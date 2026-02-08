@@ -30,7 +30,7 @@ bool RiskManager::canEnterPosition(
     double position_size_ratio,
     const std::string& strategy_name
 ) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);;
     
     // 미사용 매개변수 경고 제거
     (void)entry_price;
@@ -95,7 +95,7 @@ void RiskManager::enterPosition(
     double take_profit_2,
     const std::string& strategy_name
 ) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);;
     
     Position pos;
     pos.market = market;
@@ -135,7 +135,7 @@ void RiskManager::enterPosition(
 // ===== 포지션 업데이트 =====
 
 void RiskManager::updatePosition(const std::string& market, double current_price) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);;
     
     auto it = positions_.find(market);
     if (it == positions_.end()) return;
@@ -152,7 +152,7 @@ void RiskManager::updatePosition(const std::string& market, double current_price
 // ===== 포지션 청산 체크 =====
 
 bool RiskManager::shouldExitPosition(const std::string& market) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);;
     
     auto it = positions_.find(market);
     if (it == positions_.end()) return false;
@@ -187,7 +187,7 @@ void RiskManager::exitPosition(
     double exit_price,
     const std::string& exit_reason
 ) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);;
     
     auto it = positions_.find(market);
     if (it == positions_.end()) return;
@@ -225,7 +225,7 @@ void RiskManager::exitPosition(
 }
 
 void RiskManager::partialExit(const std::string& market, double exit_price) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);;
     
     auto it = positions_.find(market);
     if (it == positions_.end()) return;
@@ -259,7 +259,7 @@ void RiskManager::partialExit(const std::string& market, double exit_price) {
 }
 
 void RiskManager::moveStopToBreakeven(const std::string& market) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);;
     
     auto it = positions_.find(market);
     if (it == positions_.end()) return;
@@ -271,7 +271,7 @@ void RiskManager::moveStopToBreakeven(const std::string& market) {
 }
 
 Position* RiskManager::getPosition(const std::string& market) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);;
     
     auto it = positions_.find(market);
     if (it == positions_.end()) return nullptr;
@@ -280,7 +280,7 @@ Position* RiskManager::getPosition(const std::string& market) {
 }
 
 std::vector<Position> RiskManager::getAllPositions() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);;
     
     std::vector<Position> positions;
     for (const auto& [market, pos] : positions_) {
@@ -471,7 +471,7 @@ bool RiskManager::hasReachedMaxPositions() {
 // ===== 통계 및 모니터링 =====
 
 RiskManager::RiskMetrics RiskManager::getRiskMetrics() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);;
     
     RiskMetrics metrics;
     
@@ -562,32 +562,32 @@ RiskManager::RiskMetrics RiskManager::getRiskMetrics() const {
 }
 
 std::vector<TradeHistory> RiskManager::getTradeHistory() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);;
     return trade_history_;
 }
 
 // ===== 설정 =====
 
 void RiskManager::setMaxPositions(int max_positions) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);;
     max_positions_ = max_positions;
     LOG_INFO("최대 포지션 설정: {}", max_positions);
 }
 
 void RiskManager::setMaxDailyTrades(int max_trades) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);;
     max_daily_trades_ = max_trades;
     LOG_INFO("일일 최대 거래 설정: {}", max_trades);
 }
 
 void RiskManager::setMaxDrawdown(double max_drawdown_pct) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);;
     max_drawdown_pct_ = max_drawdown_pct;
     LOG_INFO("최대 Drawdown 설정: {:.1f}%", max_drawdown_pct * 100);
 }
 
 void RiskManager::setMinReentryInterval(int seconds) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);;
     min_reentry_interval_ = seconds;
     LOG_INFO("재진입 대기 시간 설정: {}초", seconds);
 }

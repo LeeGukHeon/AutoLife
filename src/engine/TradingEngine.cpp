@@ -376,15 +376,48 @@ bool TradingEngine::executeBuyOrder(
             return false;
         }
         
+        // [중요] API 리턴 구조에 따른 예외 처리
+        nlohmann::json units;
+        if (orderbook.is_array() && !orderbook.empty()) {
+            units = orderbook[0]["orderbook_units"];
+        } else if (orderbook.contains("orderbook_units")) {
+            units = orderbook["orderbook_units"];
+        } else {
+            LOG_ERROR("{} - 호가 유닛(units)을 찾을 수 없습니다: {}", market, orderbook.dump());
+            return false;
+        }
+
         auto ask_units = orderbook[0]["orderbook_units"];
         double best_ask_price = ask_units[0]["ask_price"].get<double>(); // 매도 1호가
         
         // 2. 투자 금액 및 수량 계산
         auto metrics = risk_manager_->getRiskMetrics();
-        double invest_amount = metrics.available_capital * signal.position_size;
+       // [✅ 최후의 근본적 보정 로직 추가]
+        // 업비트 최소 주문 금액(5,000원)을 맞추기 위한 최종 방어선
+        double min_required_ratio = (config_.min_order_krw + 500.0) / metrics.available_capital;
+
+        // 함수 시작 부분
+        auto modified_signal = signal; // 복사본 생성
+
+        // 보정 로직 (이제 에러 안 남)
+        if (modified_signal.position_size > 0 && modified_signal.position_size < min_required_ratio) {
+            LOG_INFO("{} - [엔진 레벨 보정] 기존 비중 {:.4f} -> 보정 비중 {:.4f}", 
+                     market, modified_signal.position_size, min_required_ratio);
+            modified_signal.position_size = min_required_ratio;
+        }
+
+        double invest_amount = metrics.available_capital * modified_signal.position_size;
+
+        LOG_INFO("{} - [계산] 가용자본: {:.0f}, 비중: {:.4f}, 투자예정: {:.0f}", 
+                 market, metrics.available_capital, modified_signal.position_size, invest_amount);
         
-        // 최소/최대 주문 금액 제한 적용
-        if (invest_amount < config_.min_order_krw) return false;
+        if (invest_amount < config_.min_order_krw) {
+            // 이제 이 블록은 웬만하면 타지 않게 됩니다.
+            LOG_WARN("{} - 최소 주문금액 미달 (금액: {:.0f}, 최소: {:.0f})", 
+                     market, invest_amount, config_.min_order_krw);
+            return false;
+        }
+
         if (invest_amount > config_.max_order_krw) invest_amount = config_.max_order_krw;
         
         // 지정가 주문 수량 계산 (소수점 8자리까지)
@@ -503,6 +536,10 @@ bool TradingEngine::executeBuyOrder(
 // TradingEngine.cpp
 
 void TradingEngine::monitorPositions() {
+
+    static int log_counter = 0;
+    bool should_log = (log_counter++ % 10 == 0);
+
     // 1. 현재 관리 중인 포지션 목록 가져오기
     auto positions = risk_manager_->getAllPositions();
     
@@ -517,7 +554,9 @@ void TradingEngine::monitorPositions() {
         markets.push_back(pos.market);
     }
     
-    LOG_INFO("===== 포지션 모니터링 ({}종목) =====", positions.size());
+    if (should_log) {
+        LOG_INFO("===== 포지션 모니터링 ({}종목) =====", positions.size());
+    }
 
     // 3. [핵심] 한 번의 HTTP 요청으로 모든 종목 현재가 조회 (Batch Processing)
     std::map<std::string, double> price_map;
@@ -567,12 +606,11 @@ void TradingEngine::monitorPositions() {
         auto* updated_pos = risk_manager_->getPosition(pos.market);
         if (!updated_pos) continue;
         
-        LOG_INFO("  {} - 진입: {:.0f}, 현재: {:.0f}, 손익: {:.0f} ({:+.2f}%)",
-                 pos.market,
-                 updated_pos->entry_price,
-                 current_price,
-                 updated_pos->unrealized_pnl,
-                 updated_pos->unrealized_pnl_pct * 100.0);
+        if (should_log) {
+            LOG_INFO("  {} - 진입: {:.0f}, 현재: {:.0f}, 손익: {:.0f} ({:+.2f}%)",
+                     pos.market, updated_pos->entry_price, current_price,
+                     updated_pos->unrealized_pnl, updated_pos->unrealized_pnl_pct * 100.0);
+        }
         
         // --- 매도 로직 (기존과 동일) ---
 

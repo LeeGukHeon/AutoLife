@@ -7,6 +7,7 @@
 #include <deque>
 #include <array>
 #include <set>
+#include "engine/TradingEngine.h"
 
 namespace autolife {
 namespace strategy {
@@ -224,7 +225,7 @@ private:
     std::shared_ptr<network::UpbitHttpClient> client_;
     bool enabled_;
     Statistics stats_;
-    mutable std::mutex mutex_;
+    mutable std::recursive_mutex mutex_;
     
     // [신규 추가] 중복 매수 방지용
     std::set<std::string> active_positions_;
@@ -447,7 +448,7 @@ private:
     double calculateVolatility(const std::vector<analytics::Candle>& candles) const;
     
     long long getCurrentTimestamp() const;
-    
+    engine::EngineConfig engine_config_;
     bool shouldGenerateSignal(
         double expected_return,
         double expected_sharpe

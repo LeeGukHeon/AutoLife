@@ -8,6 +8,7 @@
 #include <array>
 #include <map>
 #include <set>
+#include "engine/TradingEngine.h"
 
 namespace autolife {
 namespace strategy {
@@ -196,7 +197,7 @@ private:
     std::shared_ptr<network::UpbitHttpClient> client_;
     bool enabled_;
     Statistics stats_;
-    mutable std::mutex mutex_;
+    mutable std::recursive_mutex mutex_;
     
     // 이력 (500개)
     std::deque<double> recent_returns_;
@@ -254,7 +255,7 @@ private:
     static constexpr double MAX_HOLDING_TIME = 300.0;       // 5분
     static constexpr double CONFIDENCE_LEVEL = 0.95;
     static constexpr double MIN_SHARPE_RATIO = 0.8;
-    static constexpr double MAX_POSITION_SIZE = 0.05;       // 5%
+    static constexpr double MAX_POSITION_SIZE = 0.20;       // 5%
     static constexpr double HALF_KELLY_FRACTION = 0.5;
     static constexpr double MIN_LIQUIDITY = 60.0;
     static constexpr int MIN_SIGNAL_INTERVAL_SEC = 120;     // 2분
@@ -423,7 +424,7 @@ private:
     double calculateUltraShortVolatility(const std::vector<analytics::Candle>& candles) const;
     
     long long getCurrentTimestamp() const;
-    
+    engine::EngineConfig engine_config_;
     bool shouldGenerateScalpingSignal(
         double expected_return,
         double expected_sharpe

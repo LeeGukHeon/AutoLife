@@ -52,7 +52,7 @@ Signal ScalpingStrategy::generateSignal(
     const std::vector<analytics::Candle>& candles,
     double current_price
 ) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     
     // [추가] 1. 이미 진입한 상태면 매수 신호 금지
     if (active_positions_.find(market) != active_positions_.end()) {
@@ -101,7 +101,9 @@ Signal ScalpingStrategy::generateSignal(
     // 1. Market Microstate
     MarketMicrostate microstate = detectMarketMicrostate(candles);
     if (microstate != MarketMicrostate::OVERSOLD_BOUNCE && 
-        microstate != MarketMicrostate::MOMENTUM_SPIKE) {
+        microstate != MarketMicrostate::MOMENTUM_SPIKE &&
+        microstate != MarketMicrostate::BREAKOUT &&
+        microstate != MarketMicrostate::CONSOLIDATION) {
         LOG_INFO("{} - [Scalping] Microstate 부적합: {}", market, static_cast<int>(microstate));
         return signal;
     }
@@ -110,7 +112,7 @@ Signal ScalpingStrategy::generateSignal(
     
     // 2. Multi-Timeframe
     auto mtf_signal = analyzeScalpingTimeframes(candles);
-    if (mtf_signal.alignment_score < 0.6) {
+    if (mtf_signal.alignment_score < 0.35) {
         LOG_INFO("{} - [Scalping] MTF 정렬 부족: {:.2f}", market, mtf_signal.alignment_score);
         return signal;
     }
@@ -119,7 +121,7 @@ Signal ScalpingStrategy::generateSignal(
     
     // 3. Ultra-Fast Order Flow
     auto order_flow = analyzeUltraFastOrderFlow(market, current_price);
-    if (order_flow.microstructure_score < 0.55) {
+    if (order_flow.microstructure_score < 0.35) {
         LOG_INFO("{} - [Scalping] 미세구조 점수 부족: {:.2f}", market, order_flow.microstructure_score);
         return signal;
     }
@@ -129,7 +131,7 @@ Signal ScalpingStrategy::generateSignal(
         metrics, candles, mtf_signal, order_flow, microstate
     );
     
-    if (signal.strength < 0.60) {
+    if (signal.strength < 0.5) {
         LOG_INFO("{} - 신호 강도 부족: {:.2f}", market, signal.strength);
         return signal;
     }
@@ -147,19 +149,41 @@ Signal ScalpingStrategy::generateSignal(
     double expected_sharpe = calculateScalpingSharpeRatio();
     
     if (!isWorthScalping(expected_return, expected_sharpe)) {
-        LOG_INFO("{} - 거래 비용 대비 수익 부족", market);
-        return signal;
+       LOG_INFO("{} - 진입 포기: 예상수익({:.4f}), R/R({:.2f}), Sharpe({:.2f})", 
+             market, expected_return, (expected_return / BASE_STOP_LOSS), expected_sharpe);
+    return signal;
     }
     
+    double current_capital = engine_config_.initial_capital;
+
     // 7. Position Sizing
     auto pos_metrics = calculateScalpingPositionSize(
-        100000, signal.entry_price, signal.stop_loss, metrics, candles
+        current_capital, signal.entry_price, signal.stop_loss, metrics, candles
     );
     
-    signal.position_size = pos_metrics.final_position_size;
+    // [✅ 근본적 해결 로직]
+    // 1. 현재 엔진이 가진 진짜 돈과 전략이 믿는 가짜 돈의 비율을 구합니다.
+    // (예: 100만 원 / 3.8만 원 = 약 25.7배)
+    double gap_ratio = engine_config_.initial_capital / current_capital;
+
+    // 2. 비중을 결정할 때, 업비트 최소 주문(5,200원)이 진짜 돈에서 얼마의 비중인지 계산합니다.
+    // (예: 5,200 / 38,792 = 약 0.134)
+    double real_min_ratio = 5200.0 / current_capital;
+
+    // 3. 만약 전략이 준 비중이 실제 최소 주문 비중보다 작다면?
+    if (pos_metrics.final_position_size < real_min_ratio) {
+        // 강제로 실제 주문이 나갈 수 있는 비중으로 덮어씁니다.
+        pos_metrics.final_position_size = real_min_ratio;
+        LOG_INFO("{} - [소액 시드 보정] 비중 상향: {:.4f}", market, real_min_ratio);
+    }
+
+    signal.position_size = std::min(1.0, pos_metrics.final_position_size);
     
     // 최소 주문 금액 체크 (업비트: 5,000원)
-    double order_amount = signal.entry_price * signal.position_size * 100000;
+    double order_amount = current_capital * signal.position_size;
+    LOG_INFO("{} - [검증] 예상 주문금액: {:.0f}원 (자본: {:.0f}, 비중: {:.4f})", 
+          market, order_amount, current_capital, signal.position_size);
+          
     if (order_amount < MIN_ORDER_AMOUNT_KRW) {
         LOG_INFO("{} - 최소 주문 금액 미달: {:.0f}원 < 5,000원", market, order_amount);
         return signal;
@@ -208,8 +232,13 @@ bool ScalpingStrategy::shouldEnter(
     
     if (candles.size() < 30) return false;
     
+    double dynamic_liquidity_score = 50.0;
     // 1. 거래량 급증 체크 (Z-Score 로직 통과 여부)
-    if (!isVolumeSpikeSignificant(metrics, candles)) {
+    bool is_spike = isVolumeSpikeSignificant(metrics, candles);
+    if (!is_spike && metrics.liquidity_score < 30.0) {
+        LOG_INFO("{} - 1단계 탈락 (Spike: {}, LiqScore: {:.1f})", 
+             market, is_spike, metrics.liquidity_score);
+        // 거래량 폭발도 없고, 유동성도 낮으면 탈락
         return false;
     }
     
@@ -217,56 +246,77 @@ bool ScalpingStrategy::shouldEnter(
     auto prices = analytics::TechnicalIndicators::extractClosePrices(candles);
     double rsi = analytics::TechnicalIndicators::calculateRSI(prices, 14);
     
-    // [수정] 스캘핑/모멘텀을 위해 범위를 현실적으로 상향 (40~75)
-    if (rsi < 40.0 || rsi > 75.0) {
-        LOG_INFO("{} - RSI 범위 이탈: {:.1f} (목표: 40-75)", market, rsi);
+    // [수정] 스캘핑/모멘텀을 위해 범위를 현실적으로 상향 (25~75)
+    if (rsi < 20.0 || rsi > 75.0) {
+        LOG_INFO("{} - RSI 범위 이탈: {:.1f} (목표: 25-75)", market, rsi);
         return false;
     }
     
     // 3. MACD 체크 (Histogram > 0)
-    auto macd = analytics::TechnicalIndicators::calculateMACD(prices, 12, 26, 9);
-    if (macd.histogram <= 0) {
-        // LOG_INFO("{} - MACD 히스토그램 음수: {:.4f}", market, macd.histogram);
+    auto macd_current = analytics::TechnicalIndicators::calculateMACD(prices, 12, 26, 9);
+    // 이전 MACD 계산: 마지막 가격을 제외한 sub-vector 생성
+    std::vector<double> prev_prices(prices.begin(), prices.end() - 1);
+    auto macd_prev = analytics::TechnicalIndicators::calculateMACD(prev_prices, 12, 26, 9);
+
+    double current_hist = macd_current.histogram;
+    double prev_hist = macd_prev.histogram;
+
+    // 판정: 양수이거나, 음수더라도 전보다 '상승(덜 나빠짐)' 중이면 통과
+    bool is_macd_positive = current_hist > 0;
+    bool is_macd_rising = current_hist > prev_hist; 
+
+    if (!is_macd_positive && !is_macd_rising) {
+        LOG_INFO("{} - MACD 하락세 (Hist: {:.4f}, Prev: {:.4f})", market, current_hist, prev_hist);
         return false;
     }
     
     // 4. 가격 변동 체크
     double abs_change = std::abs(metrics.price_change_rate);
-    if (abs_change < 0.1) { // 0.2도 높을 수 있으니 0.1로 완화
+    if (abs_change < 0.05) { // 0.2도 높을 수 있으니 0.1로 완화
+        LOG_INFO("{} - 변동성 미달 ({:.2f}%)", market, abs_change);
         return false;
     }
     
-    // 5. [업그레이드된 로직] 반등 확인 - 최근 3개 캔들 중 양봉 개수 확인
-    // (기존 코드에는 없던 부분입니다. 새로 추가하세요!)
-    int bullish_count = 0;
+    // 5. [수정] 반등 및 지지 확인
     size_t n = candles.size();
-    size_t start_check = (n >= 3) ? n - 3 : 0; // 뒤에서부터 3개
-
-    for (size_t i = start_check; i < n; ++i) {
-        if (candles[i].close > candles[i].open) {
-            bullish_count++;
-        }
-    }
-
-    // 3개 중 2개 미만이면 진입 거부 (너무 약한 반등)
-    if (bullish_count < 2) {
-        return false;
-    }
-    
-    // 5. [중요] 반등 확인 - 가장 마지막 캔들(back)이 양봉인가?
-    bool recent_bullish = false;
     const auto& last_candle = candles.back();
-    if (last_candle.close > last_candle.open) {
-        recent_bullish = true;
+
+    int bullish_count = 0;
+    size_t start_check = (n >= 3) ? n - 3 : 0;
+    for (size_t i = start_check; i < n; ++i) {
+        if (candles[i].close > candles[i].open) bullish_count++;
     }
-    
-    if (!recent_bullish) {
-        LOG_INFO("{} - 최근 캔들이 양봉이 아님 (반등 확인 실패)", market);
+
+    // 디버깅 로그
+    LOG_INFO("{} - 시가: {}, 종가: {}, 저가: {}, Bullish: {}/3", 
+             market, last_candle.open, last_candle.close, last_candle.low, bullish_count);
+
+    bool is_bullish = last_candle.close > last_candle.open;
+    // [보정] 사실상 보합(flat) 범위를 0.05% (0.0005) -> 0.07% (0.0007)로 아주 살짝 상향
+    bool is_flat = std::abs(last_candle.close - last_candle.open) <= (last_candle.open * 0.0007); 
+    bool has_support = last_candle.low < std::min(last_candle.open, last_candle.close); 
+
+    bool pass_rebound = false;
+
+    // 1) 최근 3개 중 양봉이 1개라도 있는 경우 (기존 로직 유지 + 보합 범위 상향)
+    if (bullish_count >= 1) {
+        if (is_bullish || is_flat) pass_rebound = true;
+        else if (has_support && (last_candle.close >= last_candle.open * 0.999)) pass_rebound = true; 
+    } 
+    // 2) [추가] 3개 다 음봉이었지만(0/3), 현재 강력한 '망치형 지지'가 나온 경우
+    else if (has_support && is_flat) {
+        // 하락을 멈추고 저가 매수세가 들어와 '도지'를 만들었다면 반등 신호로 간주
+        pass_rebound = true;
+    }
+
+    if (!pass_rebound) {
+        LOG_INFO("{} - 반등 확인 실패 (Bullish: {}/3, Flat: {}, Support: {})", 
+                 market, bullish_count, is_flat, has_support);
         return false;
     }
     
     // 6. 유동성 체크
-    if (metrics.liquidity_score < 50.0) { // 기준을 조금 낮춰 유연하게 적용
+    if (metrics.liquidity_score < dynamic_liquidity_score) { // 기준을 조금 낮춰 유연하게 적용
         return false;
     }
     
@@ -332,22 +382,22 @@ double ScalpingStrategy::calculatePositionSize(
 }
 
 void ScalpingStrategy::setEnabled(bool enabled) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     enabled_ = enabled;
 }
 
 bool ScalpingStrategy::isEnabled() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     return enabled_;
 }
 
 IStrategy::Statistics ScalpingStrategy::getStatistics() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     return stats_;
 }
 
 void ScalpingStrategy::updateStatistics(const std::string& market, bool is_win, double profit_loss) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     
     // [핵심 추가] 거래가 종료되었으므로 '진입 중' 목록에서 해당 코인 삭제
     // 이제 이 코인은 다시 매수 신호가 발생하면 진입할 수 있게 됨
@@ -420,7 +470,7 @@ bool ScalpingStrategy::shouldMoveToBreakeven(
 }
 
 ScalpingRollingStatistics ScalpingStrategy::getRollingStatistics() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     return rolling_stats_;
 }
 
@@ -604,7 +654,7 @@ long long ScalpingStrategy::getCurrentTimestamp() const {
 MarketMicrostate ScalpingStrategy::detectMarketMicrostate(
     const std::vector<analytics::Candle>& candles
 ) {
-    if (candles.size() < 10) {
+    if (candles.size() < 14) { // RSI 14를 위해 최소 14개 권장
         return MarketMicrostate::CONSOLIDATION;
     }
     
@@ -619,7 +669,24 @@ MarketMicrostate ScalpingStrategy::detectMarketMicrostate(
             max_idx = i;
         }
     }
+
+    // [추가 수정] Index 4 (DECLINE) 보정 로직
+    if (max_idx == static_cast<int>(MarketMicrostate::DECLINE)) {
+        // 함수 내부에서 RSI만 가볍게 계산 (MACD보다 훨씬 가벼움)
+        auto prices = analytics::TechnicalIndicators::extractClosePrices(candles);
+        double rsi = analytics::TechnicalIndicators::calculateRSI(prices, 14);
+
+        // RSI가 40 미만이면 "하락이 멈추고 반등하려는 횡보"로 간주하여 구출
+        if (rsi < 40.0) {
+            return MarketMicrostate::CONSOLIDATION; 
+        }
+    }
     
+    // 기존 유동성 장벽 로직
+    if (max_idx != static_cast<int>(MarketMicrostate::CONSOLIDATION) && max_prob < 0.4) {
+        return MarketMicrostate::CONSOLIDATION; 
+    }
+
     return static_cast<MarketMicrostate>(max_idx);
 }
 
@@ -643,31 +710,34 @@ void ScalpingStrategy::updateMicrostateModel(
     double mean_return = calculateMean(returns);
     double volatility = calculateStdDev(returns, mean_return);
     
+    double min_vol = 0.0005; // 0.05%
+    double active_vol = std::max(volatility, min_vol);
+
     std::array<double, 5> observation_prob;
     
     // 3. [수정] 조건문 인덱스 교정
     const auto& current = candles.back();          // 현재 캔들
     const auto& previous = candles[candles.size()-2]; // 직전 캔들
     
-    // 과매도 반등: 최근 평균은 하락이었으나 지금 막 양봉 출현
-    if (mean_return < -0.005 && current.close > previous.close) {
-        observation_prob = {0.6, 0.2, 0.1, 0.05, 0.05};
+    // 1. 과매도 반등: 최근 하락폭이 변동성의 1.5배 이상이고, 현재 양봉인 경우
+    if (mean_return < -(active_vol * 1.5) && current.close > previous.close) {
+        observation_prob = {0.7, 0.15, 0.05, 0.05, 0.05}; // 반등 확률 상향
     }
-    // 모멘텀 급등: 평균 수익률이 높고 변동성(힘)이 강함
-    else if (mean_return > 0.008 && volatility > 0.01) {
-        observation_prob = {0.15, 0.65, 0.1, 0.05, 0.05};
+    // 2. 모멘텀 급등: 평균 수익률이 변동성의 2배를 초과 (강한 돌파)
+    else if (mean_return > (active_vol * 2.0)) {
+        observation_prob = {0.1, 0.7, 0.1, 0.05, 0.05};
     }
-    // 안정적 돌파: 수익률은 적당하고 변동성이 낮음 (계단식 상승)
-    else if (mean_return > 0.003 && volatility < 0.008) {
-        observation_prob = {0.1, 0.15, 0.6, 0.1, 0.05};
+    // 3. 안정적 돌파: 변동성 범위 내에서 꾸준히 상승 (계단식)
+    else if (mean_return > (active_vol * 0.5) && volatility < active_vol * 1.2) {
+        observation_prob = {0.1, 0.2, 0.6, 0.05, 0.05};
     }
-    // 횡보: 수익률 변화가 거의 없음
-    else if (std::abs(mean_return) < 0.002) {
-        observation_prob = {0.1, 0.1, 0.15, 0.55, 0.1};
+    // 4. 횡보: 수익률이 변동성 절반도 안 되는 미미한 수준
+    else if (std::abs(mean_return) < (active_vol * 0.3)) {
+        observation_prob = {0.1, 0.1, 0.1, 0.6, 0.1};
     }
-    // 하락 추세
+    // 5. 하락 추세
     else {
-        observation_prob = {0.05, 0.05, 0.1, 0.15, 0.65};
+        observation_prob = {0.05, 0.05, 0.05, 0.15, 0.7};
     }
     
     // 4. 베이즈 업데이트 (Bayesian Update) 로직은 그대로 유지
@@ -709,7 +779,7 @@ bool ScalpingStrategy::isVolumeSpikeSignificant(
     // Z-Score (현재 거래량이 과거 20개 평균 대비 얼마나 튀었나)
     double z_score = calculateZScore(current_volume, volumes);
     
-    if (z_score < 1.28) { 
+    if (z_score < 1.15) { 
         return false;
     }
     
@@ -726,7 +796,7 @@ bool ScalpingStrategy::isVolumeSpikeSignificant(
         past_17.push_back(candles[i].volume);
     }
     
-    return isTTestSignificant(recent_3, past_17, 0.20);
+    return isTTestSignificant(recent_3, past_17, 0.35);
 }
 
 double ScalpingStrategy::calculateZScore(
@@ -780,24 +850,29 @@ ScalpingMultiTimeframeSignal ScalpingStrategy::analyzeScalpingTimeframes(
     const std::vector<analytics::Candle>& candles_1m
 ) const {
     ScalpingMultiTimeframeSignal signal;
-    
-    if (candles_1m.size() < 30) {
-        return signal;
-    }
-    
+    if (candles_1m.size() < 30) return signal;
+
+    // [기존 과매도 체크 유지하되 용도 변경]
     signal.tf_1m_oversold = isOversoldOnTimeframe(candles_1m, signal.tf_1m);
-    
     auto candles_3m = resampleTo3m(candles_1m);
+
+    double score = 0.0;
+    
+    // 1. 1분봉 방향성 체크 (종가가 시가보다 높거나 RSI가 중립 이상)
+    if (candles_1m.back().close >= candles_1m.back().open) score += 0.4;
+    
+    // 2. 3분봉 정렬 체크
     if (!candles_3m.empty()) {
+        const auto& last_3m = candles_3m.back();
+        // 3분봉이 양봉이거나, 최소한 하락을 멈췄다면 점수 부여
+        if (last_3m.close >= last_3m.open) score += 0.4;
+        
+        // 3. (보너스) 상위 분봉에서 과매도였다가 반등 중이면 큰 가산점
         signal.tf_3m_oversold = isOversoldOnTimeframe(candles_3m, signal.tf_3m);
+        if (signal.tf_3m_oversold) score += 0.2;
     }
-    
-    int oversold_count = 0;
-    if (signal.tf_1m_oversold) oversold_count++;
-    if (signal.tf_3m_oversold) oversold_count++;
-    
-    signal.alignment_score = static_cast<double>(oversold_count) / 2.0;
-    
+
+    signal.alignment_score = score;
     return signal;
 }
 
@@ -940,20 +1015,20 @@ UltraFastOrderFlowMetrics ScalpingStrategy::analyzeUltraFastOrderFlow(
         else score += 0.10;
         
         // Instant Pressure (30%)
-        if (metrics.instant_pressure > 0.4) score += 0.30;
-        else if (metrics.instant_pressure > 0.2) score += 0.20;
-        else if (metrics.instant_pressure > 0) score += 0.10;
+        if (metrics.instant_pressure > 0.2) score += 0.30;       // 0.4 -> 0.2
+        else if (metrics.instant_pressure > 0.0) score += 0.20;  // 0.2 -> 0.0
+        else if (metrics.instant_pressure > -0.2) score += 0.10; // 하락 압력이 약해도 점수 부여
         
-        // Order Flow Delta (20%)
-        if (metrics.order_flow_delta > 0.2) score += 0.20;
-        else if (metrics.order_flow_delta > 0) score += 0.12;
+        // Order Flow Delta (20%) - 수정안
+        if (metrics.order_flow_delta > 0.1) score += 0.20;      // 0.2 -> 0.1
+        else if (metrics.order_flow_delta > -0.1) score += 0.12; // -0.1까지는 '균형'으로 인정
         
         // Tape Reading (15%)
         score += metrics.tape_reading_score * 0.15;
         
         // Micro Imbalance (10%)
-        if (metrics.micro_imbalance > 0.1) score += 0.10;
-        else if (metrics.micro_imbalance > 0) score += 0.05;
+        if (metrics.micro_imbalance > 0.05) score += 0.10; // 0.1 -> 0.05
+        else if (metrics.micro_imbalance > -0.05) score += 0.05;
         
         metrics.microstructure_score = score;
         
@@ -1071,9 +1146,30 @@ ScalpingPositionMetrics ScalpingStrategy::calculateScalpingPositionSize(
     double liquidity_factor = std::min(1.0, metrics.liquidity_score / 80.0);
     pos_metrics.final_position_size = pos_metrics.volatility_adjusted * liquidity_factor;
     
-    // 4. 최대 포지션 제한 (5%)
+    // 4. 포지션 제한 및 최소 금액 보정 (최종 수정본)
+
+    // (1) 일단 설정된 최대 비중 제한을 먼저 겁니다.
     pos_metrics.final_position_size = std::min(pos_metrics.final_position_size, MAX_POSITION_SIZE);
-    pos_metrics.final_position_size = std::max(pos_metrics.final_position_size, 0.01);
+    
+    // (2) [핵심] 업비트 최소 주문을 위한 비율 계산 (여유있게 5,200원)
+    double min_required_size = 5200.0 / capital;
+    
+    // (3) [중요] 계산된 비중이 최소 주문 금액보다 작다면 '강제로' 상향
+    // MAX_POSITION_SIZE(5%)보다 min_required_size(13%)가 크더라도, 
+    // 주문이 나가는 게 우선이므로 여기서는 MAX 제한을 무시하고 올립니다.
+    if (pos_metrics.final_position_size < min_required_size) {
+        pos_metrics.final_position_size = min_required_size;
+    }
+    
+    // (4) 내 전체 자산보다 많이 살 수는 없으므로 최종 방어선
+    if (pos_metrics.final_position_size > 1.0) {
+        pos_metrics.final_position_size = 1.0;
+    }
+    
+    // (5) 만약 내 전재산이 5,200원도 안 된다면 주문 포기 (0.0 리턴)
+    if (capital < 5200.0) {
+        pos_metrics.final_position_size = 0.0;
+    }
     
     // 5. 예상 Sharpe
     double risk = std::abs(entry_price - stop_loss) / entry_price;
@@ -1200,16 +1296,24 @@ double ScalpingStrategy::calculateMicroATRBasedStop(
 // ===== 7. Trade Cost Analysis =====
 
 bool ScalpingStrategy::isWorthScalping(double expected_return, double expected_sharpe) const {
-    // 업비트 수수료(0.05%*2) + 예상 슬리피지(0.03%*2) = 약 0.16%
+    // 1. 최소 비용 계산 (수수료+슬리피지) - 이건 절대 타협 못하는 선입니다.
     double total_cost = (UPBIT_FEE_RATE * 2) + (EXPECTED_SLIPPAGE * 2); 
     double net_return = expected_return - total_cost;
 
-    // [수정] 0.8%는 너무 높음. 수수료 떼고 0.2% 이상 수익이면 스캘핑 가치 있음
-    if (net_return < 0.002) return false;
-    if (expected_sharpe < MIN_SHARPE_RATIO) return false;
+    // 2. 순수익 기준: 0.05% (5bp)
+    // 수수료 떼고 커피값이라도 남으면 일단 '기회'라고 봅니다.
+    if (net_return < 0.0005) return false;
 
+    // 3. 샤프지수 기준: 0.3 (완화)
+    // 초단타(Scalping)는 캔들 몇 개만 보고 들어가기 때문에 샤프지수가 높게 나오기 어렵습니다.
+    // 기존 0.5~1.0은 너무 가혹하니 0.3으로 낮춰보세요.
+    if (expected_sharpe < 0.3) return false; 
+
+    // 4. 손익비(R/R) 기준: 0.8 (완화)
+    // 스캘핑은 승률로 먹고사는 거지, 손익비로 먹고사는 게 아닙니다.
+    // '먹을 거 0.8 : 잃을 거 1' 정도만 되어도 승률이 65%면 무조건 이득입니다.
     double actual_rr = expected_return / BASE_STOP_LOSS;
-    if (actual_rr < 1.2) return false; // 손익비 기준도 1.5에서 1.2로 소폭 완화
+    if (actual_rr < 0.8) return false; 
 
     return true;
 }
@@ -1222,22 +1326,36 @@ double ScalpingStrategy::calculateScalpingSignalStrength(
     MarketMicrostate microstate) const 
 {
     double strength = 0.0;
-    if (microstate == MarketMicrostate::OVERSOLD_BOUNCE) strength += 0.20;
-    else if (microstate == MarketMicrostate::MOMENTUM_SPIKE) strength += 0.20; // 가중치 상향
+    // 1. 시장 상태 점수 상향 (3, 2번 상태도 배려)
+    if (microstate == MarketMicrostate::OVERSOLD_BOUNCE) strength += 0.25;
+    else if (microstate == MarketMicrostate::MOMENTUM_SPIKE) strength += 0.25;
+    else if (microstate == MarketMicrostate::BREAKOUT) strength += 0.20; 
+    else if (microstate == MarketMicrostate::CONSOLIDATION) strength += 0.15;
 
     strength += mtf_signal.alignment_score * 0.15;
-    strength += order_flow.microstructure_score * 0.35;
 
-    if (metrics.volume_surge_ratio >= 150) strength += 0.20; // 기준 완화
-    else strength += 0.05;
+    // 2. 오더플로우 보너스 문턱 완화
+    double of_weight = 0.35;
+    double effective_of_score = order_flow.microstructure_score;
+    // [수정] 0.5 -> 0.3으로 완화하여 평시에도 가중치 부여
+    if (effective_of_score > 0.3) { 
+        effective_of_score = std::min(1.0, effective_of_score + 0.10);
+    }
+    strength += effective_of_score * of_weight;
 
-    // [수정] RSI가 높을 때(돌파)도 점수 부여
+    // 3. RSI 구간 하한선 확장 (핵심 수정)
     auto prices = analytics::TechnicalIndicators::extractClosePrices(candles);
     double rsi = analytics::TechnicalIndicators::calculateRSI(prices, 14);
-    if (rsi >= 30 && rsi <= 45) strength += 0.10; // 과매도 반등
-    else if (rsi >= 55 && rsi <= 70) strength += 0.10; // 강한 추세 돌파
+    
+    // [수정] 25(찐바닥)부터 점수를 주도록 범위 확장
+    if (rsi >= 25 && rsi <= 45) strength += 0.15; 
+    else if (rsi > 45 && rsi < 55) strength += 0.05;
+    else if (rsi >= 55 && rsi <= 75) strength += 0.10;
 
-    if (mtf_signal.tf_1m.instant_momentum > 0.005) strength += 0.05;
+    // 4. 거래량 점수 기본치 상향
+    if (metrics.volume_surge_ratio >= 150) strength += 0.20;
+    else if (metrics.volume_surge_ratio >= 110) strength += 0.15; // 120 -> 110
+    else strength += 0.08; // 0.05 -> 0.08
 
     return std::min(1.0, strength);
 }
@@ -1277,7 +1395,7 @@ double ScalpingStrategy::calculateScalpingSharpeRatio(
     int periods_per_year
 ) const {
     if (recent_returns_.size() < 10) {
-        return 0.0;
+        return 0.5;
     }
     
     std::vector<double> returns(recent_returns_.begin(), recent_returns_.end());

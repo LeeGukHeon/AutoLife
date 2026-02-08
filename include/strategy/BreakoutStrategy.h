@@ -216,6 +216,10 @@ private:
     BreakoutRollingStatistics rolling_stats_;
     long long last_signal_time_;
     
+    std::vector<analytics::Candle> resampleTo5m(
+    const std::vector<analytics::Candle>& candles_1m
+    ) const;
+
     // 포지션 추적 (이건 내부 로직용이고, 중복 방지는 active_positions_가 담당)
     std::map<std::string, BreakoutPositionData> position_data_; // active_positions_와 이름 겹치지 않게 주의
     

@@ -78,8 +78,10 @@ Signal BreakoutStrategy::generateSignal(
         return signal;
     }
     
+    std::vector<analytics::Candle> candles_5m = resampleTo5m(candles);
+
     // ===== 1. 기본 검증 =====
-    if (candles.size() < 100) {
+    if (candles_5m.size() < 30) {
         return signal;
     }
     
@@ -105,7 +107,7 @@ Signal BreakoutStrategy::generateSignal(
     }
     
     // ===== 5. 돌파 분석 =====
-    BreakoutSignalMetrics breakout = analyzeBreakout(market, metrics, candles, current_price);
+    BreakoutSignalMetrics breakout = analyzeBreakout(market, metrics, candles_5m, current_price);
     
     if (!shouldGenerateBreakoutSignal(breakout)) {
         return signal;
@@ -117,8 +119,8 @@ Signal BreakoutStrategy::generateSignal(
     signal.entry_price = current_price;
     
     // ===== 7. 손절/익절 계산 =====
-    signal.stop_loss = calculateStopLoss(current_price, candles);
-    signal.take_profit = calculateTakeProfit(current_price, candles);
+    signal.stop_loss = calculateStopLoss(current_price, candles_5m);
+    signal.take_profit = calculateTakeProfit(current_price, candles_5m);
     
     // ===== 8. 포지션 사이징 =====
     double capital = 1000000.0; // 엔진에서 실제 자본금으로 조정됨
@@ -559,7 +561,7 @@ std::vector<analytics::Candle> BreakoutStrategy::getCachedCandles(
     }
     
     try {
-        nlohmann::json json_data = client_->getCandles(market, "minutes/5", count);
+        nlohmann::json json_data = client_->getCandles(market, "5", count);
         auto candles = parseCandlesFromJson(json_data);
         
         candle_cache_[market] = candles;
@@ -1348,6 +1350,27 @@ std::vector<analytics::Candle> BreakoutStrategy::parseCandlesFromJson(
               });
     
     return candles;
+}
+
+std::vector<analytics::Candle> BreakoutStrategy::resampleTo5m(const std::vector<analytics::Candle>& candles_1m) const {
+    if (candles_1m.size() < 5) return {};
+    std::vector<analytics::Candle> candles_5m;
+    for (size_t i = 0; i + 5 <= candles_1m.size(); i += 5) {
+        analytics::Candle candle_5m;
+        candle_5m.open = candles_1m[i].open;         // [수정] i가 가장 과거
+        candle_5m.close = candles_1m[i + 4].close;   // [수정] i+4가 가장 최신
+        candle_5m.high = candles_1m[i].high;
+        candle_5m.low = candles_1m[i].low;
+        candle_5m.volume = 0;
+        for (size_t j = i; j < i + 5; ++j) {
+            candle_5m.high = std::max(candle_5m.high, candles_1m[j].high);
+            candle_5m.low = std::min(candle_5m.low, candles_1m[j].low);
+            candle_5m.volume += candles_1m[j].volume;
+        }
+        candle_5m.timestamp = candles_1m[i].timestamp;
+        candles_5m.push_back(candle_5m);
+    }
+    return candles_5m;
 }
 
 } // namespace strategy

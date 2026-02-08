@@ -76,7 +76,7 @@ void Config::load(const std::string& path) {
             // 안전 설정
             engine_config_.max_daily_loss_krw = t.value("max_daily_loss_krw", 50000.0);
             engine_config_.max_order_krw = t.value("max_order_krw", 500000.0);
-            engine_config_.min_order_krw = t.value("min_order_krw", 5000.0);
+            engine_config_.min_order_krw = t.value("min_order_krw", 4950.0);
 
             // 전략 목록
             if (t.contains("enabled_strategies")) {

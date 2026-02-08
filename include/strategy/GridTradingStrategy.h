@@ -8,6 +8,7 @@
 #include <array>
 #include <map>
 #include <set>
+#include "engine/TradingEngine.h"
 
 namespace autolife {
 namespace strategy {
@@ -314,7 +315,7 @@ private:
     std::shared_ptr<network::UpbitHttpClient> client_;
     bool enabled_;
     Statistics stats_;
-    mutable std::mutex mutex_;
+    mutable std::recursive_mutex mutex_;
     
     // [신규 추가] 중복 진입 방지용 Set (기존 active_grids_ 맵과 구분)
     std::set<std::string> active_positions_;
@@ -637,7 +638,7 @@ private:
     bool shouldGenerateGridSignal(
         const GridSignalMetrics& metrics
     ) const;
-    
+    engine::EngineConfig engine_config_;
     std::vector<analytics::Candle> parseCandlesFromJson(
         const nlohmann::json& json_data
     ) const;

@@ -35,6 +35,11 @@ std::vector<CoinMetrics> MarketScanner::scanAllMarkets() {
             auto tickers = client_->getTickerBatch(batch);
             for (const auto& ticker : tickers) {
                 std::string market = ticker["market"].get<std::string>();
+                // [추가] 스테이블 코인 필터링 (USDT, USDC 등)
+                // 'KRW-USDT'나 'KRW-USDC'를 여기서 원천 차단합니다.
+                if (market == "KRW-USDT" || market == "KRW-USDC") {
+                    continue; 
+                }
                 ticker_map[market] = ticker;
             }
         } catch (const std::exception& e) {
@@ -104,9 +109,9 @@ std::vector<CoinMetrics> MarketScanner::scanAllMarkets() {
     for (const auto& market : top_markets) {
         try {
             // ✅ 각 조회마다 100ms 대기 (더 안전)
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            std::this_thread::sleep_for(std::chrono::milliseconds(150));
 
-            auto candles = client_->getCandles(market, "60", 200); // 24시간
+            auto candles = client_->getCandles(market, "1", 200); // 24시간
             candles_map[market] = candles;
             candle_count++;
 

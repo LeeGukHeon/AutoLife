@@ -208,7 +208,7 @@ public:
     
     // [✅ 추가] 실전 매매 시, 실제 잔고로 자본금을 덮어쓰기 위한 함수
     void resetCapital(double actual_balance) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         current_capital_ = actual_balance; // 현재 자본금 교체
         initial_capital_ = actual_balance; // 기준점(원금)도 교체 (MDD 계산용)
         max_capital_ = actual_balance;
@@ -243,7 +243,7 @@ private:
     mutable double max_capital_;      // <- mutable 추가
     mutable double total_fees_paid_;  // <- mutable 추가
     
-    mutable std::mutex mutex_;
+    mutable std::recursive_mutex mutex_;
     
     // 헬퍼 함수
     double calculateFee(double amount) const;

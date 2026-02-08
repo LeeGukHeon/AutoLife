@@ -73,7 +73,7 @@ Signal GridTradingStrategy::generateSignal(
     const std::vector<analytics::Candle>& candles,
     double current_price)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     
     Signal signal;
     signal.type = SignalType::NONE;
@@ -125,7 +125,7 @@ Signal GridTradingStrategy::generateSignal(
     signal.take_profit = calculateTakeProfit(current_price, candles); // Range High
     
     // ===== 9. 포지션 사이징 =====
-    double capital = 1000000.0; // 엔진에서 할당
+    double capital = engine_config_.initial_capital; // 엔진에서 할당
     signal.position_size = calculatePositionSize(capital, current_price, signal.stop_loss, metrics);
     
     // ===== 10. 최소 주문 금액 확인 =====
@@ -159,7 +159,7 @@ bool GridTradingStrategy::shouldEnter(
     Signal signal = generateSignal(market, metrics, candles, current_price);
     
     if (signal.type == SignalType::BUY && signal.strength >= MIN_SIGNAL_STRENGTH) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         
         // [수정] 1. 중복 방지 목록 등록
         active_positions_.insert(market);
@@ -206,7 +206,7 @@ bool GridTradingStrategy::shouldExit(
     double current_price,
     double holding_time_seconds)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     
     if (active_grids_.find(market) == active_grids_.end()) {
         return false;
@@ -266,7 +266,7 @@ double GridTradingStrategy::calculateStopLoss(
     double entry_price,
     const std::vector<analytics::Candle>& candles)
 {
-    //std::lock_guard<std::mutex> lock(mutex_);
+    //std::lock_guard<std::recursive_mutex> lock(mutex_);
     
     double atr = calculateATR(candles, 14);
     double atr_pct = atr / entry_price;
@@ -283,7 +283,7 @@ double GridTradingStrategy::calculateTakeProfit(
     double entry_price,
     const std::vector<analytics::Candle>& candles)
 {
-    //std::lock_guard<std::mutex> lock(mutex_);
+    //std::lock_guard<std::recursive_mutex> lock(mutex_);
     
     // Grid는 Take Profit이 명확하지 않음 (계속 순환)
     // Upper Bound를 반환
@@ -299,7 +299,7 @@ double GridTradingStrategy::calculatePositionSize(
     double stop_loss,
     const analytics::CoinMetrics& metrics)
 {
-    //std::lock_guard<std::mutex> lock(mutex_);
+    //std::lock_guard<std::recursive_mutex> lock(mutex_);
     
     // Grid는 자본의 30%까지만 할당
     double position_size = MAX_GRID_CAPITAL_PCT;
@@ -315,14 +315,14 @@ double GridTradingStrategy::calculatePositionSize(
 
 void GridTradingStrategy::setEnabled(bool enabled)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     enabled_ = enabled;
     spdlog::info("[GridTradingStrategy] Enabled: {}", enabled);
 }
 
 bool GridTradingStrategy::isEnabled() const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     return enabled_;
 }
 
@@ -330,14 +330,14 @@ bool GridTradingStrategy::isEnabled() const
 
 IStrategy::Statistics GridTradingStrategy::getStatistics() const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     return stats_;
 }
 
 // [수정] market 인자 추가 및 포지션 목록 삭제 로직
 void GridTradingStrategy::updateStatistics(const std::string& market, bool is_win, double profit_loss)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     
     // [중요] 포지션 목록에서 제거 (재진입 허용)
     if (active_positions_.erase(market)) {
@@ -401,7 +401,7 @@ bool GridTradingStrategy::shouldRebalanceGrid(
     const std::string& market,
     double current_price)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     
     if (active_grids_.find(market) == active_grids_.end()) {
         return false;
@@ -414,7 +414,7 @@ void GridTradingStrategy::updateGridLevels(
     const std::string& market,
     double current_price)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     
     if (active_grids_.find(market) == active_grids_.end()) {
         return;
@@ -451,7 +451,7 @@ bool GridTradingStrategy::shouldEmergencyExit(
     const std::string& market,
     double current_price)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     
     if (active_grids_.find(market) == active_grids_.end()) {
         return false;
@@ -494,7 +494,7 @@ void GridTradingStrategy::emergencyLiquidateGrid(
     const std::string& market,
     ExitReason reason)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     
     if (active_grids_.find(market) == active_grids_.end()) {
         return;
@@ -512,7 +512,7 @@ void GridTradingStrategy::emergencyLiquidateGrid(
 
 GridRollingStatistics GridTradingStrategy::getRollingStatistics() const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     return rolling_stats_;
 }
 
@@ -646,7 +646,7 @@ std::vector<analytics::Candle> GridTradingStrategy::getCachedCandles(
     }
     
     try {
-        nlohmann::json json_data = client_->getCandles(market, "minutes/60", count);
+        nlohmann::json json_data = client_->getCandles(market, "1", count);
         auto candles = parseCandlesFromJson(json_data);
         
         candle_cache_[market] = candles;

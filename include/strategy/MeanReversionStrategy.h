@@ -284,6 +284,10 @@ private:
     static constexpr int MAX_ORDERBOOK_CALLS_PER_SEC = 8;
     static constexpr int MAX_CANDLE_CALLS_PER_SEC = 8;
     
+        std::vector<analytics::Candle> resampleTo5m(
+        const std::vector<analytics::Candle>& candles_1m
+    ) const;
+    
     // ===== 거래 빈도 제어 =====
     
     int daily_trades_count_;
