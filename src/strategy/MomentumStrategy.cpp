@@ -385,8 +385,20 @@ void MomentumStrategy::updateRegimeModel(
     if (candles.size() < 20) return;
     
     std::vector<double> returns;
-    for (size_t i = 1; i < std::min(size_t(20), candles.size()); ++i) {
-        double ret = (candles[i-1].close - candles[i].close) / candles[i].close;
+    // [✅ 핵심 수정] 
+    // 데이터가 [과거 -> 현재] 순서이므로, 
+    // 가장 끝(back)이 최신 데이터입니다. 
+    // 따라서 뒤에서부터 앞으로 가면서 계산해야 "최신 수익률"을 얻습니다.
+    
+    size_t end_idx = candles.size() - 1;
+    size_t start_idx = (candles.size() > 20) ? (candles.size() - 20) : 0;
+
+    // 뒤(최신)에서부터 과거로 가면서 루프
+    for (size_t i = end_idx; i > start_idx; --i) {
+        // 공식: (현재가격 - 전가격) / 전가격
+        // candles[i]가 현재, candles[i-1]이 과거
+        double ret = (candles[i].close - candles[i-1].close) / candles[i-1].close;
+        
         returns.push_back(ret);
     }
     

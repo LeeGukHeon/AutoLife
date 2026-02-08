@@ -785,6 +785,7 @@ double MeanReversionStrategy::calculateZScore(
 double MeanReversionStrategy::calculateHurstExponent(
     const std::vector<analytics::Candle>& candles) const
 {
+    // 데이터 부족 시 기본값 (Random Walk)
     if (candles.size() < 100) return 0.5;
     
     std::vector<double> prices = extractPrices(candles, "close");
@@ -799,42 +800,63 @@ double MeanReversionStrategy::calculateHurstExponent(
         
         int num_subseries = prices.size() / lag;
         std::vector<double> rs_values;
+        rs_values.reserve(num_subseries); // 메모리 예약 (성능 향상)
         
         for (int i = 0; i < num_subseries; i++) {
-            std::vector<double> subseries(prices.begin() + i * lag, 
-                                          prices.begin() + (i + 1) * lag);
+            // 서브시리즈 추출
+            auto start_it = prices.begin() + i * lag;
+            auto end_it = start_it + lag;
             
-            double mean = calculateMean(subseries);
+            // 1. 평균 계산 (STL 사용으로 최적화)
+            double sum = std::accumulate(start_it, end_it, 0.0);
+            double mean = sum / lag;
             
-            // Cumulative deviations
-            std::vector<double> deviations;
-            double cumsum = 0.0;
-            for (double val : subseries) {
-                cumsum += (val - mean);
-                deviations.push_back(cumsum);
+            // 2. 표준편차 & Range 동시 계산 (루프 통합)
+            double sum_sq_diff = 0.0;
+            double current_cumsum = 0.0;
+            double max_cumsum = -1e9; // 매우 작은 수로 초기화
+            double min_cumsum = 1e9;  // 매우 큰 수로 초기화
+            
+            // R/S 분석에서는 누적 편차의 시작점을 0으로 간주하는 것이 정확함
+            max_cumsum = std::max(max_cumsum, 0.0); 
+            min_cumsum = std::min(min_cumsum, 0.0);
+
+            for (auto it = start_it; it != end_it; ++it) {
+                double val = *it;
+                double diff = val - mean;
+                
+                // 표준편차용
+                sum_sq_diff += diff * diff;
+                
+                // Range용 (누적 합)
+                current_cumsum += diff;
+                if (current_cumsum > max_cumsum) max_cumsum = current_cumsum;
+                if (current_cumsum < min_cumsum) min_cumsum = current_cumsum;
             }
             
-            // Range
-            double max_dev = *std::max_element(deviations.begin(), deviations.end());
-            double min_dev = *std::min_element(deviations.begin(), deviations.end());
-            double range = max_dev - min_dev;
+            double variance = sum_sq_diff / (lag - 1); // Sample Variance
+            double std_dev = std::sqrt(variance);
+            double range = max_cumsum - min_cumsum;
             
-            // Standard deviation
-            double std_dev = calculateStdDev(subseries, mean);
-            
-            if (std_dev > 0) {
+            // [안전장치] 표준편차나 Range가 0에 가까우면 무시 (log(0) 방지)
+            if (std_dev > 1e-9 && range > 1e-9) {
                 rs_values.push_back(range / std_dev);
             }
         }
         
         if (!rs_values.empty()) {
             double avg_rs = calculateMean(rs_values);
-            log_rs.push_back(std::log(avg_rs));
-            log_n.push_back(std::log(static_cast<double>(lag)));
+            
+            // [안전장치] 최종 평균이 유효할 때만 로그 계산
+            if (avg_rs > 1e-9) {
+                log_rs.push_back(std::log(avg_rs));
+                log_n.push_back(std::log(static_cast<double>(lag)));
+            }
         }
     }
     
     // Linear regression: log(R/S) = H * log(n) + c
+    // 점이 최소 3개는 있어야 신뢰할 수 있음
     if (log_rs.size() < 3) return 0.5;
     
     double mean_x = calculateMean(log_n);
@@ -844,12 +866,19 @@ double MeanReversionStrategy::calculateHurstExponent(
     double denominator = 0.0;
     
     for (size_t i = 0; i < log_n.size(); i++) {
-        numerator += (log_n[i] - mean_x) * (log_rs[i] - mean_y);
-        denominator += (log_n[i] - mean_x) * (log_n[i] - mean_x);
+        double dx = log_n[i] - mean_x;
+        double dy = log_rs[i] - mean_y;
+        
+        numerator += dx * dy;
+        denominator += dx * dx;
     }
     
-    double hurst = (denominator != 0) ? numerator / denominator : 0.5;
+    // 분모가 0인 경우 방지
+    if (std::abs(denominator) < 1e-9) return 0.5;
+
+    double hurst = numerator / denominator;
     
+    // 결과값 클램핑 (0.0 ~ 1.0)
     return std::clamp(hurst, 0.0, 1.0);
 }
 
