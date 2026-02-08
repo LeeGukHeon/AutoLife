@@ -125,11 +125,14 @@ void TradingEngine::stop() {
 void TradingEngine::run() {
     LOG_INFO("🚀 메인 거래 루프 시작");
     
-auto scan_interval = std::chrono::seconds(config_.scan_interval_seconds);
-auto last_scan_time = std::chrono::steady_clock::now() - scan_interval;
-    
+    auto scan_interval = std::chrono::seconds(config_.scan_interval_seconds);
+    auto last_scan_time = std::chrono::steady_clock::now() - scan_interval;  
     // 포지션 감시 주기 (고정: 0.5초) - 안정
     auto monitor_interval = std::chrono::milliseconds(500); // 0.5초 주기
+    // [✅ 추가] 마지막 계좌 동기화 시간 기록용 변수
+    auto last_account_sync_time = std::chrono::steady_clock::now();
+    // 동기화 주기 (예: 5분 = 300초)
+    auto account_sync_interval = std::chrono::seconds(300);
 
     while (running_) {
         auto tick_start = std::chrono::steady_clock::now();
@@ -140,11 +143,21 @@ auto last_scan_time = std::chrono::steady_clock::now() - scan_interval;
             // ==========================================
             // 스캔 중이라도 내 돈(보유 포지션)은 지켜야 함
             monitorPositions();
-            
+            // =========================================================
+            // [✅ 추가] 정기 계좌 동기화 (입출금 감지용)
+            // =========================================================
+            auto now = std::chrono::steady_clock::now();
+            if (config_.mode == TradingMode::LIVE) { // 실전 모드일 때만
+                if (now - last_account_sync_time >= account_sync_interval) {
+                    LOG_INFO("🔄 정기 계좌 동기화 (입출금 내역 갱신)");
+                    syncAccountState(); // 여기서 잔고를 다시 긁어와서 RiskManager에 덮어씁니다.
+                    last_account_sync_time = now;
+                }
+            }
+            // =========================================================
             // ==========================================
             // 2. [Slow Track] 시장 스캔 및 신규 진입
             // ==========================================
-            auto now = std::chrono::steady_clock::now();
             auto elapsed_since_scan = std::chrono::duration_cast<std::chrono::seconds>(now - last_scan_time);
             
             // 스캔 주기가 되었을 때만 실행
@@ -379,7 +392,11 @@ bool TradingEngine::executeBuyOrder(
         
         // 문자열 변환 (업비트는 소수점 처리에 민감하므로 포맷팅 주의)
         std::string price_str = std::to_string((long long)best_ask_price); // 원화는 정수
-        std::string vol_str = std::to_string(quantity); 
+        // [제안] 소수점 정밀도 제어 (sprintf 또는 stringstream 사용)
+        char buffer[64];
+        // 수량은 소수점 8자리까지, 불필요한 0 제거 로직 필요하면 추가
+        std::snprintf(buffer, sizeof(buffer), "%.8f", quantity); 
+        std::string vol_str(buffer);
         
         LOG_INFO("  주문 준비: 평단 {:.0f}, 수량 {}, 금액 {:.0f}", 
                  best_ask_price, vol_str, invest_amount);
@@ -533,6 +550,19 @@ void TradingEngine::monitorPositions() {
         // RiskManager 상태 업데이트 (메모리 연산)
         risk_manager_->updatePosition(pos.market, current_price);
         
+        // [✅ 추가된 핵심 부분] 전략에게 "업데이트 해!" 라고 명령 ===================
+        if (strategy_manager_) {
+            // 해당 포지션을 담당하는 전략 찾기 (pos.strategy_name 사용)
+            auto strategy = strategy_manager_->getStrategy(pos.strategy_name);
+            
+            if (strategy) {
+                // 아까 IStrategy에 추가한 updateState 호출
+                // 그리드 전략이라면 내부적으로 그물망 매매를 수행할 것이고,
+                // 스캘핑 전략이라면 그냥 빈 함수라 아무 일도 안 일어남 (안전함)
+                strategy->updateState(pos.market, current_price);
+            }
+        }
+
         // 갱신된 포지션 포인터 다시 가져오기 (수익률 등 계산된 값 확인)
         auto* updated_pos = risk_manager_->getPosition(pos.market);
         if (!updated_pos) continue;
@@ -860,50 +890,60 @@ void TradingEngine::syncAccountState() {
     LOG_INFO("🔄 계좌 상태 동기화 시작...");
 
     try {
-        // 1. 업비트 계좌 잔고 조회 (GET /v1/accounts)
         auto accounts = http_client_->getAccounts();
+        bool krw_found = false;
 
         for (const auto& acc : accounts) {
             std::string currency = acc["currency"].get<std::string>();
+            double balance = std::stod(acc["balance"].get<std::string>());
+            double locked = std::stod(acc["locked"].get<std::string>());
             
-            // KRW(현금)는 건너뛰고 코인만 확인
-            if (currency == "KRW") continue;
+            // 1. [수정] KRW(현금) 처리 로직 추가
+            if (currency == "KRW") {
+                double total_cash = balance + locked; // 사용가능 + 미체결 동결
+                
+                // RiskManager의 자본금을 실제 현금 잔고로 리셋!
+                risk_manager_->resetCapital(total_cash);
+                // (2) [✅ 추가] 엔진 설정상의 '초기 자본'도 실제 잔고로 변경!
+                config_.initial_capital = total_cash;
+                krw_found = true;
+                LOG_INFO("💰 현금 잔고 동기화: {:.0f} KRW (가용: {:.0f})", total_cash, balance);
+                continue; // 현금 처리는 끝났으니 다음으로
+            }
 
+            // 2. 보유 코인 처리 (기존 로직 유지)
             // 마켓 코드 생성 (예: BTC -> KRW-BTC)
             std::string market = "KRW-" + currency;
             
-            // 보유 수량 및 평단가 파싱
-            double balance = std::stod(acc["balance"].get<std::string>());
             double avg_buy_price = std::stod(acc["avg_buy_price"].get<std::string>());
             
-            // 매수하고 남은 짜투리(Dust) 코인은 무시 (예: 5000원 미만)
+            // 짜투리(Dust) 무시
             if (balance * avg_buy_price < 5000) continue;
 
-            // 이미 RiskManager가 알고 있는 포지션이면 패스
+            // 이미 RiskManager에 있으면 패스
             if (risk_manager_->getPosition(market) != nullptr) continue;
 
             LOG_INFO("🔍 기존 보유 코인 발견: {} (수량: {:.8f}, 평단: {:.0f})", 
                      market, balance, avg_buy_price);
 
-            // 2. RiskManager에 복구 등록
-            // 주의: 기존 전략이나 TP/SL을 알 수 없으므로 '기본값'으로 설정해야 함
-            
-            double current_price = getCurrentPrice(market); // 현재가 조회
-            
-            // [수정] 손절가 설정: 평단 기준 -5% 혹은 현재가 기준 -5% 중 더 낮은 값
-            // (이미 많이 물려있는 경우 켜자마자 손절되는 것 방지)
+            double current_price = getCurrentPrice(market); 
             double safe_stop_loss = std::min(avg_buy_price * 0.95, current_price * 0.95);
 
-            // 복구된 포지션 등록
+            // 포지션 복구
             risk_manager_->enterPosition(
                 market,
-                avg_buy_price,     // 진입가 (평단가)
-                balance,           // 수량
-                safe_stop_loss,    // Stop Loss (안전 설정)
-                avg_buy_price * 1.03, // TP1 (평단 +3%)
-                avg_buy_price * 1.05, // TP2 (평단 +5%)
-                "RECOVERED"        // 전략 이름을 '복구됨'으로 표시
+                avg_buy_price,
+                balance,
+                safe_stop_loss,
+                avg_buy_price * 1.03,
+                avg_buy_price * 1.05,
+                "RECOVERED"
             );
+        }
+        
+        if (!krw_found) {
+            LOG_WARN("⚠️ 계좌에 KRW가 없습니다! (자본금 0원으로 설정됨)");
+            risk_manager_->resetCapital(0.0);
         }
         
         LOG_INFO("✅ 계좌 동기화 완료");

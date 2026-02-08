@@ -262,6 +262,8 @@ public:
         double current_price
     ) override;
     
+    void updateState(const std::string& market, double current_price) override;
+    
     bool shouldEnter(
         const std::string& market,
         const analytics::CoinMetrics& metrics,

@@ -8,6 +8,7 @@
 #include <vector>
 #include <chrono>
 #include <mutex>
+#include "common/Logger.h"
 
 namespace autolife {
 namespace risk {
@@ -205,6 +206,15 @@ public:
     RiskMetrics getRiskMetrics() const;
     std::vector<TradeHistory> getTradeHistory() const;
     
+    // [✅ 추가] 실전 매매 시, 실제 잔고로 자본금을 덮어쓰기 위한 함수
+    void resetCapital(double actual_balance) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        current_capital_ = actual_balance; // 현재 자본금 교체
+        initial_capital_ = actual_balance; // 기준점(원금)도 교체 (MDD 계산용)
+        max_capital_ = actual_balance;
+        LOG_INFO("자산 동기화 완료: RiskManager 자본금 재설정 -> {:.0f} KRW", actual_balance);
+    }
+
     // 설정
     void setMaxPositions(int max_positions);
     void setMaxDailyTrades(int max_trades);

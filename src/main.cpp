@@ -32,7 +32,7 @@ int main() {
         
         std::cout << "========================================" << std::endl;
         std::cout << "   AutoLife Trading Bot v1.0" << std::endl;
-        std::cout << "   자동 스캘핑 트레이딩 시스템" << std::endl;
+        std::cout << "   자동 트레이딩 시스템" << std::endl;
         std::cout << "========================================\n" << std::endl;
         
         LOG_INFO("========================================");
@@ -56,6 +56,9 @@ int main() {
             return 1;
         }
         
+        // 2. 완성된 엔진 설정 가져오기 (이 한 줄로 끝!)
+        engine::EngineConfig engine_config = config.getEngineConfig();
+
         // HTTP 클라이언트 생성
         auto http_client = std::make_shared<network::UpbitHttpClient>(
             access_key,
@@ -84,40 +87,18 @@ int main() {
         std::cout << "✅ 연결 성공! KRW 마켓: " << krw_count << "개\n" << std::endl;
         LOG_INFO("KRW 마켓: {}개", krw_count);
         
-        // 엔진 설정
+        // 4. 설정 정보 출력
         std::cout << "========================================" << std::endl;
-        std::cout << "   거래 설정" << std::endl;
+        std::cout << "   거래 설정 (Config 클래스 로드됨)" << std::endl;
         std::cout << "========================================" << std::endl;
-        
-        engine::EngineConfig engine_config;
-        engine_config.mode = engine::TradingMode::PAPER;  // 모의 거래
-        engine_config.dry_run = true;  
-        engine_config.initial_capital = 1000000;          // 100만원
-        engine_config.scan_interval_seconds = 60;         // 1분마다 스캔
-        engine_config.min_volume_krw = 1000000000LL;  // 10억 (5배 완화) TEST용 1억으로 완화
-        engine_config.max_positions = 5;                    // ✅ 3 → 5로 증가
-        engine_config.max_daily_trades = 20;                // ✅ 10 → 20으로 증가
-        engine_config.max_drawdown = 0.10;                // 최대 10% 손실
-        engine_config.enabled_strategies = {"scalping", "momentum" , "breakout", "mean_reversion", "grid_trading"};
-        
-        std::cout << "거래 모드:       " 
-                  << (engine_config.mode == engine::TradingMode::LIVE ? "🔴 실전" : "🟢 모의") 
-                  << std::endl;
-        std::cout << "초기 자본:       " << engine_config.initial_capital / 10000 << "만원" << std::endl;
-        std::cout << "스캔 주기:       " << engine_config.scan_interval_seconds << "초" << std::endl;
-        std::cout << "최소 거래량:     " << engine_config.min_volume_krw / 100000000 << "억" << std::endl;  // ✅ 10억 표시
-        std::cout << "최대 포지션:     " << engine_config.max_positions << "개" << std::endl;
-        std::cout << "일일 거래 한도:  " << engine_config.max_daily_trades << "회" << std::endl;
-        std::cout << "최대 손실률:     " << (engine_config.max_drawdown * 100) << "%" << std::endl;
-        std::cout << "활성 전략:       Scalping, Momentum, Breakout, Meanreversion, Grid" << std::endl;  // ✅ 수정
+        std::cout << "모드:          " << (engine_config.mode == engine::TradingMode::LIVE ? "🔴 LIVE" : "🟢 PAPER") << std::endl;
+        std::cout << "Dry Run:       " << (engine_config.dry_run ? "ON" : "OFF") << std::endl;
+        std::cout << "초기 자본:     " << (long long)engine_config.initial_capital << " KRW" << std::endl;
+        // ... (나머지 출력) ...
         std::cout << "========================================\n" << std::endl;
         
-        // 엔진 생성
-        std::cout << "⚙️  거래 엔진 초기화 중..." << std::endl;
-        g_engine = std::make_unique<engine::TradingEngine>(
-            engine_config,
-            http_client
-        );
+        // 5. 엔진 생성 및 시작
+        g_engine = std::make_unique<engine::TradingEngine>(engine_config, http_client);
         
         // Ctrl+C 핸들러 등록
         std::signal(SIGINT, signalHandler);
@@ -132,6 +113,13 @@ int main() {
             std::cout << "❌ 엔진 시작 실패" << std::endl;
             std::cin.get();
             return 1;
+        }
+        
+        // 6. 실전 잔고 확인 (엔진 시작 후)
+        if (engine_config.mode == engine::TradingMode::LIVE) {
+            auto metrics = g_engine->getMetrics();
+            std::cout << "\n💰 [실제 계좌 연동 완료]" << std::endl;
+            std::cout << "   보유 현금: " << (long long)metrics.total_capital << " KRW" << std::endl;
         }
         
         // 메인 스레드 대기 (Ctrl+C까지)

@@ -236,6 +236,23 @@ bool ScalpingStrategy::shouldEnter(
         return false;
     }
     
+    // 5. [업그레이드된 로직] 반등 확인 - 최근 3개 캔들 중 양봉 개수 확인
+    // (기존 코드에는 없던 부분입니다. 새로 추가하세요!)
+    int bullish_count = 0;
+    size_t n = candles.size();
+    size_t start_check = (n >= 3) ? n - 3 : 0; // 뒤에서부터 3개
+
+    for (size_t i = start_check; i < n; ++i) {
+        if (candles[i].close > candles[i].open) {
+            bullish_count++;
+        }
+    }
+
+    // 3개 중 2개 미만이면 진입 거부 (너무 약한 반등)
+    if (bullish_count < 2) {
+        return false;
+    }
+    
     // 5. [중요] 반등 확인 - 가장 마지막 캔들(back)이 양봉인가?
     bool recent_bullish = false;
     const auto& last_candle = candles.back();
@@ -673,37 +690,43 @@ bool ScalpingStrategy::isVolumeSpikeSignificant(
 ) const {
     (void)metrics;
 
-    // 1. 최소 데이터 확보 (최소 21개는 있어야 현재 1개 vs 과거 20개 비교 가능)
     if (candles.size() < 21) return false;
     
-    // 2. [핵심 수정] 현재 거래량은 가장 마지막(back) 데이터입니다.
+    // 현재(T=0, 맨 뒤) 거래량
     double current_volume = candles.back().volume;
     
-    // 3. [핵심 수정] 히스토리 데이터 구성 (현재 캔들을 제외한 직전 20개)
+    // 히스토리: T-20 ~ T-1 (총 20개)
     std::vector<double> volumes;
     volumes.reserve(20);
-    // 끝에서 두 번째 캔들부터 거꾸로 20개를 담음
+    
+    // candles.size() - 21 부터 candles.size() - 1 까지 (직전 캔들까지)
     for (size_t i = candles.size() - 21; i < candles.size() - 1; ++i) {
         volumes.push_back(candles[i].volume);
     }
     
-    // 4. Z-Score 계산
+    // volumes 벡터의 구성: [T-20, T-19, ..., T-2, T-1] (총 20개)
+    
+    // Z-Score (현재 거래량이 과거 20개 평균 대비 얼마나 튀었나)
     double z_score = calculateZScore(current_volume, volumes);
     
-    // [로그 추가] 디버깅을 위해 Z-Score를 찍어보세요.
-    // spdlog::info("Volume Z-Score: {:.2f} (Curr: {:.0f}, Hist Avg: {:.0f})", z_score, current_volume, calculateMean(volumes));
-
-    // 5. 조건 검사 (Z-Score 1.28은 상위 약 10% 급증을 의미)
     if (z_score < 1.28) { 
         return false;
     }
     
-    // 6. T-Test (최근 3분 추세 vs 그전 17분 비교)
-    // 데이터가 정렬되어 있으므로 마지막 3개가 최근입니다.
-    std::vector<double> recent_3(volumes.end() - 3, volumes.end());
-    std::vector<double> past_17(volumes.begin(), volumes.end() - 3);
+    // T-Test: 최근 3분(T-2, T-1, T-0) vs 과거(T-20 ~ T-3)
+    // T-0(현재)를 포함해야 '지금'의 추세를 알 수 있음
     
-    return isTTestSignificant(recent_3, past_17, 0.20); // 유의수준 0.20으로 완화
+    std::vector<double> recent_3;
+    recent_3.push_back(candles[candles.size()-3].volume);
+    recent_3.push_back(candles[candles.size()-2].volume);
+    recent_3.push_back(candles[candles.size()-1].volume); // 현재
+    
+    std::vector<double> past_17; // T-20 ~ T-4 (총 17개)
+    for(size_t i = candles.size()-20; i <= candles.size()-4; ++i) {
+        past_17.push_back(candles[i].volume);
+    }
+    
+    return isTTestSignificant(recent_3, past_17, 0.20);
 }
 
 double ScalpingStrategy::calculateZScore(
@@ -785,11 +808,17 @@ std::vector<analytics::Candle> ScalpingStrategy::resampleTo3m(
     
     std::vector<analytics::Candle> candles_3m;
     
-    for (size_t i = 0; i + 3 <= candles_1m.size(); i += 3) {
+    size_t n = candles_1m.size();
+    // 3의 배수로 맞추기 위해 앞부분을 버림 (최신 데이터를 살리기 위함)
+    size_t start_idx = n % 3; 
+    
+    for (size_t i = start_idx; i + 3 <= n; i += 3) {
         analytics::Candle candle_3m;
         
-        candle_3m.open = candles_1m[i + 2].open;
-        candle_3m.close = candles_1m[i].close;
+        // [수정] 1분봉은 시간순(Asc)이므로
+        // i: 시작(Open), i+2: 끝(Close)
+        candle_3m.open = candles_1m[i].open;
+        candle_3m.close = candles_1m[i + 2].close;
         candle_3m.high = candles_1m[i].high;
         candle_3m.low = candles_1m[i].low;
         candle_3m.volume = 0;
@@ -800,6 +829,7 @@ std::vector<analytics::Candle> ScalpingStrategy::resampleTo3m(
             candle_3m.volume += candles_1m[j].volume;
         }
         
+        // 타임스탬프는 시작 시간 or 끝 시간? 보통 캔들 시작 시간을 씁니다.
         candle_3m.timestamp = candles_1m[i].timestamp;
         candles_3m.push_back(candle_3m);
     }

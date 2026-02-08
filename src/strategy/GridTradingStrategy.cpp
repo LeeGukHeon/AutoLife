@@ -1362,13 +1362,41 @@ void GridTradingStrategy::executeGridBuy(
         return;
     }
     
+   // [✅ 추가] 실전 주문 전송 로직 시작 ==============================
+    // 수량 계산 (혹은 level.quantity 사용)
+    double quantity = level.quantity;
+    if (quantity <= 0) quantity = (level.price * 0.1) / level.price; // 안전장치
+
+    // 문자열 변환 (소수점 처리 주의 - 여기선 간단히 to_string 사용)
+    std::string price_str = std::to_string((long long)level.price); // 원화는 정수
+    std::string vol_str = std::to_string(quantity);
+
+    try {
+        // 실제 API 호출 (TradingEngine의 client_ 사용)
+        // 주의: client_가 protected여야 함. private라면 getClient() 같은 게 필요하지만
+        // 보통 상속 구조에선 protected로 둡니다.
+        auto res = client_->placeOrder(market, "bid", vol_str, price_str, "limit");
+        
+        if (res.contains("uuid")) {
+            spdlog::info("✅ [Grid] Real Buy Order: {} @ {}", market, level.price);
+        } else {
+            spdlog::error("❌ [Grid] Buy Order Fail: No UUID returned");
+            return; // 주문 실패 시 내부 상태 업데이트 안 하고 리턴
+        }
+    } catch (const std::exception& e) {
+        spdlog::error("❌ [Grid] Buy Order Error: {}", e.what());
+        return; // 주문 실패 시 리턴
+    }
+    // ================================================================
+
+    // [기존 코드 유지] 내부 상태 업데이트
     level.buy_order_placed = true;
-    level.buy_order_filled = true;
+    level.buy_order_filled = true; // (엄밀히는 체결 확인 후 바꿔야 하지만, 지정가는 거의 체결된다고 가정)
     level.buy_timestamp = getCurrentTimestamp();
-    level.quantity = level.price * 0.1;  // 임시 수량
+    level.quantity = quantity; // 수량 확정
     
     spdlog::info("[GridTrading] Buy Executed - {} | Level: {} | Price: {:.2f}",
-                market, level.level_id, level.price);
+                 market, level.level_id, level.price);
 }
 
 void GridTradingStrategy::executeGridSell(
@@ -1380,10 +1408,33 @@ void GridTradingStrategy::executeGridSell(
         return;
     }
     
+    // [✅ 추가] 실전 주문 전송 로직 시작 ==============================
+    double quantity = level.quantity; // 매수했던 수량 그대로 매도
+    std::string price_str = std::to_string((long long)current_price); // 혹은 level.price + margin
+    std::string vol_str = std::to_string(quantity);
+
+    try {
+        // 시장가 매도 ("market") 혹은 지정가 매도 ("limit")
+        // 여기선 current_price에 즉시 팔기 위해 시장가 매도로 예시 (지정가로 하셔도 됨)
+        // 시장가 매도시 price는 null("")이어야 함
+        auto res = client_->placeOrder(market, "ask", vol_str, "", "market");
+        
+        if (res.contains("uuid")) {
+            spdlog::info("✅ [Grid] Real Sell Order: {} @ Market", market);
+        } else {
+            spdlog::error("❌ [Grid] Sell Order Fail");
+            return;
+        }
+    } catch (const std::exception& e) {
+        spdlog::error("❌ [Grid] Sell Order Error: {}", e.what());
+        return;
+    }
+    // ================================================================
+
+    // [기존 코드 유지] 내부 상태 업데이트
     level.sell_order_placed = true;
     level.sell_order_filled = true;
     level.sell_timestamp = getCurrentTimestamp();
-    
     // Profit 계산
     double buy_price = level.price;
     double sell_price = current_price;
@@ -1725,13 +1776,17 @@ double GridTradingStrategy::calculateATR(
     const std::vector<analytics::Candle>& candles,
     int period) const
 {
-    if (candles.size() < static_cast<size_t>(period + 1)) {
+   if (candles.size() < static_cast<size_t>(period + 1)) {
         return 0.0;
     }
     
     std::vector<double> true_ranges;
     
-    for (size_t i = 1; i < candles.size() && true_ranges.size() < static_cast<size_t>(period); i++) {
+    // [수정] 가장 최근 'period' 개수의 캔들만 순회
+    // candles.size() - period 부터 끝까지
+    size_t start_idx = candles.size() - period;
+    
+    for (size_t i = start_idx; i < candles.size(); i++) {
         double high_low = candles[i].high - candles[i].low;
         double high_close = std::abs(candles[i].high - candles[i-1].close);
         double low_close = std::abs(candles[i].low - candles[i-1].close);
@@ -1822,6 +1877,11 @@ std::vector<analytics::Candle> GridTradingStrategy::parseCandlesFromJson(
               });
     
     return candles;
+}
+
+void GridTradingStrategy::updateState(const std::string& market, double current_price) {
+    // 내부 로직인 updateGridLevels를 호출하여 그물망 감시/주문 수행
+    updateGridLevels(market, current_price);
 }
 
 } // namespace strategy

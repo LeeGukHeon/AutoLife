@@ -559,7 +559,7 @@ std::vector<analytics::Candle> BreakoutStrategy::getCachedCandles(
     }
     
     try {
-        nlohmann::json json_data = client_->getCandles(market, "minutes/1", count);
+        nlohmann::json json_data = client_->getCandles(market, "minutes/5", count);
         auto candles = parseCandlesFromJson(json_data);
         
         candle_cache_[market] = candles;

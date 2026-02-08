@@ -66,46 +66,46 @@ bool RateLimiter::tryAcquire(const std::string& group) {
 void RateLimiter::acquire(const std::string& group) {
     std::unique_lock<std::mutex> lock(mutex_);
     
-    auto it = configs_.find(group);
-    if (it == configs_.end()) it = configs_.find("default");
-    auto& config = it->second;
-    
-    // 조건이 충족될 때까지 효율적으로 대기 (Busy waiting 없음)
     while (true) {
-        // 1. 차단 상태면 풀릴 때까지 대기
+        // 1. 차단 상태 체크
         if (is_blocked_) {
-            auto status = cv_.wait_until(lock, block_end_time_);
-            if (status == std::cv_status::timeout) {
-                is_blocked_ = false; // 타임아웃 되면 차단 해제
+            cv_.wait_until(lock, block_end_time_);
+            if (std::chrono::steady_clock::now() >= block_end_time_) {
+                is_blocked_ = false;
             } else {
-                continue; // 누군가 깨웠지만 아직 차단 중일 수 있으므로 다시 체크
+                continue; // Spurious wakeup 방지
             }
         }
 
-        // 2. 윈도우 리셋 및 토큰 체크
+        // Config 찾기
+        auto it = configs_.find(group);
+        if (it == configs_.end()) it = configs_.find("default");
+        auto& config = it->second;
+
+        // 2. 윈도우 리셋 체크
         resetWindowIfNeeded(config);
         
+        // 3. 자원 획득 시도
         if (config.current_count < config.max_per_second) {
-            // 자원 획득 성공!
             config.current_count++;
             total_requests_++;
-            return; // 함수 종료
+            return;
         }
         
-        // 3. 자원 부족 -> 다음 윈도우 시작 지점까지 대기
-        // window_start + 1초 + 아주 약간의 여유(1ms)
+        // 4. 자원 부족 시 대기
+        auto now = std::chrono::steady_clock::now();
+        // 정확히 다음 윈도우 시작 시점 계산
         auto wake_time = config.window_start + std::chrono::seconds(1) + std::chrono::milliseconds(1);
         
-        forced_waits_++;
-        auto wait_start = std::chrono::steady_clock::now();
-        
-        // 지정된 시간까지 sleep (도중에 윈도우가 리셋되어 notify가 오면 즉시 깨어남)
-        cv_.wait_until(lock, wake_time);
-        
-        total_wait_time_ += std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - wait_start
-        );
-        // 루프 다시 돌면서 자원 획득 재시도
+        if (wake_time > now) {
+            forced_waits_++;
+            // wait_until은 타임아웃 시 cv_status::timeout 반환
+            // notify_all()에 의해 깨어나더라도 루프를 다시 돌며 resetWindowIfNeeded를 수행하므로 OK
+            cv_.wait_until(lock, wake_time);
+        } else {
+            // 이미 시간이 지났다면 즉시 리셋 시도 (루프 다시 돎)
+            // resetWindowIfNeeded가 루프 상단에서 처리함
+        }
     }
 }
 

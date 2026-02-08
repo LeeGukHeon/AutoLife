@@ -177,12 +177,17 @@ bool MomentumStrategy::shouldEnter(
         return false;
     }
     
+    // [수정된 부분] 최근 3개 캔들 확인 (Old -> New 순서이므로 뒤에서부터 확인)
     int bullish_count = 0;
-    for (int i = 0; i < std::min(3, (int)candles.size()); ++i) {
+    size_t n = candles.size();
+    size_t start_check = (n >= 3) ? n - 3 : 0; // 뒤에서 3번째부터 시작
+
+    for (size_t i = start_check; i < n; ++i) {
         if (candles[i].close > candles[i].open) {
             bullish_count++;
         }
     }
+
     if (bullish_count < 2) {
         return false;
     }
@@ -424,27 +429,35 @@ bool MomentumStrategy::isVolumeSurgeSignificant(
     // 1. 최소 데이터 확보 (현재 1개 + 과거 30개 = 31개)
     if (candles.size() < 31) return false;
     
-    // 2. [핵심 수정] 현재 거래량은 가장 마지막 데이터
-    double current_volume = candles.back().volume;
-    
-    // 3. [핵심 수정] 히스토리 데이터 구성 (현재 캔들 제외, 직전 30개)
+    // 2. [수정] 전체 31개 데이터 수집 (과거 30개 + 현재 1개)
     std::vector<double> volumes;
-    volumes.reserve(30);
-    // 정렬된 candles의 뒤에서 31번째부터 뒤에서 2번째까지
-    for (size_t i = candles.size() - 31; i < candles.size() - 1; ++i) {
+    volumes.reserve(31);
+    
+    // 정렬된 candles의 뒤에서 31번째부터 끝까지
+    for (size_t i = candles.size() - 31; i < candles.size(); ++i) {
         volumes.push_back(candles[i].volume);
     }
 
-    double z_score = calculateZScore(current_volume, volumes);
+    // 3. Z-Score 계산 (현재값 vs 과거 30개 평균)
+    double current_volume = volumes.back();
+    // history: volumes의 처음부터 뒤에서 두 번째까지 (마지막 제외)
+    std::vector<double> history(volumes.begin(), volumes.end() - 1);
     
+    double z_score = calculateZScore(current_volume, history);
+    
+    // [중요] Z-Score 필터링 (누락되었던 부분 복구!)
+    // 1.96은 95% 신뢰구간을 의미. 즉, 상위 2.5% 수준의 급등만 인정
     if (z_score < 1.96) {
         return false;
     }
     
+    // 4. T-Test: 최근 5개(현재 포함) vs 그 이전 26개
+    // volumes 벡터 내에서 분리
     std::vector<double> recent_5(volumes.end() - 5, volumes.end());
-    std::vector<double> past_25(volumes.begin(), volumes.end() - 5);
+    std::vector<double> past_26(volumes.begin(), volumes.end() - 5);
     
-    return isTTestSignificant(recent_5, past_25, 0.05);
+    // 유의수준 0.05 (5%)
+    return isTTestSignificant(recent_5, past_26, 0.05);
 }
 
 double MomentumStrategy::calculateZScore(

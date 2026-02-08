@@ -75,32 +75,27 @@ HttpResponse UpbitHttpClient::post(
     
     std::string url = base_url_ + endpoint;
     
+    // [핵심 수정] JSON을 순회하며 단순 문자열 맵으로 변환
+    // dump()를 쓰지 않고 타입을 체크하여 변환해야 안전함
     std::map<std::string, std::string> query_params;
+    
     for (auto& [key, value] : body.items()) {
-        query_params[key] = value.dump();
-        query_params[key].erase(
-            std::remove(query_params[key].begin(), query_params[key].end(), '"'),
-            query_params[key].end()
-        );
+        if (value.is_string()) {
+            query_params[key] = value.get<std::string>(); // 따옴표 없는 순수 문자열
+        } else {
+            query_params[key] = value.dump(); // 숫자 등은 문자열로 변환
+        }
     }
     
+    // 이 map을 그대로 JwtGenerator에 넘김 (순수 데이터)
     std::string jwt_token = JwtGenerator::generate(access_key_, secret_key_, query_params);
     
     std::map<std::string, std::string> headers;
     headers["Authorization"] = "Bearer " + jwt_token;
     headers["Content-Type"] = "application/json";
     
-    auto response = performRequest("POST", url, body.dump(), headers);
-    
-    if (response.headers.find("Remaining-Req") != response.headers.end()) {
-        rate_limiter_->updateFromHeader(response.headers["Remaining-Req"]);
-    }
-    
-    if (response.isRateLimited() || response.isBlocked()) {
-        rate_limiter_->handleRateLimitError(response.status_code);
-    }
-    
-    return response;
+    // Body는 원본 JSON 그대로 전송
+    return performRequest("POST", url, body.dump(), headers);
 }
 
 HttpResponse UpbitHttpClient::del(

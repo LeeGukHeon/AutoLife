@@ -138,6 +138,7 @@ public:
     
     virtual Statistics getStatistics() const = 0;
     virtual void updateStatistics(const std::string& market, bool is_win, double profit_loss) = 0;
+    virtual void updateState(const std::string&, double) {}
 };
 
 } // namespace strategy
