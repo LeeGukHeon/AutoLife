@@ -24,7 +24,7 @@ private:
     Config() = default;
     std::string access_key_;
     std::string secret_key_;
-    double initial_capital_ = 1000000.0;
+    double initial_capital_ = 50000.0;
     double max_drawdown_ = 0.15;
     double position_size_ratio_ = 0.01;
     std::string log_level_ = "info";

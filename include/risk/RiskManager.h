@@ -199,7 +199,7 @@ public:
             , total_trades(0), winning_trades(0), losing_trades(0), win_rate(0)
             , max_drawdown(0), current_drawdown(0)
             , sharpe_ratio(0), profit_factor(0)
-            , active_positions(0), max_positions(5)
+            , active_positions(0), max_positions(10)
         {}
     };
     

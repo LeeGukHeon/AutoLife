@@ -394,7 +394,7 @@ bool TradingEngine::executeBuyOrder(
         auto metrics = risk_manager_->getRiskMetrics();
        // [✅ 최후의 근본적 보정 로직 추가]
         // 업비트 최소 주문 금액(5,000원)을 맞추기 위한 최종 방어선
-        double min_required_ratio = (config_.min_order_krw + 500.0) / metrics.available_capital;
+        double min_required_ratio = (config_.min_order_krw + 600.0) / metrics.available_capital;
 
         // 함수 시작 부분
         auto modified_signal = signal; // 복사본 생성
@@ -457,7 +457,7 @@ bool TradingEngine::executeBuyOrder(
             // 4. [검증] 체결 확인 (Fill Verification)
             //    주문이 서버에 도달했어도, '체결'이 되었는지는 확인해야 함.
             //    약 1초 대기 후 상태 조회
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
             
             auto check_res = http_client_->getOrder(uuid);
             std::string state = check_res["state"].get<std::string>();
@@ -507,8 +507,8 @@ bool TradingEngine::executeBuyOrder(
                 avg_price,        // 실제 체결 평단
                 executed_volume,  // 실제 체결 수량
                 avg_price * 0.98, // SL -2% (예시)
-                avg_price * 1.015,// TP 1.5%
-                avg_price * 1.03, // TP 3.0%
+                avg_price * 1.020,// TP 1.5%
+                avg_price * 1.030, // TP 3.0%
                 signal.strategy_name
             );
             
@@ -617,7 +617,7 @@ void TradingEngine::monitorPositions() {
         // 1차 익절 체크 (50% 청산)
         if (!updated_pos->half_closed && current_price >= updated_pos->take_profit_1) {
             LOG_INFO("💰 1차 익절 조건 도달! (수익률: {:+.2f}%)", updated_pos->unrealized_pnl_pct * 100.0);
-            executePartialSell(pos.market, *updated_pos);
+            executePartialSell(pos.market, *updated_pos, current_price);
             continue; // 부분 매도 후 다음 종목으로
         }
         
@@ -636,7 +636,7 @@ void TradingEngine::monitorPositions() {
                 reason = "strategy_exit"; // 전략에서 청산 신호 보냄 (TS 등)
             }
             
-            executeSellOrder(pos.market, *updated_pos, reason);
+            executeSellOrder(pos.market, *updated_pos, reason, current_price);
         }
     }
 }
@@ -644,18 +644,19 @@ void TradingEngine::monitorPositions() {
 bool TradingEngine::executeSellOrder(
     const std::string& market,
     const risk::Position& position,
-    const std::string& reason
+    const std::string& reason,
+    double current_price
 ) {
     LOG_INFO("📉 전량 매도 실행: {} (이유: {})", market, reason);
     
-    double current_price = getCurrentPrice(market);
+    //double current_price = getCurrentPrice(market);
     if (current_price <= 0) {
         LOG_ERROR("현재가 조회 실패: {}", market);
         return false;
     }
     
     // 전량 매도
-    double sell_quantity = position.quantity;
+    double sell_quantity = std::floor(position.quantity * 0.9999 * 100000000.0) / 100000000.0;
     double invest_amount = sell_quantity * current_price;
     
     // 1. 최소 주문 금액 체크
@@ -664,6 +665,11 @@ bool TradingEngine::executeSellOrder(
         return false;
     }
     
+    // 2. 문자열 변환 시 std::to_string 대신 정밀도를 고정한 stringstream 사용 (매우 중요)
+        std::stringstream ss;
+        ss << std::fixed << std::setprecision(8) << sell_quantity;
+        std::string quantity_str = ss.str();
+
     // 2. 실전 주문 실행
     bool order_success = true;
     if (config_.mode == TradingMode::LIVE) {
@@ -676,7 +682,7 @@ bool TradingEngine::executeSellOrder(
                 auto order = http_client_->placeOrder(
                     market, 
                     "ask", 
-                    std::to_string(sell_quantity), 
+                    quantity_str, 
                     "", 
                     "market" // [중요] 시장가 매도
                 );
@@ -720,31 +726,38 @@ bool TradingEngine::executeSellOrder(
 }
 
 
-bool TradingEngine::executePartialSell(
-    const std::string& market,
-    const risk::Position& position
-) {
-    LOG_INFO("✂️ 부분 매도 실행 (50%): {}", market);
-    
-    double current_price = getCurrentPrice(market);
-    if (current_price <= 0) {
+bool TradingEngine::executePartialSell(const std::string& market, const risk::Position& position, double current_price) {
+
+    //double current_price = getCurrentPrice(market);
+
+        if (current_price <= 0) {
         LOG_ERROR("현재가 조회 실패: {}", market);
         return false;
     }
     
     // 50% 수량 계산
-    double sell_quantity = position.quantity * 0.5;
+    double sell_quantity = std::floor(position.quantity * 0.5 * 100000000.0) / 100000000.0;
     double invest_amount = sell_quantity * current_price;
     
-    // 1. 최소 주문 금액 체크
+    // 1. 최소 주문 금액 체크 및 대응
     if (invest_amount < config_.min_order_krw) {
-        LOG_WARN("부분 매도 금액 부족: {:.0f} < {:.0f}", invest_amount, config_.min_order_krw);
-        return false;
+        LOG_WARN("⚠️ 부분 매도 금액 부족 ({:.0f}원). 전량 매도로 전환합니다.", invest_amount);
+        
+        // [핵심] 여기서 전량 매도 함수를 호출하여 포지션을 완전히 정리해버립니다.
+        // 그래야 다음 루프에서 다시 진입하지 않습니다.
+        return executeSellOrder(market, position, "Partial sell amount too small - Force Exit", current_price);
     }
+    
+    LOG_INFO("✂️ 부분 매도 실행 (50%): {}", market);
     
     LOG_INFO("  진입가: {:.0f}, 청산가: {:.0f}, 부분매도: {:.8f}",
              position.entry_price, current_price, sell_quantity);
     
+    // 2. 문자열 변환 시 std::to_string 대신 정밀도를 고정한 stringstream 사용 (매우 중요)
+    std::stringstream ss;
+    ss << std::fixed << std::setprecision(8) << sell_quantity;
+    std::string quantity_str = ss.str();
+
     // 2. 실전 주문 실행
     bool order_success = true;
     if (config_.mode == TradingMode::LIVE) {
@@ -756,7 +769,7 @@ bool TradingEngine::executePartialSell(
                 auto order = http_client_->placeOrder(
                     market, 
                     "ask", 
-                    std::to_string(sell_quantity), 
+                    quantity_str, 
                     "", 
                     "market" // [중요] 시장가 매도
                 );
@@ -828,26 +841,26 @@ void TradingEngine::manualScan() {
     generateSignals();
 }
 
-void TradingEngine::manualClosePosition(const std::string& market) {
-    LOG_INFO("수동 청산: {}", market);
+// void TradingEngine::manualClosePosition(const std::string& market) {
+//     LOG_INFO("수동 청산: {}", market);
     
-    auto* pos = risk_manager_->getPosition(market);
-    if (!pos) {
-        LOG_WARN("포지션 없음: {}", market);
-        return;
-    }
+//     auto* pos = risk_manager_->getPosition(market);
+//     if (!pos) {
+//         LOG_WARN("포지션 없음: {}", market);
+//         return;
+//     }
     
-    executeSellOrder(market, *pos, "manual");
-}
+//     executeSellOrder(market, *pos, "manual", current_price);
+// }
 
-void TradingEngine::manualCloseAll() {
-    LOG_INFO("전체 포지션 수동 청산");
+// void TradingEngine::manualCloseAll() {
+//     LOG_INFO("전체 포지션 수동 청산");
     
-    auto positions = risk_manager_->getAllPositions();
-    for (const auto& pos : positions) {
-        executeSellOrder(pos.market, pos, "manual_all");
-    }
-}
+//     auto positions = risk_manager_->getAllPositions();
+//     for (const auto& pos : positions) {
+//         executeSellOrder(pos.market, pos, "manual_all", current_price);
+//     }
+// }
 
 // ===== 헬퍼 함수 (수정) =====
 
@@ -858,9 +871,10 @@ double TradingEngine::getCurrentPrice(const std::string& market) {
             return 0;
         }
         
-        // trade_price는 double 타입
-        if (ticker.contains("trade_price")) {
-            return ticker["trade_price"].get<double>();
+        // 2. nlohmann/json 사용 시 안전한 타입 변환
+        if (ticker.contains("trade_price") && !ticker["trade_price"].is_null()) {
+            // value()를 사용하여 타입이 모호해도 double로 강제 변환 시도
+            return ticker.value("trade_price", 0.0);
         }
         
         return 0;
@@ -964,8 +978,16 @@ void TradingEngine::syncAccountState() {
             LOG_INFO("🔍 기존 보유 코인 발견: {} (수량: {:.8f}, 평단: {:.0f})", 
                      market, balance, avg_buy_price);
 
-            double current_price = getCurrentPrice(market); 
-            double safe_stop_loss = std::min(avg_buy_price * 0.95, current_price * 0.95);
+            //double current_price = getCurrentPrice(market); 
+            // 1. [기존] 단순 비율 손절가
+            double target_sl = avg_buy_price * 0.97;
+
+            // 2. [추가] 5,100원 마지노선을 지키기 위한 단가 계산 
+            // balance(수량)가 0일 경우를 대비해 아주 작은 값(1e-9)으로 안전장치
+            double upbit_limit_sl = 5100.0 / (balance > 0 ? balance : 1e-9);
+
+            // 3. [보정] 둘 중 높은 가격을 손절가로 채택
+            double safe_stop_loss = std::max(target_sl, upbit_limit_sl);
 
             // 포지션 복구
             risk_manager_->enterPosition(
@@ -973,8 +995,8 @@ void TradingEngine::syncAccountState() {
                 avg_buy_price,
                 balance,
                 safe_stop_loss,
-                avg_buy_price * 1.03,
-                avg_buy_price * 1.05,
+                avg_buy_price * 1.010,
+                avg_buy_price * 1.015,
                 "RECOVERED"
             );
         }

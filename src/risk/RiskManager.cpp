@@ -12,7 +12,7 @@ RiskManager::RiskManager(double initial_capital)
     , current_capital_(initial_capital)
     , daily_trade_count_(0)
     , daily_reset_time_(0)
-    , max_positions_(5)
+    , max_positions_(10)
     , max_daily_trades_(20)
     , max_drawdown_pct_(0.10)  // 10%
     , min_reentry_interval_(300)  // 5분
@@ -75,7 +75,7 @@ bool RiskManager::canEnterPosition(
         invested_sum += pos.invested_amount;
     }
     
-    double available_cash = current_capital_ - invested_sum;
+    double available_cash = current_capital_;
     double required_amount = current_capital_ * position_size_ratio;
     
     if (required_amount > available_cash) {
@@ -128,8 +128,8 @@ void RiskManager::enterPosition(
              market, quantity, pos.invested_amount, entry_fee, current_capital_);
     LOG_INFO("   └ 설정: 손절 {:.0f} ({:.2f}%), 익절1 {:.0f} ({:.2f}%), 익절2 {:.0f} ({:.2f}%)",
              stop_loss, (stop_loss - entry_price) / entry_price * 100.0,
-             take_profit_1, (take_profit_1 - entry_price) / entry_price * 100.0,
-             take_profit_2, (take_profit_2 - entry_price) / entry_price * 100.0);
+             entry_price * 1.020, 2.0,
+             entry_price * 1.030, 3.0);
 }
 
 // ===== 포지션 업데이트 =====
@@ -487,8 +487,8 @@ RiskManager::RiskMetrics RiskManager::getRiskMetrics() const {
     // 현재 총 자산 가치 (Equity)
     double total_equity = current_capital_ + metrics.unrealized_pnl;
     
-    metrics.total_capital = total_equity;
-    metrics.available_capital = current_capital_ - metrics.invested_capital;
+    metrics.total_capital = current_capital_ + metrics.invested_capital + metrics.unrealized_pnl;
+    metrics.available_capital = current_capital_;
     metrics.realized_pnl = current_capital_ - initial_capital_;
     metrics.total_pnl = metrics.realized_pnl + metrics.unrealized_pnl;
     metrics.total_pnl_pct = (initial_capital_ > 0) ? (metrics.total_pnl / initial_capital_) : 0.0;

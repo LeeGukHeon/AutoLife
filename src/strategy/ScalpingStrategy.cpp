@@ -112,7 +112,7 @@ Signal ScalpingStrategy::generateSignal(
     
     // 2. Multi-Timeframe
     auto mtf_signal = analyzeScalpingTimeframes(candles);
-    if (mtf_signal.alignment_score < 0.35) {
+    if (mtf_signal.alignment_score < 0.4) {
         LOG_INFO("{} - [Scalping] MTF 정렬 부족: {:.2f}", market, mtf_signal.alignment_score);
         return signal;
     }
@@ -121,7 +121,7 @@ Signal ScalpingStrategy::generateSignal(
     
     // 3. Ultra-Fast Order Flow
     auto order_flow = analyzeUltraFastOrderFlow(market, current_price);
-    if (order_flow.microstructure_score < 0.35) {
+    if (order_flow.microstructure_score < 0.4) {
         LOG_INFO("{} - [Scalping] 미세구조 점수 부족: {:.2f}", market, order_flow.microstructure_score);
         return signal;
     }
@@ -131,7 +131,7 @@ Signal ScalpingStrategy::generateSignal(
         metrics, candles, mtf_signal, order_flow, microstate
     );
     
-    if (signal.strength < 0.5) {
+    if (signal.strength < 0.65) {
         LOG_INFO("{} - 신호 강도 부족: {:.2f}", market, signal.strength);
         return signal;
     }

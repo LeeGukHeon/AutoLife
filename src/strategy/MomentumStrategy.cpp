@@ -84,7 +84,7 @@ Signal MomentumStrategy::generateSignal(
     
     // 3. Order Flow
     auto order_flow = analyzeAdvancedOrderFlow(market, current_price);
-    if (order_flow.microstructure_score < 0.30) {
+    if (order_flow.microstructure_score < 0.40) {
         LOG_INFO("{} - 미세구조 점수 부족: {:.2f}", market, order_flow.microstructure_score);
         return signal;
     }
@@ -92,7 +92,7 @@ Signal MomentumStrategy::generateSignal(
     // 4. Signal Strength
     signal.strength = calculateSignalStrength(metrics, candles, mtf_signal, order_flow, regime);
     
-    if (signal.strength < 0.50) {
+    if (signal.strength < 0.65) {
         LOG_INFO("{} - 신호 강도 부족: {:.2f}", market, signal.strength);
         return signal;
     }

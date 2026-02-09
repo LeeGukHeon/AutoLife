@@ -40,18 +40,18 @@ struct EngineConfig {
     double max_daily_loss_krw = 50000.0;    // 일일 최대 손실 5만원
     double max_order_krw = 500000.0;        // 단일 주문 최대 50만원
     double min_order_krw = 5000.0;          // 단일 주문 최소 5천원
-    bool dry_run = true;                    // 실전모드라도 실제 주문 안하고 로그만
+    bool dry_run = false;                    // 실전모드라도 실제 주문 안하고 로그만
 
     // 전략 설정
     std::vector<std::string> enabled_strategies;
     
     EngineConfig()
         : mode(TradingMode::PAPER)
-        , initial_capital(1000000)
+        , initial_capital(50000)
         , scan_interval_seconds(60)
         , min_volume_krw(5000000000LL)  // ✅ LL 추가
-        , max_positions(5)
-        , max_daily_trades(20)
+        , max_positions(10)
+        , max_daily_trades(50)
         , max_drawdown(0.10)
     {}
 };
@@ -107,12 +107,14 @@ private:
     bool executeSellOrder(
         const std::string& market,
         const risk::Position& position,
-        const std::string& reason
+        const std::string& reason,
+        double current_price
     );
     
     bool executePartialSell(
         const std::string& market,
-        const risk::Position& position
+        const risk::Position& position,
+        double current_price
     );
     
     // ===== 헬퍼 함수 =====

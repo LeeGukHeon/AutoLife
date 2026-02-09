@@ -51,7 +51,7 @@ void Config::load(const std::string& path) {
             auto& t = j["trading"];
 
             // [기존 멤버 변수 업데이트] (호환성 유지)
-            initial_capital_ = t.value("initial_capital", 1000000.0);
+            initial_capital_ = t.value("initial_capital", 50000.0);
             max_drawdown_ = t.value("max_drawdown", 0.15);
             position_size_ratio_ = t.value("position_size_ratio", 0.01);
             log_level_ = t.value("log_level", "info");
@@ -69,14 +69,14 @@ void Config::load(const std::string& path) {
             engine_config_.scan_interval_seconds = t.value("scan_interval_seconds", 60);
             engine_config_.min_volume_krw = t.value("min_volume_krw", 1000000000LL); // long long
             
-            engine_config_.max_positions = t.value("max_positions", 5);
-            engine_config_.max_daily_trades = t.value("max_daily_trades", 20);
+            engine_config_.max_positions = t.value("max_positions", 10);
+            engine_config_.max_daily_trades = t.value("max_daily_trades", 50);
             engine_config_.max_drawdown = max_drawdown_; // 위에서 읽은 값 사용
             
             // 안전 설정
             engine_config_.max_daily_loss_krw = t.value("max_daily_loss_krw", 50000.0);
             engine_config_.max_order_krw = t.value("max_order_krw", 500000.0);
-            engine_config_.min_order_krw = t.value("min_order_krw", 4950.0);
+            engine_config_.min_order_krw = t.value("min_order_krw", 5000.0);
 
             // 전략 목록
             if (t.contains("enabled_strategies")) {
