@@ -227,6 +227,8 @@ public:
     
     RiskMetrics getRiskMetrics() const;
     std::vector<TradeHistory> getTradeHistory() const;
+    void replaceTradeHistory(const std::vector<TradeHistory>& history);
+    void appendTradeHistory(const TradeHistory& trade);
     
     // [NEW] 포지션의 신호 정보 설정 (ML 학습용)
     void setPositionSignalInfo(
@@ -241,6 +243,7 @@ public:
         double amount,
         const std::string& strategy_name
     );
+    double getReservedGridCapital(const std::string& market) const;
     void releaseGridCapital(const std::string& market);
     bool applyGridFill(
         const std::string& market,
@@ -264,6 +267,11 @@ public:
     void setMaxDrawdown(double max_drawdown_pct);
     void setMaxExposurePct(double pct);
     void setMinReentryInterval(int seconds);
+    void setMinOrderKrw(double min_order_krw);
+    void setDailyLossLimitPct(double pct);
+    void setDailyLossLimitKrw(double krw);
+    bool isDailyLossLimitExceeded() const;
+    double getDailyLossPct() const;
     
 private:
     struct GridInventory {
@@ -288,6 +296,13 @@ private:
     std::map<std::string, long long> last_trade_time_;  // 마켓별 마지막 거래 시간
     int daily_trade_count_;
     long long daily_reset_time_;
+    double daily_start_capital_;
+    double daily_loss_limit_pct_;
+    double daily_loss_limit_krw_;
+    long long daily_start_date_;
+
+    double min_order_krw_;
+    double recommended_min_enter_krw_;
     
     // 설정
     int max_positions_;
@@ -311,6 +326,7 @@ private:
     void recordTrade(const Position& pos, double exit_price, const std::string& exit_reason);
     long long getCurrentTimestamp() const;
     void resetDailyCountIfNeeded();
+    void resetDailyLossIfNeeded();
     void updateCapital(double amount_change);
 };
 

@@ -172,11 +172,31 @@ bool GridTradingStrategy::shouldEnter(
     const std::vector<analytics::Candle>& candles,
     double current_price)
 {
-    // generateSignal 호출 (내부 락 있음)
-    // 주의: shouldEnter 호출 시 available_capital 불가, 0 전달 (fallback to engine_config_.initial_capital)
-    Signal signal = generateSignal(market, metrics, candles, current_price, 0.0);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
-    return (signal.type == SignalType::BUY && signal.strength >= MIN_SIGNAL_STRENGTH);
+    if (active_positions_.find(market) != active_positions_.end()) {
+        return false;
+    }
+
+    if (candles.size() < 100) return false;
+    if (metrics.liquidity_score < MIN_LIQUIDITY_SCORE) return false;
+
+    if (active_grids_.find(market) != active_grids_.end()) {
+        return false;
+    }
+
+    if (!canTradeNow()) return false;
+
+    checkCircuitBreaker();
+    if (isCircuitBreakerActive()) return false;
+
+    long long now = getCurrentTimestamp();
+    if ((now - last_signal_time_) < MIN_SIGNAL_INTERVAL_SEC * 1000) {
+        return false;
+    }
+
+    GridSignalMetrics grid_signal = analyzeGridOpportunity(market, metrics, candles, current_price);
+    return shouldGenerateGridSignal(grid_signal);
 }
 
 // ===== Exit Decision =====
@@ -317,6 +337,12 @@ IStrategy::Statistics GridTradingStrategy::getStatistics() const
 {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     return stats_;
+}
+
+void GridTradingStrategy::setStatistics(const Statistics& stats)
+{
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    stats_ = stats;
 }
 
 // [수정] market 인자 추가 및 포지션 목록 삭제 로직
@@ -527,13 +553,16 @@ void GridTradingStrategy::onOrderResult(const OrderResult& result)
 
     double buy_price = level.price;
     double sell_price = result.executed_price > 0.0 ? result.executed_price : buy_price;
-    double profit_pct = (sell_price - buy_price) / buy_price;
-    profit_pct -= (UPBIT_FEE_RATE * 2);
+    double notional_buy = buy_price * level.quantity;
+    double notional_sell = sell_price * level.quantity;
+    double fee_krw = (notional_buy + notional_sell) * UPBIT_FEE_RATE;
+    double profit_krw = (sell_price - buy_price) * level.quantity - fee_krw;
+    double profit_pct = (notional_buy > 0.0) ? (profit_krw / notional_buy) : 0.0;
 
     level.profit_loss = profit_pct;
     level.cumulative_profit += profit_pct;
     level.round_trips++;
-    grid.realized_pnl += profit_pct;
+    grid.realized_pnl += profit_krw;
     grid.completed_cycles++;
 
     if (level.buy_timestamp > 0) {
@@ -562,16 +591,19 @@ void GridTradingStrategy::onOrderResult(const OrderResult& result)
         }
 
         if (all_closed) {
-            double total_pnl = grid.realized_pnl + grid.unrealized_pnl;
-            bool is_win = (total_pnl > 0);
+            double total_pnl_krw = grid.realized_pnl + grid.unrealized_pnl;
+            double total_pnl_pct = (grid.total_invested > 0.0)
+                ? (total_pnl_krw / grid.total_invested)
+                : 0.0;
+            bool is_win = (total_pnl_krw > 0.0);
 
-            updateStatistics(result.market, is_win, total_pnl);
+            updateStatistics(result.market, is_win, total_pnl_pct);
 
             const char* reason_str[] = {"NONE", "PROFIT", "STOP_LOSS", "BREAKOUT", "FLASH_CRASH", "MAX_TIME", "MANUAL"};
             spdlog::info("[GridTrading] Grid Exited - {} | Reason: {} | P&L: {:.3f}% | Cycles: {}",
                          result.market,
                          reason_str[static_cast<int>(grid.exit_reason)],
-                         total_pnl * 100,
+                         total_pnl_pct * 100,
                          grid.completed_cycles);
 
             released_markets_.push_back(result.market);
@@ -634,23 +666,34 @@ void GridTradingStrategy::updateGridLevels(
     grid.last_price = current_price;
     grid.last_price_update_timestamp = getCurrentTimestamp();
     
+    double target_spacing = std::max(grid.config.grid_spacing_pct, MIN_GRID_SPACING_PCT);
+
     // 각 레벨 체크
     for (auto& [level_id, level] : grid.levels) {
+        if (level.quantity <= 0.0 && grid.config.capital_per_grid > 0.0 && level.price > 0.0) {
+            level.quantity = grid.config.capital_per_grid / level.price;
+        }
+
         // Buy 주문 체크
         if (shouldPlaceBuyOrder(level, current_price) && !level.buy_order_placed) {
             executeGridBuy(market, level, current_price);
         }
         
         // Sell 주문 체크
-        if (shouldPlaceSellOrder(level, current_price) && !level.sell_order_placed) {
+        if (shouldPlaceSellOrder(level, current_price, target_spacing) && !level.sell_order_placed) {
             executeGridSell(market, level, current_price);
         }
     }
     
     // P&L 업데이트
     grid.unrealized_pnl = calculateGridUnrealizedPnL(grid, current_price);
-    grid.current_drawdown = (grid.unrealized_pnl < 0) ? 
-        std::abs(grid.unrealized_pnl / grid.total_invested) : 0.0;
+    if (grid.total_invested > 0.0) {
+        grid.current_drawdown = (grid.unrealized_pnl < 0)
+            ? std::abs(grid.unrealized_pnl / grid.total_invested)
+            : 0.0;
+    } else {
+        grid.current_drawdown = 0.0;
+    }
     
     if (grid.current_drawdown > grid.max_drawdown) {
         grid.max_drawdown = grid.current_drawdown;
@@ -685,7 +728,7 @@ bool GridTradingStrategy::shouldEmergencyExit(
         spdlog::error("[GridTrading] Flash Crash Detected - {} | Drop: {:.2f}% | Speed: {:.2f}%/min",
                      market, flash.price_drop_pct * 100, flash.drop_speed);
         emergencyLiquidateGrid(market, ExitReason::FLASH_CRASH);
-            return false; 
+        return true;
     }
     
     // Breakout 감지
@@ -1165,7 +1208,7 @@ GridConfiguration GridTradingStrategy::createGridConfiguration(
 {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     (void)market;  // market 파라미터 미사용
-    (void)available_capital;  // available_capital 파라미터 미사용
+    // available_capital은 grid sizing에 사용
     
     GridConfiguration config;
     
@@ -1180,6 +1223,11 @@ GridConfiguration GridTradingStrategy::createGridConfiguration(
     
     // 3. Optimal Grid Count 계산
     config.num_grids = calculateOptimalGridCount(range.range_width_pct, volatility, available_capital);
+    if (config.num_grids <= 0 || available_capital < MIN_CAPITAL_PER_GRID) {
+        config.num_grids = 0;
+        config.capital_per_grid = 0.0;
+        return config;
+    }
     
     // 4. Optimal Spacing 계산
     config.grid_spacing_pct = calculateOptimalSpacing(range.range_width_pct, volatility, config.num_grids);
@@ -1191,6 +1239,10 @@ GridConfiguration GridTradingStrategy::createGridConfiguration(
     // 최소 자본 확인
     if (config.capital_per_grid < MIN_CAPITAL_PER_GRID) {
         config.num_grids = static_cast<int>(available_capital / MIN_CAPITAL_PER_GRID);
+        if (config.num_grids <= 0) {
+            config.capital_per_grid = 0.0;
+            return config;
+        }
         config.capital_per_grid = available_capital / config.num_grids;
     }
     
@@ -1286,28 +1338,56 @@ GridType GridTradingStrategy::selectGridType(
 std::map<int, GridLevel> GridTradingStrategy::generateGridLevels(
     const GridConfiguration& config)
 {
+    if (config.num_grids <= 0 || config.capital_per_grid <= 0.0) {
+        return {};
+    }
+
+    std::map<int, GridLevel> levels;
+
     switch (config.type) {
         case GridType::ARITHMETIC:
-            return generateArithmeticGrid(config.center_price, 
-                                         config.grid_spacing_pct * config.center_price,
-                                         config.num_grids);
+            levels = generateArithmeticGrid(
+                config.center_price,
+                config.grid_spacing_pct * config.center_price,
+                config.num_grids
+            );
+            break;
         
         case GridType::GEOMETRIC:
-            return generateGeometricGrid(config.center_price,
-                                        config.grid_spacing_pct,
-                                        config.num_grids);
+            levels = generateGeometricGrid(
+                config.center_price,
+                config.grid_spacing_pct,
+                config.num_grids
+            );
+            break;
         
         case GridType::FIBONACCI:
-            return generateFibonacciGrid(config.center_price,
-                                        config.upper_bound - config.lower_bound,
-                                        config.num_grids);
+            levels = generateFibonacciGrid(
+                config.center_price,
+                config.upper_bound - config.lower_bound,
+                config.num_grids
+            );
+            break;
         
         case GridType::DYNAMIC:
         default:
-            return generateArithmeticGrid(config.center_price,
-                                         config.grid_spacing_pct * config.center_price,
-                                         config.num_grids);
+            levels = generateArithmeticGrid(
+                config.center_price,
+                config.grid_spacing_pct * config.center_price,
+                config.num_grids
+            );
+            break;
     }
+
+    if (config.capital_per_grid > 0.0) {
+        for (auto& item : levels) {
+            if (item.second.price > 0.0) {
+                item.second.quantity = config.capital_per_grid / item.second.price;
+            }
+        }
+    }
+
+    return levels;
 }
 
 std::map<int, GridLevel> GridTradingStrategy::generateArithmeticGrid(
@@ -1505,10 +1585,11 @@ GridSignalMetrics GridTradingStrategy::analyzeGridOpportunity(
     
     // 11. Signal Strength
     signal.strength = 0.0;
-    signal.strength += range.confidence * 0.4;
-    signal.strength += (range.adx < ADX_RANGING_THRESHOLD ? 0.3 : 0.0);
+    signal.strength += range.confidence * 0.35;
+    signal.strength += (range.adx < ADX_RANGING_THRESHOLD ? 0.25 : 0.0);
     signal.strength += (signal.is_profitable_after_fees ? 0.2 : 0.0);
     signal.strength += (metrics.liquidity_score / 100.0) * 0.1;
+    signal.strength += (1.0 - signal.risk_score) * 0.1;
     
     // 12. Validation
     signal.is_valid = (signal.strength >= MIN_SIGNAL_STRENGTH &&
@@ -1581,7 +1662,9 @@ void GridTradingStrategy::executeGridBuy(
 
     double quantity = level.quantity;
     if (quantity <= 0.0) {
-        quantity = (level.price * 0.1) / level.price;
+        spdlog::warn("[GridTrading] Buy skipped (invalid quantity): {} | Level: {}",
+                     market, level.level_id);
+        return;
     }
 
     double order_amount = level.price * quantity;
@@ -1654,12 +1737,16 @@ bool GridTradingStrategy::shouldPlaceBuyOrder(
     return current_price <= level.price * 1.001;  // 0.1% 허용
 }
 
-bool GridTradingStrategy::shouldPlaceSellOrder(const GridLevel& level, double current_price) const {
+bool GridTradingStrategy::shouldPlaceSellOrder(
+    const GridLevel& level,
+    double current_price,
+    double spacing_pct) const {
     if (!level.buy_order_filled || level.sell_order_placed) return false;
     
     // [수정] 내가 산 가격보다 한 칸(level_spacing) 위에 도달하면 매도
     // 혹은 설정된 최소 수익(spacing)만큼 올랐을 때 매도
-    double min_profit_price = level.price * (1.0 + MIN_GRID_SPACING_PCT);
+    double target_spacing = std::max(spacing_pct, MIN_GRID_SPACING_PCT);
+    double min_profit_price = level.price * (1.0 + target_spacing);
     return current_price >= min_profit_price;
 }
 
@@ -1669,6 +1756,7 @@ bool GridTradingStrategy::checkStopLoss(
     const GridPositionData& grid,
     double current_price) const
 {
+    (void)current_price;
     if (grid.current_drawdown >= grid.config.risk_limits.stop_loss_pct) {
         return true;
     }
@@ -1708,6 +1796,7 @@ FlashCrashMetrics GridTradingStrategy::detectFlashCrash(
     double current_price)
 {
     FlashCrashMetrics flash;
+    (void)market;
     
     if (candles.size() < 5) {
         return flash;
@@ -1725,8 +1814,8 @@ FlashCrashMetrics GridTradingStrategy::detectFlashCrash(
             flash.detection_time = getCurrentTimestamp();
             
             // 연속 하락 캔들 카운트
-            for (int i = candles.size() - 1; i >= 1; i--) {
-                if (candles[i].close < candles[i-1].close) {
+            for (size_t i = candles.size() - 1; i > 0; --i) {
+                if (candles[i].close < candles[i - 1].close) {
                     flash.consecutive_drops++;
                 } else {
                     break;
@@ -1832,14 +1921,17 @@ void GridTradingStrategy::exitGrid(
     }
 
     if (all_closed) {
-        double total_pnl = grid.realized_pnl + grid.unrealized_pnl;
-        bool is_win = (total_pnl > 0);
+        double total_pnl_krw = grid.realized_pnl + grid.unrealized_pnl;
+        double total_pnl_pct = (grid.total_invested > 0.0)
+            ? (total_pnl_krw / grid.total_invested)
+            : 0.0;
+        bool is_win = (total_pnl_krw > 0.0);
 
-        updateStatistics(market, is_win, total_pnl);
+        updateStatistics(market, is_win, total_pnl_pct);
 
         const char* reason_str[] = {"NONE", "PROFIT", "STOP_LOSS", "BREAKOUT", "FLASH_CRASH", "MAX_TIME", "MANUAL"};
         spdlog::info("[GridTrading] Grid Exited - {} | Reason: {} | P&L: {:.3f}% | Cycles: {}",
-                     market, reason_str[static_cast<int>(reason)], total_pnl * 100, grid.completed_cycles);
+                 market, reason_str[static_cast<int>(reason)], total_pnl_pct * 100, grid.completed_cycles);
 
         released_markets_.push_back(market);
     }
@@ -1888,27 +1980,34 @@ double GridTradingStrategy::calculateGridUnrealizedPnL(
     const GridPositionData& grid,
     double current_price) const
 {
-    double unrealized = 0.0;
+    double unrealized_krw = 0.0;
     
     for (const auto& [level_id, level] : grid.levels) {
         if (level.buy_order_filled && !level.sell_order_filled) {
-            double profit_pct = (current_price - level.price) / level.price;
-            profit_pct -= (UPBIT_FEE_RATE * 2);
-            unrealized += profit_pct;
+            double notional_buy = level.price * level.quantity;
+            double notional_sell = current_price * level.quantity;
+            double fee_krw = (notional_buy + notional_sell) * UPBIT_FEE_RATE;
+            double profit_krw = (current_price - level.price) * level.quantity - fee_krw;
+            unrealized_krw += profit_krw;
         }
     }
     
-    return unrealized;
+    return unrealized_krw;
 }
 
 void GridTradingStrategy::compoundProfits(GridPositionData& grid)
 {
     // 수익 재투자
-    if (grid.realized_pnl > 0.05) {  // 5% 이상 수익시
-        double additional_capital = grid.config.total_capital_allocated * grid.realized_pnl;
+    double realized_pct = (grid.total_invested > 0.0)
+        ? (grid.realized_pnl / grid.total_invested)
+        : 0.0;
+    if (realized_pct > 0.05) {  // 5% 이상 수익시
+        double additional_capital = grid.realized_pnl;
         
         grid.config.total_capital_allocated += additional_capital;
-        grid.config.capital_per_grid = grid.config.total_capital_allocated / grid.config.num_grids;
+        if (grid.config.num_grids > 0) {
+            grid.config.capital_per_grid = grid.config.total_capital_allocated / grid.config.num_grids;
+        }
         
         grid.realized_pnl = 0.0;
         

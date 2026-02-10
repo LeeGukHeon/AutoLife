@@ -182,47 +182,83 @@ bool MeanReversionStrategy::shouldEnter(
     const std::vector<analytics::Candle>& candles,
     double current_price)
 {
-    // generateSignal 호출 (내부 락 있음)
-    // 주의: shouldEnter 호출 시 available_capital 불가, 0 전달 (fallback to engine_config_.initial_capital)
-    Signal signal = generateSignal(market, metrics, candles, current_price, 0.0);
-    
-    if (signal.type == SignalType::BUY && signal.strength >= MIN_SIGNAL_STRENGTH) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        
-        // [수정] 1. 중복 방지 목록 등록
-        active_positions_.insert(market);
-        
-        // Kalman Filter 상태 가져오기
-        auto& kalman = getKalmanState(market);
-        
-        // [수정] 2. 포지션 데이터 초기화 (position_data_ 사용)
-        MeanReversionPositionData pos_data;
-        pos_data.market = market;
-        pos_data.entry_price = current_price;
-        pos_data.target_mean = kalman.estimated_mean;
-        // 0으로 나누기 방지
-        if (kalman.estimated_mean != 0) {
-            pos_data.initial_deviation = (current_price - kalman.estimated_mean) / kalman.estimated_mean;
-        } else {
-            pos_data.initial_deviation = 0.0;
-        }
-        pos_data.highest_price = current_price;
-        pos_data.trailing_stop = calculateStopLoss(current_price, candles); // 초기 스탑
-        pos_data.entry_timestamp = getCurrentTimestamp();
-        pos_data.tp1_hit = false;
-        pos_data.tp2_hit = false;
-        
-        position_data_[market] = pos_data;
-        
-        recordTrade();
-        
-        spdlog::info("[MeanReversion] Position Registered - {} | Entry: {:.2f} | Target: {:.2f}",
-                     market, current_price, kalman.estimated_mean);
-        
-        return true;
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (active_positions_.find(market) != active_positions_.end()) {
+        return false;
     }
-    
-    return false;
+
+    std::vector<analytics::Candle> candles_5m = resampleTo5m(candles);
+
+    if (candles_5m.size() < 150) {
+        return false;
+    }
+
+    if (metrics.liquidity_score < MIN_LIQUIDITY_SCORE) {
+        return false;
+    }
+
+    if (!canTradeNow()) {
+        return false;
+    }
+
+    checkCircuitBreaker();
+    if (isCircuitBreakerActive()) {
+        return false;
+    }
+
+    long long now = getCurrentTimestamp();
+    if ((now - last_signal_time_) < MIN_SIGNAL_INTERVAL_SEC * 1000) {
+        return false;
+    }
+
+    updateKalmanFilter(market, current_price);
+
+    MeanReversionSignalMetrics reversion = analyzeMeanReversion(market, metrics, candles_5m, current_price);
+    return shouldGenerateMeanReversionSignal(reversion);
+}
+
+bool MeanReversionStrategy::onSignalAccepted(const Signal& signal, double allocated_capital)
+{
+    (void)allocated_capital;
+
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (signal.market.empty()) {
+        return false;
+    }
+
+    if (active_positions_.find(signal.market) != active_positions_.end()) {
+        return false;
+    }
+
+    updateKalmanFilter(signal.market, signal.entry_price);
+    auto& kalman = getKalmanState(signal.market);
+
+    MeanReversionPositionData pos_data;
+    pos_data.market = signal.market;
+    pos_data.entry_price = signal.entry_price;
+    pos_data.target_mean = kalman.estimated_mean;
+    if (kalman.estimated_mean != 0.0) {
+        pos_data.initial_deviation = (signal.entry_price - kalman.estimated_mean) / kalman.estimated_mean;
+    } else {
+        pos_data.initial_deviation = 0.0;
+    }
+    pos_data.highest_price = signal.entry_price;
+    pos_data.trailing_stop = signal.stop_loss > 0.0
+        ? signal.stop_loss
+        : signal.entry_price * (1.0 - BASE_STOP_LOSS);
+    pos_data.entry_timestamp = getCurrentTimestamp();
+    pos_data.tp1_hit = false;
+    pos_data.tp2_hit = false;
+
+    active_positions_.insert(signal.market);
+    position_data_[signal.market] = pos_data;
+    recordTrade();
+
+    spdlog::info("[MeanReversion] Position Registered - {} | Entry: {:.2f} | Target: {:.2f}",
+                 signal.market, signal.entry_price, kalman.estimated_mean);
+    return true;
 }
 
 // ===== Exit Decision =====
@@ -457,6 +493,12 @@ void MeanReversionStrategy::updateStatistics(const std::string& market, bool is_
     
     updateRollingStatistics();
     checkCircuitBreaker();
+}
+
+void MeanReversionStrategy::setStatistics(const Statistics& stats)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    stats_ = stats;
 }
 
 // ===== Trailing Stop =====
@@ -1397,6 +1439,13 @@ double MeanReversionStrategy::calculateSignalStrength(
     // 6. Time Factor (5%)
     double time_score = std::clamp(120.0 / metrics.time_to_revert, 0.0, 1.0);
     strength += time_score * 0.05;
+
+    double spread_penalty = 0.0;
+    if (coin_metrics.orderbook_snapshot.valid) {
+        double normalized_spread = std::clamp(coin_metrics.orderbook_snapshot.spread_pct / 0.003, 0.0, 1.0);
+        spread_penalty = normalized_spread * 0.10;
+    }
+    strength -= spread_penalty;
     
     return std::clamp(strength, 0.0, 1.0);
 }

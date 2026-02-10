@@ -12,6 +12,10 @@ RiskManager::RiskManager(double initial_capital)
     , current_capital_(initial_capital)
     , daily_trade_count_(0)
     , daily_reset_time_(0)
+    , daily_start_capital_(initial_capital)
+    , daily_loss_limit_pct_(0.05)
+    , daily_loss_limit_krw_(50000.0)
+    , daily_start_date_(0)
     , max_positions_(10)
     , max_daily_trades_(20)
     , max_drawdown_pct_(0.10)  // 10%
@@ -19,9 +23,12 @@ RiskManager::RiskManager(double initial_capital)
     , min_reentry_interval_(300)  // 5분
     , max_capital_(initial_capital)
     , total_fees_paid_(0)
+    , min_order_krw_(5000.0)
+    , recommended_min_enter_krw_(6000.0)
 {
     LOG_INFO("RiskManager 초기화 - 초기 자본: {:.0f} KRW", initial_capital);
     resetDailyCountIfNeeded();
+    resetDailyLossIfNeeded();
 }
 
 // ===== 포지션 진입 =====
@@ -37,6 +44,7 @@ bool RiskManager::canEnterPosition(
     
     // [자정 리셋] daily_trade_count 자동 리셋
     resetDailyCountIfNeeded();
+    resetDailyLossIfNeeded();
     
     // [1] 이미 포지션 보유 중인지 확인
     if (getPosition(market) != nullptr) {
@@ -81,13 +89,13 @@ bool RiskManager::canEnterPosition(
         reserved_sum += amount;
     }
     
-    // [가용자본] 현재 현금 - 투자 중인 금액
-    double available_cash = current_capital_ - invested_sum - reserved_sum;
+    // [가용자본] 현금 잔고 기준 (투자 중인 금액은 이미 포지션에 묶여 있음)
+    double available_cash = current_capital_ - reserved_sum;
     if (available_cash < 0) available_cash = 0.0;
     
     // [최소값 기준]
-    const double MIN_ORDER_KRW = 5100.0;  // 업비트 거래소 최소 주문
-    const double RECOMMENDED_MIN_ENTER_KRW = 6000.0;  // 권장 진입 최소액
+    const double MIN_ORDER_KRW = min_order_krw_;
+    const double RECOMMENDED_MIN_ENTER_KRW = recommended_min_enter_krw_;
     // [추가] 기본 손절 3% 적용 후에도 최소 주문금액+매도 수수료를 만족해야 함
     const double BASE_STOP_LOSS_PCT = 0.03;
     const double FEE_RATE = 0.0005;  // 업비트 수수료 0.05%
@@ -118,7 +126,7 @@ bool RiskManager::canEnterPosition(
 
     // [추가] 손절 3% 가정 시 매도 최소 주문금액 충족 여부 확인
     // exit_amount = required_amount * (1 - BASE_STOP_LOSS_PCT)
-    // exit_amount - exit_fee >= EXCHANGE_MIN_ORDER_KRW
+    // exit_amount - exit_fee >= MIN_ORDER_KRW
     double min_required_for_exit = MIN_ORDER_KRW / ((1.0 - BASE_STOP_LOSS_PCT) * (1.0 - FEE_RATE));
     if (required_amount < min_required_for_exit) {
         LOG_WARN("{}★ 매수 불가: 손절 3% 적용 시 최소 매도금액 미충족 (필요 {:.0f}원, 현재 {:.0f}원)",
@@ -172,6 +180,67 @@ bool RiskManager::canEnterPosition(
     (void)strategy_name;
     
     return true;
+}
+
+void RiskManager::setDailyLossLimitPct(double pct) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (pct < 0.0) pct = 0.0;
+    if (pct > 1.0) pct = 1.0;
+    daily_loss_limit_pct_ = pct;
+    LOG_INFO("일 손실 한도 설정: {:.2f}%", daily_loss_limit_pct_ * 100.0);
+}
+
+void RiskManager::setDailyLossLimitKrw(double krw) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (krw < 0.0) krw = 0.0;
+    daily_loss_limit_krw_ = krw;
+    LOG_INFO("일 손실 한도 설정: {:.0f} KRW", daily_loss_limit_krw_);
+}
+
+void RiskManager::setMinOrderKrw(double min_order_krw) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (min_order_krw < 0.0) min_order_krw = 0.0;
+    min_order_krw_ = min_order_krw;
+    recommended_min_enter_krw_ = std::max(6000.0, min_order_krw_ * 1.2);
+    LOG_INFO("최소 주문 금액 설정: {:.0f} KRW (권장 진입: {:.0f} KRW)",
+             min_order_krw_, recommended_min_enter_krw_);
+}
+
+bool RiskManager::isDailyLossLimitExceeded() const {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    const_cast<RiskManager*>(this)->resetDailyLossIfNeeded();
+
+    if (daily_start_capital_ <= 0.0) return false;
+
+    double unrealized = 0.0;
+    for (const auto& [market, pos] : positions_) {
+        unrealized += pos.unrealized_pnl;
+    }
+
+    double equity = current_capital_ + unrealized;
+    double loss_krw = daily_start_capital_ - equity;
+    double loss_pct = loss_krw / daily_start_capital_;
+
+    if (daily_loss_limit_krw_ > 0.0 && loss_krw >= daily_loss_limit_krw_) {
+        return true;
+    }
+
+    return loss_pct >= daily_loss_limit_pct_;
+}
+
+double RiskManager::getDailyLossPct() const {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    const_cast<RiskManager*>(this)->resetDailyLossIfNeeded();
+
+    if (daily_start_capital_ <= 0.0) return 0.0;
+
+    double unrealized = 0.0;
+    for (const auto& [market, pos] : positions_) {
+        unrealized += pos.unrealized_pnl;
+    }
+
+    double equity = current_capital_ + unrealized;
+    return (daily_start_capital_ - equity) / daily_start_capital_;
 }
 
 void RiskManager::enterPosition(
@@ -592,14 +661,14 @@ RiskManager::RiskMetrics RiskManager::getRiskMetrics() const {
     }
     
     // 2. 가용 현금
-    // = 현재 현금 잔고(current_capital_) - 투자 중인 자본
-    // (누적 수수료는 current_capital_에 이미 반영되어 있음)
+    // = 현재 현금 잔고(current_capital_) - 예약 자본
+    // (투자 중인 자본은 이미 포지션에 묶여 있어 현금에서 차감된 상태)
     metrics.reserved_capital = 0.0;
     for (const auto& [m, amount] : reserved_grid_capital_) {
         metrics.reserved_capital += amount;
     }
 
-    metrics.available_capital = current_capital_ - metrics.invested_capital - metrics.reserved_capital;
+    metrics.available_capital = current_capital_ - metrics.reserved_capital;
     if (metrics.available_capital < 0) metrics.available_capital = 0.0;
     
     // 3. 총 자산 가치 (Equity)
@@ -688,6 +757,16 @@ std::vector<TradeHistory> RiskManager::getTradeHistory() const {
     return trade_history_;
 }
 
+void RiskManager::replaceTradeHistory(const std::vector<TradeHistory>& history) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);;
+    trade_history_ = history;
+}
+
+void RiskManager::appendTradeHistory(const TradeHistory& trade) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);;
+    trade_history_.push_back(trade);
+}
+
 // [NEW] 포지션의 신호 정보 설정 (ML 학습용)
 void RiskManager::setPositionSignalInfo(
     const std::string& market,
@@ -751,7 +830,7 @@ bool RiskManager::reserveGridCapital(
         reserved_sum += reserved;
     }
 
-    double available_cash = current_capital_ - invested_sum - reserved_sum;
+    double available_cash = current_capital_ - reserved_sum;
     if (available_cash < 0.0) {
         available_cash = 0.0;
     }
@@ -775,6 +854,15 @@ bool RiskManager::reserveGridCapital(
 
     LOG_INFO("그리드 자본 예약: {} | 금액 {:.0f} | 전략: {}", market, amount, strategy_name);
     return true;
+}
+
+double RiskManager::getReservedGridCapital(const std::string& market) const {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);;
+    auto it = reserved_grid_capital_.find(market);
+    if (it == reserved_grid_capital_.end()) {
+        return 0.0;
+    }
+    return it->second;
 }
 
 void RiskManager::releaseGridCapital(const std::string& market) {
@@ -976,6 +1064,23 @@ void RiskManager::resetDailyCountIfNeeded() {
         LOG_INFO("📅 날짜 변경 (UTC 00:00 / KST 09:00) -> 일일 거래량 초기화");
         daily_trade_count_ = 0;
         daily_reset_time_ = current_day;
+    }
+}
+
+void RiskManager::resetDailyLossIfNeeded() {
+    time_t now = time(nullptr);
+    struct tm* tm_now = gmtime(&now);
+    long long current_day = (tm_now->tm_year + 1900) * 10000 + (tm_now->tm_mon + 1) * 100 + tm_now->tm_mday;
+
+    if (daily_start_date_ == 0) {
+        daily_start_date_ = current_day;
+        daily_start_capital_ = current_capital_;
+        return;
+    }
+
+    if (current_day != daily_start_date_) {
+        daily_start_date_ = current_day;
+        daily_start_capital_ = current_capital_;
     }
 }
 

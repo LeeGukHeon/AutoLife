@@ -36,6 +36,7 @@ public:
     nlohmann::json getTicker(const std::string& market);
     nlohmann::json getOrderBook(const std::string& market);
     nlohmann::json getCandles(const std::string& market, const std::string& unit, int count);
+    nlohmann::json getCandlesDays(const std::string& market, int count);
     
     // 배치 요청 (여러 마켓 한번에)
     nlohmann::json getTickerBatch(const std::vector<std::string>& markets);

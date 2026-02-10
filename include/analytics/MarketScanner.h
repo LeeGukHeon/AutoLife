@@ -3,6 +3,8 @@
 #include "common/Types.h"
 #include "network/UpbitHttpClient.h"
 #include "analytics/TechnicalIndicators.h"  // ✅ 이미 있는지 확인, 없으면 추가
+#include "analytics/OrderbookAnalyzer.h"
+#include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
 #include <map>
@@ -27,9 +29,12 @@ struct CoinMetrics {
     double volatility;                    // 변동성
     double liquidity_score;               // 유동성 점수
     double composite_score;               // 종합 점수 (0-100)
+    OrderbookSnapshot orderbook_snapshot; // 주문서 스냅샷
+    nlohmann::json orderbook_units;       // 주문서 유닛 캐시
 
     // ✅ 캔들 데이터 추가
     std::vector<Candle> candles;
+    std::map<std::string, std::vector<Candle>> candles_by_tf;
     
     CoinMetrics() : current_price(0), volume_24h(0), volume_surge_ratio(0),
                     price_change_rate(0), price_momentum(0), 
@@ -95,6 +100,8 @@ private:
     std::vector<std::string> getAllKRWMarkets();
     double getAverageVolume(const std::string& market, int hours);
     std::vector<Candle> getRecentCandles(const std::string& market, int count);
+    std::vector<Candle> getRecentCandles(const std::string& market, const std::string& unit, int count);
+    std::vector<Candle> getRecentDayCandles(const std::string& market, int count);
         // 이미 조회된 데이터로 분석 (API 호출 없음)
     double analyzeOrderBookImbalance(const nlohmann::json& orderbook);
     std::pair<int, int> analyzeWalls(const nlohmann::json& orderbook);  // {buy_walls, sell_walls}

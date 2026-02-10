@@ -208,6 +208,7 @@ public:
     
     Statistics getStatistics() const override;
     void updateStatistics(const std::string& market, bool is_win, double profit_loss) override;
+    void setStatistics(const Statistics& stats) override;
     bool onSignalAccepted(const Signal& signal, double allocated_capital) override;
     
     // === 추가 공개 메서드 ===
@@ -320,7 +321,7 @@ private:
     // ===== 4. Advanced Order Flow =====
     
     AdvancedOrderFlowMetrics analyzeAdvancedOrderFlow(
-        const std::string& market,
+        const analytics::CoinMetrics& metrics,
         double current_price
     ) const;
     
@@ -334,7 +335,7 @@ private:
     ) const;
     
     double calculateCumulativeDelta(
-        const nlohmann::json& orderbook
+        const nlohmann::json& orderbook_units
     ) const;
     
     // ===== 5. Position Sizing (Kelly + Volatility) =====

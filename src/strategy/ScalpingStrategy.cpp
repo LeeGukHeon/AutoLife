@@ -121,7 +121,7 @@ Signal ScalpingStrategy::generateSignal(
     LOG_INFO("{} - [Scalping] Order Flow 체크...", market);
     
     // 3. Ultra-Fast Order Flow
-    auto order_flow = analyzeUltraFastOrderFlow(market, current_price);
+    auto order_flow = analyzeUltraFastOrderFlow(metrics, current_price);
     if (order_flow.microstructure_score < 0.4) {
         LOG_INFO("{} - [Scalping] 미세구조 점수 부족: {:.2f}", market, order_flow.microstructure_score);
         return signal;
@@ -399,6 +399,11 @@ bool ScalpingStrategy::isEnabled() const {
 IStrategy::Statistics ScalpingStrategy::getStatistics() const {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     return stats_;
+}
+
+void ScalpingStrategy::setStatistics(const Statistics& stats) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    stats_ = stats;
 }
 
 bool ScalpingStrategy::onSignalAccepted(const Signal& signal, double allocated_capital) {
@@ -949,61 +954,69 @@ bool ScalpingStrategy::isOversoldOnTimeframe(
 // ===== 4. Ultra-Fast Order Flow =====
 
 UltraFastOrderFlowMetrics ScalpingStrategy::analyzeUltraFastOrderFlow(
-    const std::string& market,
+    const analytics::CoinMetrics& metrics,
     double current_price
 ) {
     (void)current_price;  // ✅ 추가
 
-    UltraFastOrderFlowMetrics metrics;
-    
+    UltraFastOrderFlowMetrics flow;
+    nlohmann::json units;
+
     try {
-        auto orderbook = getCachedOrderBook(market);
+        if (metrics.orderbook_units.is_array() && !metrics.orderbook_units.empty()) {
+            units = metrics.orderbook_units;
+        } else if (!metrics.market.empty()) {
+            auto orderbook = getCachedOrderBook(metrics.market);
+            if (orderbook.is_array() && !orderbook.empty() && orderbook[0].contains("orderbook_units")) {
+                units = orderbook[0]["orderbook_units"];
+            } else if (orderbook.contains("orderbook_units")) {
+                units = orderbook["orderbook_units"];
+            }
+        }
+
+        if (!units.is_array() || units.empty()) {
+            return flow;
+        }
         
-        if (orderbook.contains("orderbook_units") && orderbook["orderbook_units"].is_array()) {
-            auto units = orderbook["orderbook_units"];
+        double best_ask = units[0]["ask_price"].get<double>();
+        double best_bid = units[0]["bid_price"].get<double>();
+        flow.bid_ask_spread = (best_ask - best_bid) / best_bid * 100;
+        
+        // Instant Pressure (상위 3레벨)
+        double top3_bid = 0, top3_ask = 0;
+        for (size_t i = 0; i < std::min(size_t(3), units.size()); ++i) {
+            top3_bid += units[i]["bid_size"].get<double>();
+            top3_ask += units[i]["ask_size"].get<double>();
+        }
+        
+        if (top3_bid + top3_ask > 0) {
+            flow.instant_pressure = (top3_bid - top3_ask) / (top3_bid + top3_ask);
+        }
+        
+        // Order Flow Delta (전체)
+        double total_bid = 0, total_ask = 0;
+        for (const auto& unit : units) {
+            total_bid += unit["bid_size"].get<double>();
+            total_ask += unit["ask_size"].get<double>();
+        }
+        
+        if (total_bid + total_ask > 0) {
+            flow.order_flow_delta = (total_bid - total_ask) / (total_bid + total_ask);
+        }
+        
+        // Tape Reading Score
+        flow.tape_reading_score = calculateTapeReadingScore(units);
+        
+        // Micro Imbalance (호가 1-2레벨 집중도)
+        if (units.size() >= 2) {
+            double level1_bid = units[0]["bid_size"].get<double>();
+            double level2_bid = units[1]["bid_size"].get<double>();
+            double level1_ask = units[0]["ask_size"].get<double>();
+            double level2_ask = units[1]["ask_size"].get<double>();
             
-            if (units.empty()) return metrics;
-            
-            double best_ask = units[0]["ask_price"].get<double>();
-            double best_bid = units[0]["bid_price"].get<double>();
-            metrics.bid_ask_spread = (best_ask - best_bid) / best_bid * 100;
-            
-            // Instant Pressure (상위 3레벨)
-            double top3_bid = 0, top3_ask = 0;
-            for (size_t i = 0; i < std::min(size_t(3), units.size()); ++i) {
-                top3_bid += units[i]["bid_size"].get<double>();
-                top3_ask += units[i]["ask_size"].get<double>();
-            }
-            
-            if (top3_bid + top3_ask > 0) {
-                metrics.instant_pressure = (top3_bid - top3_ask) / (top3_bid + top3_ask);
-            }
-            
-            // Order Flow Delta (전체)
-            double total_bid = 0, total_ask = 0;
-            for (const auto& unit : units) {
-                total_bid += unit["bid_size"].get<double>();
-                total_ask += unit["ask_size"].get<double>();
-            }
-            
+            double level12_imbalance = ((level1_bid + level2_bid) - (level1_ask + level2_ask));
             if (total_bid + total_ask > 0) {
-                metrics.order_flow_delta = (total_bid - total_ask) / (total_bid + total_ask);
-            }
-            
-            // Tape Reading Score
-            metrics.tape_reading_score = calculateTapeReadingScore(orderbook);
-            
-            // Micro Imbalance (호가 1-2레벨 집중도)
-            if (units.size() >= 2) {
-                double level1_bid = units[0]["bid_size"].get<double>();
-                double level2_bid = units[1]["bid_size"].get<double>();
-                double level1_ask = units[0]["ask_size"].get<double>();
-                double level2_ask = units[1]["ask_size"].get<double>();
-                
-                double level12_imbalance = ((level1_bid + level2_bid) - (level1_ask + level2_ask));
-                if (total_bid + total_ask > 0) {
-                    metrics.micro_imbalance = level12_imbalance / (total_bid + total_ask);
-                }
+                flow.micro_imbalance = level12_imbalance / (total_bid + total_ask);
             }
         }
         
@@ -1011,43 +1024,43 @@ UltraFastOrderFlowMetrics ScalpingStrategy::analyzeUltraFastOrderFlow(
         double score = 0.0;
         
         // Spread (25%)
-        if (metrics.bid_ask_spread < 0.03) score += 0.25;
-        else if (metrics.bid_ask_spread < 0.05) score += 0.18;
+        if (flow.bid_ask_spread < 0.03) score += 0.25;
+        else if (flow.bid_ask_spread < 0.05) score += 0.18;
         else score += 0.10;
         
         // Instant Pressure (30%)
-        if (metrics.instant_pressure > 0.2) score += 0.30;       // 0.4 -> 0.2
-        else if (metrics.instant_pressure > 0.0) score += 0.20;  // 0.2 -> 0.0
-        else if (metrics.instant_pressure > -0.2) score += 0.10; // 하락 압력이 약해도 점수 부여
+        if (flow.instant_pressure > 0.2) score += 0.30;       // 0.4 -> 0.2
+        else if (flow.instant_pressure > 0.0) score += 0.20;  // 0.2 -> 0.0
+        else if (flow.instant_pressure > -0.2) score += 0.10; // 하락 압력이 약해도 점수 부여
         
         // Order Flow Delta (20%) - 수정안
-        if (metrics.order_flow_delta > 0.1) score += 0.20;      // 0.2 -> 0.1
-        else if (metrics.order_flow_delta > -0.1) score += 0.12; // -0.1까지는 '균형'으로 인정
+        if (flow.order_flow_delta > 0.1) score += 0.20;      // 0.2 -> 0.1
+        else if (flow.order_flow_delta > -0.1) score += 0.12; // -0.1까지는 '균형'으로 인정
         
         // Tape Reading (15%)
-        score += metrics.tape_reading_score * 0.15;
+        score += flow.tape_reading_score * 0.15;
         
         // Micro Imbalance (10%)
-        if (metrics.micro_imbalance > 0.05) score += 0.10; // 0.1 -> 0.05
-        else if (metrics.micro_imbalance > -0.05) score += 0.05;
+        if (flow.micro_imbalance > 0.05) score += 0.10; // 0.1 -> 0.05
+        else if (flow.micro_imbalance > -0.05) score += 0.05;
         
-        metrics.microstructure_score = score;
+        flow.microstructure_score = score;
         
     } catch (const std::exception& e) {
         LOG_ERROR("Order Flow 분석 실패: {}", e.what());
     }
     
-    return metrics;
+    return flow;
 }
 
 double ScalpingStrategy::calculateTapeReadingScore(
-    const nlohmann::json& orderbook
+    const nlohmann::json& orderbook_units
 ) const {
-    if (!orderbook.contains("orderbook_units") || !orderbook["orderbook_units"].is_array()) {
+    if (!orderbook_units.is_array() || orderbook_units.empty()) {
         return 0.0;
     }
     
-    auto units = orderbook["orderbook_units"];
+    auto units = orderbook_units;
     if (units.size() < 5) return 0.0;
     
     // 상위 5레벨의 호가 균형도
@@ -1327,16 +1340,16 @@ double ScalpingStrategy::calculateScalpingSignalStrength(
     MarketMicrostate microstate) const 
 {
     double strength = 0.0;
-    // 1. 시장 상태 점수 상향 (3, 2번 상태도 배려)
-    if (microstate == MarketMicrostate::OVERSOLD_BOUNCE) strength += 0.25;
-    else if (microstate == MarketMicrostate::MOMENTUM_SPIKE) strength += 0.25;
-    else if (microstate == MarketMicrostate::BREAKOUT) strength += 0.20; 
-    else if (microstate == MarketMicrostate::CONSOLIDATION) strength += 0.15;
+    // 1. 시장 상태 점수
+    if (microstate == MarketMicrostate::OVERSOLD_BOUNCE) strength += 0.20;
+    else if (microstate == MarketMicrostate::MOMENTUM_SPIKE) strength += 0.20;
+    else if (microstate == MarketMicrostate::BREAKOUT) strength += 0.15; 
+    else if (microstate == MarketMicrostate::CONSOLIDATION) strength += 0.10;
 
     strength += mtf_signal.alignment_score * 0.15;
 
     // 2. 오더플로우 보너스 문턱 완화
-    double of_weight = 0.35;
+    double of_weight = 0.30;
     double effective_of_score = order_flow.microstructure_score;
     // [수정] 0.5 -> 0.3으로 완화하여 평시에도 가중치 부여
     if (effective_of_score > 0.3) { 
@@ -1353,12 +1366,16 @@ double ScalpingStrategy::calculateScalpingSignalStrength(
     else if (rsi > 45 && rsi < 55) strength += 0.05;
     else if (rsi >= 55 && rsi <= 75) strength += 0.10;
 
-    // 4. 거래량 점수 기본치 상향
-    if (metrics.volume_surge_ratio >= 150) strength += 0.20;
-    else if (metrics.volume_surge_ratio >= 110) strength += 0.15; // 120 -> 110
-    else strength += 0.08; // 0.05 -> 0.08
+    // 4. 거래량 점수
+    if (metrics.volume_surge_ratio >= 150) strength += 0.15;
+    else if (metrics.volume_surge_ratio >= 110) strength += 0.10; 
+    else strength += 0.05;
 
-    return std::min(1.0, strength);
+    // 5. 유동성 보정
+    double liquidity_score = std::min(metrics.liquidity_score / 100.0, 1.0);
+    strength += liquidity_score * 0.05;
+
+    return std::clamp(strength, 0.0, 1.0);
 }
 
 // ===== 9. Risk Management (CVaR) =====

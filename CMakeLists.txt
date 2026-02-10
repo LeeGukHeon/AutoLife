@@ -33,6 +33,7 @@ set(SOURCES
     src/execution/RateLimiter.cpp
     src/analytics/MarketScanner.cpp
     src/analytics/TechnicalIndicators.cpp
+    src/analytics/OrderbookAnalyzer.cpp
     src/strategy/StrategyManager.cpp
     src/strategy/ScalpingStrategy.cpp
     src/strategy/MomentumStrategy.cpp

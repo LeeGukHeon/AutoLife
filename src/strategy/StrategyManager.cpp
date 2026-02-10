@@ -55,9 +55,35 @@ std::vector<Signal> StrategyManager::collectSignals(
             auto signal = strategy->generateSignal(market, metrics, candles, current_price, available_capital);
             
             if (signal.type != SignalType::NONE) {
+                auto stats = strategy->getStatistics();
+
+                signal.strategy_win_rate = stats.win_rate;
+                signal.strategy_profit_factor = stats.profit_factor;
+                signal.strategy_trade_count = stats.total_signals;
+                signal.liquidity_score = metrics.liquidity_score;
+                signal.volatility = metrics.volatility;
+
+                if (signal.entry_price > 0 && signal.take_profit_2 > 0) {
+                    signal.expected_return_pct = (signal.take_profit_2 - signal.entry_price) / signal.entry_price;
+                }
+
+                if (signal.entry_price > 0 && signal.stop_loss > 0) {
+                    signal.expected_risk_pct = (signal.entry_price - signal.stop_loss) / signal.entry_price;
+                }
+
+                double implied_win = signal.strategy_trade_count >= 30
+                    ? signal.strategy_win_rate
+                    : std::clamp(signal.strength, 0.35, 0.75);
+
+                signal.expected_value = (signal.expected_return_pct > 0.0 && signal.expected_risk_pct > 0.0)
+                    ? (implied_win * signal.expected_return_pct - (1.0 - implied_win) * signal.expected_risk_pct)
+                    : 0.0;
+
+                signal.score = calculateSignalScore(signal);
+
                 signals.push_back(signal);
-                LOG_INFO("{} - {} 신호 발견: 강도 {:.2f}", 
-                         market, signal.strategy_name, signal.strength);
+                LOG_INFO("{} - {} 신호 발견: 강도 {:.2f}, 점수 {:.2f}", 
+                         market, signal.strategy_name, signal.strength, signal.score);
             } else {
                 LOG_INFO("{} - {} 신호 없음", market, strategy->getInfo().name);
             }
@@ -93,7 +119,7 @@ std::vector<Signal> StrategyManager::filterSignals(
     std::vector<Signal> filtered;
     
     for (const auto& signal : signals) {
-        if (signal.strength >= min_strength) {
+        if (signal.strength >= min_strength && signal.expected_value >= 0.0) {
             filtered.push_back(signal);
         }
     }
@@ -257,6 +283,43 @@ double StrategyManager::calculateSignalScore(const Signal& signal) const {
             double rr_ratio = reward / risk;
             score *= std::min(2.0, rr_ratio / 2.0); // RR 2:1 이상이면 가산점
         }
+    }
+
+    if (signal.strategy_trade_count >= 30) {
+        if (signal.strategy_profit_factor >= 1.5) {
+            score *= 1.15;
+        } else if (signal.strategy_profit_factor < 1.1) {
+            score *= 0.90;
+        }
+
+        if (signal.strategy_win_rate >= 0.60) {
+            score *= 1.10;
+        } else if (signal.strategy_win_rate < 0.45) {
+            score *= 0.90;
+        }
+    }
+
+    if (signal.liquidity_score > 0.0) {
+        if (signal.liquidity_score < 30.0) {
+            score *= 0.75;
+        } else if (signal.liquidity_score < 50.0) {
+            score *= 0.90;
+        } else if (signal.liquidity_score >= 80.0) {
+            score *= 1.05;
+        }
+    }
+
+    if (signal.volatility > 0.0) {
+        if (signal.volatility < 0.6) {
+            score *= 0.85;
+        } else if (signal.volatility > 6.0) {
+            score *= 0.90;
+        }
+    }
+
+    if (signal.expected_value != 0.0) {
+        double ev_boost = std::clamp(signal.expected_value * 10.0, -0.5, 0.5);
+        score *= (1.0 + ev_boost);
     }
     
     return score;

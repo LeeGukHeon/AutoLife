@@ -184,6 +184,22 @@ nlohmann::json UpbitHttpClient::getCandles(
     throw std::runtime_error("Failed to get candles: " + response.body);
 }
 
+nlohmann::json UpbitHttpClient::getCandlesDays(
+    const std::string& market,
+    int count
+) {
+    std::map<std::string, std::string> params;
+    params["market"] = market;
+    params["count"] = std::to_string(count);
+
+    auto response = get("/v1/candles/days", params);
+
+    if (response.isSuccess()) {
+        return response.json();
+    }
+    throw std::runtime_error("Failed to get day candles: " + response.body);
+}
+
 // ========== 배치 요청 구현 ==========
 
 nlohmann::json UpbitHttpClient::getTickerBatch(const std::vector<std::string>& markets) {

@@ -84,7 +84,7 @@ Signal MomentumStrategy::generateSignal(
     }
     
     // 3. Order Flow
-    auto order_flow = analyzeAdvancedOrderFlow(market, current_price);
+    auto order_flow = analyzeAdvancedOrderFlow(metrics, current_price);
     if (order_flow.microstructure_score < 0.40) {
         LOG_INFO("{} - 미세구조 점수 부족: {:.2f}", market, order_flow.microstructure_score);
         return signal;
@@ -285,6 +285,11 @@ bool MomentumStrategy::isEnabled() const {
 IStrategy::Statistics MomentumStrategy::getStatistics() const {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     return stats_;
+}
+
+void MomentumStrategy::setStatistics(const Statistics& stats) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    stats_ = stats;
 }
 
 bool MomentumStrategy::onSignalAccepted(const Signal& signal, double allocated_capital) {
@@ -717,24 +722,31 @@ bool MomentumStrategy::isBullishOnTimeframe(const std::vector<analytics::Candle>
 // ===== 4. Advanced Order Flow =====
 
 AdvancedOrderFlowMetrics MomentumStrategy::analyzeAdvancedOrderFlow(
-    const std::string& market,
+    const analytics::CoinMetrics& metrics,
     double current_price
 ) const {
     (void)current_price;  // current_price 파라미터 미사용
     
-    AdvancedOrderFlowMetrics metrics;
+    AdvancedOrderFlowMetrics flow;
+    nlohmann::json units;
     
     try {
-        auto orderbook = client_->getOrderBook(market);
+        if (metrics.orderbook_units.is_array() && !metrics.orderbook_units.empty()) {
+            units = metrics.orderbook_units;
+        } else if (!metrics.market.empty()) {
+            auto orderbook = client_->getOrderBook(metrics.market);
+            if (orderbook.is_array() && !orderbook.empty() && orderbook[0].contains("orderbook_units")) {
+                units = orderbook[0]["orderbook_units"];
+            } else if (orderbook.contains("orderbook_units")) {
+                units = orderbook["orderbook_units"];
+            }
+        }
         
-        if (orderbook.contains("orderbook_units") && orderbook["orderbook_units"].is_array()) {
-            auto units = orderbook["orderbook_units"];
-            
-            if (units.empty()) return metrics;
+        if (units.is_array() && !units.empty()) {
             
             double best_ask = units[0]["ask_price"].get<double>();
             double best_bid = units[0]["bid_price"].get<double>();
-            metrics.bid_ask_spread = (best_ask - best_bid) / best_bid * 100;
+            flow.bid_ask_spread = (best_ask - best_bid) / best_bid * 100;
             
             double total_bid_volume = 0;
             double total_ask_volume = 0;
@@ -745,7 +757,7 @@ AdvancedOrderFlowMetrics MomentumStrategy::analyzeAdvancedOrderFlow(
             }
             
             if (total_bid_volume + total_ask_volume > 0) {
-                metrics.order_book_pressure = 
+                flow.order_book_pressure = 
                     (total_bid_volume - total_ask_volume) / (total_bid_volume + total_ask_volume);
             }
             
@@ -761,10 +773,10 @@ AdvancedOrderFlowMetrics MomentumStrategy::analyzeAdvancedOrderFlow(
             }
             
             if (large_bid + large_ask > 0) {
-                metrics.large_order_imbalance = (large_bid - large_ask) / (large_bid + large_ask);
+                flow.large_order_imbalance = (large_bid - large_ask) / (large_bid + large_ask);
             }
             
-            metrics.cumulative_delta = calculateCumulativeDelta(orderbook);
+            flow.cumulative_delta = calculateCumulativeDelta(units);
             
             double top5_volume = 0;
             for (size_t i = 0; i < std::min(size_t(5), units.size()); ++i) {
@@ -773,35 +785,35 @@ AdvancedOrderFlowMetrics MomentumStrategy::analyzeAdvancedOrderFlow(
             }
             
             if (total_bid_volume + total_ask_volume > 0) {
-                metrics.order_book_depth_ratio = top5_volume / (total_bid_volume + total_ask_volume);
+                flow.order_book_depth_ratio = top5_volume / (total_bid_volume + total_ask_volume);
             }
         }
         
         double score = 0.0;
         
-        if (metrics.bid_ask_spread < 0.05) score += 0.30;
-        else if (metrics.bid_ask_spread < 0.10) score += 0.20;
+        if (flow.bid_ask_spread < 0.05) score += 0.30;
+        else if (flow.bid_ask_spread < 0.10) score += 0.20;
         else score += 0.10;
         
         // Order Book Pressure (30%) 수정
-        if (metrics.order_book_pressure > 0.1) score += 0.30;       // 0.3 -> 0.1
-        else if (metrics.order_book_pressure > -0.1) score += 0.20; // 균형만 이뤄도 점수
-        else if (metrics.order_book_pressure > -0.3) score += 0.10;
+        if (flow.order_book_pressure > 0.1) score += 0.30;       // 0.3 -> 0.1
+        else if (flow.order_book_pressure > -0.1) score += 0.20; // 균형만 이뤄도 점수
+        else if (flow.order_book_pressure > -0.3) score += 0.10;
 
         // Large Order Imbalance (20%) 수정
-        if (metrics.large_order_imbalance > 0.1) score += 0.20;     // 0.2 -> 0.1
-        else if (metrics.large_order_imbalance > -0.1) score += 0.10;
+        if (flow.large_order_imbalance > 0.1) score += 0.20;     // 0.2 -> 0.1
+        else if (flow.large_order_imbalance > -0.1) score += 0.10;
         
-        if (metrics.cumulative_delta > 0.1) score += 0.20;
-        else if (metrics.cumulative_delta > 0) score += 0.10;
+        if (flow.cumulative_delta > 0.1) score += 0.20;
+        else if (flow.cumulative_delta > 0) score += 0.10;
         
-        metrics.microstructure_score = score;
+        flow.microstructure_score = score;
         
     } catch (const std::exception& e) {
         LOG_ERROR("Order Flow 분석 실패: {}", e.what());
     }
     
-    return metrics;
+    return flow;
 }
 
 double MomentumStrategy::calculateVWAPDeviation(
@@ -880,13 +892,13 @@ AdvancedOrderFlowMetrics::VolumeProfile MomentumStrategy::calculateVolumeProfile
 }
 
 double MomentumStrategy::calculateCumulativeDelta(
-    const nlohmann::json& orderbook
+    const nlohmann::json& orderbook_units
 ) const {
-    if (!orderbook.contains("orderbook_units") || !orderbook["orderbook_units"].is_array()) {
+    if (!orderbook_units.is_array() || orderbook_units.empty()) {
         return 0.0;
     }
     
-    auto units = orderbook["orderbook_units"];
+    auto units = orderbook_units;
     
     double cumulative_delta = 0.0;
     
@@ -1229,8 +1241,16 @@ double MomentumStrategy::calculateSignalStrength(
     if (metrics.price_change_rate >= 3.0) strength += 0.10;       // 5.0 -> 3.0
     else if (metrics.price_change_rate >= 1.5) strength += 0.07;  // 3.0 -> 1.5
     else strength += 0.03;
+
+    // 7. 슬리피지 패널티 (최대 -10%)
+    double expected_slip = calculateExpectedSlippage(metrics);
+    if (expected_slip > EXPECTED_SLIPPAGE) {
+        double penalty = (expected_slip - EXPECTED_SLIPPAGE) / (EXPECTED_SLIPPAGE * 2.0);
+        penalty = std::clamp(penalty, 0.0, 1.0);
+        strength -= penalty * 0.10;
+    }
     
-    return std::min(1.0, strength);
+    return std::clamp(strength, 0.0, 1.0);
 }
 
 // ===== 9. Risk Management =====
@@ -1503,6 +1523,8 @@ bool MomentumStrategy::shouldGenerateSignal(
 
 void MomentumStrategy::updateState(const std::string& market, double current_price) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
+    (void)market;
+    (void)current_price;
     
     // MomentumStrategy는 추세 추종이므로
     // 현재 추세가 유지되는지 모니터링 가능

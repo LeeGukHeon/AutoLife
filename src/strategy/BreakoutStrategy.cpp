@@ -179,37 +179,71 @@ bool BreakoutStrategy::shouldEnter(
     const std::vector<analytics::Candle>& candles,
     double current_price)
 {
-    // generateSignal을 호출하여 진입 여부 판단
-    // (generateSignal 내부에서 락을 사용하므로 여기서는 락 없이 호출)
-    // 주의: shouldEnter 호출 시 available_capital 불가, 0 전달 (fallback to engine_config_.initial_capital)
-    Signal signal = generateSignal(market, metrics, candles, current_price, 0.0);
-    
-    if (signal.type == SignalType::BUY) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        
-        // [수정] 1. 중복 방지 목록에 등록
-        active_positions_.insert(market);
-        
-        // [수정] 2. 포지션 데이터 관리 (기존 active_positions_ 맵을 position_data_로 이름 변경했다고 가정)
-        BreakoutPositionData pos_data;
-        pos_data.market = market;
-        pos_data.entry_price = current_price;
-        pos_data.highest_price = current_price;
-        pos_data.trailing_stop = signal.stop_loss; // 초기 스탑로스로 설정
-        pos_data.entry_timestamp = getCurrentTimestamp();
-        pos_data.tp1_hit = false;
-        pos_data.tp2_hit = false;
-        
-        position_data_[market] = pos_data;
-        
-        recordTrade();
-        
-        spdlog::info("[Breakout] Position Registered - {} | Entry: {:.2f}", market, current_price);
-        
-        return true;
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (active_positions_.find(market) != active_positions_.end()) {
+        return false;
     }
-    
-    return false;
+
+    std::vector<analytics::Candle> candles_5m = resampleTo5m(candles);
+
+    if (candles_5m.size() < 30) {
+        return false;
+    }
+
+    if (metrics.liquidity_score < MIN_LIQUIDITY_SCORE) {
+        return false;
+    }
+
+    if (!canTradeNow()) {
+        return false;
+    }
+
+    checkCircuitBreaker();
+    if (isCircuitBreakerActive()) {
+        return false;
+    }
+
+    long long now = getCurrentTimestamp();
+    if ((now - last_signal_time_) < MIN_SIGNAL_INTERVAL_SEC * 1000) {
+        return false;
+    }
+
+    BreakoutSignalMetrics breakout = analyzeBreakout(market, metrics, candles_5m, current_price);
+    return shouldGenerateBreakoutSignal(breakout);
+}
+
+bool BreakoutStrategy::onSignalAccepted(const Signal& signal, double allocated_capital)
+{
+    (void)allocated_capital;
+
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (signal.market.empty()) {
+        return false;
+    }
+
+    if (active_positions_.find(signal.market) != active_positions_.end()) {
+        return false;
+    }
+
+    BreakoutPositionData pos_data;
+    pos_data.market = signal.market;
+    pos_data.entry_price = signal.entry_price;
+    pos_data.highest_price = signal.entry_price;
+    pos_data.trailing_stop = signal.stop_loss > 0.0
+        ? signal.stop_loss
+        : signal.entry_price * (1.0 - BASE_STOP_LOSS);
+    pos_data.entry_timestamp = getCurrentTimestamp();
+    pos_data.tp1_hit = false;
+    pos_data.tp2_hit = false;
+
+    active_positions_.insert(signal.market);
+    position_data_[signal.market] = pos_data;
+    recordTrade();
+
+    spdlog::info("[Breakout] Position Registered - {} | Entry: {:.2f}", signal.market, signal.entry_price);
+    return true;
 }
 
 // ===== Exit Decision =====
@@ -430,6 +464,12 @@ void BreakoutStrategy::updateStatistics(const std::string& market, bool is_win, 
     
     updateRollingStatistics();
     checkCircuitBreaker();
+}
+
+void BreakoutStrategy::setStatistics(const Statistics& stats)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    stats_ = stats;
 }
 
 // ===== Trailing Stop =====
@@ -687,6 +727,7 @@ BreakoutSignalMetrics BreakoutStrategy::analyzeBreakout(
     double current_price)
 {
     BreakoutSignalMetrics signal;
+    (void)market;
     
     // 1. Donchian Channel 계산
     DonchianChannel channel = calculateDonchianChannel(candles, DONCHIAN_PERIOD);
@@ -753,7 +794,13 @@ BreakoutSignalMetrics BreakoutStrategy::analyzeBreakout(
         current_price, channel.upper, channel, volume_profile);
     
     // 9. Order Flow 분석
-    double order_flow_score = analyzeOrderFlowImbalance(market);
+    double order_flow_score = analyzeOrderFlowImbalance(metrics);
+
+    double spread_penalty = 0.0;
+    if (metrics.orderbook_snapshot.valid) {
+        double normalized_spread = std::clamp(metrics.orderbook_snapshot.spread_pct / 0.003, 0.0, 1.0);
+        spread_penalty = normalized_spread * 0.10;
+    }
     
     // 10. 종합 점수 계산
     double total_score = 0.0;
@@ -762,6 +809,7 @@ BreakoutSignalMetrics BreakoutStrategy::analyzeBreakout(
     total_score += (1.0 - signal.false_breakout_probability) * 0.20;
     total_score += std::min(signal.atr_multiple / 3.0, 1.0) * 0.15;
     total_score += order_flow_score * 0.10;
+    total_score -= spread_penalty;
     
     signal.strength = std::clamp(total_score, 0.0, 1.0);
     signal.is_valid = (signal.strength >= MIN_SIGNAL_STRENGTH);
@@ -1113,6 +1161,7 @@ bool BreakoutStrategy::isVolumeSpikeSignificant(
     const analytics::CoinMetrics& metrics,
     const std::vector<analytics::Candle>& candles) const
 {
+    (void)metrics;
     if (candles.size() < 20) {
         return false;
     }
@@ -1185,16 +1234,24 @@ double BreakoutStrategy::calculateATR(
 
 // ===== Analyze Order Flow Imbalance =====
 
-double BreakoutStrategy::analyzeOrderFlowImbalance(const std::string& market)
+double BreakoutStrategy::analyzeOrderFlowImbalance(const analytics::CoinMetrics& metrics)
 {
     try {
-        nlohmann::json orderbook = getCachedOrderBook(market);
-        
-        if (!orderbook.contains("orderbook_units") || !orderbook["orderbook_units"].is_array()) {
+        nlohmann::json units;
+        if (metrics.orderbook_units.is_array() && !metrics.orderbook_units.empty()) {
+            units = metrics.orderbook_units;
+        } else if (!metrics.market.empty()) {
+            nlohmann::json orderbook = getCachedOrderBook(metrics.market);
+            if (orderbook.is_array() && !orderbook.empty() && orderbook[0].contains("orderbook_units")) {
+                units = orderbook[0]["orderbook_units"];
+            } else if (orderbook.contains("orderbook_units")) {
+                units = orderbook["orderbook_units"];
+            }
+        }
+
+        if (!units.is_array() || units.empty()) {
             return 0.5;
         }
-        
-        const auto& units = orderbook["orderbook_units"];
         
         double total_bid_volume = 0;
         double total_ask_volume = 0;

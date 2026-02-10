@@ -305,6 +305,7 @@ public:
     
     Statistics getStatistics() const override;
     void updateStatistics(const std::string& market, bool is_win, double profit_loss) override;
+    void setStatistics(const Statistics& stats) override;
     bool onSignalAccepted(const Signal& signal, double allocated_capital) override;
     std::vector<OrderRequest> drainOrderRequests() override;
     void onOrderResult(const OrderResult& result) override;
@@ -565,7 +566,8 @@ private:
     
     bool shouldPlaceSellOrder(
         const GridLevel& level,
-        double current_price
+        double current_price,
+        double spacing_pct
     ) const;
     
     // ===== 6. Risk Monitoring =====

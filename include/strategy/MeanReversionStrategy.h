@@ -231,6 +231,8 @@ public:
     
     Statistics getStatistics() const override;
     void updateStatistics(const std::string& market, bool is_win, double profit_loss) override;
+    void setStatistics(const Statistics& stats) override;
+    bool onSignalAccepted(const Signal& signal, double allocated_capital) override;
     
     // === 추가 기능 ===
     

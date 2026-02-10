@@ -178,6 +178,7 @@ public:
     
     Statistics getStatistics() const override;
     void updateStatistics(const std::string& market, bool is_win, double profit_loss) override;
+    void setStatistics(const Statistics& stats) override;
     bool onSignalAccepted(const Signal& signal, double allocated_capital) override;
     
     // === 추가 기능 ===
@@ -341,12 +342,12 @@ private:
     // ===== 4. Ultra-Fast Order Flow =====
     
     UltraFastOrderFlowMetrics analyzeUltraFastOrderFlow(
-        const std::string& market,
+        const analytics::CoinMetrics& metrics,
         double current_price
     );
     
     double calculateTapeReadingScore(
-        const nlohmann::json& orderbook
+        const nlohmann::json& orderbook_units
     ) const;
     
     double calculateMomentumAcceleration(

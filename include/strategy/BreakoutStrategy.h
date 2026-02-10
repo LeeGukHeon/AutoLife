@@ -184,6 +184,8 @@ public:
     
     Statistics getStatistics() const override;
     void updateStatistics(const std::string& market, bool is_win, double profit_loss) override;
+    void setStatistics(const Statistics& stats) override;
+    bool onSignalAccepted(const Signal& signal, double allocated_capital) override;
     
     // === 추가 기능 ===
     
@@ -386,7 +388,7 @@ private:
     // ===== 8. Order Flow =====
     
     double analyzeOrderFlowImbalance(
-        const std::string& market
+        const analytics::CoinMetrics& metrics
     );
     
     // ===== 9. Signal Strength =====

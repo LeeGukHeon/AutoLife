@@ -81,6 +81,11 @@ void Config::load(const std::string& path) {
             // 포트폴리오 노출 비율 설정
             engine_config_.max_exposure_pct = t.value("max_exposure_pct", 0.85); // 기본값 85%
 
+            // 리스크/슬리피지 설정
+            engine_config_.max_daily_loss_pct = t.value("max_daily_loss_pct", 0.05);
+            engine_config_.risk_per_trade_pct = t.value("risk_per_trade_pct", 0.005);
+            engine_config_.max_slippage_pct = t.value("max_slippage_pct", 0.003);
+
             // 전략 목록
             if (t.contains("enabled_strategies")) {
                 engine_config_.enabled_strategies = t["enabled_strategies"].get<std::vector<std::string>>();

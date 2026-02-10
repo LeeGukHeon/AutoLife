@@ -38,6 +38,9 @@ struct EngineConfig {
     int max_daily_trades;
     double max_drawdown;
     double max_exposure_pct = 0.85;        // 총 자본 대비 허용 노출 비율 (기=85%)
+    double max_daily_loss_pct = 0.05;      // 일 손실 한도 (포트폴리오 비율)
+    double risk_per_trade_pct = 0.005;     // 트레이드당 위험 비율 (포트폴리오 비율)
+    double max_slippage_pct = 0.003;       // 허용 최대 슬리피지 (0.3%)
     
     // 실전 거래 안전 설정 (새로 추가)
     double max_daily_loss_krw = 50000.0;    // 일일 최대 손실 5만원
@@ -189,6 +192,19 @@ private:
         const std::string& market,
         double order_volume
     );
+
+    double estimateOrderbookVWAPPrice(
+        const nlohmann::json& orderbook,
+        double target_volume,
+        bool is_buy
+    ) const;
+
+    double estimateOrderbookSlippagePct(
+        const nlohmann::json& orderbook,
+        double target_volume,
+        bool is_buy,
+        double reference_price
+    ) const;
     
     // ===== 헬퍼 함수 =====
     
@@ -197,6 +213,11 @@ private:
     void logPerformance();
     // [추가] 계좌 상태를 조회하여 RiskManager와 동기화
     void syncAccountState();
+
+    // ===== 상태 저장/복구 =====
+    void loadState();
+    void saveState();
+    void runStatePersistence();
     
     // ===== [NEW] 동적 필터 및 포지션 확대 기능 =====
     
@@ -237,6 +258,8 @@ private:
     // 스레드 제어
     std::atomic<bool> running_;
     std::unique_ptr<std::thread> worker_thread_;
+    std::unique_ptr<std::thread> state_persist_thread_;
+    std::atomic<bool> state_persist_running_{false};
     mutable std::mutex mutex_;
     
     // [추가] 스캔 및 동기화 타이밍
@@ -270,6 +293,20 @@ private:
     int prometheus_server_port_ = 8080;  // HTTP 서버 포트 (기본값: 8080)
     std::unique_ptr<std::thread> prometheus_http_thread_;  // HTTP 서버 스레드
     std::atomic<bool> prometheus_server_running_ = false;  // HTTP 서버 실행 상태
+
+    std::map<std::string, std::string> recovered_strategy_map_;
+
+    struct PersistedPosition {
+        std::string market;
+        std::string strategy_name;
+        double entry_price = 0.0;
+        double quantity = 0.0;
+        long long entry_time = 0;
+        double signal_filter = 0.5;
+        double signal_strength = 0.0;
+    };
+
+    std::vector<PersistedPosition> pending_reconcile_positions_;
     
     // 통계
     long long start_time_;

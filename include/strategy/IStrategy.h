@@ -90,6 +90,17 @@ struct Signal {
     
     // [NEW] ML 학습용: 신호 필터값과 강도 저장
     double signal_filter;               // 신호 생성 시 적용된 동적 필터값 (0.45~0.55)
+
+    // [NEW] 품질/리스크 메타
+    double expected_return_pct;         // 기대 수익률 (TP2 기준)
+    double expected_risk_pct;           // 기대 손실률 (SL 기준)
+    double expected_value;              // 기대값 (EV)
+    double liquidity_score;             // 유동성 점수 (0~100)
+    double volatility;                  // 변동성 (% 단위)
+    double strategy_win_rate;           // 전략 승률
+    double strategy_profit_factor;      // 전략 PF
+    int strategy_trade_count;           // 전략 거래 수
+    double score;                       // 통합 점수
     
     std::string reason;                 // 신호 발생 이유
     long long timestamp;                // 신호 발생 시간
@@ -107,6 +118,15 @@ struct Signal {
         , max_retries(3)
         , retry_wait_ms(1000)
         , signal_filter(0.5)            // NEW: 기본값으로 중간 필터값
+        , expected_return_pct(0.0)
+        , expected_risk_pct(0.0)
+        , expected_value(0.0)
+        , liquidity_score(0.0)
+        , volatility(0.0)
+        , strategy_win_rate(0.0)
+        , strategy_profit_factor(0.0)
+        , strategy_trade_count(0)
+        , score(0.0)
         , timestamp(0)
     {}
     
@@ -212,6 +232,7 @@ public:
     
     virtual Statistics getStatistics() const = 0;
     virtual void updateStatistics(const std::string& market, bool is_win, double profit_loss) = 0;
+    virtual void setStatistics(const Statistics& stats) { (void)stats; }
     virtual void updateState(const std::string&, double) {}
     virtual bool onSignalAccepted(const Signal&, double) { return false; }
     virtual std::vector<OrderRequest> drainOrderRequests() { return {}; }

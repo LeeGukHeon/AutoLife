@@ -6,7 +6,9 @@
 #include "strategy/MeanReversionStrategy.h"
 #include "strategy/GridTradingStrategy.h"
 #include "analytics/TechnicalIndicators.h"
+#include "analytics/OrderbookAnalyzer.h"
 #include "risk/RiskManager.h"
+#include "common/PathUtils.h"
 #include <chrono>
 #include <thread>
 #include <algorithm>
@@ -16,6 +18,17 @@
 #include <cmath>
 #include <set>
 #include <functional>
+#include <filesystem>
+#include <fstream>
+#include <nlohmann/json.hpp>
+
+namespace {
+long long getCurrentTimestampMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()
+    ).count();
+}
+}
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
@@ -61,6 +74,9 @@ TradingEngine::TradingEngine(
     risk_manager_->setMaxDailyTrades(config.max_daily_trades);
     risk_manager_->setMaxDrawdown(config.max_drawdown);
     risk_manager_->setMaxExposurePct(config.max_exposure_pct);
+    risk_manager_->setDailyLossLimitPct(config.max_daily_loss_pct);
+    risk_manager_->setDailyLossLimitKrw(config.max_daily_loss_krw);
+    risk_manager_->setMinOrderKrw(config.min_order_krw);
     
     // 전략 등록: `config_.enabled_strategies`가 비어있으면 모든 전략을 등록합니다.
     std::set<std::string> enabled;
@@ -120,6 +136,7 @@ bool TradingEngine::start() {
     LOG_INFO("========================================");
     
     // [추가] 시작하기 전에 내 지갑 상태 확인!
+    loadState();
     if (config_.mode == TradingMode::LIVE) {
         syncAccountState();
     }
@@ -135,6 +152,10 @@ bool TradingEngine::start() {
     // [NEW] Prometheus HTTP 서버 시작 (별도 스레드)
     prometheus_http_thread_ = std::make_unique<std::thread>(&TradingEngine::runPrometheusHttpServer, this, 8080);
     LOG_INFO("✅ Prometheus HTTP 서버 시작 (포트: 8080)");
+
+    state_persist_running_ = true;
+    state_persist_thread_ = std::make_unique<std::thread>(&TradingEngine::runStatePersistence, this);
+    LOG_INFO("✅ 상태 자동 저장 시작 (30초 주기)");
     
     return true;
 }
@@ -155,6 +176,11 @@ void TradingEngine::stop() {
     if (prometheus_http_thread_ && prometheus_http_thread_->joinable()) {
         prometheus_http_thread_->join();
     }
+
+    state_persist_running_ = false;
+    if (state_persist_thread_ && state_persist_thread_->joinable()) {
+        state_persist_thread_->join();
+    }
     
     if (worker_thread_ && worker_thread_->joinable()) {
         worker_thread_->join();
@@ -162,6 +188,8 @@ void TradingEngine::stop() {
     
     // 최종 성과 출력
     logPerformance();
+
+    saveState();
 }
 
 // ===== 메인 루프 =====
@@ -377,6 +405,15 @@ void TradingEngine::executeSignals() {
     
     LOG_INFO("===== 신호 실행 =====");
     
+    // ===== [NEW] 일 손실 한도 체크 =====
+    if (risk_manager_->isDailyLossLimitExceeded()) {
+        double loss_pct = risk_manager_->getDailyLossPct();
+        LOG_ERROR("일 손실 한도 초과: {:.2f}% >= {:.2f}% (신규 진입 중단)",
+                  loss_pct * 100.0, config_.max_daily_loss_pct * 100.0);
+        pending_signals_.clear();
+        return;
+    }
+
     // ===== [NEW] 동적 필터값 계산 =====
     double current_filter = calculateDynamicFilterValue();
     LOG_INFO("📊 현재 신호 필터값: {:.3f} (범위: 0.45~0.55)", current_filter);
@@ -393,7 +430,7 @@ void TradingEngine::executeSignals() {
     
     int executed = 0;
     int filtered_out = 0;
-    
+
     for (auto& signal : pending_signals_) {  // [수정] const → auto& (신호 수정 가능)
         // 매수 신호만 처리
         if (signal.type != strategy::SignalType::BUY && 
@@ -422,27 +459,32 @@ void TradingEngine::executeSignals() {
         double strength_multiplier = std::clamp(0.5 + signal.strength, 0.75, 1.5);
         signal.position_size *= strength_multiplier;
         
-        LOG_INFO("📊 신호 준비 - {} (강도: {:.3f}, 확대: {:.2f}배, 강도배수: {:.2f}배 → {:.4f})",
-             signal.market, signal.strength, current_scale, strength_multiplier, signal.position_size);
-            // ===== [NEW] 최소 요구액 기반 position_size 보정 (executeSignals 단계) =====
-            // 문제: canEnterPosition 호출 전에 position_size가 불충분할 수 있음
-            // 해결: 미리 available_capital으로 필요한 최소 ratio 계산하여 보정
-            auto pre_check_metrics = risk_manager_->getRiskMetrics();
-        
+           LOG_INFO("📊 신호 준비 - {} [{}] (강도: {:.3f}, 확대: {:.2f}배, 강도배수: {:.2f}배 → {:.4f})",
+               signal.market, signal.strategy_name, signal.strength, current_scale, strength_multiplier, signal.position_size);
+
+        // ===== [NEW] 리스크/자본 메트릭 =====
+        // canEnterPosition 전에 필요한 캡/최소 금액 조건을 점검
+        auto risk_metrics = risk_manager_->getRiskMetrics();
+        double risk_budget_krw = risk_metrics.total_capital * config_.risk_per_trade_pct;
+
+        // ===== [NEW] 최소 요구액 기반 position_size 보정 (executeSignals 단계) =====
+        // 문제: canEnterPosition 호출 전에 position_size가 불충분할 수 있음
+        // 해결: 미리 available_capital으로 필요한 최소 ratio 계산하여 보정
+
             // [조정] 최소 요구액: 6000 × 1.2 = 7200원 (소액 자본 지원)
             // 예시: 가용자본 7537원이면 7200원 < 7537원이므로 진입 가능
             const double MIN_REQUIRED_KRW = RECOMMENDED_MIN_ENTER_KRW * 1.2;
                 // [조정] 1.5배 → 1.2배 (7200원) - 소액 자본 진입 허용
         
             // 1. 가용자본 부족 확인
-            if (pre_check_metrics.available_capital < MIN_REQUIRED_KRW) {
+            if (risk_metrics.available_capital < MIN_REQUIRED_KRW) {
                 LOG_WARN("{} 스킵 - 가용자본 부족 (현재: {:.0f} < 필요: {:.0f})",
-                         signal.market, pre_check_metrics.available_capital, MIN_REQUIRED_KRW);
+                         signal.market, risk_metrics.available_capital, MIN_REQUIRED_KRW);
                 continue;
             }
         
             // 2. 필요한 최소 position_size 계산
-            double min_position_size = MIN_REQUIRED_KRW / pre_check_metrics.available_capital;
+            double min_position_size = MIN_REQUIRED_KRW / risk_metrics.available_capital;
         
             // 3. 신호의 position_size가 최소값 미만이면 보정
             if (signal.position_size < min_position_size) {
@@ -457,6 +499,23 @@ void TradingEngine::executeSignals() {
                          signal.market, signal.position_size);
                 signal.position_size = 1.0;
             }
+
+        // ===== [NEW] 리스크 예산 기반 포지션 캡 =====
+        double risk_pct = 0.0;
+        if (signal.entry_price > 0.0 && signal.stop_loss > 0.0) {
+            risk_pct = (signal.entry_price - signal.stop_loss) / signal.entry_price;
+        }
+
+        if (risk_pct > 0.0 && risk_metrics.available_capital > 0.0 && risk_budget_krw > 0.0) {
+            double max_invest_amount = risk_budget_krw / risk_pct;
+            double max_position_size = max_invest_amount / risk_metrics.available_capital;
+
+            if (signal.position_size > max_position_size) {
+                LOG_INFO("{} 리스크 캡 적용: {:.4f} → {:.4f} (리스크 예산 {:.0f}원)",
+                         signal.market, signal.position_size, max_position_size, risk_budget_krw);
+                signal.position_size = max_position_size;
+            }
+        }
         
         auto strategy_ptr = strategy_manager_ ? strategy_manager_->getStrategy(signal.strategy_name) : nullptr;
         bool is_grid_strategy = (signal.strategy_name == "Grid Trading Strategy");
@@ -597,6 +656,20 @@ bool TradingEngine::executeBuyOrder(
         
         // 지정가 주문 수량 계산 (소수점 8자리까지)
         double quantity = invest_amount / best_ask_price;
+
+        // [NEW] 주문서 기반 슬리피지 사전 점검
+        double slippage_pct = estimateOrderbookSlippagePct(
+            orderbook,
+            quantity,
+            true,
+            best_ask_price
+        );
+
+        if (slippage_pct > config_.max_slippage_pct) {
+            LOG_WARN("{} 슬리피지 초과: {:.3f}% > {:.3f}% (진입 차단)",
+                     market, slippage_pct * 100.0, config_.max_slippage_pct * 100.0);
+            return false;
+        }
         
         // 문자열 변환 (업비트는 소수점 처리에 민감하므로 포맷팅 주의)
         // [제안] 소수점 정밀도 제어 (sprintf 또는 stringstream 사용)
@@ -886,10 +959,26 @@ void TradingEngine::monitorPositions() {
                 result.reason = request.reason;
 
                 double order_amount = request.price * request.quantity;
-                if (order_amount < EXCHANGE_MIN_ORDER_KRW) {
-                    LOG_WARN("그리드 주문 금액 부족: {:.0f} < {:.0f}", order_amount, EXCHANGE_MIN_ORDER_KRW);
+                if (order_amount < config_.min_order_krw) {
+                    LOG_WARN("그리드 주문 금액 부족: {:.0f} < {:.0f}", order_amount, config_.min_order_krw);
                     strategy->onOrderResult(result);
                     continue;
+                }
+
+                if (request.side == autolife::strategy::OrderSide::BUY) {
+                    if (risk_manager_->isDailyLossLimitExceeded()) {
+                        LOG_WARN("{} 그리드 매수 차단: 일 손실 한도 초과", request.market);
+                        strategy->onOrderResult(result);
+                        continue;
+                    }
+
+                    double reserved_capital = risk_manager_->getReservedGridCapital(request.market);
+                    if (reserved_capital <= 0.0 || order_amount > reserved_capital) {
+                        LOG_WARN("{} 그리드 매수 차단: 예약 자본 부족 ({:.0f} < {:.0f})",
+                                 request.market, reserved_capital, order_amount);
+                        strategy->onOrderResult(result);
+                        continue;
+                    }
                 }
 
                 if (config_.mode == TradingMode::LIVE && !config_.dry_run) {
@@ -961,8 +1050,8 @@ bool TradingEngine::executeSellOrder(
     double invest_amount = sell_quantity * current_price;
     
     // 1. 최소 주문 금액 체크 (거래소 최소: 5,000 KRW)
-    if (invest_amount < EXCHANGE_MIN_ORDER_KRW) {
-        LOG_WARN("매도 금액 부족: {:.0f} < {:.0f} (거래소 최소)", invest_amount, EXCHANGE_MIN_ORDER_KRW);
+    if (invest_amount < config_.min_order_krw) {
+        LOG_WARN("매도 금액 부족: {:.0f} < {:.0f} (거래소 최소)", invest_amount, config_.min_order_krw);
         return false;
     }
     
@@ -976,6 +1065,18 @@ bool TradingEngine::executeSellOrder(
     try {
         auto orderbook = http_client_->getOrderBook(market);
         sell_price = calculateOptimalSellPrice(market, current_price, orderbook);
+        double slippage_pct = estimateOrderbookSlippagePct(
+            orderbook,
+            sell_quantity,
+            false,
+            current_price
+        );
+
+        if (slippage_pct > config_.max_slippage_pct) {
+            LOG_WARN("{} 슬리피지 초과: {:.3f}% > {:.3f}% (청산 차단)",
+                     market, slippage_pct * 100.0, config_.max_slippage_pct * 100.0);
+            return false;
+        }
         LOG_INFO("📊 매도 호가 최적화: {} 원 (주문: {} 원)", sell_price, current_price);
     } catch (const std::exception& e) {
         LOG_WARN("⚠️ 호가 조회 실패 (모의값 사용): {}", e.what());
@@ -1049,8 +1150,8 @@ bool TradingEngine::executePartialSell(const std::string& market, const risk::Po
     double invest_amount = sell_quantity * current_price;
     
     // 1. 최소 주문 금액 체크 및 대응 (거래소 최소: 5,000 KRW)
-    if (invest_amount < EXCHANGE_MIN_ORDER_KRW) {
-        LOG_WARN("⚠️ 부분 매도 금액 부족 ({:.0f}원, 최소: {:.0f}원)", invest_amount, EXCHANGE_MIN_ORDER_KRW);
+    if (invest_amount < config_.min_order_krw) {
+        LOG_WARN("⚠️ 부분 매도 금액 부족 ({:.0f}원, 최소: {:.0f}원)", invest_amount, config_.min_order_krw);
         
         // [핵심] 여기서 전량 매도 함수를 호출하여 포지션을 완전히 정리해버립니다.
         // 그래야 다음 루프에서 다시 진입하지 않습니다.
@@ -1072,6 +1173,18 @@ bool TradingEngine::executePartialSell(const std::string& market, const risk::Po
     try {
         auto orderbook = http_client_->getOrderBook(market);
         sell_price = calculateOptimalSellPrice(market, current_price, orderbook);
+        double slippage_pct = estimateOrderbookSlippagePct(
+            orderbook,
+            sell_quantity,
+            false,
+            current_price
+        );
+
+        if (slippage_pct > config_.max_slippage_pct) {
+            LOG_WARN("{} 슬리피지 초과: {:.3f}% > {:.3f}% (부분 청산 차단)",
+                     market, slippage_pct * 100.0, config_.max_slippage_pct * 100.0);
+            return false;
+        }
     } catch (const std::exception&) {
         sell_price = current_price;
     }
@@ -1152,6 +1265,75 @@ double TradingEngine::calculateOptimalSellPrice(
     return base_price;
 }
 
+double TradingEngine::estimateOrderbookVWAPPrice(
+    const nlohmann::json& orderbook,
+    double target_volume,
+    bool is_buy
+) const {
+    if (target_volume <= 0.0) {
+        return 0.0;
+    }
+
+    nlohmann::json units;
+    if (orderbook.is_array() && !orderbook.empty()) {
+        units = orderbook[0].value("orderbook_units", nlohmann::json::array());
+    } else {
+        units = orderbook.value("orderbook_units", nlohmann::json::array());
+    }
+
+    if (!units.is_array() || units.empty()) {
+        return 0.0;
+    }
+
+    double reference_price = 0.0;
+    if (!units.empty()) {
+        reference_price = units[0].value(is_buy ? "ask_price" : "bid_price", 0.0);
+    }
+
+    if (reference_price <= 0.0) {
+        return 0.0;
+    }
+
+    double target_notional = reference_price * target_volume;
+    return analytics::OrderbookAnalyzer::estimateVWAPForNotional(
+        units,
+        target_notional,
+        is_buy
+    );
+}
+
+double TradingEngine::estimateOrderbookSlippagePct(
+    const nlohmann::json& orderbook,
+    double target_volume,
+    bool is_buy,
+    double reference_price
+) const {
+    if (reference_price <= 0.0) {
+        return 0.0;
+    }
+
+    nlohmann::json units;
+    if (orderbook.is_array() && !orderbook.empty()) {
+        units = orderbook[0].value("orderbook_units", nlohmann::json::array());
+    } else {
+        units = orderbook.value("orderbook_units", nlohmann::json::array());
+    }
+
+    if (!units.is_array() || units.empty()) {
+        return 0.0;
+    }
+
+    double target_notional = reference_price * target_volume;
+    double slippage = analytics::OrderbookAnalyzer::estimateSlippagePctForNotional(
+        units,
+        target_notional,
+        is_buy,
+        reference_price
+    );
+
+    return std::max(0.0, slippage);
+}
+
 TradingEngine::OrderFillInfo TradingEngine::verifyOrderFill(
     const std::string& uuid,
     const std::string& market,
@@ -1226,9 +1408,10 @@ TradingEngine::LimitOrderResult TradingEngine::executeLimitBuyOrder(
     double total_filled = 0.0;
     double total_funds = 0.0;
 
-    (void)max_retries; // 무한 재시도 정책 (체결될 때까지)
+    int max_attempts = max_retries > 0 ? max_retries : 3;
+    int attempt_count = 0;
 
-    while (running_ && remaining > 0.00000001) {
+    while (running_ && remaining > 0.00000001 && attempt_count < max_attempts) {
         std::stringstream ss;
         ss << std::fixed << std::setprecision(8) << remaining;
         std::string vol_str = ss.str();
@@ -1278,10 +1461,12 @@ TradingEngine::LimitOrderResult TradingEngine::executeLimitBuyOrder(
             LOG_WARN("매수 주문 취소 실패: {}", e.what());
         }
 
-        result.retry_count++;
+        attempt_count++;
+        result.retry_count = attempt_count;
 
-        if (retry_wait_ms > 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(retry_wait_ms));
+        if (retry_wait_ms > 0 && attempt_count < max_attempts) {
+            int wait_ms = retry_wait_ms * (1 + attempt_count);
+            std::this_thread::sleep_for(std::chrono::milliseconds(wait_ms));
         }
 
         try {
@@ -1297,7 +1482,7 @@ TradingEngine::LimitOrderResult TradingEngine::executeLimitBuyOrder(
         result.executed_volume = total_filled;
         result.executed_price = total_funds / total_filled;
     } else {
-        result.error_message = "No fills";
+        result.error_message = (attempt_count >= max_attempts) ? "Max retries exceeded" : "No fills";
     }
 
     return result;
@@ -1320,9 +1505,10 @@ TradingEngine::LimitOrderResult TradingEngine::executeLimitSellOrder(
     double total_filled = 0.0;
     double total_funds = 0.0;
 
-    (void)max_retries; // 무한 재시도 정책 (체결될 때까지)
+    int max_attempts = max_retries > 0 ? max_retries : 3;
+    int attempt_count = 0;
 
-    while (running_ && remaining > 0.00000001) {
+    while (running_ && remaining > 0.00000001 && attempt_count < max_attempts) {
         std::stringstream ss;
         ss << std::fixed << std::setprecision(8) << remaining;
         std::string vol_str = ss.str();
@@ -1372,10 +1558,12 @@ TradingEngine::LimitOrderResult TradingEngine::executeLimitSellOrder(
             LOG_WARN("매도 주문 취소 실패: {}", e.what());
         }
 
-        result.retry_count++;
+        attempt_count++;
+        result.retry_count = attempt_count;
 
-        if (retry_wait_ms > 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(retry_wait_ms));
+        if (retry_wait_ms > 0 && attempt_count < max_attempts) {
+            int wait_ms = retry_wait_ms * (1 + attempt_count);
+            std::this_thread::sleep_for(std::chrono::milliseconds(wait_ms));
         }
 
         try {
@@ -1391,7 +1579,7 @@ TradingEngine::LimitOrderResult TradingEngine::executeLimitSellOrder(
         result.executed_volume = total_filled;
         result.executed_price = total_funds / total_filled;
     } else {
-        result.error_message = "No fills";
+        result.error_message = (attempt_count >= max_attempts) ? "Max retries exceeded" : "No fills";
     }
 
     return result;
@@ -1590,6 +1778,7 @@ void TradingEngine::syncAccountState() {
     try {
         auto accounts = http_client_->getAccounts();
         bool krw_found = false;
+        std::set<std::string> wallet_markets;
 
         for (const auto& acc : accounts) {
             std::string currency = acc["currency"].get<std::string>();
@@ -1612,6 +1801,7 @@ void TradingEngine::syncAccountState() {
             // 2. 보유 코인 처리 (기존 로직 유지)
             // 마켓 코드 생성 (예: BTC -> KRW-BTC)
             std::string market = "KRW-" + currency;
+            wallet_markets.insert(market);
             
             double avg_buy_price = std::stod(acc["avg_buy_price"].get<std::string>());
             
@@ -1630,7 +1820,7 @@ void TradingEngine::syncAccountState() {
 
             // 2. [추가] 5,100원 마지노선을 지키기 위한 단가 계산 
             // balance(수량)가 0일 경우를 대비해 아주 작은 값(1e-9)으로 안전장치
-            double upbit_limit_sl = EXCHANGE_MIN_ORDER_KRW / (balance > 0 ? balance : 1e-9);
+            double upbit_limit_sl = config_.min_order_krw / (balance > 0 ? balance : 1e-9);
 
             // 3. [보정] 소량(더스트)일 때 업비트 최소금액 기준으로 손절을 과도하게 끌어올리지 않음
             // 만약 upbit_limit_sl이 진입가의 99% 이상으로 매우 진입가에 근접하면
@@ -1645,6 +1835,12 @@ void TradingEngine::syncAccountState() {
                 safe_stop_loss = std::max(target_sl, upbit_limit_sl);
             }
 
+            std::string recovered_strategy = "RECOVERED";
+            auto recovered_it = recovered_strategy_map_.find(market);
+            if (recovered_it != recovered_strategy_map_.end()) {
+                recovered_strategy = recovered_it->second;
+            }
+
             // 포지션 복구
             risk_manager_->enterPosition(
                 market,
@@ -1653,7 +1849,7 @@ void TradingEngine::syncAccountState() {
                 safe_stop_loss,
                 avg_buy_price * 1.010,
                 avg_buy_price * 1.015,
-                "RECOVERED"
+                recovered_strategy
             );
         }
         
@@ -1661,11 +1857,279 @@ void TradingEngine::syncAccountState() {
             LOG_WARN("⚠️ 계좌에 KRW가 없습니다! (자본금 0원으로 설정됨)");
             risk_manager_->resetCapital(0.0);
         }
+
+        // ===== 상태 정정 (지갑 기준) =====
+        if (!pending_reconcile_positions_.empty()) {
+            std::vector<std::string> missing_markets;
+            for (const auto& pos : pending_reconcile_positions_) {
+                if (!pos.market.empty() && wallet_markets.find(pos.market) == wallet_markets.end()) {
+                    missing_markets.push_back(pos.market);
+                }
+            }
+
+            std::map<std::string, double> price_map;
+            if (!missing_markets.empty()) {
+                try {
+                    auto tickers = http_client_->getTickerBatch(missing_markets);
+                    for (const auto& t : tickers) {
+                        std::string market_code = t["market"].get<std::string>();
+                        double trade_price = t["trade_price"].get<double>();
+                        price_map[market_code] = trade_price;
+                    }
+                } catch (const std::exception& e) {
+                    LOG_WARN("외부 청산 정정용 시세 조회 실패: {}", e.what());
+                }
+            }
+
+            const double FEE_RATE = 0.0005; // 0.05%
+            for (const auto& pos : pending_reconcile_positions_) {
+                if (pos.market.empty()) {
+                    continue;
+                }
+                if (wallet_markets.find(pos.market) != wallet_markets.end()) {
+                    continue;
+                }
+
+                double exit_price = pos.entry_price;
+                auto price_it = price_map.find(pos.market);
+                if (price_it != price_map.end()) {
+                    exit_price = price_it->second;
+                }
+
+                double entry_value = pos.entry_price * pos.quantity;
+                double exit_value = exit_price * pos.quantity;
+                double entry_fee = entry_value * FEE_RATE;
+                double exit_fee = exit_value * FEE_RATE;
+                double profit_loss = exit_value - entry_value - entry_fee - exit_fee;
+
+                risk::TradeHistory trade;
+                trade.market = pos.market;
+                trade.entry_price = pos.entry_price;
+                trade.exit_price = exit_price;
+                trade.quantity = pos.quantity;
+                trade.entry_time = pos.entry_time;
+                trade.exit_time = getCurrentTimestampMs();
+                trade.strategy_name = pos.strategy_name;
+                trade.exit_reason = "manual_external";
+                trade.signal_filter = pos.signal_filter;
+                trade.signal_strength = pos.signal_strength;
+                trade.profit_loss = profit_loss;
+                trade.profit_loss_pct = (pos.entry_price > 0.0)
+                    ? (exit_price - pos.entry_price) / pos.entry_price
+                    : 0.0;
+                trade.fee_paid = entry_fee + exit_fee;
+
+                risk_manager_->appendTradeHistory(trade);
+
+                if (strategy_manager_ && !pos.strategy_name.empty()) {
+                    auto strategy_ptr = strategy_manager_->getStrategy(pos.strategy_name);
+                    if (strategy_ptr) {
+                        strategy_ptr->updateStatistics(pos.market, profit_loss > 0.0, profit_loss);
+                    }
+                }
+
+                LOG_INFO("외부 청산 정정: {} (전략: {}, 손익: {:.0f})",
+                         pos.market, pos.strategy_name, profit_loss);
+            }
+        }
+
+        pending_reconcile_positions_.clear();
+
+        // 지갑에 없는 매핑 제거
+        for (auto it = recovered_strategy_map_.begin(); it != recovered_strategy_map_.end(); ) {
+            if (wallet_markets.find(it->first) == wallet_markets.end()) {
+                it = recovered_strategy_map_.erase(it);
+            } else {
+                ++it;
+            }
+        }
         
         LOG_INFO("✅ 계좌 동기화 완료");
 
     } catch (const std::exception& e) {
         LOG_ERROR("❌ 계좌 동기화 실패: {}", e.what());
+    }
+}
+
+void TradingEngine::runStatePersistence() {
+    using namespace std::chrono_literals;
+    while (state_persist_running_) {
+        std::this_thread::sleep_for(30s);
+        if (!state_persist_running_) {
+            break;
+        }
+        saveState();
+    }
+}
+
+void TradingEngine::saveState() {
+    try {
+        nlohmann::json state;
+        state["version"] = 1;
+        state["timestamp"] = getCurrentTimestampMs();
+        state["dynamic_filter_value"] = dynamic_filter_value_;
+        state["position_scale_multiplier"] = position_scale_multiplier_;
+
+        // Trade history
+        nlohmann::json history = nlohmann::json::array();
+        for (const auto& trade : risk_manager_->getTradeHistory()) {
+            nlohmann::json item;
+            item["market"] = trade.market;
+            item["entry_price"] = trade.entry_price;
+            item["exit_price"] = trade.exit_price;
+            item["quantity"] = trade.quantity;
+            item["profit_loss"] = trade.profit_loss;
+            item["profit_loss_pct"] = trade.profit_loss_pct;
+            item["fee_paid"] = trade.fee_paid;
+            item["entry_time"] = trade.entry_time;
+            item["exit_time"] = trade.exit_time;
+            item["strategy_name"] = trade.strategy_name;
+            item["exit_reason"] = trade.exit_reason;
+            item["signal_filter"] = trade.signal_filter;
+            item["signal_strength"] = trade.signal_strength;
+            history.push_back(item);
+        }
+        state["trade_history"] = history;
+
+        // Strategy stats
+        nlohmann::json stats_json;
+        if (strategy_manager_) {
+            auto stats_map = strategy_manager_->getAllStatistics();
+            for (const auto& [name, stats] : stats_map) {
+                nlohmann::json s;
+                s["total_signals"] = stats.total_signals;
+                s["winning_trades"] = stats.winning_trades;
+                s["losing_trades"] = stats.losing_trades;
+                s["total_profit"] = stats.total_profit;
+                s["total_loss"] = stats.total_loss;
+                s["win_rate"] = stats.win_rate;
+                s["avg_profit"] = stats.avg_profit;
+                s["avg_loss"] = stats.avg_loss;
+                s["profit_factor"] = stats.profit_factor;
+                s["sharpe_ratio"] = stats.sharpe_ratio;
+                stats_json[name] = s;
+            }
+        }
+        state["strategy_stats"] = stats_json;
+
+        // Position strategy mapping
+        nlohmann::json position_map;
+        for (const auto& pos : risk_manager_->getAllPositions()) {
+            if (!pos.strategy_name.empty()) {
+                position_map[pos.market] = pos.strategy_name;
+            }
+        }
+        state["position_strategy_map"] = position_map;
+
+        // Open positions (for external close reconciliation)
+        nlohmann::json open_positions = nlohmann::json::array();
+        for (const auto& pos : risk_manager_->getAllPositions()) {
+            nlohmann::json p;
+            p["market"] = pos.market;
+            p["strategy_name"] = pos.strategy_name;
+            p["entry_price"] = pos.entry_price;
+            p["quantity"] = pos.quantity;
+            p["entry_time"] = pos.entry_time;
+            p["signal_filter"] = pos.signal_filter;
+            p["signal_strength"] = pos.signal_strength;
+            open_positions.push_back(p);
+        }
+        state["open_positions"] = open_positions;
+
+        auto state_path = utils::PathUtils::resolveRelativePath("state/state.json");
+        std::filesystem::create_directories(state_path.parent_path());
+        std::ofstream out(state_path.string(), std::ios::binary | std::ios::trunc);
+        out << state.dump(2);
+    } catch (const std::exception& e) {
+        LOG_ERROR("상태 저장 실패: {}", e.what());
+    }
+}
+
+void TradingEngine::loadState() {
+    try {
+        auto state_path = utils::PathUtils::resolveRelativePath("state/state.json");
+        if (!std::filesystem::exists(state_path)) {
+            return;
+        }
+
+        std::ifstream in(state_path.string(), std::ios::binary);
+        nlohmann::json state;
+        in >> state;
+
+        dynamic_filter_value_ = state.value("dynamic_filter_value", dynamic_filter_value_);
+        position_scale_multiplier_ = state.value("position_scale_multiplier", position_scale_multiplier_);
+
+        if (state.contains("trade_history") && state["trade_history"].is_array()) {
+            std::vector<risk::TradeHistory> history;
+            for (const auto& item : state["trade_history"]) {
+                risk::TradeHistory trade;
+                trade.market = item.value("market", "");
+                trade.entry_price = item.value("entry_price", 0.0);
+                trade.exit_price = item.value("exit_price", 0.0);
+                trade.quantity = item.value("quantity", 0.0);
+                trade.profit_loss = item.value("profit_loss", 0.0);
+                trade.profit_loss_pct = item.value("profit_loss_pct", 0.0);
+                trade.fee_paid = item.value("fee_paid", 0.0);
+                trade.entry_time = item.value("entry_time", 0LL);
+                trade.exit_time = item.value("exit_time", 0LL);
+                trade.strategy_name = item.value("strategy_name", "");
+                trade.exit_reason = item.value("exit_reason", "");
+                trade.signal_filter = item.value("signal_filter", 0.5);
+                trade.signal_strength = item.value("signal_strength", 0.0);
+                history.push_back(trade);
+            }
+            risk_manager_->replaceTradeHistory(history);
+            LOG_INFO("상태 복구: 거래 이력 {}건 로드", history.size());
+        }
+
+        if (state.contains("strategy_stats") && state["strategy_stats"].is_object() && strategy_manager_) {
+            for (const auto& strategy : strategy_manager_->getStrategies()) {
+                auto info = strategy->getInfo();
+                if (!state["strategy_stats"].contains(info.name)) {
+                    continue;
+                }
+                const auto& s = state["strategy_stats"][info.name];
+                strategy::IStrategy::Statistics stats;
+                stats.total_signals = s.value("total_signals", 0);
+                stats.winning_trades = s.value("winning_trades", 0);
+                stats.losing_trades = s.value("losing_trades", 0);
+                stats.total_profit = s.value("total_profit", 0.0);
+                stats.total_loss = s.value("total_loss", 0.0);
+                stats.win_rate = s.value("win_rate", 0.0);
+                stats.avg_profit = s.value("avg_profit", 0.0);
+                stats.avg_loss = s.value("avg_loss", 0.0);
+                stats.profit_factor = s.value("profit_factor", 0.0);
+                stats.sharpe_ratio = s.value("sharpe_ratio", 0.0);
+                strategy->setStatistics(stats);
+            }
+            LOG_INFO("상태 복구: 전략 통계 로드 완료");
+        }
+
+        recovered_strategy_map_.clear();
+        if (state.contains("position_strategy_map") && state["position_strategy_map"].is_object()) {
+            for (auto it = state["position_strategy_map"].begin(); it != state["position_strategy_map"].end(); ++it) {
+                recovered_strategy_map_[it.key()] = it.value().get<std::string>();
+            }
+        }
+
+        pending_reconcile_positions_.clear();
+        if (state.contains("open_positions") && state["open_positions"].is_array()) {
+            for (const auto& p : state["open_positions"]) {
+                PersistedPosition pos;
+                pos.market = p.value("market", "");
+                pos.strategy_name = p.value("strategy_name", "");
+                pos.entry_price = p.value("entry_price", 0.0);
+                pos.quantity = p.value("quantity", 0.0);
+                pos.entry_time = p.value("entry_time", 0LL);
+                pos.signal_filter = p.value("signal_filter", 0.5);
+                pos.signal_strength = p.value("signal_strength", 0.0);
+                if (!pos.market.empty() && pos.entry_price > 0.0 && pos.quantity > 0.0) {
+                    pending_reconcile_positions_.push_back(pos);
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("상태 복구 실패: {}", e.what());
     }
 }
 
