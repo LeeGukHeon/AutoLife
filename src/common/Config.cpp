@@ -77,6 +77,9 @@ void Config::load(const std::string& path) {
             engine_config_.max_daily_loss_krw = t.value("max_daily_loss_krw", 50000.0);
             engine_config_.max_order_krw = t.value("max_order_krw", 500000.0);
             engine_config_.min_order_krw = t.value("min_order_krw", 5000.0);
+            
+            // 포트폴리오 노출 비율 설정
+            engine_config_.max_exposure_pct = t.value("max_exposure_pct", 0.85); // 기본값 85%
 
             // 전략 목록
             if (t.contains("enabled_strategies")) {

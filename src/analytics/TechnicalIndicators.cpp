@@ -386,20 +386,46 @@ std::vector<Candle> TechnicalIndicators::jsonToCandles(const nlohmann::json& jso
     std::vector<Candle> candles;
     if (!json_candles.is_array()) return candles;
 
+    auto getDouble = [](const nlohmann::json& val) -> double {
+        try {
+            if (val.is_string()) {
+                return std::stod(val.get<std::string>());
+            }
+            if (val.is_number()) {
+                return val.get<double>();
+            }
+        } catch (...) {
+        }
+        return 0.0;
+    };
+
     for (const auto& jc : json_candles) {
         Candle c;
-        c.open = jc["opening_price"].get<double>();
-        c.high = jc["high_price"].get<double>();
-        c.low = jc["low_price"].get<double>();
-        c.close = jc["trade_price"].get<double>();
-        c.volume = jc["candle_acc_trade_volume"].get<double>();
-        c.timestamp = jc["timestamp"].get<long long>();
+        c.open = getDouble(jc["opening_price"]);
+        c.high = getDouble(jc["high_price"]);
+        c.low = getDouble(jc["low_price"]);
+        c.close = getDouble(jc["trade_price"]);
+        c.volume = getDouble(jc["candle_acc_trade_volume"]);
+        c.timestamp = jc.value("timestamp", 0LL);
         
         candles.push_back(c);
     }
     
-    std::reverse(candles.begin(), candles.end());
-    
+    bool has_timestamp = false;
+    for (const auto& candle : candles) {
+        if (candle.timestamp != 0) {
+            has_timestamp = true;
+            break;
+        }
+    }
+
+    if (has_timestamp) {
+        std::stable_sort(candles.begin(), candles.end(),
+                         [](const Candle& a, const Candle& b) {
+                             return a.timestamp < b.timestamp;
+                         });
+    }
+
     return candles;
 }
 

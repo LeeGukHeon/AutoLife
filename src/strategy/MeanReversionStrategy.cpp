@@ -66,14 +66,15 @@ Signal MeanReversionStrategy::generateSignal(
     const std::string& market,
     const analytics::CoinMetrics& metrics,
     const std::vector<analytics::Candle>& candles,
-    double current_price)
+    double current_price,
+    double available_capital)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     
     Signal signal;
     signal.type = SignalType::NONE;
     signal.market = market;
-    signal.strategy_name = "Mean Reversion";
+    signal.strategy_name = "Mean Reversion Strategy";
     
     // [수정] 중복 진입 방지: 이미 진입한 종목이면 빈 신호 리턴
     if (active_positions_.find(market) != active_positions_.end()) {
@@ -125,10 +126,22 @@ Signal MeanReversionStrategy::generateSignal(
     
     // ===== 7. 손절/익절 계산 =====
     signal.stop_loss = calculateStopLoss(current_price, candles_5m);
-    signal.take_profit = calculateTakeProfit(current_price, candles_5m);
+    double base_tp_mr = calculateTakeProfit(current_price, candles_5m);
+    double risk_mr = current_price - signal.stop_loss;
+    signal.take_profit_1 = current_price + (risk_mr * 2.5 * 0.5);
+    signal.take_profit_2 = base_tp_mr;
+    signal.buy_order_type = strategy::OrderTypePolicy::LIMIT_WITH_FALLBACK;
+    signal.sell_order_type = strategy::OrderTypePolicy::LIMIT_WITH_FALLBACK;
+    signal.max_retries = 3;
+    signal.retry_wait_ms = 800;
     
     // ===== 8. 포지션 사이징 =====
-    double capital = 1000000.0; // 엔진에서 실제 자본금에 맞춰 조정됨
+    double capital = available_capital;
+    if (capital <= 0) {
+        spdlog::warn("[MeanReversion] 가용자본 없음 (신호 무시) - {}", market);
+        signal.type = SignalType::NONE;
+        return signal;
+    }
     signal.position_size = calculatePositionSize(capital, current_price, signal.stop_loss, metrics);
     
     // ===== 9. 최소 주문 금액 확인 =====
@@ -139,7 +152,7 @@ Signal MeanReversionStrategy::generateSignal(
     }
     
     // ===== 10. 리스크/리워드 비율 =====
-    double expected_return = (signal.take_profit - current_price) / current_price;
+    double expected_return = (signal.take_profit_2 - current_price) / current_price;
     double risk = (current_price - signal.stop_loss) / current_price;
     
     if (risk <= 0) return signal;
@@ -170,7 +183,8 @@ bool MeanReversionStrategy::shouldEnter(
     double current_price)
 {
     // generateSignal 호출 (내부 락 있음)
-    Signal signal = generateSignal(market, metrics, candles, current_price);
+    // 주의: shouldEnter 호출 시 available_capital 불가, 0 전달 (fallback to engine_config_.initial_capital)
+    Signal signal = generateSignal(market, metrics, candles, current_price, 0.0);
     
     if (signal.type == SignalType::BUY && signal.strength >= MIN_SIGNAL_STRENGTH) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -323,6 +337,7 @@ double MeanReversionStrategy::calculateTakeProfit(
     const std::vector<analytics::Candle>& candles)
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    (void)candles;  // candles 파라미터 미사용
     return entry_price * (1.0 + BASE_TAKE_PROFIT_1);
 }
 
@@ -335,6 +350,8 @@ double MeanReversionStrategy::calculatePositionSize(
     const analytics::CoinMetrics& metrics)
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    (void)capital;  // capital 파라미터 미사용
+    (void)metrics;  // metrics 파라미터 미사용
     
     double risk_pct = (entry_price - stop_loss) / entry_price;
     
@@ -450,6 +467,7 @@ double MeanReversionStrategy::updateTrailingStop(
     double current_price)
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    (void)current_price;  // current_price 파라미터 미사용
     
     double profit_pct = (highest_price - entry_price) / entry_price;
     
@@ -800,7 +818,7 @@ double MeanReversionStrategy::calculateHurstExponent(
     for (int lag : lags) {
         if (prices.size() < static_cast<size_t>(lag * 2)) continue;
         
-        int num_subseries = prices.size() / lag;
+        int num_subseries = static_cast<int>(prices.size() / lag);
         std::vector<double> rs_values;
         rs_values.reserve(num_subseries); // 메모리 예약 (성능 향상)
         
@@ -1332,6 +1350,8 @@ double MeanReversionStrategy::estimateReversionTime(
     double half_life,
     double current_deviation) const
 {
+    (void)current_deviation;  // current_deviation 파라미터 미사용
+    
     if (half_life <= 0 || half_life > 100) {
         return 120.0;  // Default 2 hours
     }
@@ -1531,31 +1551,7 @@ long long MeanReversionStrategy::getCurrentTimestamp() const
 std::vector<analytics::Candle> MeanReversionStrategy::parseCandlesFromJson(
     const nlohmann::json& json_data) const
 {
-    std::vector<analytics::Candle> candles;
-    
-    if (!json_data.is_array()) {
-        return candles;
-    }
-    
-    for (const auto& item : json_data) {
-        analytics::Candle candle;
-        
-        candle.timestamp = item.value("timestamp", 0LL);
-        candle.open = item.value("opening_price", 0.0);
-        candle.high = item.value("high_price", 0.0);
-        candle.low = item.value("low_price", 0.0);
-        candle.close = item.value("trade_price", 0.0);
-        candle.volume = item.value("candle_acc_trade_volume", 0.0);
-        
-        candles.push_back(candle);
-    }
-    
-    std::sort(candles.begin(), candles.end(), 
-              [](const analytics::Candle& a, const analytics::Candle& b) {
-                  return a.timestamp < b.timestamp;
-              });
-    
-    return candles;
+    return analytics::TechnicalIndicators::jsonToCandles(json_data);
 }
 
 std::vector<analytics::Candle> MeanReversionStrategy::resampleTo5m(const std::vector<analytics::Candle>& candles_1m) const {

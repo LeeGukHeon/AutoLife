@@ -294,7 +294,7 @@ double MarketScanner::detectVolumeSurge(const std::string& market) {
         
         return surge_ratio;
         
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
         return 0.0;
     }
 }
@@ -331,7 +331,7 @@ double MarketScanner::calculateOrderBookImbalance(const std::string& market) {
         
         return obi;
         
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
         return 0.0;
     }
 }
@@ -419,9 +419,7 @@ double MarketScanner::calculateVolatility(const std::string& market) {
         std::vector<double> high_low_diff;
         
         for (const auto& candle : candles) {
-            double high = candle["high_price"].get<double>();
-            double low = candle["low_price"].get<double>();
-            high_low_diff.push_back(high - low);
+            high_low_diff.push_back(candle.high - candle.low);
         }
         
         // ATR (Average True Range) 계산
@@ -429,12 +427,12 @@ double MarketScanner::calculateVolatility(const std::string& market) {
                      / high_low_diff.size();
         
         // 현재가 대비 변동성 비율
-        double current_price = candles.back()["trade_price"].get<double>();
+        double current_price = candles.back().close;
         if (current_price < 0.0001) return 0.0;
         
         return (atr / current_price) * 100.0;
         
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
         return 0.0;
     }
 }
@@ -451,7 +449,7 @@ double MarketScanner::calculateLiquidityScore(const std::string& market) {
         
         return score;
         
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
         return 0.0;
     }
 }
@@ -465,8 +463,8 @@ double MarketScanner::calculatePriceMomentum(const std::string& market) {
         std::vector<double> gains, losses;
         
         for (size_t i = 1; i < candles.size(); ++i) {
-            double prev_close = candles[i]["trade_price"].get<double>();
-            double curr_close = candles[i-1]["trade_price"].get<double>();
+            double prev_close = candles[i - 1].close;
+            double curr_close = candles[i].close;
             double change = curr_close - prev_close;
             
             if (change > 0) {
@@ -562,7 +560,7 @@ double MarketScanner::getAverageVolume(const std::string& market, int hours) {
         
         double total_volume = 0.0;
         for (const auto& candle : candles) {
-            total_volume += candle["candle_acc_trade_volume"].get<double>();
+            total_volume += candle.volume;
         }
         
         return total_volume / candles.size();
@@ -572,18 +570,26 @@ double MarketScanner::getAverageVolume(const std::string& market, int hours) {
     }
 }
 
-nlohmann::json MarketScanner::getRecentCandles(const std::string& market, int count) {
+std::vector<Candle> MarketScanner::getRecentCandles(const std::string& market, int count) {
     try {
-        return client_->getCandles(market, "60", count); // 60분봉
-    } catch (const std::exception& e) {
-        return nlohmann::json::array();
+        auto json = client_->getCandles(market, "60", count); // 60분봉
+        return TechnicalIndicators::jsonToCandles(json);
+    } catch (const std::exception&) {
+        return {};
     }
 }
 
 // 1. 호가 불균형 분석 (수량 중심 + 가중치 부여)
 double MarketScanner::analyzeOrderBookImbalance(const nlohmann::json& orderbook) {
     try {
-        auto units = orderbook["orderbook_units"];
+        nlohmann::json units;
+        if (orderbook.is_array()) {
+            units = orderbook;
+        } else if (orderbook.contains("orderbook_units")) {
+            units = orderbook["orderbook_units"];
+        } else {
+            return 0.0;
+        }
         double weighted_bids = 0.0;
         double weighted_asks = 0.0;
         int depth = std::min(10, (int)units.size()); // 너무 깊은 호가는 노이즈이므로 10단계로 제한

@@ -32,15 +32,30 @@ struct Position {
     double take_profit_2;       // 2차 익절 (100%)
     bool half_closed;           // 1차 익절 완료 여부
     
+    // [추가] Trailing Stop Loss용
+    double highest_price;       // 포지션 진입 후 최고가 기록 (손절선 상승용)
+    
     // 전략 정보
     std::string strategy_name;
+    
+    // [NEW] ML 학습용 신호 정보
+    double signal_filter;       // 진입 시 적용된 동적 필터값
+    double signal_strength;     // 진입 신호의 강도
+    
+        // [NEW] 펜딩 주문 추적 (Limit Order → Market 폴백 위해)
+        std::string pending_order_uuid;     // 펜딩 중인 주문 UUID
+        long long pending_order_time;       // 펜딩 주문 시간 (ms, epoch)
+        std::string pending_order_type;     // "sell" or "partial_sell"
+        double pending_order_price;         // 펜딩 중인 주문가격
     
     Position()
         : entry_price(0), current_price(0), quantity(0)
         , invested_amount(0), entry_time(0)
         , unrealized_pnl(0), unrealized_pnl_pct(0)
         , stop_loss(0), take_profit_1(0), take_profit_2(0)
-        , half_closed(false)
+        , half_closed(false), highest_price(0)
+        , pending_order_time(0), pending_order_price(0)
+        , signal_filter(0.5), signal_strength(0.0)
     {}
 };
 
@@ -58,10 +73,15 @@ struct TradeHistory {
     std::string strategy_name;
     std::string exit_reason;    // "take_profit", "stop_loss", "time_stop"
     
+    // [NEW] ML 학습용 필터 정보
+    double signal_filter;       // 거래 진입 시 적용된 신호 필터값 (0.45~0.55)
+    double signal_strength;     // 거래 진입 신호의 강도 (0.0~1.0)
+    
     TradeHistory()
         : entry_price(0), exit_price(0), quantity(0)
         , profit_loss(0), profit_loss_pct(0), fee_paid(0)
         , entry_time(0), exit_time(0)
+        , signal_filter(0.5), signal_strength(0.0)
     {}
 };
 
@@ -174,6 +194,7 @@ public:
         double total_capital;
         double available_capital;
         double invested_capital;
+        double reserved_capital;
         double unrealized_pnl;
         double realized_pnl;
         double total_pnl;
@@ -195,6 +216,7 @@ public:
         
         RiskMetrics()
             : total_capital(0), available_capital(0), invested_capital(0)
+            , reserved_capital(0)
             , unrealized_pnl(0), realized_pnl(0), total_pnl(0), total_pnl_pct(0)
             , total_trades(0), winning_trades(0), losing_trades(0), win_rate(0)
             , max_drawdown(0), current_drawdown(0)
@@ -205,6 +227,27 @@ public:
     
     RiskMetrics getRiskMetrics() const;
     std::vector<TradeHistory> getTradeHistory() const;
+    
+    // [NEW] 포지션의 신호 정보 설정 (ML 학습용)
+    void setPositionSignalInfo(
+        const std::string& market,
+        double signal_filter,
+        double signal_strength
+    );
+
+    // ===== 그리드 자본/체결 처리 =====
+    bool reserveGridCapital(
+        const std::string& market,
+        double amount,
+        const std::string& strategy_name
+    );
+    void releaseGridCapital(const std::string& market);
+    bool applyGridFill(
+        const std::string& market,
+        strategy::OrderSide side,
+        double price,
+        double quantity
+    );
     
     // [✅ 추가] 실전 매매 시, 실제 잔고로 자본금을 덮어쓰기 위한 함수
     void resetCapital(double actual_balance) {
@@ -219,9 +262,22 @@ public:
     void setMaxPositions(int max_positions);
     void setMaxDailyTrades(int max_trades);
     void setMaxDrawdown(double max_drawdown_pct);
+    void setMaxExposurePct(double pct);
     void setMinReentryInterval(int seconds);
     
 private:
+    struct GridInventory {
+        double quantity;
+        double avg_price;
+        long long last_buy_time;
+
+        GridInventory()
+            : quantity(0.0)
+            , avg_price(0.0)
+            , last_buy_time(0)
+        {}
+    };
+
     double initial_capital_;
     double current_capital_;
     
@@ -237,11 +293,15 @@ private:
     int max_positions_;
     int max_daily_trades_;
     double max_drawdown_pct_;
+    double max_exposure_pct_; // 총 자본 대비 허용 투자 비율 (예: 0.7 = 70%)
     int min_reentry_interval_;  // 초
     
     // 통계
     mutable double max_capital_;      // <- mutable 추가
     mutable double total_fees_paid_;  // <- mutable 추가
+
+    std::map<std::string, double> reserved_grid_capital_;
+    std::map<std::string, GridInventory> grid_inventory_;
     
     mutable std::recursive_mutex mutex_;
     

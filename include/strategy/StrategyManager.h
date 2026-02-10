@@ -23,11 +23,13 @@ public:
     std::shared_ptr<IStrategy> getStrategy(const std::string& name);
     
     // 모든 전략에서 신호 수집
+    // available_capital: 엔진에서 전달하는 현재 가용 자본 (원화)
     std::vector<Signal> collectSignals(
         const std::string& market,
         const analytics::CoinMetrics& metrics,
         const std::vector<analytics::Candle>& candles,
-        double current_price
+        double current_price,
+        double available_capital
     );
     
     // 최적 신호 선택 (여러 전략 중 가장 강한 신호)
@@ -53,6 +55,9 @@ public:
     
     // 전체 승률 계산
     double getOverallWinRate() const;
+
+    // 전략 목록 반환
+    std::vector<std::shared_ptr<IStrategy>> getStrategies() const;
     
 private:
     std::vector<std::shared_ptr<IStrategy>> strategies_;

@@ -71,14 +71,19 @@ Signal GridTradingStrategy::generateSignal(
     const std::string& market,
     const analytics::CoinMetrics& metrics,
     const std::vector<analytics::Candle>& candles,
-    double current_price)
+    double current_price,
+    double available_capital)
 {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+    last_metrics_cache_[market] = metrics;
+    last_candles_cache_[market] = candles;
+    last_price_cache_[market] = current_price;
     
     Signal signal;
     signal.type = SignalType::NONE;
     signal.market = market;
-    signal.strategy_name = "Grid Trading";
+    signal.strategy_name = "Grid Trading Strategy";
     
     // [수정] 중복 진입 방지: 이미 진입한 종목이면 신호 생성 안 함
     if (active_positions_.find(market) != active_positions_.end()) {
@@ -122,10 +127,22 @@ Signal GridTradingStrategy::generateSignal(
     
     // ===== 8. 손절/익절 계산 (그리드 전체 기준) =====
     signal.stop_loss = calculateStopLoss(current_price, candles);
-    signal.take_profit = calculateTakeProfit(current_price, candles); // Range High
+    double base_tp_grid = calculateTakeProfit(current_price, candles);
+    double risk_grid = current_price - signal.stop_loss;
+    signal.take_profit_1 = current_price + (risk_grid * 3.0 * 0.5);  // [✅] 1차 익절
+    signal.take_profit_2 = base_tp_grid;                              // [✅] 2차 익절
+    signal.buy_order_type = strategy::OrderTypePolicy::LIMIT_WITH_FALLBACK;
+    signal.sell_order_type = strategy::OrderTypePolicy::LIMIT_WITH_FALLBACK;
+    signal.max_retries = 2;
+    signal.retry_wait_ms = 300;
     
     // ===== 9. 포지션 사이징 =====
-    double capital = engine_config_.initial_capital; // 엔진에서 할당
+    double capital = available_capital;
+    if (capital <= 0) {
+        spdlog::warn("[GridTrading] 가용자본 없음 (신호 무시) - {}", market);
+        signal.type = SignalType::NONE;
+        return signal;
+    }
     signal.position_size = calculatePositionSize(capital, current_price, signal.stop_loss, metrics);
     
     // ===== 10. 최소 주문 금액 확인 =====
@@ -156,46 +173,10 @@ bool GridTradingStrategy::shouldEnter(
     double current_price)
 {
     // generateSignal 호출 (내부 락 있음)
-    Signal signal = generateSignal(market, metrics, candles, current_price);
-    
-    if (signal.type == SignalType::BUY && signal.strength >= MIN_SIGNAL_STRENGTH) {
-        std::lock_guard<std::recursive_mutex> lock(mutex_);
-        
-        // [수정] 1. 중복 방지 목록 등록
-        active_positions_.insert(market);
-        
-        // Range Detection (재호출 비용 아까우면 generateSignal에서 리턴받아야 하나 구조상 재호출)
-        RangeDetectionMetrics range = detectRange(candles, current_price);
-        
-        // Grid Configuration 생성
-        double available_capital = 1000000.0 * MAX_GRID_CAPITAL_PCT;
-        GridConfiguration config = createGridConfiguration(market, range, metrics, current_price, available_capital);
-        
-        // Grid Levels 생성
-        auto levels = generateGridLevels(config);
-        
-        // [수정] 2. 그리드 데이터 초기화 (active_grids_ 사용)
-        GridPositionData grid;
-        grid.market = market;
-        grid.config = config;
-        grid.status = GridStatus::ACTIVE;
-        grid.levels = levels;
-        grid.creation_timestamp = getCurrentTimestamp();
-        grid.last_price = current_price;
-        grid.last_price_update_timestamp = grid.creation_timestamp;
-        
-        active_grids_[market] = grid;
-        
-        recordTrade();
-        rolling_stats_.total_grids_created++;
-        
-        spdlog::info("[GridTrading] Grid Created - {} | Center: {:.2f} | Range: {:.2f}-{:.2f} | Grids: {}",
-                     market, config.center_price, config.lower_bound, config.upper_bound, config.num_grids);
-        
-        return true;
-    }
-    
-    return false;
+    // 주의: shouldEnter 호출 시 available_capital 불가, 0 전달 (fallback to engine_config_.initial_capital)
+    Signal signal = generateSignal(market, metrics, candles, current_price, 0.0);
+
+    return (signal.type == SignalType::BUY && signal.strength >= MIN_SIGNAL_STRENGTH);
 }
 
 // ===== Exit Decision =====
@@ -207,6 +188,7 @@ bool GridTradingStrategy::shouldExit(
     double holding_time_seconds)
 {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
+    (void)entry_price;  // entry_price 파라미터 미사용
     
     if (active_grids_.find(market) == active_grids_.end()) {
         return false;
@@ -221,7 +203,7 @@ bool GridTradingStrategy::shouldExit(
         // exitGrid는 updateStatistics를 호출하여 정리함.
         // 여기서 true를 반환하면 엔진도 매도를 시도하므로 중복 처리될 수 있음.
         // 하지만 안전을 위해 true 반환 (엔진은 잔고가 없으면 실패 처리될 것임)
-        return true; 
+        return false; 
     }
     
     // ===== 2. Stop Loss 체크 (전체 손익 기준) =====
@@ -230,14 +212,14 @@ bool GridTradingStrategy::shouldExit(
                      market, grid.current_drawdown * 100);
         // exitGrid 호출 (통계 업데이트 및 목록 제거)
         exitGrid(market, ExitReason::STOP_LOSS, current_price);
-        return true;
+        return false;
     }
     
     // ===== 3. Max Holding Time =====
     if (holding_hours >= MAX_HOLDING_TIME_HOURS) {
         spdlog::info("[GridTrading] Max Holding Time - {} | Hours: {:.1f}", market, holding_hours);
         exitGrid(market, ExitReason::MAX_TIME, current_price);
-        return true;
+        return false;
     }
     
     // ===== 4. Rebalancing / Breakout 체크 =====
@@ -253,7 +235,7 @@ bool GridTradingStrategy::shouldExit(
             // 추세장이면 그리드 종료 (청산)
             spdlog::info("[GridTrading] Range Lost (Trend) - {} | Exiting", market);
             exitGrid(market, ExitReason::BREAKOUT, current_price);
-            return true;
+            return false;
         }
     }
     
@@ -300,6 +282,9 @@ double GridTradingStrategy::calculatePositionSize(
     const analytics::CoinMetrics& metrics)
 {
     //std::lock_guard<std::recursive_mutex> lock(mutex_);
+    (void)capital;      // capital 파라미터 미사용
+    (void)entry_price;  // entry_price 파라미터 미사용
+    (void)stop_loss;    // stop_loss 파라미터 미사용
     
     // Grid는 자본의 30%까지만 할당
     double position_size = MAX_GRID_CAPITAL_PCT;
@@ -395,6 +380,228 @@ void GridTradingStrategy::updateStatistics(const std::string& market, bool is_wi
     checkCircuitBreaker();
 }
 
+bool GridTradingStrategy::onSignalAccepted(const Signal& signal, double allocated_capital)
+{
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+    if (signal.market.empty()) {
+        return false;
+    }
+
+    if (active_grids_.count(signal.market)) {
+        return false;
+    }
+
+    if (allocated_capital <= 0.0) {
+        return false;
+    }
+
+    auto metrics_it = last_metrics_cache_.find(signal.market);
+    auto candles_it = last_candles_cache_.find(signal.market);
+
+    if (metrics_it == last_metrics_cache_.end()) {
+        spdlog::warn("[GridTrading] Activation skipped (no metrics cache): {}", signal.market);
+        return false;
+    }
+
+    std::vector<analytics::Candle> candles;
+    if (candles_it != last_candles_cache_.end()) {
+        candles = candles_it->second;
+    }
+
+    if (candles.size() < 50) {
+        candles = getCachedCandles(signal.market, 200);
+    }
+
+    if (candles.size() < 50) {
+        spdlog::warn("[GridTrading] Activation skipped (insufficient candles): {}", signal.market);
+        return false;
+    }
+
+    double current_price = signal.entry_price;
+    if (current_price <= 0.0) {
+        auto price_it = last_price_cache_.find(signal.market);
+        if (price_it != last_price_cache_.end()) {
+            current_price = price_it->second;
+        }
+    }
+    if (current_price <= 0.0) {
+        spdlog::warn("[GridTrading] Activation skipped (invalid price): {}", signal.market);
+        return false;
+    }
+
+    RangeDetectionMetrics range = detectRange(candles, current_price);
+    GridConfiguration config = createGridConfiguration(
+        signal.market, range, metrics_it->second, current_price, allocated_capital
+    );
+
+    auto levels = generateGridLevels(config);
+    if (levels.empty()) {
+        spdlog::warn("[GridTrading] Activation skipped (no levels): {}", signal.market);
+        return false;
+    }
+
+    GridPositionData grid;
+    grid.market = signal.market;
+    grid.config = config;
+    grid.status = GridStatus::ACTIVE;
+    grid.levels = levels;
+    grid.total_invested = allocated_capital;
+    grid.creation_timestamp = getCurrentTimestamp();
+    grid.last_price = current_price;
+    grid.last_price_update_timestamp = grid.creation_timestamp;
+
+    active_positions_.insert(signal.market);
+    active_grids_[signal.market] = grid;
+
+    recordTrade();
+    rolling_stats_.total_grids_created++;
+
+    spdlog::info("[GridTrading] Grid Activated - {} | Capital: {:.0f} | Grids: {}",
+                 signal.market, allocated_capital, config.num_grids);
+
+    return true;
+}
+
+std::vector<OrderRequest> GridTradingStrategy::drainOrderRequests()
+{
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::vector<OrderRequest> drained;
+    drained.reserve(pending_orders_.size());
+    while (!pending_orders_.empty()) {
+        drained.push_back(pending_orders_.front());
+        pending_orders_.pop_front();
+    }
+    return drained;
+}
+
+void GridTradingStrategy::onOrderResult(const OrderResult& result)
+{
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+    auto grid_it = active_grids_.find(result.market);
+    if (grid_it == active_grids_.end()) {
+        spdlog::warn("[GridTrading] Order result ignored (no grid): {}", result.market);
+        return;
+    }
+
+    auto& grid = grid_it->second;
+    auto level_it = grid.levels.find(result.level_id);
+    if (level_it == grid.levels.end()) {
+        spdlog::warn("[GridTrading] Order result ignored (no level): {} #{}", result.market, result.level_id);
+        return;
+    }
+
+    auto& level = level_it->second;
+    long long now = getCurrentTimestamp();
+
+    if (!result.success || result.executed_volume <= 0.0) {
+        if (result.side == OrderSide::BUY) {
+            level.buy_order_placed = false;
+            level.buy_order_filled = false;
+        } else {
+            level.sell_order_placed = false;
+            level.sell_order_filled = false;
+        }
+        spdlog::warn("[GridTrading] Order failed - {} | Level: {}", result.market, level.level_id);
+        return;
+    }
+
+    if (result.side == OrderSide::BUY) {
+        level.buy_order_placed = true;
+        level.buy_order_filled = true;
+        level.buy_timestamp = now;
+        level.quantity = result.executed_volume;
+        if (result.executed_price > 0.0) {
+            level.price = result.executed_price;
+        }
+
+        spdlog::info("[GridTrading] Buy Filled - {} | Level: {} | Price: {:.2f}",
+                     result.market, level.level_id, level.price);
+        return;
+    }
+
+    level.sell_order_placed = true;
+    level.sell_order_filled = true;
+    level.sell_timestamp = now;
+
+    double buy_price = level.price;
+    double sell_price = result.executed_price > 0.0 ? result.executed_price : buy_price;
+    double profit_pct = (sell_price - buy_price) / buy_price;
+    profit_pct -= (UPBIT_FEE_RATE * 2);
+
+    level.profit_loss = profit_pct;
+    level.cumulative_profit += profit_pct;
+    level.round_trips++;
+    grid.realized_pnl += profit_pct;
+    grid.completed_cycles++;
+
+    if (level.buy_timestamp > 0) {
+        double cycle_time = static_cast<double>(level.sell_timestamp - level.buy_timestamp);
+        cycle_times_.push_back(cycle_time);
+        if (cycle_times_.size() > 100) {
+            cycle_times_.pop_front();
+        }
+    }
+
+    spdlog::info("[GridTrading] Sell Filled - {} | Level: {} | Profit: {:.3f}% | Trips: {}",
+                 result.market, level.level_id, profit_pct * 100, level.round_trips);
+
+    level.buy_order_filled = false;
+    level.sell_order_filled = false;
+    level.buy_order_placed = false;
+    level.sell_order_placed = false;
+
+    if (grid.exit_requested) {
+        bool all_closed = true;
+        for (const auto& item : grid.levels) {
+            if (item.second.buy_order_filled) {
+                all_closed = false;
+                break;
+            }
+        }
+
+        if (all_closed) {
+            double total_pnl = grid.realized_pnl + grid.unrealized_pnl;
+            bool is_win = (total_pnl > 0);
+
+            updateStatistics(result.market, is_win, total_pnl);
+
+            const char* reason_str[] = {"NONE", "PROFIT", "STOP_LOSS", "BREAKOUT", "FLASH_CRASH", "MAX_TIME", "MANUAL"};
+            spdlog::info("[GridTrading] Grid Exited - {} | Reason: {} | P&L: {:.3f}% | Cycles: {}",
+                         result.market,
+                         reason_str[static_cast<int>(grid.exit_reason)],
+                         total_pnl * 100,
+                         grid.completed_cycles);
+
+            released_markets_.push_back(result.market);
+        }
+    }
+}
+
+std::vector<std::string> GridTradingStrategy::drainReleasedMarkets()
+{
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::vector<std::string> released;
+    released.reserve(released_markets_.size());
+    while (!released_markets_.empty()) {
+        released.push_back(released_markets_.front());
+        released_markets_.pop_front();
+    }
+    return released;
+}
+
+std::vector<std::string> GridTradingStrategy::getActiveMarkets() const
+{
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::vector<std::string> markets;
+    markets.reserve(active_grids_.size());
+    for (const auto& item : active_grids_) {
+        markets.push_back(item.first);
+    }
+    return markets;
+}
+
 // ===== Grid Specific Functions =====
 
 bool GridTradingStrategy::shouldRebalanceGrid(
@@ -421,6 +628,9 @@ void GridTradingStrategy::updateGridLevels(
     }
     
     auto& grid = active_grids_[market];
+    if (grid.status == GridStatus::EMERGENCY_EXIT) {
+        return;
+    }
     grid.last_price = current_price;
     grid.last_price_update_timestamp = getCurrentTimestamp();
     
@@ -475,7 +685,7 @@ bool GridTradingStrategy::shouldEmergencyExit(
         spdlog::error("[GridTrading] Flash Crash Detected - {} | Drop: {:.2f}% | Speed: {:.2f}%/min",
                      market, flash.price_drop_pct * 100, flash.drop_speed);
         emergencyLiquidateGrid(market, ExitReason::FLASH_CRASH);
-        return true;
+            return false; 
     }
     
     // Breakout 감지
@@ -796,7 +1006,7 @@ RangeDetectionMetrics GridTradingStrategy::detectRange(
     metrics.consolidation_bars = 0;
     double consolidation_threshold = metrics.range_width_pct * 0.3;
     
-    for (int i = candles.size() - 1; i >= 0 && i >= static_cast<int>(candles.size()) - 50; i--) {
+    for (int i = static_cast<int>(candles.size()) - 1; i >= 0 && i >= static_cast<int>(candles.size()) - 50; i--) {
         double bar_range = (candles[i].high - candles[i].low) / candles[i].close;
         if (bar_range < consolidation_threshold) {
             metrics.consolidation_bars++;
@@ -953,6 +1163,10 @@ GridConfiguration GridTradingStrategy::createGridConfiguration(
     double current_price,
     double available_capital)
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    (void)market;  // market 파라미터 미사용
+    (void)available_capital;  // available_capital 파라미터 미사용
+    
     GridConfiguration config;
     
     // 1. Grid Type 선택
@@ -1232,6 +1446,8 @@ GridSignalMetrics GridTradingStrategy::analyzeGridOpportunity(
     const std::vector<analytics::Candle>& candles,
     double current_price)
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    (void)market;  // market 파라미터 미사용
     GridSignalMetrics signal;
     
     // 1. Range Detection
@@ -1358,44 +1574,35 @@ void GridTradingStrategy::executeGridBuy(
     GridLevel& level,
     double current_price)
 {
+    (void)current_price;  // current_price 파라미터 미사용
     if (level.buy_order_filled) {
         return;
     }
-    
-   // [✅ 추가] 실전 주문 전송 로직 시작 ==============================
-    // 수량 계산 (혹은 level.quantity 사용)
+
     double quantity = level.quantity;
-    if (quantity <= 0) quantity = (level.price * 0.1) / level.price; // 안전장치
-
-    // 문자열 변환 (소수점 처리 주의 - 여기선 간단히 to_string 사용)
-    std::string price_str = std::to_string((long long)level.price); // 원화는 정수
-    std::string vol_str = std::to_string(quantity);
-
-    try {
-        // 실제 API 호출 (TradingEngine의 client_ 사용)
-        // 주의: client_가 protected여야 함. private라면 getClient() 같은 게 필요하지만
-        // 보통 상속 구조에선 protected로 둡니다.
-        auto res = client_->placeOrder(market, "bid", vol_str, price_str, "limit");
-        
-        if (res.contains("uuid")) {
-            spdlog::info("✅ [Grid] Real Buy Order: {} @ {}", market, level.price);
-        } else {
-            spdlog::error("❌ [Grid] Buy Order Fail: No UUID returned");
-            return; // 주문 실패 시 내부 상태 업데이트 안 하고 리턴
-        }
-    } catch (const std::exception& e) {
-        spdlog::error("❌ [Grid] Buy Order Error: {}", e.what());
-        return; // 주문 실패 시 리턴
+    if (quantity <= 0.0) {
+        quantity = (level.price * 0.1) / level.price;
     }
-    // ================================================================
 
-    // [기존 코드 유지] 내부 상태 업데이트
+    double order_amount = level.price * quantity;
+    if (order_amount < MIN_ORDER_AMOUNT_KRW) {
+        spdlog::warn("[GridTrading] Buy skipped (min order): {} | Level: {} | Amount: {:.0f}",
+                     market, level.level_id, order_amount);
+        return;
+    }
+
+    OrderRequest request;
+    request.market = market;
+    request.side = OrderSide::BUY;
+    request.price = level.price;
+    request.quantity = quantity;
+    request.level_id = level.level_id;
+    request.reason = "grid_buy";
+
+    pending_orders_.push_back(request);
     level.buy_order_placed = true;
-    level.buy_order_filled = true; // (엄밀히는 체결 확인 후 바꿔야 하지만, 지정가는 거의 체결된다고 가정)
-    level.buy_timestamp = getCurrentTimestamp();
-    level.quantity = quantity; // 수량 확정
-    
-    spdlog::info("[GridTrading] Buy Executed - {} | Level: {} | Price: {:.2f}",
+
+    spdlog::info("[GridTrading] Buy Requested - {} | Level: {} | Price: {:.2f}",
                  market, level.level_id, level.price);
 }
 
@@ -1407,61 +1614,32 @@ void GridTradingStrategy::executeGridSell(
     if (!level.buy_order_filled || level.sell_order_filled) {
         return;
     }
-    
-    // [✅ 추가] 실전 주문 전송 로직 시작 ==============================
-    double quantity = level.quantity; // 매수했던 수량 그대로 매도
-    std::string price_str = std::to_string((long long)current_price); // 혹은 level.price + margin
-    std::string vol_str = std::to_string(quantity);
 
-    try {
-        // 시장가 매도 ("market") 혹은 지정가 매도 ("limit")
-        // 여기선 current_price에 즉시 팔기 위해 시장가 매도로 예시 (지정가로 하셔도 됨)
-        // 시장가 매도시 price는 null("")이어야 함
-        auto res = client_->placeOrder(market, "ask", vol_str, "", "market");
-        
-        if (res.contains("uuid")) {
-            spdlog::info("✅ [Grid] Real Sell Order: {} @ Market", market);
-        } else {
-            spdlog::error("❌ [Grid] Sell Order Fail");
-            return;
-        }
-    } catch (const std::exception& e) {
-        spdlog::error("❌ [Grid] Sell Order Error: {}", e.what());
+    double quantity = level.quantity;
+    if (quantity <= 0.0) {
         return;
     }
-    // ================================================================
 
-    // [기존 코드 유지] 내부 상태 업데이트
-    level.sell_order_placed = true;
-    level.sell_order_filled = true;
-    level.sell_timestamp = getCurrentTimestamp();
-    // Profit 계산
-    double buy_price = level.price;
-    double sell_price = current_price;
-    double profit_pct = (sell_price - buy_price) / buy_price;
-    profit_pct -= (UPBIT_FEE_RATE * 2);  // 수수료 차감
-    
-    level.profit_loss = profit_pct;
-    level.cumulative_profit += profit_pct;
-    level.round_trips++;
-    
-    // Cycle Time 기록
-    if (level.buy_timestamp > 0) {
-        double cycle_time = static_cast<double>(level.sell_timestamp - level.buy_timestamp);
-        cycle_times_.push_back(cycle_time);
-        if (cycle_times_.size() > 100) {
-            cycle_times_.pop_front();
-        }
+    double order_amount = current_price * quantity;
+    if (order_amount < MIN_ORDER_AMOUNT_KRW) {
+        spdlog::warn("[GridTrading] Sell skipped (min order): {} | Level: {} | Amount: {:.0f}",
+                     market, level.level_id, order_amount);
+        return;
     }
-    
-    spdlog::info("[GridTrading] Sell Executed - {} | Level: {} | Profit: {:.3f}% | Trips: {}",
-                market, level.level_id, profit_pct * 100, level.round_trips);
-    
-    // Reset for next cycle
-    level.buy_order_filled = false;
-    level.sell_order_filled = false;
-    level.buy_order_placed = false;
-    level.sell_order_placed = false;
+
+    OrderRequest request;
+    request.market = market;
+    request.side = OrderSide::SELL;
+    request.price = current_price;
+    request.quantity = quantity;
+    request.level_id = level.level_id;
+    request.reason = "grid_sell";
+
+    pending_orders_.push_back(request);
+    level.sell_order_placed = true;
+
+    spdlog::info("[GridTrading] Sell Requested - {} | Level: {} | Price: {:.2f}",
+                 market, level.level_id, current_price);
 }
 
 bool GridTradingStrategy::shouldPlaceBuyOrder(
@@ -1633,26 +1811,37 @@ void GridTradingStrategy::exitGrid(
     }
     
     auto& grid = active_grids_[market];
-    
-    // 모든 레벨 청산
+
+    if (grid.exit_requested) {
+        return;
+    }
+
+    grid.exit_requested = true;
+    grid.exit_reason = reason;
+    grid.status = GridStatus::EMERGENCY_EXIT;
+
+    // 모든 레벨 청산 요청
     liquidateAllLevels(grid, current_price);
-    
-    // P&L 계산
-    double total_pnl = grid.realized_pnl + grid.unrealized_pnl;
-    bool is_win = (total_pnl > 0);
-    
-    // Statistics 업데이트
-    updateStatistics(market, is_win, total_pnl); // market 추가
-    
-    // 로깅
-    const char* reason_str[] = {"NONE", "PROFIT", "STOP_LOSS", "BREAKOUT", "FLASH_CRASH", "MAX_TIME", "MANUAL"};
-    spdlog::info("[GridTrading] Grid Exited - {} | Reason: {} | P&L: {:.3f}% | Cycles: {}",
-                market, reason_str[static_cast<int>(reason)], total_pnl * 100, grid.completed_cycles);
-    
-// [참고] updateStatistics 안에서 지웠다면 여기선 안 지워도 됨.
-    // 명시적으로 남겨둔다면 updateStatistics 내부의 erase를 제거하는 것을 추천.
-    if (active_grids_.count(market)) {
-        active_grids_.erase(market);
+
+    bool all_closed = true;
+    for (const auto& item : grid.levels) {
+        if (item.second.buy_order_filled) {
+            all_closed = false;
+            break;
+        }
+    }
+
+    if (all_closed) {
+        double total_pnl = grid.realized_pnl + grid.unrealized_pnl;
+        bool is_win = (total_pnl > 0);
+
+        updateStatistics(market, is_win, total_pnl);
+
+        const char* reason_str[] = {"NONE", "PROFIT", "STOP_LOSS", "BREAKOUT", "FLASH_CRASH", "MAX_TIME", "MANUAL"};
+        spdlog::info("[GridTrading] Grid Exited - {} | Reason: {} | P&L: {:.3f}% | Cycles: {}",
+                     market, reason_str[static_cast<int>(reason)], total_pnl * 100, grid.completed_cycles);
+
+        released_markets_.push_back(market);
     }
 }
 
@@ -1661,16 +1850,35 @@ void GridTradingStrategy::liquidateAllLevels(
     double current_price)
 {
     for (auto& [level_id, level] : grid.levels) {
-        if (level.buy_order_filled && !level.sell_order_filled) {
-            // 강제 매도
-            double profit_pct = (current_price - level.price) / level.price;
-            profit_pct -= (UPBIT_FEE_RATE * 2);
-            
-            grid.realized_pnl += profit_pct;
-            
-            spdlog::debug("[GridTrading] Liquidate Level {} | Price: {:.2f} | P&L: {:.3f}%",
-                         level_id, level.price, profit_pct * 100);
+        if (!level.buy_order_filled || level.sell_order_filled) {
+            continue;
         }
+
+        double quantity = level.quantity;
+        if (quantity <= 0.0) {
+            continue;
+        }
+
+        double order_amount = current_price * quantity;
+        if (order_amount < MIN_ORDER_AMOUNT_KRW) {
+            spdlog::warn("[GridTrading] Liquidation skipped (min order): {} | Level: {} | Amount: {:.0f}",
+                         grid.market, level.level_id, order_amount);
+            continue;
+        }
+
+        OrderRequest request;
+        request.market = grid.market;
+        request.side = OrderSide::SELL;
+        request.price = current_price;
+        request.quantity = quantity;
+        request.level_id = level.level_id;
+        request.reason = "grid_liquidation";
+
+        pending_orders_.push_back(request);
+        level.sell_order_placed = true;
+
+        spdlog::info("[GridTrading] Liquidation Requested - {} | Level: {} | Price: {:.2f}",
+                     grid.market, level.level_id, current_price);
     }
 }
 
@@ -1718,7 +1926,7 @@ double GridTradingStrategy::calculateGridEfficiency(
         return 0.0;
     }
     
-    int total_levels = grid.levels.size();
+    int total_levels = static_cast<int>(grid.levels.size());
     int active_levels = 0;
     int completed_trips = 0;
     
@@ -1852,31 +2060,7 @@ bool GridTradingStrategy::shouldGenerateGridSignal(
 std::vector<analytics::Candle> GridTradingStrategy::parseCandlesFromJson(
     const nlohmann::json& json_data) const
 {
-    std::vector<analytics::Candle> candles;
-    
-    if (!json_data.is_array()) {
-        return candles;
-    }
-    
-    for (const auto& item : json_data) {
-        analytics::Candle candle;
-        
-        candle.timestamp = item.value("timestamp", 0LL);
-        candle.open = item.value("opening_price", 0.0);
-        candle.high = item.value("high_price", 0.0);
-        candle.low = item.value("low_price", 0.0);
-        candle.close = item.value("trade_price", 0.0);
-        candle.volume = item.value("candle_acc_trade_volume", 0.0);
-        
-        candles.push_back(candle);
-    }
-    
-    std::sort(candles.begin(), candles.end(), 
-              [](const analytics::Candle& a, const analytics::Candle& b) {
-                  return a.timestamp < b.timestamp;
-              });
-    
-    return candles;
+    return analytics::TechnicalIndicators::jsonToCandles(json_data);
 }
 
 void GridTradingStrategy::updateState(const std::string& market, double current_price) {

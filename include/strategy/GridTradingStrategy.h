@@ -2,13 +2,13 @@
 
 #include "strategy/IStrategy.h"
 #include "network/UpbitHttpClient.h"
+#include "engine/TradingEngine.h"
 #include <memory>
 #include <mutex>
 #include <deque>
 #include <array>
 #include <map>
 #include <set>
-#include "engine/TradingEngine.h"
 
 namespace autolife {
 namespace strategy {
@@ -208,6 +208,8 @@ struct GridPositionData {
     long long last_price_update_timestamp;
     double last_price;
     FlashCrashMetrics flash_crash;   // 급락 감지
+    ExitReason exit_reason;
+    bool exit_requested;
     
     GridPositionData()
         : status(GridStatus::INACTIVE)
@@ -218,6 +220,7 @@ struct GridPositionData {
         , completed_cycles(0), creation_timestamp(0)
         , last_rebalance_timestamp(0)
         , last_price_update_timestamp(0), last_price(0)
+        , exit_reason(ExitReason::NONE), exit_requested(false)
     {}
 };
 
@@ -260,7 +263,8 @@ public:
         const std::string& market,
         const analytics::CoinMetrics& metrics,
         const std::vector<analytics::Candle>& candles,
-        double current_price
+        double current_price,
+        double available_capital
     ) override;
     
     void updateState(const std::string& market, double current_price) override;
@@ -301,6 +305,11 @@ public:
     
     Statistics getStatistics() const override;
     void updateStatistics(const std::string& market, bool is_win, double profit_loss) override;
+    bool onSignalAccepted(const Signal& signal, double allocated_capital) override;
+    std::vector<OrderRequest> drainOrderRequests() override;
+    void onOrderResult(const OrderResult& result) override;
+    std::vector<std::string> drainReleasedMarkets() override;
+    std::vector<std::string> getActiveMarkets() const override;
     
     // === Grid 전용 기능 ===
     
@@ -330,6 +339,12 @@ private:
     
     // 그리드 포지션 추적
     std::map<std::string, GridPositionData> active_grids_;
+    std::deque<OrderRequest> pending_orders_;
+    std::deque<std::string> released_markets_;
+
+    std::map<std::string, analytics::CoinMetrics> last_metrics_cache_;
+    std::map<std::string, std::vector<analytics::Candle>> last_candles_cache_;
+    std::map<std::string, double> last_price_cache_;
     
     // ===== API 호출 제어 =====
     

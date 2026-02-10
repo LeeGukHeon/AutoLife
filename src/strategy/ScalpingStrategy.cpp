@@ -50,8 +50,9 @@ Signal ScalpingStrategy::generateSignal(
     const std::string& market,
     const analytics::CoinMetrics& metrics,
     const std::vector<analytics::Candle>& candles,
-    double current_price
-) {
+    double current_price,
+    double available_capital)
+{
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     
     // [추가] 1. 이미 진입한 상태면 매수 신호 금지
@@ -142,10 +143,15 @@ Signal ScalpingStrategy::generateSignal(
     signal.type = SignalType::BUY;
     signal.entry_price = current_price;
     signal.stop_loss = stops.stop_loss;
-    signal.take_profit = stops.take_profit_2;
+    signal.take_profit_1 = stops.take_profit_1;
+    signal.take_profit_2 = stops.take_profit_2;
+    signal.buy_order_type = strategy::OrderTypePolicy::LIMIT_WITH_FALLBACK;
+    signal.sell_order_type = strategy::OrderTypePolicy::LIMIT_WITH_FALLBACK;
+    signal.max_retries = 3;
+    signal.retry_wait_ms = 500;
     
     // 6. Worth Scalping (거래 비용 체크)
-    double expected_return = (signal.take_profit - signal.entry_price) / signal.entry_price;
+    double expected_return = (signal.take_profit_2 - signal.entry_price) / signal.entry_price;
     double expected_sharpe = calculateScalpingSharpeRatio();
     
     if (!isWorthScalping(expected_return, expected_sharpe)) {
@@ -154,9 +160,13 @@ Signal ScalpingStrategy::generateSignal(
     return signal;
     }
     
-    double current_capital = engine_config_.initial_capital;
+    // 7. Position Sizing - 전략은 엔진에서 전달된 실제 가용자본을 사용
+    double current_capital = available_capital;
+    if (current_capital <= 0) {
+        LOG_WARN("{} - [Scalping] 가용자본 없음 (신호 무시)", market);
+        return signal;
+    }
 
-    // 7. Position Sizing
     auto pos_metrics = calculateScalpingPositionSize(
         current_capital, signal.entry_price, signal.stop_loss, metrics, candles
     );
@@ -165,6 +175,7 @@ Signal ScalpingStrategy::generateSignal(
     // 1. 현재 엔진이 가진 진짜 돈과 전략이 믿는 가짜 돈의 비율을 구합니다.
     // (예: 100만 원 / 3.8만 원 = 약 25.7배)
     double gap_ratio = engine_config_.initial_capital / current_capital;
+    (void)gap_ratio;  // 미래 사용을 위해 미리 계산
 
     // 2. 비중을 결정할 때, 업비트 최소 주문(5,200원)이 진짜 돈에서 얼마의 비중인지 계산합니다.
     // (예: 5,200 / 38,792 = 약 0.134)
@@ -208,13 +219,7 @@ Signal ScalpingStrategy::generateSignal(
         signal.type = SignalType::STRONG_BUY;
     }
     
-    // [추가] 매수 신호가 확정되면 목록에 등록
-    if (signal.type == SignalType::BUY || signal.type == SignalType::STRONG_BUY) {
-        active_positions_.insert(market);
-    }
-
     last_signal_time_ = getCurrentTimestamp();
-    recordTrade();
     
     LOG_INFO("스캘핑 신호: {} - 강도 {:.2f}, 포지션 {:.1f}%",
              market, signal.strength, signal.position_size * 100);
@@ -396,6 +401,16 @@ IStrategy::Statistics ScalpingStrategy::getStatistics() const {
     return stats_;
 }
 
+bool ScalpingStrategy::onSignalAccepted(const Signal& signal, double allocated_capital) {
+    (void)allocated_capital;
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    auto inserted = active_positions_.insert(signal.market).second;
+    if (inserted) {
+        recordTrade();
+    }
+    return true;
+}
+
 void ScalpingStrategy::updateStatistics(const std::string& market, bool is_win, double profit_loss) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     
@@ -551,21 +566,7 @@ std::vector<analytics::Candle> ScalpingStrategy::getCachedCandles(const std::str
     try {
         recordAPICall();
         auto candles_json = client_->getCandles(market, "1", count);
-        std::vector<analytics::Candle> candles;
-        if (candles_json.is_array()) {
-            for (const auto& candle_json : candles_json) {
-                analytics::Candle candle;
-                candle.open = candle_json.value("opening_price", 0.0);
-                candle.high = candle_json.value("high_price", 0.0);
-                candle.low = candle_json.value("low_price", 0.0);
-                candle.close = candle_json.value("trade_price", 0.0);
-                candle.volume = candle_json.value("candle_acc_trade_volume", 0.0);
-                candle.timestamp = candle_json.value("timestamp", 0LL);
-                candles.push_back(candle);
-            }
-            // [핵심] 업비트의 최신순(Desc) 데이터를 시간순(Asc)으로 정렬
-            std::reverse(candles.begin(), candles.end());
-        }
+        auto candles = analytics::TechnicalIndicators::jsonToCandles(candles_json);
         candle_cache_[market] = candles;
         candle_cache_time_[market] = now;
         return candles;
@@ -828,8 +829,8 @@ bool ScalpingStrategy::isTTestSignificant(
     double std1 = calculateStdDev(sample1, mean1);
     double std2 = calculateStdDev(sample2, mean2);
     
-    double n1 = sample1.size();
-    double n2 = sample2.size();
+    double n1 = static_cast<double>(sample1.size());
+    double n2 = static_cast<double>(sample2.size());
     
     double pooled_std = std::sqrt(
         ((n1 - 1) * std1 * std1 + (n2 - 1) * std2 * std2) / (n1 + n2 - 2)
@@ -1151,8 +1152,8 @@ ScalpingPositionMetrics ScalpingStrategy::calculateScalpingPositionSize(
     // (1) 일단 설정된 최대 비중 제한을 먼저 겁니다.
     pos_metrics.final_position_size = std::min(pos_metrics.final_position_size, MAX_POSITION_SIZE);
     
-    // (2) [핵심] 업비트 최소 주문을 위한 비율 계산 (여유있게 5,200원)
-    double min_required_size = 5200.0 / capital;
+    // (2) [핵심] 업비트 최소 주문을 위한 비율 계산 (여유있게 6,000원)
+    double min_required_size = 6000.0 / capital;
     
     // (3) [중요] 계산된 비중이 최소 주문 금액보다 작다면 '강제로' 상향
     // MAX_POSITION_SIZE(5%)보다 min_required_size(13%)가 크더라도, 
@@ -1166,8 +1167,8 @@ ScalpingPositionMetrics ScalpingStrategy::calculateScalpingPositionSize(
         pos_metrics.final_position_size = 1.0;
     }
     
-    // (5) 만약 내 전재산이 5,200원도 안 된다면 주문 포기 (0.0 리턴)
-    if (capital < 5200.0) {
+    // (5) 만약 내 전재산이 6,000원도 안 된다면 주문 포기 (0.0 리턴)
+    if (capital < 6000.0) {
         pos_metrics.final_position_size = 0.0;
     }
     
@@ -1533,6 +1534,18 @@ bool ScalpingStrategy::shouldGenerateScalpingSignal(
     }
     
     return true;
+}
+
+// ===== 포지션 상태 업데이트 (모니터링 중) =====
+
+void ScalpingStrategy::updateState(const std::string& market, double current_price) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    
+    // ScalpingStrategy는 초단타이므로 실시간 추적이 덜 중요
+    // 하지만 필요시 마이크로스테이트 업데이트 가능
+   
+    // [선택사항] 가장 최근 가격으로 마이크로상태 재평가
+    // 하지만 스캘핑이므로 홀딩 시간이 짧아 대부분 청산 전에 신호 재분석 안 함
 }
 
 } // namespace strategy

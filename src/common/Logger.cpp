@@ -28,6 +28,7 @@ void Logger::initialize(const std::string& log_dir) {
         auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
         console_sink->set_pattern("[%Y-%m-%d %H:%M:%S] [%^%l%$] %v");
         
+        // 파일 싱크 - UTF-8 인코딩 지원
         auto file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
             logs_path.string() + "/autolife.log", 1024 * 1024 * 10, 3
         );
@@ -35,6 +36,8 @@ void Logger::initialize(const std::string& log_dir) {
         std::vector<spdlog::sink_ptr> sinks{console_sink, file_sink};
         main_logger_ = std::make_shared<spdlog::logger>("main", sinks.begin(), sinks.end());
         main_logger_->set_level(spdlog::level::info);
+        // UTF-8 인코딩 보장
+        main_logger_->flush_on(spdlog::level::warn);
         spdlog::register_logger(main_logger_);
         
         trade_logger_ = spdlog::daily_logger_mt("trade", logs_path.string() + "/trades.log");

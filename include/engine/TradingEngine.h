@@ -23,6 +23,8 @@ enum class TradingMode {
 };
 
 // 엔진 설정
+static constexpr double EXCHANGE_MIN_ORDER_KRW = 5000.0;  // 거래소 최소 주문액
+static constexpr double RECOMMENDED_MIN_ENTER_KRW = 6000.0;  // 권장 진입 최소액 (손절폭 안전성)
 struct EngineConfig {
     TradingMode mode;
     double initial_capital;
@@ -35,11 +37,12 @@ struct EngineConfig {
     int max_positions;
     int max_daily_trades;
     double max_drawdown;
+    double max_exposure_pct = 0.85;        // 총 자본 대비 허용 노출 비율 (기=85%)
     
     // 실전 거래 안전 설정 (새로 추가)
     double max_daily_loss_krw = 50000.0;    // 일일 최대 손실 5만원
     double max_order_krw = 500000.0;        // 단일 주문 최대 50만원
-    double min_order_krw = 5000.0;          // 단일 주문 최소 5천원
+    double min_order_krw = 5000.0;          // 단일 주문 최소 5천원 (거래소 기준)
     bool dry_run = false;                    // 실전모드라도 실제 주문 안하고 로그만
 
     // 전략 설정
@@ -97,7 +100,7 @@ private:
     void monitorPositions();      // 포지션 모니터링
     void updateMetrics();         // 메트릭 업데이트
     
-    // ===== 주문 실행 =====
+    // ===== 주문 실행 (개선) =====
     
     bool executeBuyOrder(
         const std::string& market,
@@ -117,6 +120,76 @@ private:
         double current_price
     );
     
+    // [✅ 추가] 주문 헬퍼 함수들
+    
+    // LIMIT 주문으로 매수 (재시도 로직 포함)
+    struct LimitOrderResult {
+        bool success;
+        std::string order_uuid;
+        double executed_price;
+        double executed_volume;
+        int retry_count;
+        std::string error_message;
+    };
+    
+    LimitOrderResult executeLimitBuyOrder(
+        const std::string& market,
+        double entry_price,      // 지정가
+        double quantity,         // 주문 수량
+        int max_retries,         // 최대 재시도
+        int retry_wait_ms        // 재시도 간격 (ms)
+    );
+    
+    // LIMIT 주문으로 매도
+    LimitOrderResult executeLimitSellOrder(
+        const std::string& market,
+        double exit_price,
+        double quantity,
+        int max_retries,
+        int retry_wait_ms
+    );
+    
+    // 시장가 주문 (폴백용)
+    bool executeMarketBuyOrder(
+        const std::string& market,
+        double quantity,
+        double& out_avg_price,
+        double& out_volume
+    );
+    
+    bool executeMarketSellOrder(
+        const std::string& market,
+        double quantity
+    );
+    
+    // LIMIT 주문 최적 가격 계산 (시장 상황 반영)
+    double calculateOptimalBuyPrice(
+        const std::string& market,
+        double base_price,
+        const nlohmann::json& orderbook
+    );
+    
+    double calculateOptimalSellPrice(
+        const std::string& market,
+        double base_price,
+        const nlohmann::json& orderbook
+    );
+    
+    // 주문 상태 검증 및 체결 확인
+    struct OrderFillInfo {
+        bool is_filled;           // 완전히 체결되었는가
+        bool is_partially_filled; // 부분 체결되었는가
+        double filled_volume;     // 체결된 수량
+        double avg_price;         // 평균 체결가
+        double fee;               // 수수료
+    };
+    
+    OrderFillInfo verifyOrderFill(
+        const std::string& uuid,
+        const std::string& market,
+        double order_volume
+    );
+    
     // ===== 헬퍼 함수 =====
     
     double getCurrentPrice(const std::string& market);
@@ -124,6 +197,30 @@ private:
     void logPerformance();
     // [추가] 계좌 상태를 조회하여 RiskManager와 동기화
     void syncAccountState();
+    
+    // ===== [NEW] 동적 필터 및 포지션 확대 기능 =====
+    
+    // 시장 변동성을 기반으로 필터값을 동적 조정 (0.45~0.55)
+    // 높은 변동성 → 낮은 필터값 (더 많은 신호 포착)
+    // 낮은 변동성 → 높은 필터값 (품질 높은 신호만)
+    double calculateDynamicFilterValue();
+    
+    // Win Rate >= 60%, Profit Factor >= 1.5일 때 포지션 확대
+    // 기관급 성능 기준 적용
+    double calculatePositionScaleMultiplier();
+    
+    // Historical P&L 데이터에서 최적 필터값 학습 (ML)
+    // 이전 거래 성과에서 최적의 필터 임계값 자동 계산
+    void learnOptimalFilterValue();
+    
+    // Prometheus 메트릭 노출 (실시간 모니터링용)
+    // Grafana 연동을 위한 메트릭 데이터 생성
+    std::string exportPrometheusMetrics() const;
+    
+    // [NEW] Prometheus HTTP 서버 (메트릭 노출)
+    // /metrics 엔드포인트로 Prometheus 형식 메트릭 제공
+    void runPrometheusHttpServer(int port = 8080);
+    
     // ===== 멤버 변수 =====
     
     EngineConfig config_;
@@ -141,6 +238,38 @@ private:
     std::atomic<bool> running_;
     std::unique_ptr<std::thread> worker_thread_;
     mutable std::mutex mutex_;
+    
+    // [추가] 스캔 및 동기화 타이밍
+    std::chrono::steady_clock::time_point last_scan_time_;
+    std::chrono::steady_clock::time_point last_account_sync_time_;
+    
+    // ===== [NEW] 동적 필터 및 포지션 확대 멤버 =====
+    
+    // 현재 동적 필터값 (0.45~0.55 범위)
+    // 초기값: 0.5 (중립)
+    double dynamic_filter_value_ = 0.5;
+    
+    // 포지션 확대 배수 (기본 1.0, 최대 2.5)
+    // Win Rate ≥ 60%, PF ≥ 1.5일 때 자동 증가
+    double position_scale_multiplier_ = 1.0;
+    
+    // ML 모듈을 위한 최적 필터값 학습 데이터
+    // key: 필터값, value: 해당 필터값에서의 승률
+    std::map<double, double> filter_performance_history_;
+    
+    // Prometheus 메트릭 누적용 (메모리 효율)
+    struct PrometheusMetrics {
+        long long total_buy_orders = 0;
+        long long total_sell_orders = 0;
+        double cumulative_realized_pnl = 0.0;
+        int active_strategies_count = 0;
+        double last_update_timestamp = 0.0;
+    } prometheus_metrics_;
+    
+    // [NEW] Prometheus HTTP 서버 관련
+    int prometheus_server_port_ = 8080;  // HTTP 서버 포트 (기본값: 8080)
+    std::unique_ptr<std::thread> prometheus_http_thread_;  // HTTP 서버 스레드
+    std::atomic<bool> prometheus_server_running_ = false;  // HTTP 서버 실행 상태
     
     // 통계
     long long start_time_;

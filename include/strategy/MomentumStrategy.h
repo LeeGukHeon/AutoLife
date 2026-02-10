@@ -168,7 +168,8 @@ public:
         const std::string& market,
         const analytics::CoinMetrics& metrics,
         const std::vector<analytics::Candle>& candles,
-        double current_price
+        double current_price,
+        double available_capital
     ) override;
     
     bool shouldEnter(
@@ -207,6 +208,7 @@ public:
     
     Statistics getStatistics() const override;
     void updateStatistics(const std::string& market, bool is_win, double profit_loss) override;
+    bool onSignalAccepted(const Signal& signal, double allocated_capital) override;
     
     // === 추가 공개 메서드 ===
     
@@ -222,6 +224,9 @@ public:
     RollingStatistics getRollingStatistics() const;
     
 private:
+        // 포지션 상태 업데이트
+        void updateState(const std::string& market, double current_price) override;
+
     std::shared_ptr<network::UpbitHttpClient> client_;
     bool enabled_;
     Statistics stats_;

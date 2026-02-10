@@ -20,6 +20,8 @@ public:
     std::string getLogLevel() const { return log_level_; }
     // [✅ 추가] 완성된 엔진 설정 구조체 반환
     engine::EngineConfig getEngineConfig() const { return engine_config_; }
+    // [✅ 추가] 동적 손절 배수 설정
+    double getStopLossMultiplier() const { return stop_loss_multiplier_; }
 private:
     Config() = default;
     std::string access_key_;
@@ -30,6 +32,8 @@ private:
     std::string log_level_ = "info";
     // [✅ 추가] 엔진 설정을 통째로 담을 변수
     engine::EngineConfig engine_config_;
+    // [✅ 추가] 동적 손절 배수
+    double stop_loss_multiplier_ = 1.0;
 };
 
 } // namespace autolife

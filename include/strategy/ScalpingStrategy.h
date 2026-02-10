@@ -138,7 +138,8 @@ public:
         const std::string& market,
         const analytics::CoinMetrics& metrics,
         const std::vector<analytics::Candle>& candles,
-        double current_price
+        double current_price,
+        double available_capital
     ) override;
     
     bool shouldEnter(
@@ -177,6 +178,7 @@ public:
     
     Statistics getStatistics() const override;
     void updateStatistics(const std::string& market, bool is_win, double profit_loss) override;
+    bool onSignalAccepted(const Signal& signal, double allocated_capital) override;
     
     // === 추가 기능 ===
     
@@ -194,6 +196,9 @@ public:
     ScalpingRollingStatistics getRollingStatistics() const;
     
 private:
+        // 포지션 상태 업데이트
+        void updateState(const std::string& market, double current_price) override;
+
     std::shared_ptr<network::UpbitHttpClient> client_;
     bool enabled_;
     Statistics stats_;
@@ -248,7 +253,7 @@ private:
     
     static constexpr double UPBIT_FEE_RATE = 0.0005;        // 0.05% (공식)
     static constexpr double EXPECTED_SLIPPAGE = 0.0003;     // 0.03%
-    static constexpr double MIN_ORDER_AMOUNT_KRW = 5000.0;  // 5,000원 (공식)
+    static constexpr double MIN_ORDER_AMOUNT_KRW = 5000.0;  // 5,000원 (거래소 최소)
     
     static constexpr double BASE_TAKE_PROFIT = 0.02;        // 2%
     static constexpr double BASE_STOP_LOSS = 0.01;          // 1%

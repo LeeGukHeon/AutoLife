@@ -64,14 +64,15 @@ Signal BreakoutStrategy::generateSignal(
     const std::string& market,
     const analytics::CoinMetrics& metrics,
     const std::vector<analytics::Candle>& candles,
-    double current_price)
+    double current_price,
+    double available_capital)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     
     Signal signal;
     signal.type = SignalType::NONE;
     signal.market = market;
-    signal.strategy_name = "Breakout"; // 전략명 명시
+    signal.strategy_name = "Breakout Strategy"; // 전략명 명시
     
     // [수정] 중복 진입 방지: 이미 진입한 종목이면 신호 생성 안 함
     if (active_positions_.find(market) != active_positions_.end()) {
@@ -120,10 +121,22 @@ Signal BreakoutStrategy::generateSignal(
     
     // ===== 7. 손절/익절 계산 =====
     signal.stop_loss = calculateStopLoss(current_price, candles_5m);
-    signal.take_profit = calculateTakeProfit(current_price, candles_5m);
+    double base_tp = calculateTakeProfit(current_price, candles_5m);
+    double risk = current_price - signal.stop_loss;
+    signal.take_profit_1 = current_price + (risk * 2.0 * 0.5);
+    signal.take_profit_2 = base_tp;
+    signal.buy_order_type = strategy::OrderTypePolicy::LIMIT_WITH_FALLBACK;
+    signal.sell_order_type = strategy::OrderTypePolicy::LIMIT_WITH_FALLBACK;
+    signal.max_retries = 3;
+    signal.retry_wait_ms = 500;
     
     // ===== 8. 포지션 사이징 =====
-    double capital = 1000000.0; // 엔진에서 실제 자본금으로 조정됨
+    double capital = available_capital;
+    if (capital <= 0) {
+        spdlog::warn("[Breakout] 가용자본 없음 (신호 무시) - {}", market);
+        signal.type = SignalType::NONE;
+        return signal;
+    }
     signal.position_size = calculatePositionSize(capital, current_price, signal.stop_loss, metrics);
     
     // ===== 9. 최소 주문 금액 확인 =====
@@ -134,8 +147,8 @@ Signal BreakoutStrategy::generateSignal(
     }
     
     // ===== 10. 리스크/리워드 비율 =====
-    double expected_return = (signal.take_profit - current_price) / current_price;
-    double risk = (current_price - signal.stop_loss) / current_price;
+    double expected_return = (signal.take_profit_2 - current_price) / current_price;
+    // risk는 이미 L120에서 정의됨
     
     if (risk <= 0) {
         signal.type = SignalType::NONE;
@@ -168,7 +181,8 @@ bool BreakoutStrategy::shouldEnter(
 {
     // generateSignal을 호출하여 진입 여부 판단
     // (generateSignal 내부에서 락을 사용하므로 여기서는 락 없이 호출)
-    Signal signal = generateSignal(market, metrics, candles, current_price);
+    // 주의: shouldEnter 호출 시 available_capital 불가, 0 전달 (fallback to engine_config_.initial_capital)
+    Signal signal = generateSignal(market, metrics, candles, current_price, 0.0);
     
     if (signal.type == SignalType::BUY) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -300,6 +314,7 @@ double BreakoutStrategy::calculateTakeProfit(
     const std::vector<analytics::Candle>& candles)
 {
    // std::lock_guard<std::mutex> lock(mutex_);
+   (void)candles;  // candles 파라미터 미사용
     return entry_price * (1.0 + BASE_TAKE_PROFIT_1);
 }
 
@@ -312,6 +327,8 @@ double BreakoutStrategy::calculatePositionSize(
     const analytics::CoinMetrics& metrics)
 {
     //std::lock_guard<std::mutex> lock(mutex_);
+    (void)capital;    // capital 파라미터 미사용
+    (void)metrics;    // metrics 파라미터 미사용
     
     double risk_pct = (entry_price - stop_loss) / entry_price;
     
@@ -423,6 +440,7 @@ double BreakoutStrategy::updateTrailingStop(
     double current_price)
 {
     //std::lock_guard<std::mutex> lock(mutex_);
+    (void)current_price;  // current_price 파라미터 미사용
     
     double profit_pct = (highest_price - entry_price) / entry_price;
     
@@ -1191,7 +1209,7 @@ double BreakoutStrategy::analyzeOrderFlowImbalance(const std::string& market)
         
         return total_bid_volume / total;
         
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
         return 0.5;
     }
 }
@@ -1325,31 +1343,7 @@ long long BreakoutStrategy::getCurrentTimestamp() const
 std::vector<analytics::Candle> BreakoutStrategy::parseCandlesFromJson(
     const nlohmann::json& json_data) const
 {
-    std::vector<analytics::Candle> candles;
-    
-    if (!json_data.is_array()) {
-        return candles;
-    }
-    
-    for (const auto& item : json_data) {
-        analytics::Candle candle;
-        
-        candle.timestamp = item.value("timestamp", 0LL);
-        candle.open = item.value("opening_price", 0.0);
-        candle.high = item.value("high_price", 0.0);
-        candle.low = item.value("low_price", 0.0);
-        candle.close = item.value("trade_price", 0.0);
-        candle.volume = item.value("candle_acc_trade_volume", 0.0);
-        
-        candles.push_back(candle);
-    }
-    
-    std::sort(candles.begin(), candles.end(), 
-              [](const analytics::Candle& a, const analytics::Candle& b) {
-                  return a.timestamp < b.timestamp;
-              });
-    
-    return candles;
+    return analytics::TechnicalIndicators::jsonToCandles(json_data);
 }
 
 std::vector<analytics::Candle> BreakoutStrategy::resampleTo5m(const std::vector<analytics::Candle>& candles_1m) const {

@@ -144,7 +144,8 @@ public:
         const std::string& market,
         const analytics::CoinMetrics& metrics,
         const std::vector<analytics::Candle>& candles,
-        double current_price
+        double current_price,
+        double available_capital
     ) override;
     
     bool shouldEnter(

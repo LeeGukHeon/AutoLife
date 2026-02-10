@@ -94,7 +94,7 @@ private:
     // 헬퍼 함수들
     std::vector<std::string> getAllKRWMarkets();
     double getAverageVolume(const std::string& market, int hours);
-    nlohmann::json getRecentCandles(const std::string& market, int count);
+    std::vector<Candle> getRecentCandles(const std::string& market, int count);
         // 이미 조회된 데이터로 분석 (API 호출 없음)
     double analyzeOrderBookImbalance(const nlohmann::json& orderbook);
     std::pair<int, int> analyzeWalls(const nlohmann::json& orderbook);  // {buy_walls, sell_walls}

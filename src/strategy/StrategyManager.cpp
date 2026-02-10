@@ -38,7 +38,8 @@ std::vector<Signal> StrategyManager::collectSignals(
     const std::string& market,
     const analytics::CoinMetrics& metrics,
     const std::vector<analytics::Candle>& candles,
-    double current_price
+    double current_price,
+    double available_capital
 ) {
     std::vector<Signal> signals;
     
@@ -51,7 +52,7 @@ std::vector<Signal> StrategyManager::collectSignals(
         }
         
         try {
-            auto signal = strategy->generateSignal(market, metrics, candles, current_price);
+            auto signal = strategy->generateSignal(market, metrics, candles, current_price, available_capital);
             
             if (signal.type != SignalType::NONE) {
                 signals.push_back(signal);
@@ -134,26 +135,32 @@ Signal StrategyManager::synthesizeSignals(const std::vector<Signal>& signals) {
     synthesized.strength = total_strength / signals.size();
     
     // 진입가, 손절가, 익절가는 중간값 사용
-    std::vector<double> entry_prices, stop_losses, take_profits;
+    std::vector<double> entry_prices, stop_losses, take_profit1s, take_profit2s;
     for (const auto& signal : signals) {
         if (signal.entry_price > 0) entry_prices.push_back(signal.entry_price);
         if (signal.stop_loss > 0) stop_losses.push_back(signal.stop_loss);
-        if (signal.take_profit > 0) take_profits.push_back(signal.take_profit);
+        if (signal.take_profit_1 > 0) take_profit1s.push_back(signal.take_profit_1);
+        if (signal.take_profit_2 > 0) take_profit2s.push_back(signal.take_profit_2);
     }
-    
+
     if (!entry_prices.empty()) {
         std::sort(entry_prices.begin(), entry_prices.end());
         synthesized.entry_price = entry_prices[entry_prices.size() / 2];
     }
-    
+
     if (!stop_losses.empty()) {
         std::sort(stop_losses.begin(), stop_losses.end());
         synthesized.stop_loss = stop_losses[stop_losses.size() / 2];
     }
-    
-    if (!take_profits.empty()) {
-        std::sort(take_profits.begin(), take_profits.end());
-        synthesized.take_profit = take_profits[take_profits.size() / 2];
+
+    // 합성 익절: 1차와 2차 모두 고려. 기본적으로 2차(완전 청산)을 우선 사용
+    if (!take_profit2s.empty()) {
+        std::sort(take_profit2s.begin(), take_profit2s.end());
+        synthesized.take_profit_2 = take_profit2s[take_profit2s.size() / 2];
+    }
+    if (!take_profit1s.empty()) {
+        std::sort(take_profit1s.begin(), take_profit1s.end());
+        synthesized.take_profit_1 = take_profit1s[take_profit1s.size() / 2];
     }
     
     synthesized.reason = "Synthesized from " + std::to_string(signals.size()) + " strategies";
@@ -200,6 +207,11 @@ std::vector<std::string> StrategyManager::getActiveStrategies() const {
     return active;
 }
 
+std::vector<std::shared_ptr<IStrategy>> StrategyManager::getStrategies() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return strategies_;
+}
+
 double StrategyManager::getOverallWinRate() const {
     std::lock_guard<std::mutex> lock(mutex_);
     
@@ -236,9 +248,10 @@ double StrategyManager::calculateSignalScore(const Signal& signal) const {
     }
     
     // Risk/Reward Ratio 고려
-    if (signal.entry_price > 0 && signal.stop_loss > 0 && signal.take_profit > 0) {
+    double tp = signal.getTakeProfitForLegacy();
+    if (signal.entry_price > 0 && signal.stop_loss > 0 && tp > 0) {
         double risk = std::abs(signal.entry_price - signal.stop_loss);
-        double reward = std::abs(signal.take_profit - signal.entry_price);
+        double reward = std::abs(tp - signal.entry_price);
         
         if (risk > 0) {
             double rr_ratio = reward / risk;

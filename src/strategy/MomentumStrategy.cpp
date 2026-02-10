@@ -38,7 +38,8 @@ Signal MomentumStrategy::generateSignal(
     const std::string& market,
     const analytics::CoinMetrics& metrics,
     const std::vector<analytics::Candle>& candles,
-    double current_price
+    double current_price,
+    double available_capital
 ) {
      std::lock_guard<std::recursive_mutex> lock(mutex_);
     
@@ -103,10 +104,15 @@ Signal MomentumStrategy::generateSignal(
     signal.type = SignalType::BUY;
     signal.entry_price = current_price;
     signal.stop_loss = stops.stop_loss;
-    signal.take_profit = stops.take_profit_2;
+    signal.take_profit_1 = stops.take_profit_1;  // [✅] 1차 익절
+    signal.take_profit_2 = stops.take_profit_2;  // [✅] 2차 익절
+    signal.buy_order_type = strategy::OrderTypePolicy::LIMIT_WITH_FALLBACK;
+    signal.sell_order_type = strategy::OrderTypePolicy::LIMIT_WITH_FALLBACK;
+    signal.max_retries = 3;
+    signal.retry_wait_ms = 500;
     
     // 6. Worth Trading
-    double expected_return = (signal.take_profit - signal.entry_price) / signal.entry_price;
+    double expected_return = (signal.take_profit_2 - signal.entry_price) / signal.entry_price;
     double expected_sharpe = calculateSharpeRatio();
     
     if (!isWorthTrading(expected_return, expected_sharpe)) {
@@ -114,13 +120,17 @@ Signal MomentumStrategy::generateSignal(
         return signal;
     }
     
-    double current_capital = engine_config_.initial_capital;
+    double current_capital = available_capital;
+    if (current_capital <= 0) {
+        LOG_WARN("{} - [Momentum] 가용자본 없음 (신호 무시)", market);
+        return signal;
+    }
 
     // 7. Position Sizing
     auto pos_metrics = calculateAdvancedPositionSize(
         current_capital, signal.entry_price, signal.stop_loss, metrics, candles
     );
-    
+
     signal.position_size = pos_metrics.final_position_size;
     
     // 8. Signal Interval
@@ -144,9 +154,6 @@ Signal MomentumStrategy::generateSignal(
     
     last_signal_time_ = getCurrentTimestamp();
     
-    // [중복 매수 방지 2] 매수 확정 시 목록에 등록
-    active_positions_.insert(market);
-
     LOG_INFO("모멘텀 신호: {} - 강도 {:.2f}, 포지션 {:.1f}%",
              market, signal.strength, signal.position_size * 100);
     
@@ -278,6 +285,13 @@ bool MomentumStrategy::isEnabled() const {
 IStrategy::Statistics MomentumStrategy::getStatistics() const {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     return stats_;
+}
+
+bool MomentumStrategy::onSignalAccepted(const Signal& signal, double allocated_capital) {
+    (void)allocated_capital;
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    active_positions_.insert(signal.market);
+    return true;
 }
 
 void MomentumStrategy::updateStatistics(const std::string& market, bool is_win, double profit_loss) {
@@ -464,6 +478,7 @@ bool MomentumStrategy::isVolumeSurgeSignificant(
     const std::vector<analytics::Candle>& candles
 ) const {
     // 1. 최소 데이터 확보 (현재 1개 + 과거 30개 = 31개)
+        (void)metrics;  // 현재 미사용
     if (candles.size() < 31) return false;
     
     // 2. [수정] 전체 31개 데이터 수집 (과거 30개 + 현재 1개)
@@ -517,6 +532,7 @@ bool MomentumStrategy::isTTestSignificant(
     double alpha
 ) const {
     if (sample1.size() < 2 || sample2.size() < 2) return false;
+        (void)alpha;  // 고정 t_critical 값 사용
     
     double mean1 = calculateMean(sample1);
     double mean2 = calculateMean(sample2);
@@ -524,8 +540,8 @@ bool MomentumStrategy::isTTestSignificant(
     double std1 = calculateStdDev(sample1, mean1);
     double std2 = calculateStdDev(sample2, mean2);
     
-    double n1 = sample1.size();
-    double n2 = sample2.size();
+    double n1 = static_cast<double>(sample1.size());
+    double n2 = static_cast<double>(sample2.size());
     
     double pooled_std = std::sqrt(
         ((n1 - 1) * std1 * std1 + (n2 - 1) * std2 * std2) / (n1 + n2 - 2)
@@ -576,6 +592,7 @@ bool MomentumStrategy::isKSTestPassed(
 
 MultiTimeframeSignal MomentumStrategy::analyzeMultiTimeframe(
     const std::vector<analytics::Candle>& candles_1m
+
 ) const {
     MultiTimeframeSignal signal;
     
@@ -659,8 +676,8 @@ std::vector<analytics::Candle> MomentumStrategy::resampleTo15m(
     for (size_t i = 0; i + 15 <= candles_1m.size(); i += 15) {
         analytics::Candle candle_15m;
         
-        candle_15m.open = candles_1m[i + 14].open;
-        candle_15m.close = candles_1m[i].close;
+        candle_15m.open = candles_1m[i].open;
+        candle_15m.close = candles_1m[i + 14].close;
         candle_15m.high = candles_1m[i].high;
         candle_15m.low = candles_1m[i].low;
         candle_15m.volume = 0;
@@ -703,6 +720,8 @@ AdvancedOrderFlowMetrics MomentumStrategy::analyzeAdvancedOrderFlow(
     const std::string& market,
     double current_price
 ) const {
+    (void)current_price;  // current_price 파라미터 미사용
+    
     AdvancedOrderFlowMetrics metrics;
     
     try {
@@ -812,6 +831,12 @@ AdvancedOrderFlowMetrics::VolumeProfile MomentumStrategy::calculateVolumeProfile
     }
     
     double price_step = (max_price - min_price) / 20.0;
+    if (price_step < 0.00000001) {
+        profile.point_of_control = min_price;
+        profile.value_area_low = min_price;
+        profile.value_area_high = max_price;
+        return profile;
+    }
     std::vector<double> volume_at_price(20, 0.0);
     
     for (const auto& candle : candles) {
@@ -921,8 +946,8 @@ PositionMetrics MomentumStrategy::calculateAdvancedPositionSize(
     // (1) 일단 설정된 최대 비중 제한을 먼저 겁니다.
     pos_metrics.final_position_size = std::min(pos_metrics.final_position_size, MAX_POSITION_SIZE);
     
-    // (2) [핵심] 업비트 최소 주문을 위한 비율 계산 (여유있게 5,200원)
-    double min_required_size = 5200.0 / capital;
+    // (2) [핵심] 업비트 최소 주문을 위한 비율 계산 (여유있게 6,000원)
+    double min_required_size = 6000.0 / capital;
     
     // (3) [중요] 계산된 비중이 최소 주문 금액보다 작다면 '강제로' 상향
     // MAX_POSITION_SIZE(5%)보다 min_required_size(13%)가 크더라도, 
@@ -936,8 +961,8 @@ PositionMetrics MomentumStrategy::calculateAdvancedPositionSize(
         pos_metrics.final_position_size = 1.0;
     }
     
-    // (5) 만약 내 전재산이 5,200원도 안 된다면 주문 포기 (0.0 리턴)
-    if (capital < 5200.0) {
+    // (5) 만약 내 전재산이 6,000원도 안 된다면 주문 포기 (0.0 리턴)
+    if (capital < 6000.0) {
         pos_metrics.final_position_size = 0.0;
     }
     
@@ -1350,7 +1375,9 @@ double MomentumStrategy::calculateMaxDrawdown() const {
         if (value > peak) {
             peak = value;
         }
-        
+        if (peak <= 0.0) {
+            continue;
+        }
         double drawdown = (peak - value) / peak;
         max_drawdown = std::max(max_drawdown, drawdown);
     }
@@ -1401,7 +1428,7 @@ WalkForwardResult MomentumStrategy::validateStrategy(
         return result;
     }
     
-    size_t split_point = historical_data.size() / 2;
+    [[maybe_unused]] size_t split_point = historical_data.size() / 2;
     
     // In-Sample Sharpe (전반부)
     // Out-of-Sample Sharpe (후반부)
@@ -1470,6 +1497,16 @@ bool MomentumStrategy::shouldGenerateSignal(
     }
     
     return true;
+}
+
+// ===== 포지션 상태 업데이트 (모니터링 중) =====
+
+void MomentumStrategy::updateState(const std::string& market, double current_price) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    
+    // MomentumStrategy는 추세 추종이므로
+    // 현재 추세가 유지되는지 모니터링 가능
+    // 하지만 TradingEngine에서 손절/익절을 처리하므로 여기서는 패스
 }
 
 } // namespace strategy
