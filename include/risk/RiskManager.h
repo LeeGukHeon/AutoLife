@@ -34,6 +34,8 @@ struct Position {
     
     // [추가] Trailing Stop Loss용
     double highest_price;       // 포지션 진입 후 최고가 기록 (손절선 상승용)
+    double breakeven_trigger;   // 본전 이동 트리거 가격
+    double trailing_start;      // 트레일링 시작 가격
     
     // 전략 정보
     std::string strategy_name;
@@ -54,6 +56,7 @@ struct Position {
         , unrealized_pnl(0), unrealized_pnl_pct(0)
         , stop_loss(0), take_profit_1(0), take_profit_2(0)
         , half_closed(false), highest_price(0)
+        , breakeven_trigger(0), trailing_start(0)
         , pending_order_time(0), pending_order_price(0)
         , signal_filter(0.5), signal_strength(0.0)
     {}
@@ -108,7 +111,9 @@ public:
         double stop_loss,
         double take_profit_1,
         double take_profit_2,
-        const std::string& strategy_name
+        const std::string& strategy_name,
+        double breakeven_trigger = 0.0,
+        double trailing_start = 0.0
     );
     
     // 포지션 업데이트 (현재가 갱신)
@@ -154,6 +159,16 @@ public:
     
     // Break-even Stop (본전 이동)
     void moveStopToBreakeven(const std::string& market);
+
+    // Stop Loss 상향 갱신 (트레일링용)
+    void updateStopLoss(const std::string& market, double new_stop_loss, const std::string& reason);
+
+    // 트레일링/브레이크이븐 파라미터 설정
+    void setPositionTrailingParams(
+        const std::string& market,
+        double breakeven_trigger,
+        double trailing_start
+    );
     
     // ===== 포지션 사이징 =====
     

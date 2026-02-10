@@ -78,6 +78,8 @@ struct Signal {
     double stop_loss;                   // 손절가
     double take_profit_1;               // [✅ 추가] 1차 익절가 (50% 청산)
     double take_profit_2;               // [✅ 추가] 2차 익절가 (100% 청산)
+    double breakeven_trigger;           // 본전 이동 트리거 가격
+    double trailing_start;              // 트레일링 시작 가격
     double position_size;               // 포지션 크기 (비율)
     
     // [✅ 추가] 주문 실행 정책
@@ -112,6 +114,8 @@ struct Signal {
         , stop_loss(0.0)
         , take_profit_1(0.0)            // ✅ 초기화
         , take_profit_2(0.0)            // ✅ 초기화
+        , breakeven_trigger(0.0)
+        , trailing_start(0.0)
         , position_size(0.0)
         , buy_order_type(OrderTypePolicy::LIMIT_WITH_FALLBACK)      // 기본값
         , sell_order_type(OrderTypePolicy::LIMIT_WITH_FALLBACK)     // 기본값

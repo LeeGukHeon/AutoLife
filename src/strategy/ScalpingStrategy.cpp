@@ -145,6 +145,8 @@ Signal ScalpingStrategy::generateSignal(
     signal.stop_loss = stops.stop_loss;
     signal.take_profit_1 = stops.take_profit_1;
     signal.take_profit_2 = stops.take_profit_2;
+    signal.breakeven_trigger = stops.breakeven_trigger;
+    signal.trailing_start = stops.trailing_start;
     signal.buy_order_type = strategy::OrderTypePolicy::LIMIT_WITH_FALLBACK;
     signal.sell_order_type = strategy::OrderTypePolicy::LIMIT_WITH_FALLBACK;
     signal.max_retries = 3;
@@ -338,17 +340,9 @@ bool ScalpingStrategy::shouldExit(
     double holding_time_seconds
 ) {
     (void)market;
-    
-    // 익절
-    if (current_price >= entry_price * 1.02) {
-        return true;
-    }
-    
-    // 손절
-    if (current_price <= entry_price * 0.99) {
-        return true;
-    }
-    
+    (void)entry_price;
+    (void)current_price;
+
     // 시간 손절 (5분)
     if (holding_time_seconds >= MAX_HOLDING_TIME) {
         return true;
@@ -1245,6 +1239,13 @@ ScalpingDynamicStops ScalpingStrategy::calculateScalpingDynamicStops(
         stops.take_profit_2 = entry_price * (1.0 + BASE_TAKE_PROFIT);
         stops.breakeven_trigger = entry_price * (1.0 + BREAKEVEN_TRIGGER);
         stops.trailing_start = entry_price * (1.0 + BASE_TAKE_PROFIT * 0.3);
+        double min_tp1 = entry_price * (1.0 + MIN_TP1_PCT);
+        double min_tp2 = entry_price * (1.0 + MIN_TP2_PCT);
+        stops.take_profit_1 = std::max(stops.take_profit_1, min_tp1);
+        stops.take_profit_2 = std::max(stops.take_profit_2, min_tp2);
+        if (stops.take_profit_2 <= stops.take_profit_1) {
+            stops.take_profit_2 = stops.take_profit_1 * 1.001;
+        }
         return stops;
     }
     
@@ -1267,6 +1268,13 @@ ScalpingDynamicStops ScalpingStrategy::calculateScalpingDynamicStops(
     
     stops.take_profit_1 = entry_price + (risk * reward_ratio * 0.5);  // 1% (50% 청산)
     stops.take_profit_2 = entry_price + (risk * reward_ratio);         // 2% (전체 청산)
+    double min_tp1 = entry_price * (1.0 + MIN_TP1_PCT);
+    double min_tp2 = entry_price * (1.0 + MIN_TP2_PCT);
+    stops.take_profit_1 = std::max(stops.take_profit_1, min_tp1);
+    stops.take_profit_2 = std::max(stops.take_profit_2, min_tp2);
+    if (stops.take_profit_2 <= stops.take_profit_1) {
+        stops.take_profit_2 = stops.take_profit_1 * 1.001;
+    }
     
     // 4. Breakeven Trigger (1% 수익시)
     stops.breakeven_trigger = entry_price * (1.0 + BREAKEVEN_TRIGGER);

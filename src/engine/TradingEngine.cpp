@@ -718,6 +718,26 @@ bool TradingEngine::executeBuyOrder(
                 LOG_WARN("⚠️ [LIVE] 동적 손절 계산 실패, 기본값(-2.5%) 사용: {}", e.what());
             }
 
+            double applied_stop_loss = dynamic_stop_loss;
+            if (signal.stop_loss > 0.0 && signal.strategy_name == "Advanced Scalping") {
+                if (signal.stop_loss < avg_price) {
+                    applied_stop_loss = signal.stop_loss;
+                }
+            }
+
+            double breakeven_trigger = signal.breakeven_trigger;
+            double trailing_start = signal.trailing_start;
+            if (signal.entry_price > 0.0) {
+                double be_ratio = (signal.breakeven_trigger / signal.entry_price) - 1.0;
+                if (be_ratio > 0.0) {
+                    breakeven_trigger = avg_price * (1.0 + be_ratio);
+                }
+                double ts_ratio = (signal.trailing_start / signal.entry_price) - 1.0;
+                if (ts_ratio > 0.0) {
+                    trailing_start = avg_price * (1.0 + ts_ratio);
+                }
+            }
+
             // 6. [동적 익절가 계산] Signal의 take_profit을 사용
             double tp1 = signal.take_profit_1 > 0 ? signal.take_profit_1 : avg_price * 1.020;
             double tp2 = signal.take_profit_2 > 0 ? signal.take_profit_2 : avg_price * 1.030;
@@ -731,10 +751,12 @@ bool TradingEngine::executeBuyOrder(
                 market,
                 avg_price,        // 실제 체결 평단
                 executed_volume,  // 실제 체결 수량
-                dynamic_stop_loss, // 동적 손절가
+                applied_stop_loss, // 동적 손절가
                 tp1,              // [수정됨] Signal 기반 1차 익절가
                 tp2,              // [수정됨] Signal 기반 2차 익절가
-                signal.strategy_name
+                signal.strategy_name,
+                breakeven_trigger,
+                trailing_start
             );
 
             if (strategy_manager_) {
@@ -763,6 +785,26 @@ bool TradingEngine::executeBuyOrder(
                 LOG_WARN("⚠️ [PAPER] 동적 손절 계산 실패, 기본값(-2.5%) 사용: {}", e.what());
             }
 
+            double applied_stop_loss = dynamic_stop_loss;
+            if (signal.stop_loss > 0.0 && signal.strategy_name == "Advanced Scalping") {
+                if (signal.stop_loss < best_ask_price) {
+                    applied_stop_loss = signal.stop_loss;
+                }
+            }
+
+            double breakeven_trigger = signal.breakeven_trigger;
+            double trailing_start = signal.trailing_start;
+            if (signal.entry_price > 0.0) {
+                double be_ratio = (signal.breakeven_trigger / signal.entry_price) - 1.0;
+                if (be_ratio > 0.0) {
+                    breakeven_trigger = best_ask_price * (1.0 + be_ratio);
+                }
+                double ts_ratio = (signal.trailing_start / signal.entry_price) - 1.0;
+                if (ts_ratio > 0.0) {
+                    trailing_start = best_ask_price * (1.0 + ts_ratio);
+                }
+            }
+
             // [동적 익절가 계산] Signal의 take_profit을 사용
             double tp1_paper = signal.take_profit_1 > 0 ? signal.take_profit_1 : best_ask_price * 1.015;
             double tp2_paper = signal.take_profit_2 > 0 ? signal.take_profit_2 : best_ask_price * 1.03;
@@ -773,8 +815,10 @@ bool TradingEngine::executeBuyOrder(
             
             risk_manager_->enterPosition(
                 market, best_ask_price, quantity, 
-                dynamic_stop_loss, tp1_paper, tp2_paper, 
-                signal.strategy_name
+                applied_stop_loss, tp1_paper, tp2_paper, 
+                signal.strategy_name,
+                breakeven_trigger,
+                trailing_start
             );
 
             if (strategy_manager_) {
@@ -888,6 +932,25 @@ void TradingEngine::monitorPositions() {
             LOG_INFO("  {} - 전략: {} - 진입: {:.0f}, 현재: {:.0f}, 손익: {:.0f} ({:+.2f}%)",
                      pos.market, updated_pos->strategy_name, updated_pos->entry_price, current_price,
                      updated_pos->unrealized_pnl, updated_pos->unrealized_pnl_pct * 100.0);
+        }
+
+        // 스캘핑: 브레이크이븐/트레일링 처리
+        auto scalping_strategy = std::dynamic_pointer_cast<strategy::ScalpingStrategy>(strategy);
+        if (scalping_strategy && updated_pos->strategy_name == "Advanced Scalping") {
+            if (updated_pos->breakeven_trigger > 0.0 &&
+                current_price >= updated_pos->breakeven_trigger &&
+                updated_pos->stop_loss < updated_pos->entry_price) {
+                risk_manager_->moveStopToBreakeven(updated_pos->market);
+            }
+
+            if (updated_pos->trailing_start > 0.0 && current_price >= updated_pos->trailing_start) {
+                double new_stop = scalping_strategy->updateTrailingStop(
+                    updated_pos->entry_price,
+                    updated_pos->highest_price,
+                    current_price
+                );
+                risk_manager_->updateStopLoss(updated_pos->market, new_stop, "trailing");
+            }
         }
         
         // --- 매도 로직 (전략 기반 청산 우선) ---
@@ -1152,10 +1215,7 @@ bool TradingEngine::executePartialSell(const std::string& market, const risk::Po
     // 1. 최소 주문 금액 체크 및 대응 (거래소 최소: 5,000 KRW)
     if (invest_amount < config_.min_order_krw) {
         LOG_WARN("⚠️ 부분 매도 금액 부족 ({:.0f}원, 최소: {:.0f}원)", invest_amount, config_.min_order_krw);
-        
-        // [핵심] 여기서 전량 매도 함수를 호출하여 포지션을 완전히 정리해버립니다.
-        // 그래야 다음 루프에서 다시 진입하지 않습니다.
-        return executeSellOrder(market, position, "Partial sell amount too small - Force Exit", current_price);
+        return false;
     }
     
     LOG_INFO("✂️ 부분 매도 실행 (50%): {}", market);

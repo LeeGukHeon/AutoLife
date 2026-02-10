@@ -258,7 +258,9 @@ private:
     
     static constexpr double BASE_TAKE_PROFIT = 0.02;        // 2%
     static constexpr double BASE_STOP_LOSS = 0.01;          // 1%
-    static constexpr double MAX_HOLDING_TIME = 300.0;       // 5분
+    static constexpr double MIN_TP1_PCT = 0.003;            // 0.3%
+    static constexpr double MIN_TP2_PCT = 0.006;            // 0.6%
+    static constexpr double MAX_HOLDING_TIME = 1800.0;      // 30분
     static constexpr double CONFIDENCE_LEVEL = 0.95;
     static constexpr double MIN_SHARPE_RATIO = 0.8;
     static constexpr double MAX_POSITION_SIZE = 0.20;       // 5%

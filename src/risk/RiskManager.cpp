@@ -250,7 +250,9 @@ void RiskManager::enterPosition(
     double stop_loss,
     double take_profit_1,
     double take_profit_2,
-    const std::string& strategy_name
+    const std::string& strategy_name,
+    double breakeven_trigger,
+    double trailing_start
 ) {
     // [🔒 스레드 안전성] 포지션 추가는 TradingEngine 메인 스레드에서만 호출되므로
     // 교착 상태 위험 없음. 단 recursive_mutex로 설정되어 있어 재진입도 안전.
@@ -275,6 +277,8 @@ void RiskManager::enterPosition(
     pos.strategy_name = strategy_name;
     pos.half_closed = false;
     pos.highest_price = entry_price;  // [추가] Trailing SL용 최고가 초기화
+    pos.breakeven_trigger = breakeven_trigger;
+    pos.trailing_start = trailing_start;
     
     // [핵심] 자본금에서 수수료 차감
     // 현금: 주식 구매비 + 수수료 모두 차감됨
@@ -306,6 +310,9 @@ void RiskManager::updatePosition(const std::string& market, double current_price
     
     auto& pos = it->second;
     pos.current_price = current_price;
+    if (pos.highest_price <= 0.0 || current_price > pos.highest_price) {
+        pos.highest_price = current_price;
+    }
     
     // 미실현 손익 계산
     double current_value = current_price * pos.quantity;
@@ -437,6 +444,35 @@ void RiskManager::moveStopToBreakeven(const std::string& market) {
     pos.stop_loss = pos.entry_price;
     
     LOG_INFO("{} 손절선 본전 이동: {:.0f}", market, pos.entry_price);
+}
+
+void RiskManager::updateStopLoss(const std::string& market, double new_stop_loss, const std::string& reason) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);;
+
+    auto it = positions_.find(market);
+    if (it == positions_.end()) return;
+
+    auto& pos = it->second;
+    if (new_stop_loss <= 0.0) return;
+    if (new_stop_loss <= pos.stop_loss) return;
+    if (new_stop_loss >= pos.current_price) return;
+
+    pos.stop_loss = new_stop_loss;
+    LOG_INFO("{} 손절선 상향 ({}): {:.0f}", market, reason, new_stop_loss);
+}
+
+void RiskManager::setPositionTrailingParams(
+    const std::string& market,
+    double breakeven_trigger,
+    double trailing_start
+) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);;
+
+    auto it = positions_.find(market);
+    if (it == positions_.end()) return;
+
+    it->second.breakeven_trigger = breakeven_trigger;
+    it->second.trailing_start = trailing_start;
 }
 
 Position* RiskManager::getPosition(const std::string& market) {
