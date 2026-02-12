@@ -17,6 +17,7 @@ public:
     std::string getAccessKey() const { return access_key_; }
     std::string getSecretKey() const { return secret_key_; }
     double getInitialCapital() const { return initial_capital_; }
+    void setInitialCapital(double v) { initial_capital_ = v; engine_config_.initial_capital = v; }
     double getMaxDrawdown() const { return max_drawdown_; }
     double getPositionSizeRatio() const { return position_size_ratio_; }
     std::string getLogLevel() const { return log_level_; }
