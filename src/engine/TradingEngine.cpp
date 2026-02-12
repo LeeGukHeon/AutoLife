@@ -9,6 +9,7 @@
 #include "analytics/OrderbookAnalyzer.h"
 #include "risk/RiskManager.h"
 #include "common/PathUtils.h"
+#include "common/TickSizeHelper.h"  // [Phase 3] 업비트 호가 단위 정렬
 #include <chrono>
 #include <iostream>
 #include <thread>
@@ -1118,6 +1119,15 @@ bool TradingEngine::executeSellOrder(
             }
 
             executed_price = order_result.executed_price;
+            sell_quantity = order_result.executed_volume;  // [Phase 3] 실제 체결량 반영
+            
+            // [Phase 3] 부분 체결 감지
+            double fill_ratio = order_result.executed_volume / position.quantity;
+            if (fill_ratio < 0.999) {
+                LOG_WARN("⚠️ 부분 체결 감지: {:.8f}/{:.8f} ({:.1f}%)",
+                         order_result.executed_volume, position.quantity, fill_ratio * 100.0);
+            }
+            
             LOG_INFO("🆗 매도 체결 확인: 평단 {:.0f} (재시도: {})",
                      executed_price, order_result.retry_count);
         }
@@ -1127,8 +1137,18 @@ bool TradingEngine::executeSellOrder(
     double gross_pnl = (executed_price - position.entry_price) * sell_quantity;
     bool is_win = gross_pnl > 0;
     
-    // 4. RiskManager 업데이트 (포지션 삭제)
-    risk_manager_->exitPosition(market, executed_price, reason);
+    // 4. [Phase 3] 부분 체결 vs 전량 체결 분기
+    double fill_ratio = sell_quantity / position.quantity;
+    if (fill_ratio >= 0.999) {
+        // 전량 체결 → 기존 로직 (포지션 완전 삭제)
+        risk_manager_->exitPosition(market, executed_price, reason);
+    } else {
+        // 부분 체결 → 잔량 유지
+        double remaining_qty = position.quantity - sell_quantity;
+        LOG_WARN("📊 부분 청산: {:.8f}개 매도, {:.8f}개 잔존", sell_quantity, remaining_qty);
+        // 포지션 수량만 업데이트 (포지션은 유지)
+        risk_manager_->updatePositionQuantity(market, remaining_qty);
+    }
     
     // 5. [핵심 수정] StrategyManager를 통해 전략을 찾아 통계 업데이트 & 잠금 해제
     if (strategy_manager_ && !position.strategy_name.empty()) {
@@ -1250,10 +1270,11 @@ double TradingEngine::calculateOptimalBuyPrice(
     }
 
     if (units.is_array() && !units.empty()) {
-        return units[0].value("ask_price", base_price);
+        double ask = units[0].value("ask_price", base_price);
+        return common::roundUpToTickSize(ask);  // [Phase 3] 호가 단위 올림
     }
 
-    return base_price;
+    return common::roundUpToTickSize(base_price);
 }
 
 double TradingEngine::calculateOptimalSellPrice(
@@ -1271,10 +1292,11 @@ double TradingEngine::calculateOptimalSellPrice(
     }
 
     if (units.is_array() && !units.empty()) {
-        return units[0].value("bid_price", base_price);
+        double bid = units[0].value("bid_price", base_price);
+        return common::roundDownToTickSize(bid);  // [Phase 3] 호가 단위 내림
     }
 
-    return base_price;
+    return common::roundDownToTickSize(base_price);
 }
 
 double TradingEngine::estimateOrderbookVWAPPrice(
@@ -1427,7 +1449,9 @@ TradingEngine::LimitOrderResult TradingEngine::executeLimitBuyOrder(
         std::stringstream ss;
         ss << std::fixed << std::setprecision(8) << remaining;
         std::string vol_str = ss.str();
-        std::string price_str = std::to_string((long long)entry_price);
+        // [Phase 3] 호가 단위 올림 + 정밀 문자열 변환
+        double tick_price = common::roundUpToTickSize(entry_price);
+        std::string price_str = common::priceToString(tick_price);
 
         nlohmann::json order_res;
         try {
@@ -1524,7 +1548,9 @@ TradingEngine::LimitOrderResult TradingEngine::executeLimitSellOrder(
         std::stringstream ss;
         ss << std::fixed << std::setprecision(8) << remaining;
         std::string vol_str = ss.str();
-        std::string price_str = std::to_string((long long)exit_price);
+        // [Phase 3] 호가 단위 내림 + 정밀 문자열 변환
+        double tick_price = common::roundDownToTickSize(exit_price);
+        std::string price_str = common::priceToString(tick_price);
 
         nlohmann::json order_res;
         try {
@@ -1826,25 +1852,46 @@ void TradingEngine::syncAccountState() {
             LOG_INFO("🔍 기존 보유 코인 발견: {} (수량: {:.8f}, 평단: {:.0f})", 
                      market, balance, avg_buy_price);
 
-            //double current_price = getCurrentPrice(market); 
-            // 1. [기존] 단순 비율 손절가
-            double target_sl = avg_buy_price * 0.97;
+            // [Phase 4] 영속화된 포지션에서 SL/TP 복원 시도
+            const PersistedPosition* persisted = nullptr;
+            for (const auto& pp : pending_reconcile_positions_) {
+                if (pp.market == market && pp.stop_loss > 0.0) {
+                    persisted = &pp;
+                    break;
+                }
+            }
 
-            // 2. [추가] 5,100원 마지노선을 지키기 위한 단가 계산 
-            // balance(수량)가 0일 경우를 대비해 아주 작은 값(1e-9)으로 안전장치
-            double upbit_limit_sl = config_.min_order_krw / (balance > 0 ? balance : 1e-9);
-
-            // 3. [보정] 소량(더스트)일 때 업비트 최소금액 기준으로 손절을 과도하게 끌어올리지 않음
-            // 만약 upbit_limit_sl이 진입가의 99% 이상으로 매우 진입가에 근접하면
-            // 복구 시점에 손절을 원래 target_sl에 두고 경고를 남깁니다.
             double safe_stop_loss;
-            if (upbit_limit_sl > avg_buy_price * 0.99) {
-                LOG_WARN("{} 복구 포지션 소량 감지: 수량 {:.6f}, upbit_limit_sl {:.0f} → 손절 보정 보류 (target_sl 사용)",
-                         market, balance, upbit_limit_sl);
-                safe_stop_loss = target_sl;
+            double tp1, tp2;
+            double be_trigger = 0.0, trail_start = 0.0;
+            bool half_closed = false;
+
+            if (persisted) {
+                // [Phase 4] 저장된 원래 전략 값 사용 (핵심!)
+                safe_stop_loss = persisted->stop_loss;
+                tp1 = persisted->take_profit_1;
+                tp2 = persisted->take_profit_2;
+                be_trigger = persisted->breakeven_trigger;
+                trail_start = persisted->trailing_start;
+                half_closed = persisted->half_closed;
+                LOG_INFO("✅ 포지션 複구(영속): {} SL={:.0f} TP1={:.0f} TP2={:.0f} BE={:.0f} TS={:.0f}",
+                         market, safe_stop_loss, tp1, tp2, be_trigger, trail_start);
             } else {
-                // 일반적인 경우: 진입가 대비 너무 낮은 손절로 인해 주문이 최소금액 미만이 되지 않도록 상향 조정
-                safe_stop_loss = std::max(target_sl, upbit_limit_sl);
+                // 영속 데이터 없음 → 기본값 (최초 실행 또는 수동 매수)
+                double target_sl = avg_buy_price * 0.97;
+                double upbit_limit_sl = config_.min_order_krw / (balance > 0 ? balance : 1e-9);
+
+                if (upbit_limit_sl > avg_buy_price * 0.99) {
+                    LOG_WARN("{} 복구 포지션 소량 감지: 수량 {:.6f}, upbit_limit_sl {:.0f} → 손절 보정 보류",
+                             market, balance, upbit_limit_sl);
+                    safe_stop_loss = target_sl;
+                } else {
+                    safe_stop_loss = std::max(target_sl, upbit_limit_sl);
+                }
+                tp1 = avg_buy_price * 1.010;
+                tp2 = avg_buy_price * 1.015;
+                LOG_WARN("⚠️ 포지션 복구(기본값): {} SL={:.0f} TP1={:.0f} TP2={:.0f} (영속 데이터 없음)",
+                         market, safe_stop_loss, tp1, tp2);
             }
 
             std::string recovered_strategy = "RECOVERED";
@@ -1859,10 +1906,21 @@ void TradingEngine::syncAccountState() {
                 avg_buy_price,
                 balance,
                 safe_stop_loss,
-                avg_buy_price * 1.010,
-                avg_buy_price * 1.015,
-                recovered_strategy
+                tp1,
+                tp2,
+                recovered_strategy,
+                be_trigger,
+                trail_start
             );
+
+            // [Phase 4] 부분 청산 상태 복원
+            if (half_closed) {
+                auto* pos = risk_manager_->getPosition(market);
+                if (pos) {
+                    pos->half_closed = true;
+                    LOG_INFO("  └ 부분 청산 상태 복원: {} (half_closed=true)", market);
+                }
+            }
         }
         
         if (!krw_found) {
@@ -2044,6 +2102,13 @@ void TradingEngine::saveState() {
             p["entry_time"] = pos.entry_time;
             p["signal_filter"] = pos.signal_filter;
             p["signal_strength"] = pos.signal_strength;
+            // [Phase 4] 손절/익절/트레일링 영속화
+            p["stop_loss"] = pos.stop_loss;
+            p["take_profit_1"] = pos.take_profit_1;
+            p["take_profit_2"] = pos.take_profit_2;
+            p["breakeven_trigger"] = pos.breakeven_trigger;
+            p["trailing_start"] = pos.trailing_start;
+            p["half_closed"] = pos.half_closed;
             open_positions.push_back(p);
         }
         state["open_positions"] = open_positions;
@@ -2135,6 +2200,13 @@ void TradingEngine::loadState() {
                 pos.entry_time = p.value("entry_time", 0LL);
                 pos.signal_filter = p.value("signal_filter", 0.5);
                 pos.signal_strength = p.value("signal_strength", 0.0);
+                // [Phase 4] 손절/익절/트레일링 복원
+                pos.stop_loss = p.value("stop_loss", 0.0);
+                pos.take_profit_1 = p.value("take_profit_1", 0.0);
+                pos.take_profit_2 = p.value("take_profit_2", 0.0);
+                pos.breakeven_trigger = p.value("breakeven_trigger", 0.0);
+                pos.trailing_start = p.value("trailing_start", 0.0);
+                pos.half_closed = p.value("half_closed", false);
                 if (!pos.market.empty() && pos.entry_price > 0.0 && pos.quantity > 0.0) {
                     pending_reconcile_positions_.push_back(pos);
                 }

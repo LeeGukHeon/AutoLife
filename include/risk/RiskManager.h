@@ -132,6 +132,9 @@ public:
     // 1차 익절 (50% 청산)
     void partialExit(const std::string& market, double exit_price);
     
+    // [Phase 3] 부분 체결 시 수량만 업데이트 (포지션 유지)
+    void updatePositionQuantity(const std::string& market, double new_quantity);
+    
     // 현재 포지션 조회
     Position* getPosition(const std::string& market);
     std::vector<Position> getAllPositions() const;
@@ -186,7 +189,7 @@ public:
         double entry_price,
         double stop_loss,
         double take_profit,
-        double fee_rate = 0.001  // 0.1%
+        double fee_rate = 0.0005  // [Phase 3] 0.05% (업비트 KRW 실제 수수료와 일치)
     );
     
     // ===== 리스크 관리 =====

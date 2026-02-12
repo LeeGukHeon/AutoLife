@@ -265,6 +265,13 @@ private:
         long long entry_time = 0;
         double signal_filter = 0.5;
         double signal_strength = 0.0;
+        // [Phase 4] 손절/익절/트레일링 영속화
+        double stop_loss = 0.0;
+        double take_profit_1 = 0.0;
+        double take_profit_2 = 0.0;
+        double breakeven_trigger = 0.0;
+        double trailing_start = 0.0;
+        bool half_closed = false;
     };
 
     std::vector<PersistedPosition> pending_reconcile_positions_;

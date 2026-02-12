@@ -434,6 +434,32 @@ void RiskManager::partialExit(const std::string& market, double exit_price) {
              market, exit_price, profit);
 }
 
+// [Phase 3] 부분 체결 시 수량만 감소 (포지션 유지)
+void RiskManager::updatePositionQuantity(const std::string& market, double new_quantity) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    
+    auto it = positions_.find(market);
+    if (it == positions_.end()) {
+        LOG_WARN("updatePositionQuantity: 포지션 없음 - {}", market);
+        return;
+    }
+    
+    auto& pos = it->second;
+    double old_quantity = pos.quantity;
+    double sold_quantity = old_quantity - new_quantity;
+    
+    // 매도된 만큼 자본금 회수
+    double freed_capital = sold_quantity * pos.entry_price;
+    current_capital_ += freed_capital;
+    
+    // 포지션 수량 및 투자금 업데이트
+    pos.quantity = new_quantity;
+    pos.invested_amount = new_quantity * pos.entry_price;
+    
+    LOG_INFO("📊 포지션 수량 업데이트: {} ({:.8f} → {:.8f}), 자본 회수: {:.0f}원",
+             market, old_quantity, new_quantity, freed_capital);
+}
+
 void RiskManager::moveStopToBreakeven(const std::string& market) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);;
     
