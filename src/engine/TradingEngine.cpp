@@ -238,6 +238,10 @@ void TradingEngine::run() {
                              order.filled_volume, order.price);
                     
                     if (order.side == OrderSide::BUY) {
+                        // 펜딩 자본 해제 (체결 완료)
+                        double filled_amount = order.price * order.filled_volume;
+                        risk_manager_->releasePendingCapital(filled_amount);
+                        
                         // RiskManager에 포지션 등록
                         risk_manager_->enterPosition(
                             order.market,
@@ -730,6 +734,7 @@ bool TradingEngine::executeBuyOrder(
 
             if (submitted) {
                 LOG_INFO("✅ OrderManager에 주문 제출 완료: {}", market);
+                risk_manager_->reservePendingCapital(invest_amount);  // 펜딩 자본 예약
                 return true; // Async Success
             } else {
                 LOG_ERROR("❌ OrderManager 주문 제출 실패");

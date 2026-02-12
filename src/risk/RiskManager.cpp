@@ -730,7 +730,7 @@ RiskManager::RiskMetrics RiskManager::getRiskMetrics() const {
         metrics.reserved_capital += amount;
     }
 
-    metrics.available_capital = current_capital_ - metrics.reserved_capital;
+    metrics.available_capital = current_capital_ - metrics.reserved_capital - pending_order_capital_;
     if (metrics.available_capital < 0) metrics.available_capital = 0.0;
     
     // 3. 총 자산 가치 (Equity)

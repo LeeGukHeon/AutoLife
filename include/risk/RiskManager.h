@@ -173,6 +173,24 @@ public:
         double trailing_start
     );
     
+    // ===== 주문 대기 자본 관리 =====
+    // 제출됐지만 아직 체결 안 된 주문 금액을 추적하여 중복 주문 방지
+    void reservePendingCapital(double amount) {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        pending_order_capital_ += amount;
+        LOG_INFO("💰 펜딩 자본 예약: +{:.0f} (총 펜딩: {:.0f})", amount, pending_order_capital_);
+    }
+    void releasePendingCapital(double amount) {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        pending_order_capital_ -= amount;
+        if (pending_order_capital_ < 0) pending_order_capital_ = 0.0;
+        LOG_INFO("💰 펜딩 자본 해제: -{:.0f} (총 펜딩: {:.0f})", amount, pending_order_capital_);
+    }
+    void clearPendingCapital() {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        pending_order_capital_ = 0.0;
+    }
+
     // ===== 포지션 사이징 =====
     
     // Kelly Criterion 기반 포지션 사이징
@@ -274,6 +292,7 @@ public:
     void resetCapital(double actual_balance) {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
         current_capital_ = actual_balance; // 현재 자본금 교체
+        pending_order_capital_ = 0.0;       // 동기 후 펜딩 초기화
         initial_capital_ = actual_balance; // 기준점(원금)도 교체 (MDD 계산용)
         max_capital_ = actual_balance;
         LOG_INFO("자산 동기화 완료: RiskManager 자본금 재설정 -> {:.0f} KRW", actual_balance);
@@ -306,6 +325,7 @@ private:
 
     double initial_capital_;
     double current_capital_;
+    double pending_order_capital_ = 0.0;    // 제출됐지만 아직 체결 안 된 주문 금액
     
     std::map<std::string, Position> positions_;
     std::vector<TradeHistory> trade_history_;
