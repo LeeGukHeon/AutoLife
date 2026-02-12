@@ -33,7 +33,7 @@ config/*.json
 # ===== 로그 파일 =====
 logs/
 *.log
-
+*.csv
 # ===== IDE & 에디터 =====
 .vs/
 .vscode/settings.json

@@ -1,8 +1,13 @@
 #include "strategy/GridTradingStrategy.h"
+#include "common/Logger.h"
 #include "analytics/TechnicalIndicators.h"
-#include <algorithm>
 #include <cmath>
+#include <algorithm>
 #include <numeric>
+
+// Prevent Windows macros from interfering with std::min/max
+#undef max
+#undef min
 #include <chrono>
 #include <spdlog/spdlog.h>
 
@@ -70,9 +75,10 @@ StrategyInfo GridTradingStrategy::getInfo() const
 Signal GridTradingStrategy::generateSignal(
     const std::string& market,
     const analytics::CoinMetrics& metrics,
-    const std::vector<analytics::Candle>& candles,
+    const std::vector<Candle>& candles,
     double current_price,
-    double available_capital)
+    double available_capital,
+    const analytics::RegimeAnalysis& regime)
 {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
 
@@ -85,81 +91,87 @@ Signal GridTradingStrategy::generateSignal(
     signal.market = market;
     signal.strategy_name = "Grid Trading Strategy";
     
-    // [수정] 중복 진입 방지: 이미 진입한 종목이면 신호 생성 안 함
-    if (active_positions_.find(market) != active_positions_.end()) {
-        return signal;
-    }
-    
-    // ===== 1. 기본 검증 =====
+    // ===== Hard Gates =====
+    if (active_positions_.find(market) != active_positions_.end()) return signal;
+    if (active_grids_.find(market) != active_grids_.end()) return signal;
     if (candles.size() < 100) return signal;
-    if (metrics.liquidity_score < MIN_LIQUIDITY_SCORE) return signal;
-    
-    // ===== 2. 이미 그리드 활성화 중인지 확인 (이중 체크) =====
-    // active_positions_와 active_grids_가 동기화되어야 함
-    if (active_grids_.find(market) != active_grids_.end()) {
-        return signal;  // 이미 그리드 운영 중
-    }
-    
-    // ===== 3. 거래 가능 확인 =====
+    if (available_capital <= 0) return signal;
     if (!canTradeNow()) return signal;
     
-    // ===== 4. 서킷 브레이커 =====
     checkCircuitBreaker();
     if (isCircuitBreakerActive()) return signal;
     
-    // ===== 5. 신호 간격 =====
-    long long now = getCurrentTimestamp();
-    if ((now - last_signal_time_) < MIN_SIGNAL_INTERVAL_SEC * 1000) {
-        return signal;
-    }
+    // ===== Score-Based Evaluation =====
+    double total_score = 0.0;
     
-    // ===== 6. Grid Opportunity 분석 =====
+    // --- (1) 그리드 분석 (최대 0.40) ---
     GridSignalMetrics grid_signal = analyzeGridOpportunity(market, metrics, candles, current_price);
+    total_score += grid_signal.strength * 0.40;
     
-    if (!shouldGenerateGridSignal(grid_signal)) {
-        return signal;
+    // --- (2) 유동성 (최대 0.10) ---
+    if (metrics.liquidity_score >= MIN_LIQUIDITY_SCORE) total_score += 0.10;
+    else if (metrics.liquidity_score >= MIN_LIQUIDITY_SCORE * 0.5) total_score += 0.05;
+    
+    // --- (3) 레짐 (최대 0.20) ---
+    double regime_score = 0.0;
+    switch (regime.regime) {
+        case analytics::MarketRegime::RANGING: regime_score = 0.20; break;     // 그리드에 최적
+        case analytics::MarketRegime::HIGH_VOLATILITY: regime_score = 0.10; break;
+        case analytics::MarketRegime::TRENDING_UP: regime_score = 0.05; break;
+        case analytics::MarketRegime::TRENDING_DOWN: regime_score = 0.02; break;
+        default: regime_score = 0.05; break;
     }
+    total_score += regime_score;
     
-    // ===== 7. 매수 신호 생성 =====
+    // --- (4) 변동성 적합도 (최대 0.15) ---
+    auto prices = analytics::TechnicalIndicators::extractClosePrices(candles);
+    double rsi = analytics::TechnicalIndicators::calculateRSI(prices, 14);
+    // 그리드는 RSI 40~60 (횡보) 구간이 최적
+    if (rsi >= 40 && rsi <= 60) total_score += 0.15;
+    else if (rsi >= 30 && rsi <= 70) total_score += 0.08;
+    else total_score += 0.02;
+    
+    // --- (5) 거래량 (최대 0.15) ---
+    if (metrics.volume_surge_ratio >= 1.5) total_score += 0.15;
+    else if (metrics.volume_surge_ratio >= 1.0) total_score += 0.10;
+    else total_score += 0.03;
+    
+    // ===== 최종 판정 =====
+    signal.strength = std::clamp(total_score, 0.0, 1.0);
+    
+    if (signal.strength < 0.40) return signal;
+    
+    // ===== 신호 생성 =====
     signal.type = SignalType::BUY;
-    signal.strength = grid_signal.strength;
     signal.entry_price = current_price;
-    
-    // ===== 8. 손절/익절 계산 (그리드 전체 기준) =====
     signal.stop_loss = calculateStopLoss(current_price, candles);
-    double base_tp_grid = calculateTakeProfit(current_price, candles);
     double risk_grid = current_price - signal.stop_loss;
-    signal.take_profit_1 = current_price + (risk_grid * 3.0 * 0.5);  // [✅] 1차 익절
-    signal.take_profit_2 = base_tp_grid;                              // [✅] 2차 익절
+    signal.take_profit_1 = current_price + (risk_grid * 3.0 * 0.5);
+    signal.take_profit_2 = calculateTakeProfit(current_price, candles);
     signal.buy_order_type = strategy::OrderTypePolicy::LIMIT_WITH_FALLBACK;
     signal.sell_order_type = strategy::OrderTypePolicy::LIMIT_WITH_FALLBACK;
     signal.max_retries = 2;
     signal.retry_wait_ms = 300;
     
-    // ===== 9. 포지션 사이징 =====
-    double capital = available_capital;
-    if (capital <= 0) {
-        spdlog::warn("[GridTrading] 가용자본 없음 (신호 무시) - {}", market);
-        signal.type = SignalType::NONE;
-        return signal;
-    }
-    signal.position_size = calculatePositionSize(capital, current_price, signal.stop_loss, metrics);
+    // 포지션 사이징
+    signal.position_size = calculatePositionSize(available_capital, current_price, signal.stop_loss, metrics);
     
-    // ===== 10. 최소 주문 금액 확인 =====
-    double order_amount = capital * signal.position_size;
+    double order_amount = available_capital * signal.position_size;
     if (order_amount < MIN_CAPITAL_PER_GRID * grid_signal.optimal_grid_count) {
         signal.type = SignalType::NONE;
         return signal;
     }
     
-    // ===== 11. 로깅 =====
-    spdlog::info("[GridTrading] GRID Signal - {} | Strength: {:.3f} | Type: {} | Grids: {} | Spacing: {:.2f}%",
-                 market, signal.strength, 
-                 static_cast<int>(grid_signal.recommended_type),
+    if (signal.strength >= 0.70) {
+        signal.type = SignalType::STRONG_BUY;
+    }
+    
+    spdlog::info("[GridTrading] 🎯 GRID Signal - {} | Strength: {:.3f} | Grids: {} | Spacing: {:.2f}%",
+                 market, signal.strength,
                  grid_signal.optimal_grid_count,
                  grid_signal.optimal_spacing_pct * 100);
     
-    last_signal_time_ = now;
+    last_signal_time_ = getCurrentTimestamp();
     
     return signal;
 }
@@ -169,10 +181,12 @@ Signal GridTradingStrategy::generateSignal(
 bool GridTradingStrategy::shouldEnter(
     const std::string& market,
     const analytics::CoinMetrics& metrics,
-    const std::vector<analytics::Candle>& candles,
-    double current_price)
+    const std::vector<Candle>& candles,
+    double current_price,
+    const analytics::RegimeAnalysis& regime)
 {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
+    (void)regime; // Used for future enhancements
 
     if (active_positions_.find(market) != active_positions_.end()) {
         return false;
@@ -244,7 +258,7 @@ bool GridTradingStrategy::shouldExit(
     
     // ===== 4. Rebalancing / Breakout 체크 =====
     if (shouldRebalanceGrid(market, current_price)) {
-        std::vector<analytics::Candle> candles = getCachedCandles(market, 100);
+        std::vector<Candle> candles = getCachedCandles(market, 100);
         RangeDetectionMetrics new_range = detectRange(candles, current_price);
         
         if (new_range.is_ranging) {
@@ -266,7 +280,7 @@ bool GridTradingStrategy::shouldExit(
 
 double GridTradingStrategy::calculateStopLoss(
     double entry_price,
-    const std::vector<analytics::Candle>& candles)
+    const std::vector<Candle>& candles)
 {
     //std::lock_guard<std::recursive_mutex> lock(mutex_);
     
@@ -283,7 +297,7 @@ double GridTradingStrategy::calculateStopLoss(
 
 double GridTradingStrategy::calculateTakeProfit(
     double entry_price,
-    const std::vector<analytics::Candle>& candles)
+    const std::vector<Candle>& candles)
 {
     //std::lock_guard<std::recursive_mutex> lock(mutex_);
     
@@ -430,7 +444,7 @@ bool GridTradingStrategy::onSignalAccepted(const Signal& signal, double allocate
         return false;
     }
 
-    std::vector<analytics::Candle> candles;
+    std::vector<Candle> candles;
     if (candles_it != last_candles_cache_.end()) {
         candles = candles_it->second;
     }
@@ -721,7 +735,7 @@ bool GridTradingStrategy::shouldEmergencyExit(
     }
     
     // Flash Crash 감지
-    std::vector<analytics::Candle> candles = getCachedCandles(market, 20);
+    std::vector<Candle> candles = getCachedCandles(market, 20);
     FlashCrashMetrics flash = detectFlashCrash(market, candles, current_price);
     
     if (flash.detected) {
@@ -880,7 +894,7 @@ nlohmann::json GridTradingStrategy::getCachedOrderBook(const std::string& market
     return cached_orderbook_;
 }
 
-std::vector<analytics::Candle> GridTradingStrategy::getCachedCandles(
+std::vector<Candle> GridTradingStrategy::getCachedCandles(
     const std::string& market,
     int count)
 {
@@ -895,7 +909,7 @@ std::vector<analytics::Candle> GridTradingStrategy::getCachedCandles(
         if (candle_cache_.count(market)) {
             return candle_cache_[market];
         }
-        return std::vector<analytics::Candle>();
+        return std::vector<Candle>();
     }
     
     try {
@@ -911,7 +925,7 @@ std::vector<analytics::Candle> GridTradingStrategy::getCachedCandles(
         if (candle_cache_.count(market)) {
             return candle_cache_[market];
         }
-        return std::vector<analytics::Candle>();
+        return std::vector<Candle>();
     }
 }
 
@@ -1001,7 +1015,7 @@ bool GridTradingStrategy::isCircuitBreakerActive() const
 // ===== Range Detection =====
 
 RangeDetectionMetrics GridTradingStrategy::detectRange(
-    const std::vector<analytics::Candle>& candles,
+    const std::vector<Candle>& candles,
     double current_price) const
 {
     RangeDetectionMetrics metrics;
@@ -1096,7 +1110,7 @@ RangeDetectionMetrics GridTradingStrategy::detectRange(
 }
 
 double GridTradingStrategy::calculateADX(
-    const std::vector<analytics::Candle>& candles,
+    const std::vector<Candle>& candles,
     int period) const
 {
     if (candles.size() < static_cast<size_t>(period + 1)) {
@@ -1140,7 +1154,7 @@ double GridTradingStrategy::calculateADX(
 }
 
 void GridTradingStrategy::calculateDMI(
-    const std::vector<analytics::Candle>& candles,
+    const std::vector<Candle>& candles,
     int period,
     double& plus_di,
     double& minus_di) const
@@ -1177,7 +1191,7 @@ void GridTradingStrategy::calculateDMI(
 }
 
 bool GridTradingStrategy::isConsolidating(
-    const std::vector<analytics::Candle>& candles,
+    const std::vector<Candle>& candles,
     int lookback) const
 {
     if (candles.size() < static_cast<size_t>(lookback)) {
@@ -1509,7 +1523,7 @@ std::map<int, GridLevel> GridTradingStrategy::generateFibonacciGrid(
 
 std::map<int, GridLevel> GridTradingStrategy::generateDynamicGrid(
     const GridConfiguration& config,
-    const std::vector<analytics::Candle>& candles)
+    const std::vector<Candle>& candles)
 {
     // Dynamic은 ATR 기반으로 간격 조정
     double atr = calculateATR(candles, 14);
@@ -1523,7 +1537,7 @@ std::map<int, GridLevel> GridTradingStrategy::generateDynamicGrid(
 GridSignalMetrics GridTradingStrategy::analyzeGridOpportunity(
     const std::string& market,
     const analytics::CoinMetrics& metrics,
-    const std::vector<analytics::Candle>& candles,
+    const std::vector<Candle>& candles,
     double current_price)
 {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
@@ -1792,7 +1806,7 @@ bool GridTradingStrategy::detectBreakout(
 
 FlashCrashMetrics GridTradingStrategy::detectFlashCrash(
     const std::string& market,
-    const std::vector<analytics::Candle>& candles,
+    const std::vector<Candle>& candles,
     double current_price)
 {
     FlashCrashMetrics flash;
@@ -2065,7 +2079,7 @@ double GridTradingStrategy::calculateStdDev(
     return std::sqrt(sum_sq / (values.size() - 1));
 }
 
-double GridTradingStrategy::calculateVolatility(const std::vector<analytics::Candle>& candles) const {
+double GridTradingStrategy::calculateVolatility(const std::vector<Candle>& candles) const {
     if (candles.size() < 21) return 0.02;
     
     std::vector<double> returns;
@@ -2080,7 +2094,7 @@ double GridTradingStrategy::calculateVolatility(const std::vector<analytics::Can
 }
 
 double GridTradingStrategy::calculateATR(
-    const std::vector<analytics::Candle>& candles,
+    const std::vector<Candle>& candles,
     int period) const
 {
    if (candles.size() < static_cast<size_t>(period + 1)) {
@@ -2105,7 +2119,7 @@ double GridTradingStrategy::calculateATR(
 }
 
 std::vector<double> GridTradingStrategy::extractPrices(
-    const std::vector<analytics::Candle>& candles,
+    const std::vector<Candle>& candles,
     const std::string& type) const
 {
     std::vector<double> prices;
@@ -2156,7 +2170,7 @@ bool GridTradingStrategy::shouldGenerateGridSignal(
     return true;
 }
 
-std::vector<analytics::Candle> GridTradingStrategy::parseCandlesFromJson(
+std::vector<Candle> GridTradingStrategy::parseCandlesFromJson(
     const nlohmann::json& json_data) const
 {
     return analytics::TechnicalIndicators::jsonToCandles(json_data);

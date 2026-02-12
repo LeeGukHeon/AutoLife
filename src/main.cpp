@@ -7,6 +7,8 @@
 #include <memory>
 #include <Windows.h>
 
+#include "backtest/BacktestEngine.h"
+
 using namespace autolife;
 
 // 전역 엔진 (Ctrl+C 처리용)
@@ -21,7 +23,7 @@ void signalHandler(int signal) {
     }
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     try {
         // 콘솔 UTF-8 설정
         SetConsoleOutputCP(CP_UTF8);
@@ -35,13 +37,57 @@ int main() {
         std::cout << "   자동 트레이딩 시스템" << std::endl;
         std::cout << "========================================\n" << std::endl;
         
-        LOG_INFO("========================================");
-        LOG_INFO("AutoLife Trading Bot v1.0");
-        LOG_INFO("========================================");
-        
         // 설정 로드
         Config::getInstance().load("config/config.json");
         auto& config = Config::getInstance();
+
+        // 0. 백테스트 모드 확인
+        bool backtest_mode = false;
+        std::string history_file;
+        
+        if (argc > 1) {
+            std::string arg1 = argv[1];
+            if (arg1 == "--backtest") {
+                backtest_mode = true;
+                if (argc > 2) {
+                    history_file = argv[2];
+                } else {
+                    std::cout << "❌ 백테스트 데이터 파일 경로가 필요합니다." << std::endl;
+                    std::cout << "사용법: AutoLifeTrading --backtest <data_file>" << std::endl;
+                    return 1;
+                }
+            }
+        }
+
+        if (backtest_mode) {
+            std::cout << "🔄 백테스트 모드로 진입합니다..." << std::endl;
+            LOG_INFO("Starting Backtest Mode with file: {}", history_file);
+            
+            backtest::BacktestEngine bt_engine;
+            bt_engine.init(config);
+            bt_engine.loadData(history_file);
+            bt_engine.run();
+            
+            auto result = bt_engine.getResult();
+            std::cout << "\n📊 백테스트 결과" << std::endl;
+            std::cout << "----------------------------------------" << std::endl;
+            std::cout << "최종 잔고: " << (long long)result.final_balance << " KRW" << std::endl;
+            std::cout << "총 수익금: " << (long long)result.total_profit << " KRW" << std::endl;
+            std::cout << "MDD:       " << (result.max_drawdown * 100.0) << "%" << std::endl;
+            std::cout << "총 거래수: " << result.total_trades << std::endl;
+            std::cout << "승리 거래: " << result.winning_trades << std::endl;
+            std::cout << "----------------------------------------" << std::endl;
+            
+            return 0;
+        }
+
+        // ==========================================
+        // 기존 라이브/페이퍼 트레이딩 모드
+        // ==========================================
+        
+        LOG_INFO("========================================");
+        LOG_INFO("AutoLife Trading Bot v1.0 - Live/Paper Mode");
+        LOG_INFO("========================================");
         
         std::string access_key = config.getAccessKey();
         std::string secret_key = config.getSecretKey();
@@ -132,8 +178,7 @@ int main() {
         std::cout << "========================================" << std::endl;
         LOG_INFO("프로그램 종료");
         
-        std::cout << "\n엔터를 눌러 종료..." << std::endl;
-        std::cin.get();
+        return 0;
         
     } catch (const std::exception& e) {
         LOG_ERROR("치명적 오류: {}", e.what());

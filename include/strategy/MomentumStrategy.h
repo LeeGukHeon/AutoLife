@@ -167,16 +167,18 @@ public:
     Signal generateSignal(
         const std::string& market,
         const analytics::CoinMetrics& metrics,
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         double current_price,
-        double available_capital
+        double available_capital,
+        const analytics::RegimeAnalysis& regime
     ) override;
     
     bool shouldEnter(
         const std::string& market,
         const analytics::CoinMetrics& metrics,
-        const std::vector<analytics::Candle>& candles,
-        double current_price
+        const std::vector<Candle>& candles,
+        double current_price,
+        const analytics::RegimeAnalysis& regime
     ) override;
     
     bool shouldExit(
@@ -188,12 +190,12 @@ public:
     
     double calculateStopLoss(
         double entry_price,
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) override;
     
     double calculateTakeProfit(
         double entry_price,
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) override;
     
     double calculatePositionSize(
@@ -218,7 +220,7 @@ public:
         double entry_price,
         double highest_price,
         double current_price,
-        const std::vector<analytics::Candle>& recent_candles
+        const std::vector<Candle>& recent_candles
     );
     
     // 롤링 통계 조회
@@ -269,11 +271,11 @@ private:
     // ===== 1. Market Regime (HMM) =====
     
     MarketRegime detectMarketRegime(
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     );
     
     void updateRegimeModel(
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         RegimeModel& model
     );
     
@@ -281,7 +283,7 @@ private:
     
     bool isVolumeSurgeSignificant(
         const analytics::CoinMetrics& metrics,
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) const;
     
     double calculateZScore(
@@ -302,19 +304,19 @@ private:
     // ===== 3. Multi-Timeframe Analysis =====
     
     MultiTimeframeSignal analyzeMultiTimeframe(
-        const std::vector<analytics::Candle>& candles_1m
+        const std::vector<Candle>& candles_1m
     ) const;
     
-    std::vector<analytics::Candle> resampleTo5m(
-        const std::vector<analytics::Candle>& candles_1m
+    std::vector<Candle> resampleTo5m(
+        const std::vector<Candle>& candles_1m
     ) const;
     
-    std::vector<analytics::Candle> resampleTo15m(
-        const std::vector<analytics::Candle>& candles_1m
+    std::vector<Candle> resampleTo15m(
+        const std::vector<Candle>& candles_1m
     ) const;
     
     bool isBullishOnTimeframe(
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         MultiTimeframeSignal::TimeframeMetrics& metrics
     ) const;
     
@@ -326,12 +328,12 @@ private:
     ) const;
     
     double calculateVWAPDeviation(
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         double current_price
     ) const;
     
     AdvancedOrderFlowMetrics::VolumeProfile calculateVolumeProfile(
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) const;
     
     double calculateCumulativeDelta(
@@ -345,7 +347,7 @@ private:
         double entry_price,
         double stop_loss,
         const analytics::CoinMetrics& metrics,
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) const;
     
     double calculateKellyFraction(
@@ -363,18 +365,18 @@ private:
     
     DynamicStops calculateDynamicStops(
         double entry_price,
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) const;
     
     double calculateATRBasedStop(
         double entry_price,
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         double multiplier
     ) const;
     
     double findNearestSupport(
         double entry_price,
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) const;
     
     double calculateChandelierExit(
@@ -384,7 +386,7 @@ private:
     ) const;
     
     double calculateParabolicSAR(
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         double acceleration = 0.02,
         double max_af = 0.20
     ) const;
@@ -404,7 +406,7 @@ private:
     
     double calculateSignalStrength(
         const analytics::CoinMetrics& metrics,
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         const MultiTimeframeSignal& mtf_signal,
         const AdvancedOrderFlowMetrics& order_flow,
         MarketRegime regime
@@ -444,14 +446,14 @@ private:
     // ===== 11. Walk-Forward Validation =====
     
     WalkForwardResult validateStrategy(
-        const std::vector<analytics::Candle>& historical_data
+        const std::vector<Candle>& historical_data
     ) const;
     
     // ===== 12. Helpers =====
     
     double calculateMean(const std::vector<double>& values) const;
     double calculateStdDev(const std::vector<double>& values, double mean) const;
-    double calculateVolatility(const std::vector<analytics::Candle>& candles) const;
+    double calculateVolatility(const std::vector<Candle>& candles) const;
     
     long long getCurrentTimestamp() const;
     engine::EngineConfig engine_config_;

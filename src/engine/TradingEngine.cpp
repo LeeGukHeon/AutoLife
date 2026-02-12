@@ -10,8 +10,12 @@
 #include "risk/RiskManager.h"
 #include "common/PathUtils.h"
 #include <chrono>
+#include <iostream>
 #include <thread>
 #include <algorithm>
+
+#undef max
+#undef min
 #include <sstream>
 #include <iomanip>
 #include <map>
@@ -69,6 +73,8 @@ TradingEngine::TradingEngine(
     scanner_ = std::make_unique<analytics::MarketScanner>(http_client);
     strategy_manager_ = std::make_unique<strategy::StrategyManager>(http_client);
     risk_manager_ = std::make_unique<risk::RiskManager>(config.initial_capital);
+    order_manager_ = std::make_unique<execution::OrderManager>(http_client);
+    regime_detector_ = std::make_unique<analytics::RegimeDetector>();
     // Apply engine-level risk settings to RiskManager
     risk_manager_->setMaxPositions(config.max_positions);
     risk_manager_->setMaxDailyTrades(config.max_daily_trades);
@@ -213,8 +219,39 @@ void TradingEngine::run() {
             // ==========================================
             // 1. [Fast Track] 포지션 감시 (최우선 순위)
             // ==========================================
+            // ==========================================
+            // 1. [Fast Track] 포지션 및 주문 감시
+            // ==========================================
             // 스캔 중이라도 내 돈(보유 포지션)은 지켜야 함
             monitorPositions();
+            
+            // [NEW] 주문 상태 모니터링 및 체결 처리
+            if (order_manager_) {
+                order_manager_->monitorOrders();
+                
+                // 체결된 주문 처리 (비동기)
+                auto filled_orders = order_manager_->getFilledOrders();
+                for (const auto& order : filled_orders) {
+                    LOG_INFO("✅ 주문 체결 확인: {} {} {:.8f} @ {:.0f}", 
+                             order.market, (order.side == OrderSide::BUY ? "BUY" : "SELL"), 
+                             order.filled_volume, order.price);
+                    
+                    if (order.side == OrderSide::BUY) {
+                        // RiskManager에 포지션 등록
+                        risk_manager_->enterPosition(
+                            order.market,
+                            order.price,        // 체결가 (Limit Chase로 변경되었을 수 있음)
+                            order.filled_volume,
+                            order.stop_loss,
+                            order.take_profit,
+                            order.take_profit * 1.01, // TP2 (estimated)
+                            order.strategy_name,
+                            order.breakeven_trigger,
+                            order.trailing_start
+                        );
+                    }
+                }
+            }
             // =========================================================
             // [✅ 추가] 정기 계좌 동기화 (입출금 감지용)
             // =========================================================
@@ -340,6 +377,11 @@ void TradingEngine::generateSignals() {
             continue;
         }
         
+        // [NEW] 이미 진행 중인 주문이 있으면 스킵
+        if (order_manager_->hasActiveOrder(coin.market)) {
+            continue;
+        }
+        
         try {
             // ✅ 캔들 조회 제거 - Scanner에서 이미 포함됨
             const auto& candles = coin.candles;
@@ -350,25 +392,26 @@ void TradingEngine::generateSignals() {
             }
             
             double current_price = candles.back().close;
+
+            // [NEW] 시장 레짐 분석 for this coin
+            auto regime = regime_detector_->analyzeRegime(candles);
             
-            // 전략에서 신호 수집
+            // 전략에서 신호 수집 (Regime 정보 전달)
             auto signals = strategy_manager_->collectSignals(
                 coin.market,
                 coin,
                 candles,
                 current_price,
-                risk_manager_->getRiskMetrics().available_capital
+                risk_manager_->getRiskMetrics().available_capital,
+                regime
             );
             
             if (signals.empty()) {
                 continue;
             }
             
-            // 신호 필터링 (강도 0.6 이상)
-            // [🔧 수정] 신호 강도 필터: 0.6 → 0.5 (금융공학 권장)
-            // 보정 사유: 기관급 트레이더는 50%+ 신뢰도로 수익성 확보 가능
-            // 너무 높은 필터(0.6)는 우수한 기회를 놓칠 위험 증가
-            auto filtered = strategy_manager_->filterSignals(signals, 0.5);
+            // [Phase 2] 전략 점수 합산 방식과 동기화 (0.5 → 0.40)
+            auto filtered = strategy_manager_->filterSignals(signals, 0.40);
             
             if (filtered.empty()) {
                 continue;
@@ -471,10 +514,8 @@ void TradingEngine::executeSignals() {
         // 문제: canEnterPosition 호출 전에 position_size가 불충분할 수 있음
         // 해결: 미리 available_capital으로 필요한 최소 ratio 계산하여 보정
 
-            // [조정] 최소 요구액: 6000 × 1.2 = 7200원 (소액 자본 지원)
-            // 예시: 가용자본 7537원이면 7200원 < 7537원이므로 진입 가능
-            const double MIN_REQUIRED_KRW = RECOMMENDED_MIN_ENTER_KRW * 1.2;
-                // [조정] 1.5배 → 1.2배 (7200원) - 소액 자본 진입 허용
+            // [Phase 2] 소액 시드 최적화: 5,000 × 1.05 = 5,250원
+            const double MIN_REQUIRED_KRW = config_.min_order_krw * 1.05;
         
             // 1. 가용자본 부족 확인
             if (risk_metrics.available_capital < MIN_REQUIRED_KRW) {
@@ -552,21 +593,9 @@ void TradingEngine::executeSignals() {
             continue;
         }
         
-        // [기존] Post-Entry 차일드 포지션 여유금 재검증
-        {
-            auto metrics = risk_manager_->getRiskMetrics();
-                double current_required = metrics.available_capital * signal.position_size;
-            double remaining_after = metrics.available_capital - current_required;
-            
-            // [완화] 소액 자본 지원: 1.5배 → 1.1배
-            double min_remaining = RECOMMENDED_MIN_ENTER_KRW * 1.1;
-            
-            if (remaining_after < min_remaining) {
-                LOG_WARN("{} 진입 불가 (차일드 여유 부족: {:.0f} < {:.0f})",
-                         signal.market, remaining_after, min_remaining);
-                continue;
-            }
-        }
+        // [Phase 2] 차일드 여유금 검사 제거 (소액 시드 호환)
+        // 소액 계정에서 이 검사가 거의 모든 진입을 차단하므로 제거
+        // 리스크는 canEnterPosition()에서 이미 관리됨
         
         // 주문 실행
         if (executeBuyOrder(signal.market, signal)) {
@@ -615,9 +644,9 @@ bool TradingEngine::executeBuyOrder(
             // 따라서 여기서는 최종 안전장치만 수행
         
             // [최종 체크 1] 가용자본 최소값 확인 (executeSignals에서도 했지만, 재확인)
-        if (metrics.available_capital < RECOMMENDED_MIN_ENTER_KRW) {
+        if (metrics.available_capital < (config_.min_order_krw * 1.2)) {
             LOG_WARN("{} - 가용자본 부족: {:.0f} < {:.0f}원 (진입 불가)", 
-                     market, metrics.available_capital, RECOMMENDED_MIN_ENTER_KRW);
+                     market, metrics.available_capital, (config_.min_order_krw * 1.2));
             return false;
         }
         
@@ -634,10 +663,10 @@ bool TradingEngine::executeBuyOrder(
         LOG_INFO("{} - [계산] 가용자본(100%): {:.0f}, 투자비중: {:.4f}%, 투자예정금액: {:.0f}원", 
                      market, metrics.available_capital, safe_position_size * 100.0, invest_amount);
         
-        if (invest_amount < RECOMMENDED_MIN_ENTER_KRW) {
+        if (invest_amount < (config_.min_order_krw * 1.2)) {
             // 이 상황은 이제 거의 발생하지 않아야 함 (위에서 차단함)
             LOG_WARN("{} - 진입액 부족 (금액: {:.0f}, 필요: {:.0f}원) [내부 오류]", 
-                     market, invest_amount, RECOMMENDED_MIN_ENTER_KRW);
+                     market, invest_amount, (config_.min_order_krw * 1.2));
             return false;
         }
         
@@ -681,95 +710,39 @@ bool TradingEngine::executeBuyOrder(
         LOG_INFO("  주문 준비: 평단 {:.0f}, 수량 {}, 금액 {:.0f}", 
                  best_ask_price, vol_str, invest_amount);
 
-        // 3. [안전] 실전 매수 주문 (지정가 Limit Order, 10초 미체결 시 재호가 반복)
+            // 3. [안전] 실전 매수 주문 (OrderManager 위임)
         if (config_.mode == TradingMode::LIVE && !config_.dry_run) {
-            auto order_result = executeLimitBuyOrder(
+            
+            // [NEW] OrderManager에 비동기 주문 제출
+            // Strategy Metadata 전달
+            bool submitted = order_manager_->submitOrder(
                 market,
+                OrderSide::BUY,
                 best_ask_price,
                 quantity,
-                signal.max_retries,
-                signal.retry_wait_ms
+                signal.strategy_name,
+                signal.stop_loss,
+                signal.take_profit_1, // TP1
+                signal.breakeven_trigger,
+                signal.trailing_start
             );
 
-            if (!order_result.success || order_result.executed_volume <= 0.0) {
-                LOG_ERROR("❌ 매수 체결 실패: {}", order_result.error_message);
+            if (submitted) {
+                LOG_INFO("✅ OrderManager에 주문 제출 완료: {}", market);
+                return true; // Async Success
+            } else {
+                LOG_ERROR("❌ OrderManager 주문 제출 실패");
                 return false;
             }
-
-            double executed_volume = order_result.executed_volume;
-            double avg_price = order_result.executed_price;
-
-            LOG_INFO("🆗 실제 체결 확인: 수량 {:.8f}, 평단 {:.0f} (재시도: {})",
-                     executed_volume, avg_price, order_result.retry_count);
-
-            // 5. [동적 손절 계산] Candles 조회 후 동적 손절가 계산
-            double dynamic_stop_loss = avg_price * 0.975; // 기본값: -2.5%
-            try {
-                auto candles_json = http_client_->getCandles(market, "60", 200);
-                if (!candles_json.empty() && candles_json.is_array()) {
-                    auto candles = analytics::TechnicalIndicators::jsonToCandles(candles_json);
-                    if (!candles.empty()) {
-                        dynamic_stop_loss = risk_manager_->calculateDynamicStopLoss(avg_price, candles);
-                        LOG_INFO("📊 [LIVE] 동적 손절가 계산: {:.0f} ({:.2f}%)", 
-                                 dynamic_stop_loss, (dynamic_stop_loss - avg_price) / avg_price * 100.0);
-                    }
-                }
-            } catch (const std::exception& e) {
-                LOG_WARN("⚠️ [LIVE] 동적 손절 계산 실패, 기본값(-2.5%) 사용: {}", e.what());
-            }
-
-            double applied_stop_loss = dynamic_stop_loss;
-            if (signal.stop_loss > 0.0 && signal.strategy_name == "Advanced Scalping") {
-                if (signal.stop_loss < avg_price) {
-                    applied_stop_loss = signal.stop_loss;
-                }
-            }
-
-            double breakeven_trigger = signal.breakeven_trigger;
-            double trailing_start = signal.trailing_start;
-            if (signal.entry_price > 0.0) {
-                double be_ratio = (signal.breakeven_trigger / signal.entry_price) - 1.0;
-                if (be_ratio > 0.0) {
-                    breakeven_trigger = avg_price * (1.0 + be_ratio);
-                }
-                double ts_ratio = (signal.trailing_start / signal.entry_price) - 1.0;
-                if (ts_ratio > 0.0) {
-                    trailing_start = avg_price * (1.0 + ts_ratio);
-                }
-            }
-
-            // 6. [동적 익절가 계산] Signal의 take_profit을 사용
-            double tp1 = signal.take_profit_1 > 0 ? signal.take_profit_1 : avg_price * 1.020;
-            double tp2 = signal.take_profit_2 > 0 ? signal.take_profit_2 : avg_price * 1.030;
-            
-            LOG_INFO("📈 [LIVE] 익절가 적용: TP1={:.0f} ({:.2f}%), TP2={:.0f} ({:.2f}%)",
-                     tp1, (tp1 - avg_price) / avg_price * 100.0,
-                     tp2, (tp2 - avg_price) / avg_price * 100.0);
-            
-            // 7. RiskManager 등록 (실제 체결 데이터 기반)
-            risk_manager_->enterPosition(
-                market,
-                avg_price,        // 실제 체결 평단
-                executed_volume,  // 실제 체결 수량
-                applied_stop_loss, // 동적 손절가
-                tp1,              // [수정됨] Signal 기반 1차 익절가
-                tp2,              // [수정됨] Signal 기반 2차 익절가
-                signal.strategy_name,
-                breakeven_trigger,
-                trailing_start
-            );
-
-            if (strategy_manager_) {
-                auto strategy_ptr = strategy_manager_->getStrategy(signal.strategy_name);
-                if (strategy_ptr) {
-                    strategy_ptr->onSignalAccepted(signal, invest_amount);
-                }
-            }
-            
-            return true;
         } 
         else {
-            // Paper Trading (모의투자) 모드 - [동적 손절 계산]
+            // Paper Trading (모의투자) - 기존 로직 유지 (Simulation)
+            // ... (Paper Mode Logic stays roughly same or we use OrderManager for Paper too?)
+            // OrderManager currently hits API. So for Paper Mode we should NOT use OrderManager 
+            // unless we Mock API.
+            // Current Paper Mode simulates "Fill" immediately.
+            
+            // [동적 손절 계산]
             double dynamic_stop_loss = best_ask_price * 0.975; // 기본값: -2.5%
             try {
                 auto candles_json = http_client_->getCandles(market, "60", 200);
@@ -791,55 +764,34 @@ bool TradingEngine::executeBuyOrder(
                     applied_stop_loss = signal.stop_loss;
                 }
             }
-
-            double breakeven_trigger = signal.breakeven_trigger;
-            double trailing_start = signal.trailing_start;
-            if (signal.entry_price > 0.0) {
-                double be_ratio = (signal.breakeven_trigger / signal.entry_price) - 1.0;
-                if (be_ratio > 0.0) {
-                    breakeven_trigger = best_ask_price * (1.0 + be_ratio);
-                }
-                double ts_ratio = (signal.trailing_start / signal.entry_price) - 1.0;
-                if (ts_ratio > 0.0) {
-                    trailing_start = best_ask_price * (1.0 + ts_ratio);
-                }
-            }
-
-            // [동적 익절가 계산] Signal의 take_profit을 사용
-            double tp1_paper = signal.take_profit_1 > 0 ? signal.take_profit_1 : best_ask_price * 1.015;
-            double tp2_paper = signal.take_profit_2 > 0 ? signal.take_profit_2 : best_ask_price * 1.03;
             
-            LOG_INFO("📈 [PAPER] 익절가 적용: TP1={:.0f} ({:.2f}%), TP2={:.0f} ({:.2f}%)",
-                     tp1_paper, (tp1_paper - best_ask_price) / best_ask_price * 100.0,
-                     tp2_paper, (tp2_paper - best_ask_price) / best_ask_price * 100.0);
-            
-            risk_manager_->enterPosition(
-                market, best_ask_price, quantity, 
-                applied_stop_loss, tp1_paper, tp2_paper, 
+             double tp1 = signal.take_profit_1 > 0 ? signal.take_profit_1 : best_ask_price * 1.020;
+             double tp2 = signal.take_profit_2 > 0 ? signal.take_profit_2 : best_ask_price * 1.030;
+
+             risk_manager_->enterPosition(
+                market,
+                best_ask_price,
+                quantity,
+                applied_stop_loss,
+                tp1,
+                tp2,
                 signal.strategy_name,
-                breakeven_trigger,
-                trailing_start
+                signal.breakeven_trigger,
+                signal.trailing_start
             );
-
-            if (strategy_manager_) {
-                auto strategy_ptr = strategy_manager_->getStrategy(signal.strategy_name);
-                if (strategy_ptr) {
-                    strategy_ptr->onSignalAccepted(signal, invest_amount);
-                }
-            }
+            
             return true;
         }
 
+        // Unreachable
+        return false;
+
     } catch (const std::exception& e) {
-        LOG_ERROR("매수 실행 중 예외 발생: {}", e.what());
+        LOG_ERROR("executeBuyOrder 예외: {}", e.what());
         return false;
     }
 }
 
-
-// ===== 포지션 모니터링 =====
-
-// TradingEngine.cpp
 
 void TradingEngine::monitorPositions() {
 
@@ -2196,44 +2148,36 @@ void TradingEngine::loadState() {
 // ===== [NEW] 동적 필터값 계산 (변동성 기반) =====
 
 double TradingEngine::calculateDynamicFilterValue() {
-    // 스캔된 모든 시장의 변동성을 기반으로 필터값 동적 조정
-    // 변동성 범위: 0.0 ~ 1.0
-    // → 필터값: 0.45 ~ 0.55 범위
+    // [Phase 2] 점수 합산 방식과 동기화: 필터 범위 0.35 ~ 0.45
     
     if (scanned_markets_.empty()) {
-        LOG_WARN("스캔된 시장이 없어 필터값을 기본값으로 유지 (0.5)");
-        return 0.5;  // 기본값
+        return 0.40;  // 기본값 (전략 내부 임계값과 동일)
     }
     
     // 1. 모든 시장의 변동성 평균 계산
     double total_volatility = 0.0;
     for (const auto& metrics : scanned_markets_) {
-        // MarketScanner에서 계산한 volatility 활용
-        // volatility가 0~1 범위라고 가정
         total_volatility += metrics.volatility;
     }
     
     double avg_volatility = total_volatility / scanned_markets_.size();
     
     // 2. 변동성 → 필터값 매핑
-    // 변동성 낮음 (0.0~0.3): 필터값 높음 (0.55, 충분히 신뢰할 수 있는 신호만)
-    // 변동성 중간 (0.3~0.7): 필터값 중간 (0.50, 중립)
-    // 변동성 높음 (0.7~1.0): 필터값 낮음 (0.45, 더 많은 기회 포착)
+    // 변동성 낮음 (0.0~0.3): 필터값 높음 (0.45)
+    // 변동성 중간 (0.3~0.7): 필터값 중간 (0.40)
+    // 변동성 높음 (0.7~1.0): 필터값 낮음 (0.35)
     
     double new_filter_value;
     if (avg_volatility < 0.3) {
-        // 낮은 변동성 → 높은 필터값 (0.55)
-        new_filter_value = 0.50 + (0.3 - avg_volatility) * 0.1667;  // 최대 0.55
+        new_filter_value = 0.40 + (0.3 - avg_volatility) * 0.1667;  // 최대 0.45
     } else if (avg_volatility > 0.7) {
-        // 높은 변동성 → 낮은 필터값 (0.45)
-        new_filter_value = 0.50 - (avg_volatility - 0.7) * 0.1667;  // 최소 0.45
+        new_filter_value = 0.40 - (avg_volatility - 0.7) * 0.1667;  // 최소 0.35
     } else {
-        // 중간 변동성 → 기본값 (0.50)
-        new_filter_value = 0.50;
+        new_filter_value = 0.40;
     }
     
     // 3. 범위 클리핑
-    new_filter_value = std::max(0.45, std::min(0.55, new_filter_value));
+    new_filter_value = std::max(0.35, std::min(0.45, new_filter_value));
     
     // 4. 변경이 크면 로깅
     if (std::abs(new_filter_value - dynamic_filter_value_) > 0.01) {
@@ -2453,6 +2397,16 @@ void TradingEngine::learnOptimalFilterValue() {
         // 적격 필터가 없으면 전체에서 Sharpe 최고값
         LOG_WARN("✨ ML 학습 (적격 필터 없음, 전체에서 선택):");
         LOG_WARN("  추천 필터값: {:.2f} (Sharpe: {:.3f})", best_filter, best_sharpe);
+    }
+    
+    // [FIX] 동적 필터값 업데이트 (천천히 반영)
+    if (std::abs(best_filter - dynamic_filter_value_) > 0.001) {
+        double direction = (best_filter > dynamic_filter_value_) ? 1.0 : -1.0;
+        dynamic_filter_value_ += direction * 0.01; // 0.01씩 이동
+        dynamic_filter_value_ = std::clamp(dynamic_filter_value_, 0.45, 0.55);
+        
+        LOG_INFO("🔄 시스템 필터값 조정: {:.2f} -> {:.2f}", 
+                 dynamic_filter_value_ - (direction * 0.01), dynamic_filter_value_);
     }
     
     // 필터 성능 이력 저장 (추세 분석용)

@@ -27,9 +27,10 @@ public:
     std::vector<Signal> collectSignals(
         const std::string& market,
         const analytics::CoinMetrics& metrics,
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         double current_price,
-        double available_capital
+        double available_capital,
+        const analytics::RegimeAnalysis& regime
     );
     
     // 최적 신호 선택 (여러 전략 중 가장 강한 신호)
@@ -60,6 +61,16 @@ public:
     std::vector<std::shared_ptr<IStrategy>> getStrategies() const;
     
 private:
+    Signal processStrategySignal(
+        std::shared_ptr<IStrategy> strategy,
+        const std::string& market,
+        const analytics::CoinMetrics& metrics,
+        const std::vector<Candle>& candles,
+        double current_price,
+        double available_capital,
+        const analytics::RegimeAnalysis& regime
+    );
+
     std::vector<std::shared_ptr<IStrategy>> strategies_;
     std::shared_ptr<network::UpbitHttpClient> client_;
     mutable std::mutex mutex_;

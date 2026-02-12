@@ -1,5 +1,6 @@
 #include "risk/RiskManager.h"
 #include "common/Logger.h"
+#include "common/Config.h"
 #include <algorithm>
 #include <cmath>
 #include <chrono>
@@ -17,10 +18,10 @@ RiskManager::RiskManager(double initial_capital)
     , daily_loss_limit_krw_(50000.0)
     , daily_start_date_(0)
     , max_positions_(10)
-    , max_daily_trades_(20)
+    , max_daily_trades_(100)   // [Phase 2] 20→100 (전략 다양화 지원)
     , max_drawdown_pct_(0.10)  // 10%
     , max_exposure_pct_(0.85)  // 총 자본 대비 기본 85%
-    , min_reentry_interval_(300)  // 5분
+    , min_reentry_interval_(60)   // [Phase 2] 300초→60초 (기회 손실 방지)
     , max_capital_(initial_capital)
     , total_fees_paid_(0)
     , min_order_krw_(5000.0)
@@ -94,11 +95,12 @@ bool RiskManager::canEnterPosition(
     if (available_cash < 0) available_cash = 0.0;
     
     // [최소값 기준]
-    const double MIN_ORDER_KRW = min_order_krw_;
-    const double RECOMMENDED_MIN_ENTER_KRW = recommended_min_enter_krw_;
+    const double MIN_ORDER_KRW = Config::getInstance().getMinOrderKrw();
+    const double RECOMMENDED_MIN_ENTER_KRW = MIN_ORDER_KRW * 1.05; // [Phase 2] 5,250원 (소액 시드 지원)
+    
     // [추가] 기본 손절 3% 적용 후에도 최소 주문금액+매도 수수료를 만족해야 함
     const double BASE_STOP_LOSS_PCT = 0.03;
-    const double FEE_RATE = 0.0005;  // 업비트 수수료 0.05%
+    const double FEE_RATE = Config::getInstance().getFeeRate();
     
     // [position_size_ratio 정규화]
     double normalized_ratio = std::clamp(position_size_ratio, 0.0, 1.0);
@@ -124,14 +126,12 @@ bool RiskManager::canEnterPosition(
         return false;
     }
 
-    // [추가] 손절 3% 가정 시 매도 최소 주문금액 충족 여부 확인
-    // exit_amount = required_amount * (1 - BASE_STOP_LOSS_PCT)
-    // exit_amount - exit_fee >= MIN_ORDER_KRW
+    // [Phase 2] 손절 후 매도 최소금액 검사 → 경고만 (소액 시드에서 진입 차단 방지)
     double min_required_for_exit = MIN_ORDER_KRW / ((1.0 - BASE_STOP_LOSS_PCT) * (1.0 - FEE_RATE));
     if (required_amount < min_required_for_exit) {
-        LOG_WARN("{}★ 매수 불가: 손절 3% 적용 시 최소 매도금액 미충족 (필요 {:.0f}원, 현재 {:.0f}원)",
+        LOG_WARN("{}⚠ 주의: 손절 시 최소 매도금액 미충족 가능 (필요 {:.0f}원, 현재 {:.0f}원)",
                  market, min_required_for_exit, required_amount);
-        return false;
+        // [Phase 2] hard block 제거 - 소액 시드에서도 진입 허용
     }
     
     // [권장 최소값 체크]
@@ -499,7 +499,7 @@ std::vector<Position> RiskManager::getAllPositions() const {
 
 double RiskManager::calculateDynamicStopLoss(
     double entry_price,
-    const std::vector<analytics::Candle>& candles
+    const std::vector<Candle>& candles
 ) {
     if (candles.size() < 14) {
         return entry_price * 0.975; // Fallback: -2.5%
@@ -532,7 +532,7 @@ double RiskManager::calculateDynamicStopLoss(
 
 double RiskManager::calculateATRStopLoss(
     double entry_price,
-    const std::vector<analytics::Candle>& candles,
+    const std::vector<Candle>& candles,
     double multiplier
 ) {
     double atr = analytics::TechnicalIndicators::calculateATR(candles, 14);
@@ -564,7 +564,7 @@ double RiskManager::calculateATRStopLoss(
 
 double RiskManager::calculateSupportStopLoss(
     double entry_price,
-    const std::vector<analytics::Candle>& candles
+    const std::vector<Candle>& candles
 ) {
     auto support_levels = analytics::TechnicalIndicators::findSupportLevels(candles, 20);
     
@@ -1041,7 +1041,7 @@ void RiskManager::setMinReentryInterval(int seconds) {
 // ===== Private 헬퍼 함수 =====
 
 double RiskManager::calculateFee(double amount) const {
-    return amount * 0.0005; // 0.05% (업비트 수수료)
+    return amount * Config::getInstance().getFeeRate();
 }
 
 void RiskManager::recordTrade(

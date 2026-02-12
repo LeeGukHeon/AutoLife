@@ -105,9 +105,9 @@ private:
         // 이미 조회된 데이터로 분석 (API 호출 없음)
     double analyzeOrderBookImbalance(const nlohmann::json& orderbook);
     std::pair<int, int> analyzeWalls(const nlohmann::json& orderbook);  // {buy_walls, sell_walls}
-    double analyzeVolumeSurge(const std::vector<analytics::Candle>& candles);
-    double analyzeVolatility(const std::vector<analytics::Candle>& candles);
-    double analyzeMomentum(const std::vector<analytics::Candle>& candles);
+    double analyzeVolumeSurge(const std::vector<Candle>& candles);
+    double analyzeVolatility(const std::vector<Candle>& candles);
+    double analyzeMomentum(const std::vector<Candle>& candles);
 };
 
 } // namespace analytics

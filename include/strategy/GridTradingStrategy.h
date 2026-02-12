@@ -262,9 +262,10 @@ public:
     Signal generateSignal(
         const std::string& market,
         const analytics::CoinMetrics& metrics,
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         double current_price,
-        double available_capital
+        double available_capital,
+        const analytics::RegimeAnalysis& regime
     ) override;
     
     void updateState(const std::string& market, double current_price) override;
@@ -272,8 +273,9 @@ public:
     bool shouldEnter(
         const std::string& market,
         const analytics::CoinMetrics& metrics,
-        const std::vector<analytics::Candle>& candles,
-        double current_price
+        const std::vector<Candle>& candles,
+        double current_price,
+        const analytics::RegimeAnalysis& regime
     ) override;
     
     bool shouldExit(
@@ -285,12 +287,12 @@ public:
     
     double calculateStopLoss(
         double entry_price,
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) override;
     
     double calculateTakeProfit(
         double entry_price,
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) override;
     
     double calculatePositionSize(
@@ -344,7 +346,7 @@ private:
     std::deque<std::string> released_markets_;
 
     std::map<std::string, analytics::CoinMetrics> last_metrics_cache_;
-    std::map<std::string, std::vector<analytics::Candle>> last_candles_cache_;
+    std::map<std::string, std::vector<Candle>> last_candles_cache_;
     std::map<std::string, double> last_price_cache_;
     
     // ===== API 호출 제어 =====
@@ -354,7 +356,7 @@ private:
     static constexpr int ORDERBOOK_CACHE_MS = 2000;
     
     mutable std::map<std::string, long long> candle_cache_time_;
-    mutable std::map<std::string, std::vector<analytics::Candle>> candle_cache_;
+    mutable std::map<std::string, std::vector<Candle>> candle_cache_;
     static constexpr int CANDLE_CACHE_MS = 5000;
     
     mutable std::deque<long long> api_call_timestamps_;
@@ -425,7 +427,7 @@ private:
     void recordAPICall() const;
     
     nlohmann::json getCachedOrderBook(const std::string& market);
-    std::vector<analytics::Candle> getCachedCandles(const std::string& market, int count);
+    std::vector<Candle> getCachedCandles(const std::string& market, int count);
     
     // ===== 거래 빈도 관리 =====
     
@@ -443,24 +445,24 @@ private:
     // ===== 1. Range Detection =====
     
     RangeDetectionMetrics detectRange(
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         double current_price
     ) const;
     
     double calculateADX(
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         int period = 14
     ) const;
     
     void calculateDMI(
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         int period,
         double& plus_di,
         double& minus_di
     ) const;
     
     bool isConsolidating(
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         int lookback = 50
     ) const;
     
@@ -518,7 +520,7 @@ private:
     
     std::map<int, GridLevel> generateDynamicGrid(
         const GridConfiguration& config,
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     );
     
     // ===== 4. Grid Signal Analysis =====
@@ -526,7 +528,7 @@ private:
     GridSignalMetrics analyzeGridOpportunity(
         const std::string& market,
         const analytics::CoinMetrics& metrics,
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         double current_price
     );
     
@@ -585,7 +587,7 @@ private:
     
     FlashCrashMetrics detectFlashCrash(
         const std::string& market,
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         double current_price
     );
     
@@ -642,11 +644,11 @@ private:
     
     double calculateMean(const std::vector<double>& values) const;
     double calculateStdDev(const std::vector<double>& values, double mean) const;
-    double calculateVolatility(const std::vector<analytics::Candle>& candles) const;
-    double calculateATR(const std::vector<analytics::Candle>& candles, int period) const;
+    double calculateVolatility(const std::vector<Candle>& candles) const;
+    double calculateATR(const std::vector<Candle>& candles, int period) const;
     
     std::vector<double> extractPrices(
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         const std::string& type = "close"
     ) const;
     
@@ -656,7 +658,7 @@ private:
         const GridSignalMetrics& metrics
     ) const;
     engine::EngineConfig engine_config_;
-    std::vector<analytics::Candle> parseCandlesFromJson(
+    std::vector<Candle> parseCandlesFromJson(
         const nlohmann::json& json_data
     ) const;
 };

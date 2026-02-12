@@ -4,24 +4,12 @@
 #include <string>
 #include <map>
 #include <nlohmann/json.hpp>
+#include "common/Types.h"
 
 namespace autolife {
 namespace analytics {
 
-// 캔들 데이터 구조
-struct Candle {
-    double open;
-    double high;
-    double low;
-    double close;
-    double volume;
-    long long timestamp;
-    
-    Candle() : open(0), high(0), low(0), close(0), volume(0), timestamp(0) {}
-    
-    Candle(double o, double h, double l, double c, double v, long long t)
-        : open(o), high(h), low(l), close(c), volume(v), timestamp(t) {}
-};
+// Candle struct is now in common/Types.h
 
 // Technical Indicators - 검증된 공식으로 구현
 class TechnicalIndicators {
@@ -58,6 +46,10 @@ public:
     
     // ATR (Average True Range) - 변동성 측정, 손절라인 설정에 사용
     static double calculateATR(const std::vector<Candle>& candles, int period = 14);
+
+    // ADX (Average Directional Index) - 추세 강도 측정
+    // 25 이상: 추세장, 20 미만: 비추세(횡보)
+    static double calculateADX(const std::vector<Candle>& candles, int period = 14);
     
     // EMA (Exponential Moving Average) - 최근 가격에 더 큰 가중치
     static double calculateEMA(const std::vector<double>& prices, int period);

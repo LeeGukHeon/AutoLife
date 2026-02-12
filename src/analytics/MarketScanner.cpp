@@ -5,6 +5,9 @@
 #include <numeric>
 #include <cmath>
 
+#undef max
+#undef min
+
 namespace autolife {
 namespace analytics {
 

@@ -13,32 +13,15 @@
 namespace autolife {
 namespace strategy {
 
-// ===== Market Microstate (초단타용) =====
+// ===== Ultra-Fast Order Flow =====
 
 enum class MarketMicrostate {
-    OVERSOLD_BOUNCE,     // 과매도 반등
-    MOMENTUM_SPIKE,      // 순간 급등
-    BREAKOUT,            // 짧은 돌파
-    CONSOLIDATION,       // 횡보
-    DECLINE              // 하락
+    UNKNOWN,
+    OVERSOLD_BOUNCE,
+    MOMENTUM_SPIKE,
+    BREAKOUT,
+    CONSOLIDATION
 };
-
-// HMM (Scalping용)
-struct MicrostateModel {
-    std::array<std::array<double, 5>, 5> transition_prob;
-    std::array<double, 5> current_prob;
-    
-    MicrostateModel() {
-        for (int i = 0; i < 5; ++i) {
-            for (int j = 0; j < 5; ++j) {
-                transition_prob[i][j] = (i == j) ? 0.6 : 0.1;
-            }
-            current_prob[i] = 0.2;
-        }
-    }
-};
-
-// ===== Ultra-Fast Order Flow =====
 
 struct UltraFastOrderFlowMetrics {
     double bid_ask_spread;
@@ -137,16 +120,18 @@ public:
     Signal generateSignal(
         const std::string& market,
         const analytics::CoinMetrics& metrics,
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         double current_price,
-        double available_capital
+        double available_capital,
+        const analytics::RegimeAnalysis& regime
     ) override;
     
     bool shouldEnter(
         const std::string& market,
         const analytics::CoinMetrics& metrics,
-        const std::vector<analytics::Candle>& candles,
-        double current_price
+        const std::vector<Candle>& candles,
+        double current_price,
+        const analytics::RegimeAnalysis& regime
     ) override;
     
     bool shouldExit(
@@ -158,12 +143,12 @@ public:
     
     double calculateStopLoss(
         double entry_price,
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) override;
     
     double calculateTakeProfit(
         double entry_price,
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) override;
     
     double calculatePositionSize(
@@ -211,7 +196,6 @@ private:
     std::deque<long long> trade_timestamps_;
     
     ScalpingRollingStatistics rolling_stats_;
-    MicrostateModel microstate_model_;
     long long last_signal_time_;
     
     // [신규 추가] 중복 진입 방지를 위한 활성 포지션 목록
@@ -224,7 +208,7 @@ private:
     static constexpr int ORDERBOOK_CACHE_MS = 500;  // 0.5초 캐시
     
     mutable std::map<std::string, long long> candle_cache_time_;
-    mutable std::map<std::string, std::vector<analytics::Candle>> candle_cache_;
+    mutable std::map<std::string, std::vector<Candle>> candle_cache_;
     static constexpr int CANDLE_CACHE_MS = 2000;    // 2초 캐시
     
     mutable std::deque<long long> api_call_timestamps_;
@@ -279,7 +263,7 @@ private:
     
     nlohmann::json getCachedOrderBook(const std::string& market);
     
-    std::vector<analytics::Candle> getCachedCandles(
+    std::vector<Candle> getCachedCandles(
         const std::string& market,
         int count
     );
@@ -297,22 +281,11 @@ private:
     void activateCircuitBreaker();
     bool isCircuitBreakerActive() const;
     
-    // ===== 1. Market Microstate Detection =====
-    
-    MarketMicrostate detectMarketMicrostate(
-        const std::vector<analytics::Candle>& candles
-    );
-    
-    void updateMicrostateModel(
-        const std::vector<analytics::Candle>& candles,
-        MicrostateModel& model
-    );
-    
     // ===== 2. Statistical Significance =====
     
     bool isVolumeSpikeSignificant(
         const analytics::CoinMetrics& metrics,
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) const;
     
     double calculateZScore(
@@ -329,15 +302,15 @@ private:
     // ===== 3. Multi-Timeframe (1m, 3m) =====
     
     ScalpingMultiTimeframeSignal analyzeScalpingTimeframes(
-        const std::vector<analytics::Candle>& candles_1m
+        const std::vector<Candle>& candles_1m
     ) const;
     
-    std::vector<analytics::Candle> resampleTo3m(
-        const std::vector<analytics::Candle>& candles_1m
+    std::vector<Candle> resampleTo3m(
+        const std::vector<Candle>& candles_1m
     ) const;
     
     bool isOversoldOnTimeframe(
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         ScalpingMultiTimeframeSignal::ScalpingTimeframeMetrics& metrics
     ) const;
     
@@ -353,7 +326,7 @@ private:
     ) const;
     
     double calculateMomentumAcceleration(
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) const;
     
     // ===== 5. Position Sizing =====
@@ -363,7 +336,7 @@ private:
         double entry_price,
         double stop_loss,
         const analytics::CoinMetrics& metrics,
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) const;
     
     double calculateKellyFraction(
@@ -381,12 +354,12 @@ private:
     
     ScalpingDynamicStops calculateScalpingDynamicStops(
         double entry_price,
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) const;
     
     double calculateMicroATRBasedStop(
         double entry_price,
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) const;
     
     // ===== 7. Trade Cost Analysis =====
@@ -400,7 +373,7 @@ private:
     
     double calculateScalpingSignalStrength(
         const analytics::CoinMetrics& metrics,
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         const ScalpingMultiTimeframeSignal& mtf_signal,
         const UltraFastOrderFlowMetrics& order_flow,
         MarketMicrostate microstate
@@ -429,7 +402,7 @@ private:
     
     double calculateMean(const std::vector<double>& values) const;
     double calculateStdDev(const std::vector<double>& values, double mean) const;
-    double calculateUltraShortVolatility(const std::vector<analytics::Candle>& candles) const;
+    double calculateUltraShortVolatility(const std::vector<Candle>& candles) const;
     
     long long getCurrentTimestamp() const;
     engine::EngineConfig engine_config_;

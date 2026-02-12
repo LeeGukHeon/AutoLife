@@ -190,16 +190,18 @@ public:
     Signal generateSignal(
         const std::string& market,
         const analytics::CoinMetrics& metrics,
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         double current_price,
-        double available_capital
+        double available_capital,
+        const analytics::RegimeAnalysis& regime
     ) override;
     
     bool shouldEnter(
         const std::string& market,
         const analytics::CoinMetrics& metrics,
-        const std::vector<analytics::Candle>& candles,
-        double current_price
+        const std::vector<Candle>& candles,
+        double current_price,
+        const analytics::RegimeAnalysis& regime
     ) override;
     
     bool shouldExit(
@@ -211,12 +213,12 @@ public:
     
     double calculateStopLoss(
         double entry_price,
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) override;
     
     double calculateTakeProfit(
         double entry_price,
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) override;
     
     double calculatePositionSize(
@@ -280,15 +282,15 @@ private:
     static constexpr int ORDERBOOK_CACHE_MS = 2000;
     
     mutable std::map<std::string, long long> candle_cache_time_;
-    mutable std::map<std::string, std::vector<analytics::Candle>> candle_cache_;
+    mutable std::map<std::string, std::vector<Candle>> candle_cache_;
     static constexpr int CANDLE_CACHE_MS = 5000;
     
     mutable std::deque<long long> api_call_timestamps_;
     static constexpr int MAX_ORDERBOOK_CALLS_PER_SEC = 8;
     static constexpr int MAX_CANDLE_CALLS_PER_SEC = 8;
     
-        std::vector<analytics::Candle> resampleTo5m(
-        const std::vector<analytics::Candle>& candles_1m
+        std::vector<Candle> resampleTo5m(
+        const std::vector<Candle>& candles_1m
     ) const;
     
     // ===== 거래 빈도 제어 =====
@@ -354,7 +356,7 @@ private:
     void recordAPICall() const;
     
     nlohmann::json getCachedOrderBook(const std::string& market);
-    std::vector<analytics::Candle> getCachedCandles(const std::string& market, int count);
+    std::vector<Candle> getCachedCandles(const std::string& market, int count);
     
     // ===== 거래 빈도 관리 =====
     
@@ -372,7 +374,7 @@ private:
     // ===== 1. Statistical Analysis =====
     
     StatisticalMetrics calculateStatisticalMetrics(
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) const;
     
     double calculateZScore(
@@ -381,11 +383,11 @@ private:
     ) const;
     
     double calculateHurstExponent(
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) const;
     
     double calculateHalfLife(
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) const;
     
     double calculateADFStatistic(
@@ -409,7 +411,7 @@ private:
     // ===== 3. Bollinger Bands =====
     
     BollingerBands calculateBollingerBands(
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         int period,
         double std_dev_mult
     ) const;
@@ -419,18 +421,18 @@ private:
     // ===== 4. RSI Analysis =====
     
     MultiPeriodRSI calculateMultiPeriodRSI(
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) const;
     
     double calculateRSI(
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         int period
     ) const;
     
     // ===== 5. VWAP Analysis =====
     
     VWAPAnalysis calculateVWAPAnalysis(
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         double current_price
     ) const;
     
@@ -445,7 +447,7 @@ private:
     MeanReversionSignalMetrics analyzeMeanReversion(
         const std::string& market,
         const analytics::CoinMetrics& metrics,
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         double current_price
     );
     
@@ -514,10 +516,10 @@ private:
     
     double calculateMean(const std::vector<double>& values) const;
     double calculateStdDev(const std::vector<double>& values, double mean) const;
-    double calculateVolatility(const std::vector<analytics::Candle>& candles) const;
+    double calculateVolatility(const std::vector<Candle>& candles) const;
     
     std::vector<double> extractPrices(
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         const std::string& type = "close"
     ) const;
     
@@ -527,7 +529,7 @@ private:
         const MeanReversionSignalMetrics& metrics
     ) const;
     
-    std::vector<analytics::Candle> parseCandlesFromJson(
+    std::vector<Candle> parseCandlesFromJson(
         const nlohmann::json& json_data
     ) const;
 };

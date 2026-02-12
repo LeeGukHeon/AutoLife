@@ -141,20 +141,20 @@ public:
     // Dynamic Stop Loss (ATR + Support 조합)
     double calculateDynamicStopLoss(
         double entry_price,
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     );
     
     // ATR 기반 손절
     double calculateATRStopLoss(
         double entry_price,
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         double multiplier = 2.0
     );
     
     // Support 기반 손절
     double calculateSupportStopLoss(
         double entry_price,
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     );
     
     // Break-even Stop (본전 이동)

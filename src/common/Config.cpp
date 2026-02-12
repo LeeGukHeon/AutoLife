@@ -94,6 +94,29 @@ void Config::load(const std::string& path) {
         
         std::cout << "설정 파일 로드 완료" << std::endl;
         
+    // [Refactor] Load Centralized Trading Constants
+    if (j.contains("trading")) {
+        auto& t = j["trading"];
+        fee_rate_ = t.value("fee_rate", 0.0005);
+        min_order_krw_ = t.value("min_order_krw", 5000.0);
+        max_slippage_pct_ = t.value("max_slippage_pct", 0.003);
+        risk_per_trade_pct_ = t.value("risk_per_trade_pct", 0.01);
+    }
+    
+    // [Refactor] Load Strategy Configs
+    if (j.contains("strategies") && j["strategies"].contains("scalping")) {
+        auto& s = j["strategies"]["scalping"];
+        scalping_config_.max_daily_trades = s.value("max_daily_trades", 15);
+        scalping_config_.max_hourly_trades = s.value("max_hourly_trades", 5);
+        scalping_config_.max_consecutive_losses = s.value("max_consecutive_losses", 5);
+        
+        scalping_config_.rsi_lower = s.value("rsi_lower", 20.0);
+        scalping_config_.rsi_upper = s.value("rsi_upper", 75.0);
+        scalping_config_.volume_z_score_threshold = s.value("volume_z_score_threshold", 1.15);
+        // scan_interval_seconds_ = 0; // Removing warning usage of unused variable if any
+    }
+    
+    std::cout << "Config Loaded: Fee=" << fee_rate_ << ", MinOrder=" << min_order_krw_ << std::endl;
     } catch (const std::exception& e) {
         std::cerr << "설정 로드 오류: " << e.what() << std::endl;
     }

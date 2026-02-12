@@ -23,8 +23,8 @@ find_package(Boost REQUIRED COMPONENTS system thread)
 include_directories(${CMAKE_SOURCE_DIR}/include)
 
 # 소스 파일 명시
-set(SOURCES
-    src/main.cpp
+# 소스 파일 명시 (Main 제외)
+set(LIB_SOURCES
     src/common/Logger.cpp
     src/common/Config.cpp
     src/common/PathUtils.cpp
@@ -42,9 +42,33 @@ set(SOURCES
     src/strategy/GridTradingStrategy.cpp
     src/risk/RiskManager.cpp
     src/engine/TradingEngine.cpp
+    src/backtest/DataHistory.cpp
+    src/backtest/BacktestEngine.cpp
+    src/execution/OrderManager.cpp
+    src/analytics/RegimeDetector.cpp
 )
 
-add_executable(AutoLifeTrading ${SOURCES})
+add_executable(AutoLifeTrading src/main.cpp ${LIB_SOURCES})
+
+# [Test] Config Unit Test
+add_executable(AutoLifeTest tests/TestConfig.cpp ${LIB_SOURCES})
+target_link_libraries(AutoLifeTest PRIVATE
+    CURL::libcurl
+    OpenSSL::SSL
+    OpenSSL::Crypto
+    nlohmann_json::nlohmann_json
+    spdlog::spdlog
+    Boost::system
+    Boost::thread
+)
+if(WIN32)
+    target_link_libraries(AutoLifeTest PRIVATE ws2_32 wsock32)
+endif()
+
+target_compile_definitions(AutoLifeTest PRIVATE
+    _WIN32_WINNT=0x0A00
+    NOMINMAX
+)
 
 target_link_libraries(AutoLifeTrading PRIVATE
     CURL::libcurl

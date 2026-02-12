@@ -65,9 +65,10 @@ StrategyInfo MeanReversionStrategy::getInfo() const
 Signal MeanReversionStrategy::generateSignal(
     const std::string& market,
     const analytics::CoinMetrics& metrics,
-    const std::vector<analytics::Candle>& candles,
+    const std::vector<Candle>& candles,
     double current_price,
-    double available_capital)
+    double available_capital,
+    const analytics::RegimeAnalysis& regime)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     
@@ -76,99 +77,90 @@ Signal MeanReversionStrategy::generateSignal(
     signal.market = market;
     signal.strategy_name = "Mean Reversion Strategy";
     
-    // [수정] 중복 진입 방지: 이미 진입한 종목이면 빈 신호 리턴
-    if (active_positions_.find(market) != active_positions_.end()) {
-        return signal;
-    }
+    // ===== Hard Gates =====
+    if (active_positions_.find(market) != active_positions_.end()) return signal;
+    if (available_capital <= 0) return signal;
     
-    std::vector<analytics::Candle> candles_5m = resampleTo5m(candles);
-
-    // ===== 1. 기본 검증 =====
-    if (candles_5m.size() < 150) {
-        return signal;
-    }
+    std::vector<Candle> candles_5m = resampleTo5m(candles);
+    if (candles_5m.size() < 150) return signal;
+    if (!canTradeNow()) return signal;
     
-    if (metrics.liquidity_score < MIN_LIQUIDITY_SCORE) {
-        return signal;
-    }
-    
-    // ===== 2. 거래 가능 확인 =====
-    if (!canTradeNow()) {
-        return signal;
-    }
-    
-    // ===== 3. 서킷 브레이커 =====
     checkCircuitBreaker();
-    if (isCircuitBreakerActive()) {
-        return signal;
-    }
+    if (isCircuitBreakerActive()) return signal;
     
-    // ===== 4. 신호 간격 =====
-    long long now = getCurrentTimestamp();
-    if ((now - last_signal_time_) < MIN_SIGNAL_INTERVAL_SEC * 1000) {
-        return signal;
-    }
-    
-    // ===== 5. Kalman Filter 업데이트 & 분석 =====
-    // (const 함수가 아니므로 내부 상태 업데이트 가능)
+    // ===== Kalman Filter Update =====
     updateKalmanFilter(market, current_price);
     
+    // ===== Score-Based Evaluation =====
+    double total_score = 0.0;
+    
+    // --- (1) 평균 회귀 분석 (최대 0.40) ---
     MeanReversionSignalMetrics reversion = analyzeMeanReversion(market, metrics, candles_5m, current_price);
+    total_score += reversion.strength * 0.40;
     
-    if (!shouldGenerateMeanReversionSignal(reversion)) {
-        return signal;
+    // --- (2) 유동성 (최대 0.10) ---
+    if (metrics.liquidity_score >= MIN_LIQUIDITY_SCORE) total_score += 0.10;
+    else if (metrics.liquidity_score >= MIN_LIQUIDITY_SCORE * 0.5) total_score += 0.05;
+    
+    // --- (3) 레짐 (최대 0.15) ---
+    double regime_score = 0.0;
+    switch (regime.regime) {
+        case analytics::MarketRegime::RANGING: regime_score = 0.15; break;    // 평균 회귀에 최적
+        case analytics::MarketRegime::HIGH_VOLATILITY: regime_score = 0.08; break;
+        case analytics::MarketRegime::TRENDING_UP: regime_score = 0.03; break;
+        case analytics::MarketRegime::TRENDING_DOWN: regime_score = 0.02; break;
+        default: regime_score = 0.05; break;
     }
+    total_score += regime_score;
     
-    // ===== 6. 매수 신호 생성 =====
+    // --- (4) RSI 역전 신호 (최대 0.20) ---
+    auto prices = analytics::TechnicalIndicators::extractClosePrices(candles_5m);
+    double rsi = analytics::TechnicalIndicators::calculateRSI(prices, 14);
+    
+    if (rsi < 30) total_score += 0.20;         // 강한 과매도
+    else if (rsi < 40) total_score += 0.12;     // 과매도
+    else if (rsi < 50) total_score += 0.05;     // 약간 낮음
+    // 평균 회귀는 과매도에서 매수하므로 RSI 높으면 점수 없음
+    
+    // --- (5) 거래량 확인 (최대 0.15) ---
+    if (metrics.volume_surge_ratio >= 2.0) total_score += 0.15;
+    else if (metrics.volume_surge_ratio >= 1.0) total_score += 0.08;
+    else total_score += 0.03;
+    
+    // ===== 최종 판정 =====
+    signal.strength = std::clamp(total_score, 0.0, 1.0);
+    
+    if (signal.strength < 0.40) return signal;
+    
+    // ===== 신호 생성 =====
     signal.type = SignalType::BUY;
-    signal.strength = reversion.strength;
     signal.entry_price = current_price;
-    
-    // ===== 7. 손절/익절 계산 =====
     signal.stop_loss = calculateStopLoss(current_price, candles_5m);
-    double base_tp_mr = calculateTakeProfit(current_price, candles_5m);
     double risk_mr = current_price - signal.stop_loss;
     signal.take_profit_1 = current_price + (risk_mr * 2.5 * 0.5);
-    signal.take_profit_2 = base_tp_mr;
+    signal.take_profit_2 = calculateTakeProfit(current_price, candles_5m);
     signal.buy_order_type = strategy::OrderTypePolicy::LIMIT_WITH_FALLBACK;
     signal.sell_order_type = strategy::OrderTypePolicy::LIMIT_WITH_FALLBACK;
     signal.max_retries = 3;
     signal.retry_wait_ms = 800;
     
-    // ===== 8. 포지션 사이징 =====
-    double capital = available_capital;
-    if (capital <= 0) {
-        spdlog::warn("[MeanReversion] 가용자본 없음 (신호 무시) - {}", market);
-        signal.type = SignalType::NONE;
-        return signal;
-    }
-    signal.position_size = calculatePositionSize(capital, current_price, signal.stop_loss, metrics);
+    // 포지션 사이징
+    signal.position_size = calculatePositionSize(available_capital, current_price, signal.stop_loss, metrics);
     
-    // ===== 9. 최소 주문 금액 확인 =====
-    double order_amount = capital * signal.position_size;
+    double order_amount = available_capital * signal.position_size;
     if (order_amount < MIN_ORDER_AMOUNT_KRW) {
         signal.type = SignalType::NONE;
         return signal;
     }
     
-    // ===== 10. 리스크/리워드 비율 =====
-    double expected_return = (signal.take_profit_2 - current_price) / current_price;
-    double risk = (current_price - signal.stop_loss) / current_price;
-    
-    if (risk <= 0) return signal;
-    
-    double risk_reward = expected_return / risk;
-    if (risk_reward < 1.5) {
-        signal.type = SignalType::NONE;
-        return signal;
+    if (signal.strength >= 0.70) {
+        signal.type = SignalType::STRONG_BUY;
     }
     
-    // ===== 11. 로깅 =====
-    spdlog::info("[MeanReversion] BUY Signal - {} | Strength: {:.3f} | Prob: {:.1f}% | Expected: {:.2f}% | Time: {:.0f}m",
-                 market, signal.strength, reversion.reversion_probability * 100,
-                 reversion.expected_reversion_pct * 100, reversion.time_to_revert);
+    spdlog::info("[MeanReversion] 🎯 BUY Signal - {} | Strength: {:.3f} | RSI: {:.1f}",
+                 market, signal.strength, rsi);
     
-    last_signal_time_ = now;
+    last_signal_time_ = getCurrentTimestamp();
     rolling_stats_.total_reversions_detected++;
     
     return signal;
@@ -179,16 +171,18 @@ Signal MeanReversionStrategy::generateSignal(
 bool MeanReversionStrategy::shouldEnter(
     const std::string& market,
     const analytics::CoinMetrics& metrics,
-    const std::vector<analytics::Candle>& candles,
-    double current_price)
+    const std::vector<Candle>& candles,
+    double current_price,
+    const analytics::RegimeAnalysis& regime)
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    (void)regime; // Used for future enhancements
 
     if (active_positions_.find(market) != active_positions_.end()) {
         return false;
     }
 
-    std::vector<analytics::Candle> candles_5m = resampleTo5m(candles);
+    std::vector<Candle> candles_5m = resampleTo5m(candles);
 
     if (candles_5m.size() < 150) {
         return false;
@@ -346,7 +340,7 @@ bool MeanReversionStrategy::shouldExit(
 
 // ===== Calculate Stop Loss =====
 
-double MeanReversionStrategy::calculateStopLoss(double entry_price, const std::vector<analytics::Candle>& candles) {
+double MeanReversionStrategy::calculateStopLoss(double entry_price, const std::vector<Candle>& candles) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (candles.size() < 16) return entry_price * (1.0 - BASE_STOP_LOSS);
 
@@ -370,7 +364,7 @@ double MeanReversionStrategy::calculateStopLoss(double entry_price, const std::v
 
 double MeanReversionStrategy::calculateTakeProfit(
     double entry_price,
-    const std::vector<analytics::Candle>& candles)
+    const std::vector<Candle>& candles)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     (void)candles;  // candles 파라미터 미사용
@@ -639,7 +633,7 @@ nlohmann::json MeanReversionStrategy::getCachedOrderBook(const std::string& mark
     return cached_orderbook_;
 }
 
-std::vector<analytics::Candle> MeanReversionStrategy::getCachedCandles(
+std::vector<Candle> MeanReversionStrategy::getCachedCandles(
     const std::string& market,
     int count)
 {
@@ -654,7 +648,7 @@ std::vector<analytics::Candle> MeanReversionStrategy::getCachedCandles(
         if (candle_cache_.count(market)) {
             return candle_cache_[market];
         }
-        return std::vector<analytics::Candle>();
+        return std::vector<Candle>();
     }
     
     try {
@@ -670,7 +664,7 @@ std::vector<analytics::Candle> MeanReversionStrategy::getCachedCandles(
         if (candle_cache_.count(market)) {
             return candle_cache_[market];
         }
-        return std::vector<analytics::Candle>();
+        return std::vector<Candle>();
     }
 }
 
@@ -788,7 +782,7 @@ KalmanFilterState& MeanReversionStrategy::getKalmanState(const std::string& mark
 // ===== Statistical Analysis =====
 
 StatisticalMetrics MeanReversionStrategy::calculateStatisticalMetrics(
-    const std::vector<analytics::Candle>& candles) const
+    const std::vector<Candle>& candles) const
 {
     StatisticalMetrics stats;
     
@@ -845,7 +839,7 @@ double MeanReversionStrategy::calculateZScore(
 }
 
 double MeanReversionStrategy::calculateHurstExponent(
-    const std::vector<analytics::Candle>& candles) const
+    const std::vector<Candle>& candles) const
 {
     // 데이터 부족 시 기본값 (Random Walk)
     if (candles.size() < 100) return 0.5;
@@ -945,7 +939,7 @@ double MeanReversionStrategy::calculateHurstExponent(
 }
 
 double MeanReversionStrategy::calculateHalfLife(
-    const std::vector<analytics::Candle>& candles) const
+    const std::vector<Candle>& candles) const
 {
     if (candles.size() < 50) return 0.0;
     
@@ -1052,7 +1046,7 @@ double MeanReversionStrategy::calculateAutocorrelation(
 
 // ===== Bollinger Bands =====
 
-BollingerBands MeanReversionStrategy::calculateBollingerBands(const std::vector<analytics::Candle>& candles, int period, double std_dev_mult) const {
+BollingerBands MeanReversionStrategy::calculateBollingerBands(const std::vector<Candle>& candles, int period, double std_dev_mult) const {
     BollingerBands bb;
     if (candles.size() < static_cast<size_t>(period)) return bb;
 
@@ -1084,7 +1078,7 @@ bool MeanReversionStrategy::isBBSqueeze(const BollingerBands& bb) const
 // ===== Multi-Period RSI =====
 
 MultiPeriodRSI MeanReversionStrategy::calculateMultiPeriodRSI(
-    const std::vector<analytics::Candle>& candles) const
+    const std::vector<Candle>& candles) const
 {
     MultiPeriodRSI rsi;
     
@@ -1109,7 +1103,7 @@ MultiPeriodRSI MeanReversionStrategy::calculateMultiPeriodRSI(
 }
 
 double MeanReversionStrategy::calculateRSI(
-    const std::vector<analytics::Candle>& candles,
+    const std::vector<Candle>& candles,
     int period) const
 {
     if (candles.size() < static_cast<size_t>(period + 1)) {
@@ -1144,7 +1138,7 @@ double MeanReversionStrategy::calculateRSI(
 // ===== VWAP Analysis =====
 
 VWAPAnalysis MeanReversionStrategy::calculateVWAPAnalysis(
-    const std::vector<analytics::Candle>& candles,
+    const std::vector<Candle>& candles,
     double current_price) const
 {
     VWAPAnalysis vwap;
@@ -1208,7 +1202,7 @@ MRMarketRegime MeanReversionStrategy::detectMarketRegime(
 MeanReversionSignalMetrics MeanReversionStrategy::analyzeMeanReversion(
     const std::string& market,
     const analytics::CoinMetrics& metrics,
-    const std::vector<analytics::Candle>& candles,
+    const std::vector<Candle>& candles,
     double current_price)
 {
     MeanReversionSignalMetrics signal;
@@ -1554,7 +1548,7 @@ double MeanReversionStrategy::calculateStdDev(
     return std::sqrt(sum_sq / (values.size() - 1));
 }
 
-double MeanReversionStrategy::calculateVolatility(const std::vector<analytics::Candle>& candles) const {
+double MeanReversionStrategy::calculateVolatility(const std::vector<Candle>& candles) const {
     if (candles.size() < 21) return 0.02;
     
     std::vector<double> returns;
@@ -1568,7 +1562,7 @@ double MeanReversionStrategy::calculateVolatility(const std::vector<analytics::C
 }
 
 std::vector<double> MeanReversionStrategy::extractPrices(
-    const std::vector<analytics::Candle>& candles,
+    const std::vector<Candle>& candles,
     const std::string& type) const
 {
     std::vector<double> prices;
@@ -1597,17 +1591,17 @@ long long MeanReversionStrategy::getCurrentTimestamp() const
     ).count();
 }
 
-std::vector<analytics::Candle> MeanReversionStrategy::parseCandlesFromJson(
+std::vector<Candle> MeanReversionStrategy::parseCandlesFromJson(
     const nlohmann::json& json_data) const
 {
     return analytics::TechnicalIndicators::jsonToCandles(json_data);
 }
 
-std::vector<analytics::Candle> MeanReversionStrategy::resampleTo5m(const std::vector<analytics::Candle>& candles_1m) const {
+std::vector<Candle> MeanReversionStrategy::resampleTo5m(const std::vector<Candle>& candles_1m) const {
     if (candles_1m.size() < 5) return {};
-    std::vector<analytics::Candle> candles_5m;
+    std::vector<Candle> candles_5m;
     for (size_t i = 0; i + 5 <= candles_1m.size(); i += 5) {
-        analytics::Candle candle_5m;
+        Candle candle_5m;
         candle_5m.open = candles_1m[i].open;         // [수정] i가 가장 과거
         candle_5m.close = candles_1m[i + 4].close;   // [수정] i+4가 가장 최신
         candle_5m.high = candles_1m[i].high;

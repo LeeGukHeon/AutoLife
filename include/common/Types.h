@@ -26,6 +26,21 @@ struct Order {
     Volume volume;
     OrderStatus status;
     Timestamp created_at;
+    std::string strategy_name;
+};
+
+struct Candle {
+    double open;
+    double high;
+    double low;
+    double close;
+    double volume;
+    long long timestamp;
+    
+    Candle() : open(0), high(0), low(0), close(0), volume(0), timestamp(0) {}
+    
+    Candle(double o, double h, double l, double c, double v, long long t)
+        : open(o), high(h), low(l), close(c), volume(v), timestamp(t) {}
 };
 
 struct Position {

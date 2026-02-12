@@ -143,16 +143,18 @@ public:
     Signal generateSignal(
         const std::string& market,
         const analytics::CoinMetrics& metrics,
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         double current_price,
-        double available_capital
+        double available_capital,
+        const analytics::RegimeAnalysis& regime
     ) override;
     
     bool shouldEnter(
         const std::string& market,
         const analytics::CoinMetrics& metrics,
-        const std::vector<analytics::Candle>& candles,
-        double current_price
+        const std::vector<Candle>& candles,
+        double current_price,
+        const analytics::RegimeAnalysis& regime
     ) override;
     
     bool shouldExit(
@@ -164,12 +166,12 @@ public:
     
     double calculateStopLoss(
         double entry_price,
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) override;
     
     double calculateTakeProfit(
         double entry_price,
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) override;
     
     double calculatePositionSize(
@@ -219,8 +221,8 @@ private:
     BreakoutRollingStatistics rolling_stats_;
     long long last_signal_time_;
     
-    std::vector<analytics::Candle> resampleTo5m(
-    const std::vector<analytics::Candle>& candles_1m
+    std::vector<Candle> resampleTo5m(
+    const std::vector<Candle>& candles_1m
     ) const;
 
     // 포지션 추적 (이건 내부 로직용이고, 중복 방지는 active_positions_가 담당)
@@ -233,7 +235,7 @@ private:
     static constexpr int ORDERBOOK_CACHE_MS = 2000;
     
     mutable std::map<std::string, long long> candle_cache_time_;
-    mutable std::map<std::string, std::vector<analytics::Candle>> candle_cache_;
+    mutable std::map<std::string, std::vector<Candle>> candle_cache_;
     static constexpr int CANDLE_CACHE_MS = 5000;
     
     mutable std::deque<long long> api_call_timestamps_;
@@ -289,7 +291,7 @@ private:
     
     nlohmann::json getCachedOrderBook(const std::string& market);
     
-    std::vector<analytics::Candle> getCachedCandles(
+    std::vector<Candle> getCachedCandles(
         const std::string& market,
         int count
     );
@@ -310,38 +312,38 @@ private:
     // ===== 1. Donchian Channel =====
     
     DonchianChannel calculateDonchianChannel(
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         int period
     ) const;
     
     // ===== 2. Support/Resistance =====
     
     SupportResistanceLevels calculateSupportResistance(
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) const;
     
     std::vector<double> findSwingHighs(
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) const;
     
     std::vector<double> findSwingLows(
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) const;
     
     // ===== 3. Volume Profile =====
     
     VolumeProfileData calculateVolumeProfile(
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) const;
     
     // ===== 4. Market Structure =====
     
     MarketStructureAnalysis analyzeMarketStructure(
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) const;
     
     bool isConsolidating(
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         double& range_pct
     ) const;
     
@@ -350,14 +352,14 @@ private:
     BreakoutSignalMetrics analyzeBreakout(
         const std::string& market,
         const analytics::CoinMetrics& metrics,
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         double current_price
     );
     
     bool isFalseBreakout(
         double current_price,
         double breakout_level,
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) const;
     
     double calculateBreakoutStrength(
@@ -371,17 +373,17 @@ private:
     
     bool isVolumeSpikeSignificant(
         const analytics::CoinMetrics& metrics,
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) const;
     
     double calculateVolumeConfirmation(
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) const;
     
     // ===== 7. ATR Calculation =====
     
     double calculateATR(
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         int period
     ) const;
     
@@ -425,7 +427,7 @@ private:
     
     double calculateMean(const std::vector<double>& values) const;
     double calculateStdDev(const std::vector<double>& values, double mean) const;
-    double calculateVolatility(const std::vector<analytics::Candle>& candles) const;
+    double calculateVolatility(const std::vector<Candle>& candles) const;
     
     long long getCurrentTimestamp() const;
     
@@ -433,7 +435,7 @@ private:
         const BreakoutSignalMetrics& metrics
     ) const;
     
-    std::vector<analytics::Candle> parseCandlesFromJson(
+    std::vector<Candle> parseCandlesFromJson(
         const nlohmann::json& json_data
     ) const;
 };

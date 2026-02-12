@@ -1,7 +1,11 @@
 #include "strategy/StrategyManager.h"
 #include "common/Logger.h"
 #include <algorithm>
+
+#undef max
+#undef min
 #include <numeric>
+#include <future>
 
 namespace autolife {
 namespace strategy {
@@ -34,64 +38,104 @@ std::shared_ptr<IStrategy> StrategyManager::getStrategy(const std::string& name)
     return nullptr;
 }
 
+Signal StrategyManager::processStrategySignal(
+    std::shared_ptr<IStrategy> strategy,
+    const std::string& market,
+    const analytics::CoinMetrics& metrics,
+    const std::vector<Candle>& candles,
+    double current_price,
+    double available_capital,
+    const analytics::RegimeAnalysis& regime
+) {
+    try {
+        if (!strategy->isEnabled()) {
+            return Signal(); // NONE
+        }
+
+        auto signal = strategy->generateSignal(market, metrics, candles, current_price, available_capital, regime);
+        
+        if (signal.type != SignalType::NONE) {
+            // 통계 정보나 추가 정보 채우기 (Thread-safe하게 접근 가능한지 확인 필요, getStatistics는 const라 가정)
+            // But getStatistics() might not be thread safe if updated concurrently. 
+            // However, here we are just reading. Writing happens in engine usually? 
+            // Warning: generateSignal might update internal state of strategy.
+            // Assuming strategies are thread-safe or distinct instances? 
+            // They are shared_ptr, single instance per engine.
+            // IF strategies have internal state updated during generateSignal, we need a lock inside strategy.
+            // Most strategies here seem to just calculate based on inputs.
+            
+            auto stats = strategy->getStatistics();
+
+            signal.strategy_win_rate = stats.win_rate;
+            signal.strategy_profit_factor = stats.profit_factor;
+            signal.strategy_trade_count = stats.total_signals;
+            signal.liquidity_score = metrics.liquidity_score;
+            signal.volatility = metrics.volatility;
+
+            if (signal.entry_price > 0 && signal.take_profit_2 > 0) {
+                signal.expected_return_pct = (signal.take_profit_2 - signal.entry_price) / signal.entry_price;
+            }
+
+            if (signal.entry_price > 0 && signal.stop_loss > 0) {
+                signal.expected_risk_pct = (signal.entry_price - signal.stop_loss) / signal.entry_price;
+            }
+
+            double implied_win = signal.strategy_trade_count >= 30
+                ? signal.strategy_win_rate
+                : std::clamp(signal.strength, 0.35, 0.75);
+
+            signal.expected_value = (signal.expected_return_pct > 0.0 && signal.expected_risk_pct > 0.0)
+                ? (implied_win * signal.expected_return_pct - (1.0 - implied_win) * signal.expected_risk_pct)
+                : 0.0;
+
+            signal.score = calculateSignalScore(signal);
+            
+            return signal;
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("{} - {} 분석 실패: {}", market, strategy->getInfo().name, e.what());
+    }
+
+    return Signal(); // NONE
+}
+
 std::vector<Signal> StrategyManager::collectSignals(
     const std::string& market,
     const analytics::CoinMetrics& metrics,
-    const std::vector<analytics::Candle>& candles,
+    const std::vector<Candle>& candles,
     double current_price,
-    double available_capital
+    double available_capital,
+    const analytics::RegimeAnalysis& regime
 ) {
     std::vector<Signal> signals;
     
-    LOG_INFO("{} - 전략 분석 시작 (변동: {:.2f}%, 유동성: {:.1f})", 
-             market, metrics.price_change_rate, metrics.liquidity_score);
+    // [Parallel Agents] 전략 실행 병렬화
+    std::vector<std::future<Signal>> futures;
     
+    // 1. 각 전략 비동기 실행
     for (auto& strategy : strategies_) {
-        if (!strategy->isEnabled()) {
-            continue;
-        }
-        
+        // capture by value for simple types, strategy is shared_ptr
+        futures.push_back(std::async(std::launch::async, [this, strategy, market, metrics, candles, current_price, available_capital, regime]() {
+            return this->processStrategySignal(strategy, market, metrics, candles, current_price, available_capital, regime);
+        }));
+    }
+    
+    // 2. 결과 수집
+    for (auto& f : futures) {
         try {
-            auto signal = strategy->generateSignal(market, metrics, candles, current_price, available_capital);
-            
+            Signal signal = f.get();
             if (signal.type != SignalType::NONE) {
-                auto stats = strategy->getStatistics();
-
-                signal.strategy_win_rate = stats.win_rate;
-                signal.strategy_profit_factor = stats.profit_factor;
-                signal.strategy_trade_count = stats.total_signals;
-                signal.liquidity_score = metrics.liquidity_score;
-                signal.volatility = metrics.volatility;
-
-                if (signal.entry_price > 0 && signal.take_profit_2 > 0) {
-                    signal.expected_return_pct = (signal.take_profit_2 - signal.entry_price) / signal.entry_price;
-                }
-
-                if (signal.entry_price > 0 && signal.stop_loss > 0) {
-                    signal.expected_risk_pct = (signal.entry_price - signal.stop_loss) / signal.entry_price;
-                }
-
-                double implied_win = signal.strategy_trade_count >= 30
-                    ? signal.strategy_win_rate
-                    : std::clamp(signal.strength, 0.35, 0.75);
-
-                signal.expected_value = (signal.expected_return_pct > 0.0 && signal.expected_risk_pct > 0.0)
-                    ? (implied_win * signal.expected_return_pct - (1.0 - implied_win) * signal.expected_risk_pct)
-                    : 0.0;
-
-                signal.score = calculateSignalScore(signal);
-
                 signals.push_back(signal);
                 LOG_INFO("{} - {} 신호 발견: 강도 {:.2f}, 점수 {:.2f}", 
                          market, signal.strategy_name, signal.strength, signal.score);
-            } else {
-                LOG_INFO("{} - {} 신호 없음", market, strategy->getInfo().name);
             }
-            
         } catch (const std::exception& e) {
-            LOG_ERROR("{} - {} 분석 실패: {}", 
-                      market, strategy->getInfo().name, e.what());
+            LOG_ERROR("전략 실행 중 예외 발생: {}", e.what());
         }
+    }
+    
+    if (!signals.empty()) {
+         LOG_INFO("{} - 전략 분석 완료 ({}개 신호)", market, signals.size());
     }
     
     return signals;

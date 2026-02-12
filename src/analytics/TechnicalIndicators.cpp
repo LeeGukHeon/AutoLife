@@ -166,6 +166,92 @@ double TechnicalIndicators::calculateATR(const std::vector<Candle>& candles, int
     return atr; // 가장 최신 ATR
 }
 
+// ADX 계산
+double TechnicalIndicators::calculateADX(const std::vector<Candle>& candles, int period) {
+    if (candles.size() < static_cast<size_t>(period * 2)) return 0.0;
+    
+    std::vector<double> tr_vec, dm_plus_vec, dm_minus_vec;
+    tr_vec.reserve(candles.size());
+    dm_plus_vec.reserve(candles.size());
+    dm_minus_vec.reserve(candles.size());
+    
+    for (size_t i = 1; i < candles.size(); ++i) {
+        double current_high = candles[i].high;
+        double current_low = candles[i].low;
+        double prev_high = candles[i-1].high;
+        double prev_low = candles[i-1].low;
+        double prev_close = candles[i-1].close;
+        
+        // TR Calculation
+        double tr1 = current_high - current_low;
+        double tr2 = std::abs(current_high - prev_close);
+        double tr3 = std::abs(current_low - prev_close);
+        tr_vec.push_back(std::max({tr1, tr2, tr3}));
+        
+        // DM Calculation
+        double up_move = current_high - prev_high;
+        double down_move = prev_low - current_low;
+        
+        if (up_move > down_move && up_move > 0) dm_plus_vec.push_back(up_move);
+        else dm_plus_vec.push_back(0.0);
+        
+        if (down_move > up_move && down_move > 0) dm_minus_vec.push_back(down_move);
+        else dm_minus_vec.push_back(0.0);
+    }
+    
+    // Smooth Function (Wilder's)
+    auto smooth = [&](std::vector<double>& vec, int p) -> std::vector<double> {
+        std::vector<double> smoothed;
+        if (vec.size() < static_cast<size_t>(p)) return smoothed;
+        
+        double sum = 0.0;
+        for(int i=0; i<p; ++i) sum += vec[i];
+        
+        smoothed.push_back(sum); // Initial Sum (not avg, or avg? Wilder uses Sum for first, then smooth)
+        // Wait, Wilder's ATR uses SMA first? 
+        // Standard ADX: First TR14 is Sum of TR.
+        // Let's use Sum for first.
+        double prev = sum;
+        
+        for(size_t i=p; i<vec.size(); ++i) {
+            double current = prev - (prev / p) + vec[i];
+            smoothed.push_back(current);
+            prev = current;
+        }
+        return smoothed;
+    };
+    
+    auto tr_smooth = smooth(tr_vec, period);
+    auto dm_plus_smooth = smooth(dm_plus_vec, period);
+    auto dm_minus_smooth = smooth(dm_minus_vec, period);
+    
+    size_t len = std::min({tr_smooth.size(), dm_plus_smooth.size(), dm_minus_smooth.size()});
+    if (len == 0) return 0.0;
+    
+    std::vector<double> dx_vec;
+    for(size_t i=0; i<len; ++i) {
+        double tr = tr_smooth[i];
+        if (tr == 0) {
+            dx_vec.push_back(0.0); 
+            continue;
+        }
+        
+        double di_plus = (dm_plus_smooth[i] / tr) * 100.0;
+        double di_minus = (dm_minus_smooth[i] / tr) * 100.0;
+        
+        double sum_di = di_plus + di_minus;
+        if (sum_di == 0) dx_vec.push_back(0.0);
+        else dx_vec.push_back((std::abs(di_plus - di_minus) / sum_di) * 100.0);
+    }
+    
+    // ADX is SMA of DX
+    if (dx_vec.size() < static_cast<size_t>(period)) return 0.0;
+    
+    // Return latest ADX (Simple Average of last period DXs)
+    // Or Wilder's smoothing on DX too? Usually ADX is SMA(DX).
+    return calculateSMA(dx_vec, period);
+}
+
 // EMA 계산 (Exponential Moving Average)
 double TechnicalIndicators::calculateEMA(const std::vector<double>& prices, int period) {
     if (prices.empty()) return 0.0;

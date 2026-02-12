@@ -63,109 +63,116 @@ StrategyInfo BreakoutStrategy::getInfo() const
 Signal BreakoutStrategy::generateSignal(
     const std::string& market,
     const analytics::CoinMetrics& metrics,
-    const std::vector<analytics::Candle>& candles,
+    const std::vector<Candle>& candles,
     double current_price,
-    double available_capital)
+    double available_capital,
+    const analytics::RegimeAnalysis& regime)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     
     Signal signal;
     signal.type = SignalType::NONE;
     signal.market = market;
-    signal.strategy_name = "Breakout Strategy"; // 전략명 명시
+    signal.strategy_name = "Breakout Strategy";
     
-    // [수정] 중복 진입 방지: 이미 진입한 종목이면 신호 생성 안 함
-    if (active_positions_.find(market) != active_positions_.end()) {
-        return signal;
-    }
+    // ===== Hard Gates =====
+    if (active_positions_.find(market) != active_positions_.end()) return signal;
+    if (available_capital <= 0) return signal;
     
-    std::vector<analytics::Candle> candles_5m = resampleTo5m(candles);
-
-    // ===== 1. 기본 검증 =====
-    if (candles_5m.size() < 30) {
-        return signal;
-    }
+    std::vector<Candle> candles_5m = resampleTo5m(candles);
+    if (candles_5m.size() < 30) return signal;
+    if (!canTradeNow()) return signal;
     
-    if (metrics.liquidity_score < MIN_LIQUIDITY_SCORE) {
-        return signal;
-    }
-    
-    // ===== 2. 거래 가능 확인 =====
-    if (!canTradeNow()) {
-        return signal;
-    }
-    
-    // ===== 3. 서킷 브레이커 =====
     checkCircuitBreaker();
-    if (isCircuitBreakerActive()) {
-        return signal;
-    }
+    if (isCircuitBreakerActive()) return signal;
     
-    // ===== 4. 신호 간격 =====
-    long long now = getCurrentTimestamp();
-    if ((now - last_signal_time_) < MIN_SIGNAL_INTERVAL_SEC * 1000) {
-        return signal;
-    }
+    // ===== Score-Based Evaluation =====
+    double total_score = 0.0;
     
-    // ===== 5. 돌파 분석 =====
+    // --- (1) 돌파 분석 (최대 0.40) ---
     BreakoutSignalMetrics breakout = analyzeBreakout(market, metrics, candles_5m, current_price);
+    total_score += breakout.strength * 0.40;
     
-    if (!shouldGenerateBreakoutSignal(breakout)) {
-        return signal;
+    // --- (2) 유동성 (최대 0.10) ---
+    if (metrics.liquidity_score >= MIN_LIQUIDITY_SCORE) total_score += 0.10;
+    else if (metrics.liquidity_score >= MIN_LIQUIDITY_SCORE * 0.5) total_score += 0.05;
+    
+    // --- (3) 레짐 (최대 0.15) ---
+    double regime_score = 0.0;
+    switch (regime.regime) {
+        case analytics::MarketRegime::TRENDING_UP: regime_score = 0.15; break;
+        case analytics::MarketRegime::HIGH_VOLATILITY: regime_score = 0.10; break;
+        case analytics::MarketRegime::RANGING: regime_score = 0.05; break;
+        default: regime_score = 0.00; break;
     }
+    total_score += regime_score;
     
-    // ===== 6. 매수 신호 생성 =====
+    // --- (4) 거래량 (최대 0.15) ---
+    if (metrics.volume_surge_ratio >= 3.0) total_score += 0.15;
+    else if (metrics.volume_surge_ratio >= 1.5) total_score += 0.10;
+    else if (metrics.volume_surge_ratio >= 1.0) total_score += 0.05;
+    
+    // --- (5) 기술 지표 (최대 0.20) ---
+    auto prices = analytics::TechnicalIndicators::extractClosePrices(candles_5m);
+    double rsi = analytics::TechnicalIndicators::calculateRSI(prices, 14);
+    auto macd_data = analytics::TechnicalIndicators::calculateMACD(prices, 12, 26, 9);
+    
+    if (rsi >= 50 && rsi <= 70) total_score += 0.08;
+    else if (rsi >= 40) total_score += 0.04;
+    
+    if (macd_data.histogram > 0) total_score += 0.08;
+    else if (macd_data.macd > 0) total_score += 0.04;
+
+    // 가격 변동률
+    if (metrics.price_change_rate > 1.0) total_score += 0.04;
+    else if (metrics.price_change_rate > 0.3) total_score += 0.02;
+    
+    // ===== 최종 판정 =====
+    signal.strength = std::clamp(total_score, 0.0, 1.0);
+    
+    if (signal.strength < 0.40) return signal;
+    
+    // ===== 신호 생성 =====
     signal.type = SignalType::BUY;
-    signal.strength = breakout.strength;
     signal.entry_price = current_price;
-    
-    // ===== 7. 손절/익절 계산 =====
     signal.stop_loss = calculateStopLoss(current_price, candles_5m);
-    double base_tp = calculateTakeProfit(current_price, candles_5m);
     double risk = current_price - signal.stop_loss;
     signal.take_profit_1 = current_price + (risk * 2.0 * 0.5);
-    signal.take_profit_2 = base_tp;
+    signal.take_profit_2 = calculateTakeProfit(current_price, candles_5m);
     signal.buy_order_type = strategy::OrderTypePolicy::LIMIT_WITH_FALLBACK;
     signal.sell_order_type = strategy::OrderTypePolicy::LIMIT_WITH_FALLBACK;
     signal.max_retries = 3;
     signal.retry_wait_ms = 500;
     
-    // ===== 8. 포지션 사이징 =====
-    double capital = available_capital;
-    if (capital <= 0) {
-        spdlog::warn("[Breakout] 가용자본 없음 (신호 무시) - {}", market);
-        signal.type = SignalType::NONE;
-        return signal;
-    }
-    signal.position_size = calculatePositionSize(capital, current_price, signal.stop_loss, metrics);
+    // 포지션 사이징
+    signal.position_size = calculatePositionSize(available_capital, current_price, signal.stop_loss, metrics);
     
-    // ===== 9. 최소 주문 금액 확인 =====
-    double order_amount = capital * signal.position_size;
+    double order_amount = available_capital * signal.position_size;
     if (order_amount < MIN_ORDER_AMOUNT_KRW) {
-        signal.type = SignalType::NONE; // HOLD -> NONE으로 명확화
-        return signal;
-    }
-    
-    // ===== 10. 리스크/리워드 비율 =====
-    double expected_return = (signal.take_profit_2 - current_price) / current_price;
-    // risk는 이미 L120에서 정의됨
-    
-    if (risk <= 0) {
         signal.type = SignalType::NONE;
         return signal;
     }
     
-    double risk_reward = expected_return / risk;
-    if (risk_reward < 2.0) {
-        signal.type = SignalType::NONE;
-        return signal;
+    // R/R 체크 (soft gate)
+    if (risk > 0) {
+        double expected_rr = (signal.take_profit_2 - current_price) / risk;
+        if (expected_rr < 1.5) {
+            signal.strength *= 0.7;
+            if (signal.strength < 0.40) {
+                signal.type = SignalType::NONE;
+                return signal;
+            }
+        }
     }
     
-    // ===== 11. 로깅 =====
-    spdlog::info("[Breakout] BUY Signal - {} | Strength: {:.3f} | Size: {:.2f}% | R/R: {:.2f}",
-                 market, signal.strength, signal.position_size * 100, risk_reward);
+    if (signal.strength >= 0.70) {
+        signal.type = SignalType::STRONG_BUY;
+    }
     
-    last_signal_time_ = now;
+    spdlog::info("[Breakout] 🎯 BUY Signal - {} | Strength: {:.3f} | Size: {:.2f}%",
+                 market, signal.strength, signal.position_size * 100);
+    
+    last_signal_time_ = getCurrentTimestamp();
     rolling_stats_.total_breakouts_detected++;
     
     return signal;
@@ -176,16 +183,18 @@ Signal BreakoutStrategy::generateSignal(
 bool BreakoutStrategy::shouldEnter(
     const std::string& market,
     const analytics::CoinMetrics& metrics,
-    const std::vector<analytics::Candle>& candles,
-    double current_price)
+    const std::vector<Candle>& candles,
+    double current_price,
+    const analytics::RegimeAnalysis& regime)
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    (void)regime; // Used for future enhancements
 
     if (active_positions_.find(market) != active_positions_.end()) {
         return false;
     }
 
-    std::vector<analytics::Candle> candles_5m = resampleTo5m(candles);
+    std::vector<Candle> candles_5m = resampleTo5m(candles);
 
     if (candles_5m.size() < 30) {
         return false;
@@ -328,7 +337,7 @@ bool BreakoutStrategy::shouldExit(
 
 double BreakoutStrategy::calculateStopLoss(
     double entry_price,
-    const std::vector<analytics::Candle>& candles)
+    const std::vector<Candle>& candles)
 {
     //std::lock_guard<std::mutex> lock(mutex_);
     
@@ -345,7 +354,7 @@ double BreakoutStrategy::calculateStopLoss(
 
 double BreakoutStrategy::calculateTakeProfit(
     double entry_price,
-    const std::vector<analytics::Candle>& candles)
+    const std::vector<Candle>& candles)
 {
    // std::lock_guard<std::mutex> lock(mutex_);
    (void)candles;  // candles 파라미터 미사용
@@ -600,7 +609,7 @@ nlohmann::json BreakoutStrategy::getCachedOrderBook(const std::string& market)
     return cached_orderbook_;
 }
 
-std::vector<analytics::Candle> BreakoutStrategy::getCachedCandles(
+std::vector<Candle> BreakoutStrategy::getCachedCandles(
     const std::string& market,
     int count)
 {
@@ -615,7 +624,7 @@ std::vector<analytics::Candle> BreakoutStrategy::getCachedCandles(
         if (candle_cache_.count(market)) {
             return candle_cache_[market];
         }
-        return std::vector<analytics::Candle>();
+        return std::vector<Candle>();
     }
     
     try {
@@ -631,7 +640,7 @@ std::vector<analytics::Candle> BreakoutStrategy::getCachedCandles(
         if (candle_cache_.count(market)) {
             return candle_cache_[market];
         }
-        return std::vector<analytics::Candle>();
+        return std::vector<Candle>();
     }
 }
 
@@ -723,7 +732,7 @@ bool BreakoutStrategy::isCircuitBreakerActive() const
 BreakoutSignalMetrics BreakoutStrategy::analyzeBreakout(
     const std::string& market,
     const analytics::CoinMetrics& metrics,
-    const std::vector<analytics::Candle>& candles,
+    const std::vector<Candle>& candles,
     double current_price)
 {
     BreakoutSignalMetrics signal;
@@ -819,7 +828,7 @@ BreakoutSignalMetrics BreakoutStrategy::analyzeBreakout(
 
 // ===== Calculate Donchian Channel =====
 
-DonchianChannel BreakoutStrategy::calculateDonchianChannel(const std::vector<analytics::Candle>& candles, int period) const {
+DonchianChannel BreakoutStrategy::calculateDonchianChannel(const std::vector<Candle>& candles, int period) const {
     DonchianChannel channel;
     if (candles.size() < static_cast<size_t>(period + 1)) return channel;
 
@@ -842,7 +851,7 @@ DonchianChannel BreakoutStrategy::calculateDonchianChannel(const std::vector<ana
 // ===== Calculate Support/Resistance =====
 
 SupportResistanceLevels BreakoutStrategy::calculateSupportResistance(
-    const std::vector<analytics::Candle>& candles) const
+    const std::vector<Candle>& candles) const
 {
     SupportResistanceLevels sr;
     
@@ -883,7 +892,7 @@ SupportResistanceLevels BreakoutStrategy::calculateSupportResistance(
 // ===== Find Swing Highs =====
 
 std::vector<double> BreakoutStrategy::findSwingHighs(
-    const std::vector<analytics::Candle>& candles) const
+    const std::vector<Candle>& candles) const
 {
     std::vector<double> swing_highs;
     
@@ -906,7 +915,7 @@ std::vector<double> BreakoutStrategy::findSwingHighs(
 // ===== Find Swing Lows =====
 
 std::vector<double> BreakoutStrategy::findSwingLows(
-    const std::vector<analytics::Candle>& candles) const
+    const std::vector<Candle>& candles) const
 {
     std::vector<double> swing_lows;
     
@@ -929,7 +938,7 @@ std::vector<double> BreakoutStrategy::findSwingLows(
 // ===== Calculate Volume Profile =====
 
 VolumeProfileData BreakoutStrategy::calculateVolumeProfile(
-    const std::vector<analytics::Candle>& candles) const
+    const std::vector<Candle>& candles) const
 {
     VolumeProfileData profile;
     
@@ -1010,7 +1019,7 @@ VolumeProfileData BreakoutStrategy::calculateVolumeProfile(
 // ===== Analyze Market Structure =====
 
 MarketStructureAnalysis BreakoutStrategy::analyzeMarketStructure(
-    const std::vector<analytics::Candle>& candles) const
+    const std::vector<Candle>& candles) const
 {
     MarketStructureAnalysis structure;
     
@@ -1070,7 +1079,7 @@ MarketStructureAnalysis BreakoutStrategy::analyzeMarketStructure(
 // ===== Is Consolidating =====
 
 bool BreakoutStrategy::isConsolidating(
-    const std::vector<analytics::Candle>& candles,
+    const std::vector<Candle>& candles,
     double& range_pct) const
 {
     if (candles.size() < MIN_CONSOLIDATION_BARS) {
@@ -1097,7 +1106,7 @@ bool BreakoutStrategy::isConsolidating(
 bool BreakoutStrategy::isFalseBreakout(
     double current_price,
     double breakout_level,
-    const std::vector<analytics::Candle>& candles) const
+    const std::vector<Candle>& candles) const
 {
     double breakout_pct = (current_price - breakout_level) / breakout_level;
     if (breakout_pct < 0.005) {
@@ -1159,7 +1168,7 @@ double BreakoutStrategy::calculateBreakoutStrength(
 
 bool BreakoutStrategy::isVolumeSpikeSignificant(
     const analytics::CoinMetrics& metrics,
-    const std::vector<analytics::Candle>& candles) const
+    const std::vector<Candle>& candles) const
 {
     (void)metrics;
     if (candles.size() < 20) {
@@ -1179,7 +1188,7 @@ bool BreakoutStrategy::isVolumeSpikeSignificant(
 
 // ===== Calculate Volume Confirmation =====
 
-double BreakoutStrategy::calculateVolumeConfirmation(const std::vector<analytics::Candle>& candles) const {
+double BreakoutStrategy::calculateVolumeConfirmation(const std::vector<Candle>& candles) const {
     if (candles.size() < 25) return 0.0;
     
     // [수정] 최근 3분 거래량 평균 (데이터의 맨 뒤)
@@ -1202,7 +1211,7 @@ double BreakoutStrategy::calculateVolumeConfirmation(const std::vector<analytics
 // ===== Calculate ATR =====
 
 double BreakoutStrategy::calculateATR(
-    const std::vector<analytics::Candle>& candles,
+    const std::vector<Candle>& candles,
     int period) const
 {
     if (candles.size() < static_cast<size_t>(period + 1)) {
@@ -1332,7 +1341,7 @@ double BreakoutStrategy::adjustForVolatility(
 
 // ===== Calculate Volatility =====
 
-double BreakoutStrategy::calculateVolatility(const std::vector<analytics::Candle>& candles) const {
+double BreakoutStrategy::calculateVolatility(const std::vector<Candle>& candles) const {
     if (candles.size() < 21) return 0.02;
     std::vector<double> returns;
     // [수정] 정방향(Ascending) 정렬 기준 현재 수익률 계산
@@ -1397,17 +1406,17 @@ long long BreakoutStrategy::getCurrentTimestamp() const
     ).count();
 }
 
-std::vector<analytics::Candle> BreakoutStrategy::parseCandlesFromJson(
+std::vector<Candle> BreakoutStrategy::parseCandlesFromJson(
     const nlohmann::json& json_data) const
 {
     return analytics::TechnicalIndicators::jsonToCandles(json_data);
 }
 
-std::vector<analytics::Candle> BreakoutStrategy::resampleTo5m(const std::vector<analytics::Candle>& candles_1m) const {
+std::vector<Candle> BreakoutStrategy::resampleTo5m(const std::vector<Candle>& candles_1m) const {
     if (candles_1m.size() < 5) return {};
-    std::vector<analytics::Candle> candles_5m;
+    std::vector<Candle> candles_5m;
     for (size_t i = 0; i + 5 <= candles_1m.size(); i += 5) {
-        analytics::Candle candle_5m;
+        Candle candle_5m;
         candle_5m.open = candles_1m[i].open;         // [수정] i가 가장 과거
         candle_5m.close = candles_1m[i + 4].close;   // [수정] i+4가 가장 최신
         candle_5m.high = candles_1m[i].high;

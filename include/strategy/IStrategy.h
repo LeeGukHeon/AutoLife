@@ -3,6 +3,7 @@
 #include "common/Types.h"
 #include "analytics/TechnicalIndicators.h"
 #include "analytics/MarketScanner.h"
+#include "analytics/RegimeDetector.h"
 #include <string>
 #include <vector>
 #include <memory>
@@ -164,22 +165,28 @@ public:
     // 전략 정보 반환
     virtual StrategyInfo getInfo() const = 0;
     
+
+
+// ...
+
     // 신호 생성 (핵심 메서드)
-    // 추가 매개변수: 현재 엔진의 가용자본(원화)
+    // 추가 매개변수: 현재 엔진의 가용자본(원화), 시장 국면 분석(Regime)
     virtual Signal generateSignal(
         const std::string& market,
         const analytics::CoinMetrics& metrics,
-        const std::vector<analytics::Candle>& candles,
+        const std::vector<Candle>& candles,
         double current_price,
-        double available_capital
+        double available_capital,
+        const analytics::RegimeAnalysis& regime
     ) = 0;
     
     // 진입 조건 체크
     virtual bool shouldEnter(
         const std::string& market,
         const analytics::CoinMetrics& metrics,
-        const std::vector<analytics::Candle>& candles,
-        double current_price
+        const std::vector<Candle>& candles,
+        double current_price,
+        const analytics::RegimeAnalysis& regime
     ) = 0;
     
     // 청산 조건 체크
@@ -193,13 +200,13 @@ public:
     // 손절 가격 계산
     virtual double calculateStopLoss(
         double entry_price,
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) = 0;
     
     // 익절 가격 계산
     virtual double calculateTakeProfit(
         double entry_price,
-        const std::vector<analytics::Candle>& candles
+        const std::vector<Candle>& candles
     ) = 0;
     
     // 포지션 사이즈 계산 (자본 대비 비율)
