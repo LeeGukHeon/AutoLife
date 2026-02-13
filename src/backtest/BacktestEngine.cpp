@@ -5,11 +5,14 @@
 #include "core/execution/ExecutionUpdateSchema.h"
 #include <iostream>
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <set>
+#include <string_view>
 
 #include "strategy/ScalpingStrategy.h"
 #include "strategy/MomentumStrategy.h"
@@ -21,14 +24,60 @@ namespace autolife {
 namespace backtest {
 
 namespace {
-constexpr double ENTRY_SLIPPAGE_PCT = 0.0005;  // 0.05%
-constexpr double EXIT_SLIPPAGE_PCT = 0.0007;   // 0.07%
-constexpr double STOP_SLIPPAGE_PCT = 0.0015;   // 0.15% (worse fill on stop)
+constexpr double CORE_ENTRY_SLIPPAGE_PCT = 0.0005;   // 0.05%
+constexpr double CORE_EXIT_SLIPPAGE_PCT = 0.0007;    // 0.07%
+constexpr double CORE_STOP_SLIPPAGE_PCT = 0.0015;    // 0.15%
+constexpr double LEGACY_ENTRY_SLIPPAGE_PCT = 0.0002; // 0.02%
+constexpr double LEGACY_EXIT_SLIPPAGE_PCT = 0.0003;  // 0.03%
+constexpr double LEGACY_STOP_SLIPPAGE_PCT = 0.0010;  // 0.10%
+constexpr size_t BACKTEST_CANDLE_WINDOW = 4000;
+constexpr size_t TF_5M_MAX_BARS = 120;
+constexpr size_t TF_1H_MAX_BARS = 120;
+constexpr size_t TF_4H_MAX_BARS = 90;
+constexpr size_t TF_1D_MAX_BARS = 60;
 
 long long getCurrentTimeMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()
     ).count();
+}
+
+long long normalizeTimestampMs(long long ts) {
+    // Second-based timestamps are converted to millisecond scale.
+    if (ts > 0 && ts < 1000000000000LL) {
+        return ts * 1000LL;
+    }
+    return ts;
+}
+
+std::string toLowerCopy(const std::string& value) {
+    std::string out = value;
+    std::transform(out.begin(), out.end(), out.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return out;
+}
+
+bool startsWith(const std::string& value, const std::string& prefix) {
+    return value.size() >= prefix.size() && value.compare(0, prefix.size(), prefix) == 0;
+}
+
+bool containsToken(const std::string& value, const std::string& token) {
+    return value.find(token) != std::string::npos;
+}
+
+double entrySlippagePct(const engine::EngineConfig& cfg) {
+    const bool execution_plane_enabled = cfg.enable_core_plane_bridge && cfg.enable_core_execution_plane;
+    return execution_plane_enabled ? CORE_ENTRY_SLIPPAGE_PCT : LEGACY_ENTRY_SLIPPAGE_PCT;
+}
+
+double exitSlippagePct(const engine::EngineConfig& cfg) {
+    const bool execution_plane_enabled = cfg.enable_core_plane_bridge && cfg.enable_core_execution_plane;
+    return execution_plane_enabled ? CORE_EXIT_SLIPPAGE_PCT : LEGACY_EXIT_SLIPPAGE_PCT;
+}
+
+double stopSlippagePct(const engine::EngineConfig& cfg) {
+    const bool execution_plane_enabled = cfg.enable_core_plane_bridge && cfg.enable_core_execution_plane;
+    return execution_plane_enabled ? CORE_STOP_SLIPPAGE_PCT : LEGACY_STOP_SLIPPAGE_PCT;
 }
 
 std::filesystem::path executionUpdateArtifactPath() {
@@ -210,6 +259,8 @@ BacktestEngine::BacktestEngine()
       // Initialize Components
       strategy_manager_ = std::make_unique<strategy::StrategyManager>(http_client_);
       regime_detector_ = std::make_unique<analytics::RegimeDetector>();
+      policy_controller_ = std::make_unique<engine::AdaptivePolicyController>();
+      performance_store_ = std::make_unique<engine::PerformanceStore>();
       // RiskManager will be initialized in init() with config capital
 }
 
@@ -220,6 +271,7 @@ void BacktestEngine::init(const Config& config) {
     balance_krw_ = config.getInitialCapital();
     balance_asset_ = 0.0;
     max_balance_ = balance_krw_;
+    loaded_tf_cursors_.clear();
     
     // Reset Risk Manager with initial capital
     risk_manager_ = std::make_unique<risk::RiskManager>(balance_krw_);
@@ -269,7 +321,188 @@ void BacktestEngine::init(const Config& config) {
         strategy_manager_->registerStrategy(grid);
     }
     
-    LOG_INFO("BacktestEngine Initialized with all strategies.");
+    LOG_INFO(
+        "BacktestEngine initialized (core_bridge={}, core_policy={}, core_risk={}, core_execution={})",
+        engine_config_.enable_core_plane_bridge ? "on" : "off",
+        engine_config_.enable_core_policy_plane ? "on" : "off",
+        engine_config_.enable_core_risk_plane ? "on" : "off",
+        engine_config_.enable_core_execution_plane ? "on" : "off"
+    );
+}
+
+long long BacktestEngine::toMsTimestamp(long long ts) {
+    return normalizeTimestampMs(ts);
+}
+
+void BacktestEngine::normalizeTimestampsToMs(std::vector<Candle>& candles) {
+    for (auto& candle : candles) {
+        candle.timestamp = toMsTimestamp(candle.timestamp);
+    }
+    std::sort(candles.begin(), candles.end(), [](const Candle& a, const Candle& b) {
+        return a.timestamp < b.timestamp;
+    });
+}
+
+std::vector<Candle> BacktestEngine::aggregateCandles(
+    const std::vector<Candle>& candles_1m,
+    int timeframe_minutes,
+    size_t max_bars
+) {
+    if (candles_1m.empty()) {
+        return {};
+    }
+    if (timeframe_minutes <= 1) {
+        if (candles_1m.size() <= max_bars) {
+            return candles_1m;
+        }
+        return std::vector<Candle>(candles_1m.end() - static_cast<std::ptrdiff_t>(max_bars), candles_1m.end());
+    }
+
+    const long long bucket_ms = static_cast<long long>(timeframe_minutes) * 60LL * 1000LL;
+    std::vector<Candle> aggregated;
+    aggregated.reserve(candles_1m.size() / static_cast<size_t>(timeframe_minutes) + 2);
+
+    Candle current{};
+    long long current_bucket = std::numeric_limits<long long>::min();
+    bool has_current = false;
+
+    for (const auto& src : candles_1m) {
+        const long long ts_ms = toMsTimestamp(src.timestamp);
+        const long long bucket = (ts_ms / bucket_ms) * bucket_ms;
+        if (!has_current || bucket != current_bucket) {
+            if (has_current) {
+                aggregated.push_back(current);
+            }
+            current_bucket = bucket;
+            current.timestamp = bucket;
+            current.open = src.open;
+            current.high = src.high;
+            current.low = src.low;
+            current.close = src.close;
+            current.volume = src.volume;
+            has_current = true;
+            continue;
+        }
+
+        current.high = std::max(current.high, src.high);
+        current.low = std::min(current.low, src.low);
+        current.close = src.close;
+        current.volume += src.volume;
+    }
+
+    if (has_current) {
+        aggregated.push_back(current);
+    }
+
+    if (aggregated.size() > max_bars) {
+        aggregated.erase(
+            aggregated.begin(),
+            aggregated.end() - static_cast<std::ptrdiff_t>(max_bars)
+        );
+    }
+    return aggregated;
+}
+
+void BacktestEngine::loadCompanionTimeframes(const std::string& file_path) {
+    loaded_tf_candles_.clear();
+    loaded_tf_cursors_.clear();
+
+    std::filesystem::path primary(file_path);
+    if (!primary.has_parent_path() || !std::filesystem::exists(primary.parent_path())) {
+        return;
+    }
+
+    const std::string stem_lower = toLowerCopy(primary.stem().string());
+    const std::string prefix = "upbit_";
+    const std::string pivot = "_1m_";
+    if (!startsWith(stem_lower, prefix) || !containsToken(stem_lower, pivot)) {
+        return;
+    }
+
+    const size_t market_begin = prefix.size();
+    const size_t market_end = stem_lower.find(pivot, market_begin);
+    if (market_end == std::string::npos || market_end <= market_begin) {
+        return;
+    }
+    const std::string market_token = stem_lower.substr(market_begin, market_end - market_begin);
+
+    auto findCompanion = [&](const std::vector<std::string>& tf_tokens) -> std::filesystem::path {
+        const auto parent = primary.parent_path();
+        for (const auto& entry : std::filesystem::directory_iterator(parent)) {
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+            if (toLowerCopy(entry.path().extension().string()) != ".csv") {
+                continue;
+            }
+
+            const std::string candidate_stem = toLowerCopy(entry.path().stem().string());
+            for (const auto& token : tf_tokens) {
+                const std::string expected_prefix = "upbit_" + market_token + "_" + token + "_";
+                if (startsWith(candidate_stem, expected_prefix)) {
+                    return entry.path();
+                }
+            }
+        }
+        return {};
+    };
+
+    struct TfSpec {
+        std::string tf_key;
+        std::vector<std::string> tokens;
+    };
+
+    const std::vector<TfSpec> specs = {
+        {"5m", {"5m"}},
+        {"1h", {"60m"}},
+        {"4h", {"240m"}},
+        {"1d", {"1d", "1440m"}}
+    };
+
+    for (const auto& spec : specs) {
+        const auto companion = findCompanion(spec.tokens);
+        if (companion.empty()) {
+            continue;
+        }
+
+        auto candles = DataHistory::loadCSV(companion.string());
+        if (candles.empty()) {
+            continue;
+        }
+        normalizeTimestampsToMs(candles);
+        loaded_tf_candles_[spec.tf_key] = std::move(candles);
+        loaded_tf_cursors_[spec.tf_key] = 0;
+        LOG_INFO("Backtest companion timeframe loaded: tf={} rows={} file={}",
+                 spec.tf_key,
+                 loaded_tf_candles_[spec.tf_key].size(),
+                 companion.string());
+    }
+}
+
+std::vector<Candle> BacktestEngine::getTimeframeCandles(
+    const std::string& timeframe,
+    long long current_timestamp,
+    int fallback_minutes,
+    size_t max_bars
+) {
+    const long long ts_ms = toMsTimestamp(current_timestamp);
+    auto loaded_it = loaded_tf_candles_.find(timeframe);
+    if (loaded_it != loaded_tf_candles_.end()) {
+        const auto& source = loaded_it->second;
+        size_t& cursor = loaded_tf_cursors_[timeframe];
+        while (cursor < source.size() &&
+               toMsTimestamp(source[cursor].timestamp) <= ts_ms) {
+            ++cursor;
+        }
+
+        if (cursor > 0) {
+            const size_t start = (cursor > max_bars) ? (cursor - max_bars) : 0;
+            return std::vector<Candle>(source.begin() + static_cast<std::ptrdiff_t>(start),
+                                       source.begin() + static_cast<std::ptrdiff_t>(cursor));
+        }
+    }
+
+    return aggregateCandles(current_candles_, fallback_minutes, max_bars);
 }
 
 void BacktestEngine::loadData(const std::string& file_path) {
@@ -278,6 +511,29 @@ void BacktestEngine::loadData(const std::string& file_path) {
     } else {
         history_data_ = DataHistory::loadCSV(file_path);
     }
+
+    normalizeTimestampsToMs(history_data_);
+    loadCompanionTimeframes(file_path);
+
+    const std::string stem_lower = toLowerCopy(std::filesystem::path(file_path).stem().string());
+    const std::string prefix = "upbit_";
+    const std::string pivot = "_1m_";
+    if (startsWith(stem_lower, prefix) && containsToken(stem_lower, pivot)) {
+        const size_t market_begin = prefix.size();
+        const size_t market_end = stem_lower.find(pivot, market_begin);
+        if (market_end != std::string::npos && market_end > market_begin) {
+            std::string token = stem_lower.substr(market_begin, market_end - market_begin);
+            std::replace(token.begin(), token.end(), '_', '-');
+            std::transform(token.begin(), token.end(), token.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+            market_name_ = token;
+        }
+    }
+
+    LOG_INFO("Backtest data loaded: market={}, rows={}, tf_companions={}",
+             market_name_,
+             history_data_.size(),
+             loaded_tf_candles_.size());
 }
 
 void BacktestEngine::run() {
@@ -299,7 +555,7 @@ void BacktestEngine::run() {
 void BacktestEngine::processCandle(const Candle& candle) {
     // 1. Accumulate History
     current_candles_.push_back(candle);
-    if (current_candles_.size() > 200) {
+    if (current_candles_.size() > BACKTEST_CANDLE_WINDOW) {
         current_candles_.erase(current_candles_.begin()); // Keep window size
     }
     
@@ -314,6 +570,11 @@ void BacktestEngine::processCandle(const Candle& candle) {
     analytics::CoinMetrics metrics;
     metrics.market = market_name_;
     metrics.candles = current_candles_;
+    metrics.candles_by_tf["1m"] = metrics.candles;
+    metrics.candles_by_tf["5m"] = getTimeframeCandles("5m", candle.timestamp, 5, TF_5M_MAX_BARS);
+    metrics.candles_by_tf["1h"] = getTimeframeCandles("1h", candle.timestamp, 60, TF_1H_MAX_BARS);
+    metrics.candles_by_tf["4h"] = getTimeframeCandles("4h", candle.timestamp, 240, TF_4H_MAX_BARS);
+    metrics.candles_by_tf["1d"] = getTimeframeCandles("1d", candle.timestamp, 1440, TF_1D_MAX_BARS);
     metrics.current_price = current_price;
     metrics.volatility = regime.atr_pct;
     
@@ -406,7 +667,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
     }
     if (risk_manager_->isDrawdownExceeded()) {
         if (position) {
-            const double forced_exit = current_price * (1.0 - EXIT_SLIPPAGE_PCT);
+            const double forced_exit = current_price * (1.0 - exitSlippagePct(engine_config_));
             Order dd_order;
             dd_order.market = market_name_;
             dd_order.side = OrderSide::SELL;
@@ -442,7 +703,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
             const bool tp2_touched = (candle.high >= position->take_profit_2);
 
             if (stop_touched) {
-                const double stop_fill = position->stop_loss * (1.0 - STOP_SLIPPAGE_PCT);
+                const double stop_fill = position->stop_loss * (1.0 - stopSlippagePct(engine_config_));
                 Order sl_order;
                 sl_order.market = market_name_;
                 sl_order.side = OrderSide::SELL;
@@ -453,7 +714,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 risk_manager_->exitPosition(market_name_, stop_fill, "StopLoss");
             } else {
                 if (!position->half_closed && tp1_touched) {
-                    const double tp1_fill = position->take_profit_1 * (1.0 - EXIT_SLIPPAGE_PCT);
+                    const double tp1_fill = position->take_profit_1 * (1.0 - exitSlippagePct(engine_config_));
                     const double partial_qty = position->quantity * 0.5;
 
                     Order tp1_order;
@@ -470,7 +731,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 if (position) {
                     const bool tp2_touched_after_partial = tp2_touched || (candle.high >= position->take_profit_2);
                     if (tp2_touched_after_partial) {
-                        const double tp2_fill = position->take_profit_2 * (1.0 - EXIT_SLIPPAGE_PCT);
+                        const double tp2_fill = position->take_profit_2 * (1.0 - exitSlippagePct(engine_config_));
                         Order tp2_order;
                         tp2_order.market = market_name_;
                         tp2_order.side = OrderSide::SELL;
@@ -485,7 +746,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
                         order.market = market_name_;
                         order.side = OrderSide::SELL;
                         order.volume = position->quantity;
-                        order.price = current_price * (1.0 - EXIT_SLIPPAGE_PCT);
+                        order.price = current_price * (1.0 - exitSlippagePct(engine_config_));
                         order.strategy_name = position->strategy_name;
                         executeOrder(order, order.price);
                         risk_manager_->exitPosition(market_name_, order.price, "StrategyExit");
@@ -514,6 +775,9 @@ void BacktestEngine::processCandle(const Candle& candle) {
         const bool small_seed_mode =
             bt_metrics.total_capital > 0.0 &&
             bt_metrics.total_capital <= engine_config_.small_account_tier2_capital_krw;
+        const bool core_bridge_enabled = engine_config_.enable_core_plane_bridge;
+        const bool core_policy_enabled = core_bridge_enabled && engine_config_.enable_core_policy_plane;
+        const bool core_risk_enabled = core_bridge_enabled && engine_config_.enable_core_risk_plane;
         if (small_seed_mode) {
             filter_threshold = std::clamp(filter_threshold + 0.08, 0.35, 0.90);
         }
@@ -547,10 +811,37 @@ void BacktestEngine::processCandle(const Candle& candle) {
             min_expected_value = std::max(0.0, min_expected_value - 0.00003);
         }
 
-        auto best_signal = strategy_manager_->selectRobustSignal(
-            strategy_manager_->filterSignals(signals, filter_threshold, min_expected_value, regime.regime),
-            regime.regime
+        auto filtered_signals = strategy_manager_->filterSignals(
+            signals, filter_threshold, min_expected_value, regime.regime
         );
+        std::vector<strategy::Signal> candidate_signals = filtered_signals;
+        if (core_policy_enabled && policy_controller_) {
+            if (performance_store_) {
+                performance_store_->rebuild(risk_manager_->getTradeHistory());
+            }
+
+            engine::PolicyInput policy_input;
+            policy_input.candidates = filtered_signals;
+            policy_input.small_seed_mode = small_seed_mode;
+            policy_input.max_new_orders_per_scan = 1;
+            policy_input.dominant_regime = regime.regime;
+            if (performance_store_) {
+                policy_input.strategy_stats = &performance_store_->byStrategy();
+                policy_input.bucket_stats = &performance_store_->byBucket();
+            }
+
+            auto policy_output = policy_controller_->selectCandidates(policy_input);
+            candidate_signals = std::move(policy_output.selected_candidates);
+        }
+
+        strategy::Signal best_signal;
+        if (!candidate_signals.empty()) {
+            if (core_bridge_enabled) {
+                best_signal = strategy_manager_->selectRobustSignal(candidate_signals, regime.regime);
+            } else {
+                best_signal = strategy_manager_->selectBestSignal(candidate_signals);
+            }
+        }
 
         if (best_signal.type != strategy::SignalType::NONE) {
             best_signal.market_regime = regime.regime;
@@ -559,7 +850,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
             double adaptive_rr_add = 0.0;
             double adaptive_edge_add = 0.0;
             auto stat_it = strategy_edge.find(best_signal.strategy_name);
-            if (stat_it != strategy_edge.end()) {
+            if (core_risk_enabled && stat_it != strategy_edge.end()) {
                 const auto& stat = stat_it->second;
                 if (stat.trades >= engine_config_.min_strategy_trades_for_ev) {
                     strategy_ev_ok =
@@ -592,36 +883,40 @@ void BacktestEngine::processCandle(const Candle& candle) {
             }
 
             engine::EngineConfig tuned_cfg = engine_config_;
-            if (small_seed_mode) {
+            if (core_risk_enabled && small_seed_mode) {
                 tuned_cfg.min_reward_risk = engine_config_.min_reward_risk + 0.35;
                 tuned_cfg.min_expected_edge_pct = engine_config_.min_expected_edge_pct * 1.8;
             }
-            tuned_cfg.min_reward_risk = std::clamp(
-                tuned_cfg.min_reward_risk + adaptive_rr_add,
-                tuned_cfg.min_reward_risk,
-                tuned_cfg.min_reward_risk + 0.9
-            );
-            tuned_cfg.min_expected_edge_pct = std::clamp(
-                tuned_cfg.min_expected_edge_pct + adaptive_edge_add,
-                tuned_cfg.min_expected_edge_pct,
-                tuned_cfg.min_expected_edge_pct + 0.002
-            );
+            if (core_risk_enabled) {
+                tuned_cfg.min_reward_risk = std::clamp(
+                    tuned_cfg.min_reward_risk + adaptive_rr_add,
+                    tuned_cfg.min_reward_risk,
+                    tuned_cfg.min_reward_risk + 0.9
+                );
+                tuned_cfg.min_expected_edge_pct = std::clamp(
+                    tuned_cfg.min_expected_edge_pct + adaptive_edge_add,
+                    tuned_cfg.min_expected_edge_pct,
+                    tuned_cfg.min_expected_edge_pct + 0.002
+                );
+            }
 
             normalizeSignalStopLossByRegime(best_signal, best_signal.market_regime);
-            if (strategy_ev_ok &&
-                rebalanceSignalRiskReward(best_signal, tuned_cfg) &&
-                passesRegimeGate(best_signal.market_regime, engine_config_) &&
-                passesEntryQualityGate(best_signal, tuned_cfg)) {
+            const bool risk_gate_ok =
+                !core_risk_enabled ||
+                (strategy_ev_ok &&
+                 passesRegimeGate(best_signal.market_regime, engine_config_) &&
+                 passesEntryQualityGate(best_signal, tuned_cfg));
+            if (rebalanceSignalRiskReward(best_signal, tuned_cfg) && risk_gate_ok) {
                 // Validate Risk
                 if (risk_manager_->canEnterPosition(
                     market_name_,
-                    current_price * (1.0 + ENTRY_SLIPPAGE_PCT),
+                    current_price * (1.0 + entrySlippagePct(engine_config_)),
                     best_signal.position_size,
                     best_signal.strategy_name
                 )) {
                     // Execute Buy
                     double available_cash = risk_manager_->getRiskMetrics().available_capital;
-                    double fill_price = current_price * (1.0 + ENTRY_SLIPPAGE_PCT);
+                    double fill_price = current_price * (1.0 + entrySlippagePct(engine_config_));
                     const double fee_rate = Config::getInstance().getFeeRate();
                     const double min_order_krw = std::max(5000.0, engine_config_.min_order_krw);
                     const double fee_reserve = std::clamp(engine_config_.order_fee_reserve_pct, 0.0, 0.02);

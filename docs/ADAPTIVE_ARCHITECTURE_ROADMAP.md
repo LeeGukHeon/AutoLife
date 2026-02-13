@@ -48,6 +48,16 @@ Completed:
 - Risk/Trade data model expanded with regime/liquidity/volatility/EV/RR metadata for each trade.
 - Fee-inclusive small-seed matrix re-run completed (`build/Release/logs/small_seed_summary.json`).
 - Release build passes.
+- Real-data candidate loop established:
+  - `scripts/run_realdata_candidate_loop.ps1` (fetch -> matrix -> tuning).
+  - Upbit historical 1m datasets integrated into profitability gate workflow.
+- Live/Backtest operator UX simplification:
+  - `main` live mode supports `SIMPLE(SAFE/BALANCED/ACTIVE)` profile mode.
+  - Interactive backtest supports running an existing real-data CSV directly.
+- Backtest parity fixes:
+  - Backtest now injects MTF candles (`1m/5m/1h/4h/1d`) into `CoinMetrics`.
+  - Companion TF datasets (`5m/60m/240m`) are auto-loaded when present; fallback aggregation remains.
+  - Core plane flags now alter backtest decision path (legacy vs bridge vs policy/risk/execution).
 
 In progress:
 - Decision records are structured in policy output, but persistent JSONL verification in backtest path is still open.
@@ -91,3 +101,13 @@ In progress:
 2. Implement `LearningStateStore` checkpoint/load for online adaptive parameters.
 3. Unify adaptive threshold helpers across all strategy classes.
 4. Add backtest gate-rejection telemetry and retune based on telemetry, not only top-level config knobs.
+5. Promote scanner preloaded timeframe candles (`candles_by_tf`) to first-class strategy inputs across all strategies (1m/5m/1h).
+6. Add fallback-quality flags (preloaded vs resampled) to signal metadata for policy weighting.
+7. Add market-scan telemetry: per-TF cache hit ratio, full-sync vs incremental ratio, stale-candle detection.
+8. Shift candidate gate tuning objective from trade-density to edge-quality:
+- Prioritize fixing negative expectancy/profitable-ratio bottlenecks on real-data matrix.
+- Add per-market loss-tail diagnostics and strategy/regime attribution for worst contributors.
+9. Close profile-parity gap in backtest:
+- Add explicit regression test/CI check that `profiles_identical_by_dataset` is `False` on at least one real-data fixture.
+10. After parameter sweep, tune strategy-internal filters:
+- Focus on per-strategy loss-tail controls (breakout/scalping first) to lift expectancy and profitable-ratio without collapsing trade count.

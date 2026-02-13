@@ -106,6 +106,9 @@ struct Signal {
     int strategy_trade_count;           // 전략 거래 수
     double score;                       // 통합 점수
     analytics::MarketRegime market_regime; // signal-time market regime
+    bool used_preloaded_tf_5m;          // scanner preloaded 5m candles used
+    bool used_preloaded_tf_1h;          // scanner preloaded 1h candles used
+    bool used_resampled_tf_fallback;    // fallback to in-strategy resampling path
     
     std::string reason;                 // 신호 발생 이유
     long long timestamp;                // 신호 발생 시간
@@ -135,6 +138,9 @@ struct Signal {
         , strategy_trade_count(0)
         , score(0.0)
         , market_regime(analytics::MarketRegime::UNKNOWN)
+        , used_preloaded_tf_5m(false)
+        , used_preloaded_tf_1h(false)
+        , used_resampled_tf_fallback(false)
         , timestamp(0)
     {}
     

@@ -146,8 +146,15 @@ std::vector<Signal> StrategyManager::collectSignals(
             );
             if (signal.type != SignalType::NONE) {
                 signals.push_back(signal);
-                LOG_INFO("{} - {} signal generated: strength {:.2f}, score {:.2f}",
-                         market, signal.strategy_name, signal.strength, signal.score);
+                LOG_INFO(
+                    "{} - {} signal generated: strength {:.2f}, score {:.2f}, tf5m_preloaded={}, tf1h_preloaded={}, fallback={}",
+                    market,
+                    signal.strategy_name,
+                    signal.strength,
+                    signal.score,
+                    signal.used_preloaded_tf_5m ? "Y" : "N",
+                    signal.used_preloaded_tf_1h ? "Y" : "N",
+                    signal.used_resampled_tf_fallback ? "Y" : "N");
             }
         } catch (const std::exception& e) {
             LOG_ERROR("Strategy execution exception ({}): {}", strategy->getInfo().name, e.what());

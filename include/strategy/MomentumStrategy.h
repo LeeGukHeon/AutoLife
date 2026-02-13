@@ -304,6 +304,7 @@ private:
     // ===== 3. Multi-Timeframe Analysis =====
     
     MultiTimeframeSignal analyzeMultiTimeframe(
+        const analytics::CoinMetrics& metrics,
         const std::vector<Candle>& candles_1m
     ) const;
     

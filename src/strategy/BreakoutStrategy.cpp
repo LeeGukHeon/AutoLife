@@ -174,7 +174,19 @@ Signal BreakoutStrategy::generateSignal(
     if (available_capital <= 0) return signal;
     if (!isBreakoutRegimeTradable(metrics, regime)) return signal;
     
-    std::vector<Candle> candles_5m = resampleTo5m(candles);
+    std::vector<Candle> candles_5m;
+    auto tf_5m_it = metrics.candles_by_tf.find("5m");
+    const bool used_preloaded_5m = (tf_5m_it != metrics.candles_by_tf.end() && tf_5m_it->second.size() >= 30);
+    signal.used_preloaded_tf_5m = used_preloaded_5m;
+    signal.used_preloaded_tf_1h =
+        metrics.candles_by_tf.find("1h") != metrics.candles_by_tf.end() &&
+        metrics.candles_by_tf.at("1h").size() >= 26;
+    signal.used_resampled_tf_fallback = !used_preloaded_5m;
+    if (used_preloaded_5m) {
+        candles_5m = tf_5m_it->second;
+    } else {
+        candles_5m = resampleTo5m(candles);
+    }
     if (candles_5m.size() < 30) return signal;
     if (!canTradeNow()) return signal;
     
@@ -302,7 +314,13 @@ bool BreakoutStrategy::shouldEnter(
         return false;
     }
 
-    std::vector<Candle> candles_5m = resampleTo5m(candles);
+    std::vector<Candle> candles_5m;
+    auto tf_5m_it = metrics.candles_by_tf.find("5m");
+    if (tf_5m_it != metrics.candles_by_tf.end() && tf_5m_it->second.size() >= 30) {
+        candles_5m = tf_5m_it->second;
+    } else {
+        candles_5m = resampleTo5m(candles);
+    }
 
     if (candles_5m.size() < 30) {
         return false;

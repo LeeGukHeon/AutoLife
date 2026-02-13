@@ -32,6 +32,9 @@ struct PolicyDecisionRecord {
     int strategy_trades = 0;
     double strategy_win_rate = 0.0;
     double strategy_profit_factor = 0.0;
+    bool used_preloaded_tf_5m = false;
+    bool used_preloaded_tf_1h = false;
+    bool used_resampled_tf_fallback = false;
 };
 
 struct PolicyOutput {

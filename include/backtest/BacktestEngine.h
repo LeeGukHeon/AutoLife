@@ -9,6 +9,8 @@
 #include "strategy/StrategyManager.h"
 #include "analytics/RegimeDetector.h"
 #include "risk/RiskManager.h"
+#include "engine/AdaptivePolicyController.h"
+#include "engine/PerformanceStore.h"
 #include "network/UpbitHttpClient.h"
 #include <memory>
 
@@ -69,6 +71,8 @@ private:
     
     // Execution State
     std::vector<Candle> current_candles_;
+    std::map<std::string, std::vector<Candle>> loaded_tf_candles_;
+    std::map<std::string, size_t> loaded_tf_cursors_;
     double dynamic_filter_value_ = 0.46; // Self-learning filter (backtest bootstrap)
     int no_entry_streak_candles_ = 0;   // Regime-aware minimum activation helper
     struct PendingBacktestOrder {
@@ -83,6 +87,8 @@ private:
     std::shared_ptr<network::UpbitHttpClient> http_client_; // Mockable
     std::unique_ptr<strategy::StrategyManager> strategy_manager_;
     std::unique_ptr<analytics::RegimeDetector> regime_detector_;
+    std::unique_ptr<engine::AdaptivePolicyController> policy_controller_;
+    std::unique_ptr<engine::PerformanceStore> performance_store_;
     std::unique_ptr<risk::RiskManager> risk_manager_;
 
     // Performance Metrics
@@ -95,6 +101,21 @@ private:
     void processCandle(const Candle& candle);
     void checkOrders(const Candle& candle);
     void executeOrder(const Order& order, double price);
+
+    void loadCompanionTimeframes(const std::string& file_path);
+    std::vector<Candle> getTimeframeCandles(
+        const std::string& timeframe,
+        long long current_timestamp,
+        int fallback_minutes,
+        size_t max_bars
+    );
+    static void normalizeTimestampsToMs(std::vector<Candle>& candles);
+    static std::vector<Candle> aggregateCandles(
+        const std::vector<Candle>& candles_1m,
+        int timeframe_minutes,
+        size_t max_bars
+    );
+    static long long toMsTimestamp(long long ts);
     
     // Self-learning
     void updateDynamicFilter();

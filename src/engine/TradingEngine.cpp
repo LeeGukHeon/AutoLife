@@ -184,6 +184,9 @@ void appendPolicyDecisionAudit(
         item["trades"] = d.strategy_trades;
         item["win_rate"] = d.strategy_win_rate;
         item["profit_factor"] = d.strategy_profit_factor;
+        item["used_preloaded_tf_5m"] = d.used_preloaded_tf_5m;
+        item["used_preloaded_tf_1h"] = d.used_preloaded_tf_1h;
+        item["used_resampled_tf_fallback"] = d.used_resampled_tf_fallback;
         line["decisions"].push_back(std::move(item));
     }
 
@@ -646,10 +649,13 @@ void TradingEngine::generateSignals() {
                 pending_signals_.push_back(best_signal);
                 total_signals_++;
 
-                LOG_INFO("Signal selected: {} - {} (strength: {:.2f})",
+                LOG_INFO("Signal selected: {} - {} (strength: {:.2f}, tf5m_preloaded={}, tf1h_preloaded={}, fallback={})",
                          coin.market,
                          best_signal.type == strategy::SignalType::STRONG_BUY ? "STRONG_BUY" : "BUY",
-                         best_signal.strength);
+                         best_signal.strength,
+                         best_signal.used_preloaded_tf_5m ? "Y" : "N",
+                         best_signal.used_preloaded_tf_1h ? "Y" : "N",
+                         best_signal.used_resampled_tf_fallback ? "Y" : "N");
             }
         } catch (const std::exception& e) {
             LOG_ERROR("Signal generation failed: {} - {}", coin.market, e.what());

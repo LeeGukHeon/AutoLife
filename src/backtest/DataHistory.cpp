@@ -4,6 +4,7 @@
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <algorithm>
+#include <cctype>
 #include "common/Logger.h"
 
 namespace autolife {
@@ -18,14 +19,35 @@ std::vector<Candle> DataHistory::loadCSV(const std::string& file_path) {
         return candles;
     }
 
-    std::string line;
-    // Skip header if it exists (heuristic: check if first char is alpha)
-    if (file.peek() != std::ifstream::traits_type::eof()) {
-        char c = file.peek();
-        if (std::isalpha(c)) {
-            std::getline(file, line);
+    auto trim = [](std::string s) {
+        while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) {
+            s.erase(s.begin());
         }
-    }
+        while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) {
+            s.pop_back();
+        }
+        return s;
+    };
+
+    auto normalizeCell = [&](std::string s) {
+        s = trim(std::move(s));
+
+        // Strip UTF-8 BOM if present at first cell.
+        if (s.size() >= 3 &&
+            static_cast<unsigned char>(s[0]) == 0xEF &&
+            static_cast<unsigned char>(s[1]) == 0xBB &&
+            static_cast<unsigned char>(s[2]) == 0xBF) {
+            s = s.substr(3);
+        }
+
+        // Accept quoted CSV cells.
+        if (s.size() >= 2 && s.front() == '"' && s.back() == '"') {
+            s = s.substr(1, s.size() - 2);
+        }
+        return trim(std::move(s));
+    };
+
+    std::string line;
 
     while (std::getline(file, line)) {
         std::stringstream ss(line);
@@ -33,10 +55,15 @@ std::vector<Candle> DataHistory::loadCSV(const std::string& file_path) {
         std::vector<std::string> row;
 
         while (std::getline(ss, cell, ',')) {
-            row.push_back(cell);
+            row.push_back(normalizeCell(cell));
         }
 
         if (row.size() < 6) continue;
+        if (row[0].empty()) continue;
+        if (!std::isdigit(static_cast<unsigned char>(row[0][0])) && row[0][0] != '-') {
+            // Header or malformed row.
+            continue;
+        }
 
         try {
             Candle candle;

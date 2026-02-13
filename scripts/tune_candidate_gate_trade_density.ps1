@@ -3,6 +3,7 @@ param(
     [string]$BuildConfigPath = ".\build\Release\config\config.json",
     [string]$DataDir = ".\data\backtest",
     [string]$CuratedDataDir = ".\data\backtest_curated",
+    [string[]]$ExtraDataDirs = @(".\data\backtest_real"),
     [string]$OutputDir = ".\build\Release\logs",
     [string]$SummaryCsv = ".\build\Release\logs\candidate_trade_density_tuning_summary.csv",
     [string]$SummaryJson = ".\build\Release\logs\candidate_trade_density_tuning_summary.json"
@@ -100,13 +101,18 @@ function Get-DatasetList {
         if (-not (Test-Path $dirPath)) {
             continue
         }
+        $isRealDataDir = $dirPath.ToLowerInvariant().Contains("backtest_real")
         $all += @(
             Get-ChildItem -Path $dirPath -File -Filter *.csv -ErrorAction SilentlyContinue |
                 Sort-Object Name |
+                Where-Object {
+                    if (-not $isRealDataDir) { return $true }
+                    $_.Name.ToLowerInvariant().Contains("_1m_")
+                } |
                 ForEach-Object { $_.FullName }
         )
     }
-    return @($all)
+    return @($all | Sort-Object -Unique)
 }
 
 $resolvedMatrixScript = Resolve-OrThrow -PathValue $MatrixScript -Label "Matrix script"
@@ -120,9 +126,18 @@ if (-not (Test-Path $resolvedOutputDir)) {
     New-Item -Path $resolvedOutputDir -ItemType Directory -Force | Out-Null
 }
 
-$datasets = Get-DatasetList -Dirs @($DataDir, $CuratedDataDir)
+$scanDirs = @($DataDir, $CuratedDataDir)
+if ($null -ne $ExtraDataDirs) {
+    foreach ($extraDir in $ExtraDataDirs) {
+        if ([string]::IsNullOrWhiteSpace($extraDir)) {
+            continue
+        }
+        $scanDirs += $extraDir
+    }
+}
+$datasets = Get-DatasetList -Dirs $scanDirs
 if (@($datasets).Count -eq 0) {
-    throw "No datasets found under DataDir/CuratedDataDir."
+    throw "No datasets found under DataDir/CuratedDataDir/ExtraDataDirs."
 }
 
 $comboSpecs = @(
@@ -143,6 +158,42 @@ $comboSpecs = @(
         momentum_min_signal_strength = 0.72
         breakout_min_signal_strength = 0.40
         mean_reversion_min_signal_strength = 0.40
+    },
+    [pscustomobject]@{
+        combo_id = "quality_strict_a"
+        description = "Quality-first strict gates for expectancy/profitable-ratio recovery."
+        max_new_orders_per_scan = 2
+        min_expected_edge_pct = 0.0016
+        min_reward_risk = 1.35
+        min_rr_weak_signal = 2.10
+        min_rr_strong_signal = 1.40
+        min_strategy_trades_for_ev = 40
+        min_strategy_expectancy_krw = 0.0
+        min_strategy_profit_factor = 1.05
+        avoid_high_volatility = $true
+        avoid_trending_down = $true
+        scalping_min_signal_strength = 0.74
+        momentum_min_signal_strength = 0.76
+        breakout_min_signal_strength = 0.45
+        mean_reversion_min_signal_strength = 0.46
+    },
+    [pscustomobject]@{
+        combo_id = "quality_strict_b"
+        description = "Balanced strict gates with slightly more throughput."
+        max_new_orders_per_scan = 2
+        min_expected_edge_pct = 0.0014
+        min_reward_risk = 1.28
+        min_rr_weak_signal = 1.95
+        min_rr_strong_signal = 1.30
+        min_strategy_trades_for_ev = 35
+        min_strategy_expectancy_krw = -1.0
+        min_strategy_profit_factor = 1.00
+        avoid_high_volatility = $true
+        avoid_trending_down = $true
+        scalping_min_signal_strength = 0.72
+        momentum_min_signal_strength = 0.74
+        breakout_min_signal_strength = 0.42
+        mean_reversion_min_signal_strength = 0.44
     },
     [pscustomobject]@{
         combo_id = "trade_density_relaxed_a"
@@ -308,6 +359,7 @@ $sortedRows | Export-Csv -Path $resolvedSummaryCsv -NoTypeInformation -Encoding 
 
 $reportOut = [ordered]@{
     generated_at = (Get-Date).ToString("o")
+    dataset_dirs = $scanDirs
     dataset_count = @($datasets).Count
     datasets = $datasets
     combos = $comboSpecs

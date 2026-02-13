@@ -4,6 +4,8 @@
 - 목표: `TARGET_ARCHITECTURE` 기준으로 기존 코드베이스를 깨지 않고 단계적으로 이전.
 - 운영 제약: 실거래 안정성/업비트 규칙 준수 우선, API 키 처리 방식은 현행 유지.
 - 전략: `legacy 경로 유지 + core 경로 점진 활성화` (플래그 기반 전환).
+- 실행 TODO 문서:
+  - `docs/TODO_STAGE15_EXECUTION_PLAN_2026-02-13.md`
 
 ## Latest Progress Snapshot (2026-02-13)
 1. Stage 0 완료: baseline 고정
@@ -343,14 +345,153 @@
     - `build/Release/logs/*.json`, `*.csv`, `*.log`
     - `build/Release/state/*.json`, `*.jsonl`
 
+## Stage 15 Addendum (2026-02-13, Live Scan Cache/Universe)
+- 실거래 스캔 최적화(최소 침습):
+  - `src/analytics/MarketScanner.cpp`
+    - 상세 스캔 종목 수 축소: `50 -> 25`
+    - 멀티 타임프레임 수집 상한 축소:
+      - `5m`: 25개
+      - `1h`: 15개
+      - `4h`: 8개
+      - `1d`: 8개
+- 롤링 캔들 캐시 도입:
+  - 초기 full fetch 이후 증분 fetch(`count=3`) + timestamp 기준 병합.
+  - 주기적 full sync(드리프트 보정) 유지.
+  - 캔들 API 최소 호출 간격 스로틀 적용.
+  - 관련 변경:
+    - `include/analytics/MarketScanner.h`
+    - `src/analytics/MarketScanner.cpp`
+    - `include/strategy/MomentumStrategy.h`
+    - `src/strategy/MomentumStrategy.cpp`
+    - `src/strategy/BreakoutStrategy.cpp`
+    - `src/strategy/MeanReversionStrategy.cpp`
+- 빌드 검증:
+  - 명시 경로 cmake 사용:
+    - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe`
+  - 실행:
+    - `cmake.exe --build build --config Release -j 6`
+  - 결과:
+    - `AutoLifeTrading.exe`, `AutoLifeTest.exe` 포함 Release 빌드 PASS.
+
+### Candle Ordering Validation (Code-level)
+- 원본 변환 정렬 보장:
+  - `src/analytics/TechnicalIndicators.cpp`
+    - `jsonToCandles()`에서 `timestamp` 존재 시 오름차순 `stable_sort`.
+- 캐시 병합 시 정렬 일관성 보장:
+  - `src/analytics/MarketScanner.cpp`
+    - `mergeCandles()`에서 `timestamp` 기준 `lower_bound` 삽입/교체.
+    - `keepRecentCandles()`는 tail만 유지해 시간순 유지.
+- 실제 사용처 순서 합치성:
+  - `src/engine/TradingEngine.cpp`
+    - 최신가는 `candles.back()` 기준 사용.
+  - 전략 코드 전반(`Momentum/MeanReversion/Breakout/Scalping/Grid`)
+    - 최근 lookback을 `candles.size()-N ... candles.size()-1`로 소비.
+    - 리샘플 함수(`resampleTo5m/resampleTo15m`)는 앞에서 뒤로 순회하며 마지막 봉을 close로 사용.
+  - 결론:
+    - 현재 사용 패턴은 `오름차순(오래된 -> 최신)` 캔들 컨벤션과 일치.
+
+### Strategy Consumption Update (Adaptive Use)
+- 해석 정정:
+  - `5m: 25개`는 "5분봉 캔들 개수"가 아니라 "5분봉 추가 조회 대상 종목 수"를 의미.
+  - 종목당 캔들 길이는 `CANDLES_5M=120` 유지.
+- 전략단 적용:
+  - `Momentum`:
+    - MTF 분석에서 scanner preloaded `5m` 우선 사용, 없으면 1m 리샘플 fallback.
+    - 15m는 5m가 충분할 때 `3x5m` 재집계 경로를 우선 사용.
+    - preloaded `1h`가 있으면 alignment score에 보조 반영.
+  - `Breakout`, `MeanReversion`:
+    - 신호 생성/진입 판단에서 `metrics.candles_by_tf["5m"]` 우선 사용.
+    - fallback은 기존 1m 리샘플 유지.
+  - `MeanReversion` 보강:
+    - 5m 부족 시 즉시 실패하지 않도록 `degraded_5m_mode`(40~79 bars) 경로를 추가하고 strength floor를 가산해 보수적으로 동작.
+
+## Stage 15 Addendum (2026-02-13, Real-data Candidate Loop + UX Simplification)
+- 실데이터 기반 반복 루프 추가:
+  - 신규:
+    - `scripts/run_realdata_candidate_loop.ps1`
+  - 확장:
+    - `scripts/tune_candidate_gate_trade_density.ps1`
+      - `-ExtraDataDirs` 추가(기본 `data/backtest_real`)
+      - 중복 dataset 제거(`Sort-Object -Unique`)
+- 실데이터 수집/검증 실행:
+  - 수집 마켓(1m, 목표 12000):
+    - `KRW-BTC`, `KRW-ETH`, `KRW-XRP`, `KRW-SOL`, `KRW-DOGE`, `KRW-ADA`, `KRW-AVAX`, `KRW-LINK`
+  - 루프 실행 결과:
+    - gate report: `build/Release/logs/profitability_gate_report_realdata.json`
+    - dataset_count: `24`(기존+curated+real)
+    - `overall_gate_pass = false`
+  - `core_full` 병목 수치:
+    - `avg_profit_factor = 2.5533` (PASS)
+    - `avg_total_trades = 12.3333` (PASS)
+    - `avg_expectancy_krw = -17.9367` (FAIL)
+    - `profitable_ratio = 0.2667` (FAIL, min 0.55)
+  - 해석:
+    - 병목이 `trade density`에서 `edge quality(기대값/수익 러닝 비율)`로 이동.
+- candidate trade-density 튜닝 결과:
+  - 요약: `build/Release/logs/candidate_trade_density_tuning_summary.csv`
+  - best combo: `quality_strict_b` (strict 세트 추가 후 갱신)
+  - strict 조합 수치:
+    - `quality_strict_b`: `avg_profit_factor=2.9122`, `avg_expectancy_krw=-16.0802`, `avg_total_trades=13.6154`, `profitable_ratio=0.3077`
+    - `quality_strict_a`: `avg_profit_factor=2.9301`, `avg_expectancy_krw=-12.7214`, `avg_total_trades=13.5385`, `profitable_ratio=0.3077`
+  - 결론:
+    - 완화(open) 계열은 성능 악화.
+    - strict 계열이 PF/expectancy를 개선했지만 `expectancy>=0`, `profitable_ratio>=0.55`는 여전히 미충족.
+- 마지막 검증 상태:
+  - `scripts/run_profitability_exploratory.ps1` PASS (`overall_gate_pass=true`, `dataset_count=14`)
+  - `scripts/apply_trading_preset.ps1` safe/active PASS (검증용 임시 config 경로)
+- 런타임 UX 단순화:
+  - `src/main.cpp`
+    - 실거래 설정에 `SIMPLE(SAFE/BALANCED/ACTIVE)` 모드 추가.
+    - 고급 파라미터는 `advanced_mode`에서만 직접 입력.
+    - 백테스트 인터랙티브에서 `기존 CSV` 직접 선택 지원(실데이터 파일 즉시 재생 가능).
+
+## Stage 15 Addendum (2026-02-13, Backtest MTF/Plane Parity Fix)
+- 핵심 수정:
+  - `src/backtest/BacktestEngine.cpp`, `include/backtest/BacktestEngine.h`
+  - 백테스트 `CoinMetrics`에 MTF 캔들(`1m/5m/1h/4h/1d`) 주입.
+  - 기본 1m 윈도우를 `200 -> 4000`으로 확장해 5m/1h 집계 안정화.
+  - 실데이터 sidecar 자동 로딩 지원:
+    - `upbit_<MARKET>_5m_*.csv`
+    - `upbit_<MARKET>_60m_*.csv`
+    - `upbit_<MARKET>_240m_*.csv`
+    - (`1d`는 파일 존재 시 로드, 미존재 시 1m 집계 fallback)
+  - sidecar 없을 때는 1m 집계 fallback 사용(기존 fixture 호환 유지).
+- core plane 플래그 반영:
+  - `legacy_default`(bridge off): `selectBestSignal` 경로.
+  - `core_bridge_only`(bridge on, policy off): `selectRobustSignal` 경로.
+  - `core_policy_*`(policy on): `AdaptivePolicyController` + `PerformanceStore` 경로.
+  - `core_risk` on일 때만 EV/Regime/Entry quality risk gate 강화 적용.
+  - `core_execution` on/off에 따라 백테스트 체결 슬리피지 모델 분기 적용.
+- 실데이터 수집 루프 확장:
+  - `scripts/run_realdata_candidate_loop.ps1`
+  - 1m 외 추가 수집 기본 포함:
+    - `5m`(`Candles5m=4000`)
+    - `60m`(`Candles1h=1200`)
+    - `240m`(`Candles4h=600`)
+  - 옵션: `-SkipHigherTfFetch`
+  - matrix/tuning 입력에서는 `data/backtest_real`의 `*_1m_*.csv`만 dataset으로 사용하고,
+    `5m/60m/240m` 파일은 backtest companion TF로만 사용.
+- 검증 결과:
+  - backtest 실행 로그에서 companion 로드 확인:
+    - `tf=5m`, `tf=1h`, `tf=4h`
+  - profile 분리 확인:
+    - `build/Release/logs/profitability_matrix_profile_check2.csv`
+    - `profiles_identical_by_dataset=False`
+  - realdata 루프(25 datasets, 1m base only) 최신 요약:
+    - `core_full.avg_profit_factor=3.1007`
+    - `core_full.avg_total_trades=11.2667`
+    - `core_full.avg_expectancy_krw=-13.1301`
+    - `overall_gate_pass=false`
+
 ## Remaining Gaps
 1. GitHub Environment 운영 설정 점검 필요
 - 코드/워크플로우 연동은 완료됨.
 - 저장소 설정에서 `strict-live-resume` Environment의 `required reviewers`/보호 규칙이 runbook 기준과 일치하는지 운영 측 최종 점검이 필요.
 
 2. Stage 13 수익성 gate 튜닝/표본 확대 필요
-- 현재 기본 데이터셋 2개 기준으로 거래수와 PF 표본이 부족해 `overall_gate_pass=false`.
-- 데이터셋 확장(기간/레짐) + gate 임계치 보정(운영 기준 유지)을 통해 재평가 필요.
+- 실데이터 확장 후 거래수/PF는 개선되었으나, `avg_expectancy_krw`와 `profitable_ratio`가 미충족.
+- 다음 튜닝 중심축을 `trade density`가 아닌 `edge quality`(손실 꼬리/시장별 음수 기대값 완화)로 전환 필요.
+- profile 분리 이슈는 backtest MTF/plane parity fix로 해소(`profiles_identical_by_dataset=false` 확인).
 
 3. 개인 배포용 최소 패키지 최종화 필요
 - 현재 문서/프리셋/스크립트는 반영 완료.
@@ -358,8 +499,8 @@
 
 ## Immediate Next Steps (Priority Order)
 1. Stage 13 수익성 gate 통과 조건 재검증
-- `scripts/run_profitability_matrix.ps1`를 dataset 확장/threshold 조정 케이스로 재실행.
-- `core_full vs legacy_default` 델타가 음수 회귀가 아닌지 우선 확인.
+- `scripts/run_realdata_candidate_loop.ps1` 기반으로 실데이터 마켓/기간을 주간 확장.
+- `profitability_matrix_realdata.csv`에서 음수 기대값 상위 마켓별 원인(전략/레짐/체결비용) 분해.
 
 2. exploratory -> candidate 승격 기준 정의
 - exploratory non-blocking 리포트 추세를 주간으로 수집하고 candidate 기준 승격 시점을 수치로 정의.
@@ -369,6 +510,18 @@
 
 4. 승인 경계 운영 점검
 - `strict-live-resume` Environment required reviewers 실제 승인 흐름(승인/거부/재시도)을 정기 리허설로 검증.
+
+5. 롤링 캐시 회귀 안전장치 보강
+- `MarketScanner` 롤링 캐시에 대한 단위/통합 테스트 추가:
+  - full fetch -> incremental merge -> keepRecent 경계값 검증
+  - timestamp 중복/누락/역순 입력 시 정렬 일관성 검증
+- 운영 로깅 보강:
+  - cache hit/miss, incremental/full-sync 비율, 종목별 마지막 캔들 timestamp 드리프트 추적
+
+6. 적응형 전략 고도화 TODO
+- preloaded `1h/4h/1d`를 각 전략의 진입 점수와 리스크 파라미터(손절 폭/position scale)에 일관 반영.
+- `candles_by_tf` 미존재/누락 시 fallback 품질 플래그를 신호 payload에 기록해 정책 레이어에서 가중치 조정.
+- 전략별 MTF 활용도를 메트릭화(used_tf_1m/5m/1h flags, fallback ratio)하여 주간 리포트에 추가.
 
 ## Environment Memo
 - CMake path:

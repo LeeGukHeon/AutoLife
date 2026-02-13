@@ -315,21 +315,51 @@ int main(int argc, char* argv[]) {
             std::cout << "\n[백테스트 설정]\n";
 
             double bt_capital = readDouble("초기 자본금(KRW)", 1000000.0);
-            int bt_candles = readInt("시뮬레이션 캔들 수 (예: 500/1000/2000)", 2000);
-            double bt_start_price = readDouble("시작 가격 (예: 50000000 = BTC 5천만원)", 50000000.0);
-
-            std::cout << "\n모의 데이터 생성 중...\n";
-            std::string csv_path = generateSimulationCSV(bt_candles, bt_start_price);
-            if (csv_path.empty()) {
-                std::cout << "데이터 생성 실패\n";
-                return 1;
+            std::cout << "데이터 소스 [1=모의 생성, 2=기존 CSV] [기본값: 1]: ";
+            std::string source_input = readLine();
+            int source_choice = 1;
+            int bt_candles = 0;
+            try {
+                if (!source_input.empty()) {
+                    source_choice = std::stoi(source_input);
+                }
+            } catch (...) {
+                source_choice = 1;
             }
-            std::cout << "생성 완료: " << csv_path << " (" << bt_candles << "개 캔들)\n\n";
+
+            std::string csv_path;
+            if (source_choice == 2) {
+                std::string default_csv = "data/backtest_real/upbit_KRW_BTC_1m_12000.csv";
+                std::cout << "백테스트 CSV 경로 [기본값: " << default_csv << "]: ";
+                std::string input_csv = readLine();
+                csv_path = input_csv.empty() ? default_csv : input_csv;
+
+                if (!std::filesystem::exists(csv_path)) {
+                    std::cout << "CSV 파일을 찾을 수 없습니다: " << csv_path << "\n";
+                    return 1;
+                }
+                std::cout << "실데이터 CSV 사용: " << csv_path << "\n\n";
+            } else {
+                bt_candles = readInt("시뮬레이션 캔들 수 (예: 500/1000/2000)", 2000);
+                double bt_start_price = readDouble("시작 가격 (예: 50000000 = BTC 5천만원)", 50000000.0);
+
+                std::cout << "\n모의 데이터 생성 중...\n";
+                csv_path = generateSimulationCSV(bt_candles, bt_start_price);
+                if (csv_path.empty()) {
+                    std::cout << "데이터 생성 실패\n";
+                    return 1;
+                }
+                std::cout << "생성 완료: " << csv_path << " (" << bt_candles << "개 캔들)\n\n";
+            }
 
             config.setInitialCapital(bt_capital);
 
             std::cout << "백테스트 실행 중...\n\n";
-            LOG_INFO("Interactive Backtest: {} candles, capital={:.0f}", bt_candles, bt_capital);
+            if (source_choice == 2) {
+                LOG_INFO("Interactive Backtest: csv={}, capital={:.0f}", csv_path, bt_capital);
+            } else {
+                LOG_INFO("Interactive Backtest: {} candles, capital={:.0f}", bt_candles, bt_capital);
+            }
 
             backtest::BacktestEngine bt_engine;
             bt_engine.init(config);
@@ -388,31 +418,95 @@ int main(int argc, char* argv[]) {
         bool dry_run = readYesNo("Dry Run 모드로 실행할까요? (실주문 없음)", cfg_engine.dry_run);
         int max_positions = readInt("동시 보유 최대 종목 수", cfg_engine.max_positions);
         int max_daily_trades = readInt("일일 최대 거래 횟수", cfg_engine.max_daily_trades);
+        bool advanced_mode = readYesNo("고급 설정 모드로 세부 파라미터를 직접 조정할까요?", false);
+        int live_profile = 2;
+        std::string live_profile_name = "BALANCED";
 
-        std::cout << "\n[리스크 설정]\n";
-        double max_drawdown_pct = readDouble("전체 기간 최대 손실 허용(%)", cfg_engine.max_drawdown * 100.0);
-        double max_daily_loss_pct = readDouble("일일 손실 허용(%)", cfg_engine.max_daily_loss_pct * 100.0);
-        double max_daily_loss_krw = readDouble("일일 손실 허용(KRW)", cfg_engine.max_daily_loss_krw);
-        double max_exposure_pct = readDouble("최대 투자 비중(%)", cfg_engine.max_exposure_pct * 100.0);
-        double risk_per_trade = readDouble("거래당 투자 비중(%)", cfg_engine.risk_per_trade_pct * 100.0);
+        double max_drawdown_pct = cfg_engine.max_drawdown * 100.0;
+        double max_daily_loss_pct = cfg_engine.max_daily_loss_pct * 100.0;
+        double max_daily_loss_krw = cfg_engine.max_daily_loss_krw;
+        double max_exposure_pct = cfg_engine.max_exposure_pct * 100.0;
+        double risk_per_trade = cfg_engine.risk_per_trade_pct * 100.0;
 
-        std::cout << "\n[주문 제한]\n";
-        double max_order_krw = readDouble("1회 주문 최대 금액(KRW)", cfg_engine.max_order_krw);
-        double min_order_krw = readDouble("1회 주문 최소 금액(KRW)", cfg_engine.min_order_krw);
-        int max_new_orders_per_scan = readInt("스캔당 신규 주문 최대 개수", cfg_engine.max_new_orders_per_scan);
-        double max_slippage = readDouble("허용 슬리피지(%)", cfg_engine.max_slippage_pct * 100.0);
-        int scan_interval = readInt("시장 스캔 주기(초)", cfg_engine.scan_interval_seconds);
+        double max_order_krw = cfg_engine.max_order_krw;
+        double min_order_krw = cfg_engine.min_order_krw;
+        int max_new_orders_per_scan = cfg_engine.max_new_orders_per_scan;
+        double max_slippage = cfg_engine.max_slippage_pct * 100.0;
+        int scan_interval = cfg_engine.scan_interval_seconds;
 
-        std::cout << "\n[진입 품질 게이트]\n";
-        double min_expected_edge = readDouble("최소 순기대엣지(%)", cfg_engine.min_expected_edge_pct * 100.0);
-        double min_reward_risk = readDouble("최소 손익비(TP/SL)", cfg_engine.min_reward_risk);
-        double min_rr_weak = readDouble("약한 신호 최소 RR", cfg_engine.min_rr_weak_signal);
-        double min_rr_strong = readDouble("강한 신호 최소 RR", cfg_engine.min_rr_strong_signal);
-        int min_ev_trades = readInt("전략 EV 계산 최소 거래수", cfg_engine.min_strategy_trades_for_ev);
-        double min_ev_krw = readDouble("전략 최소 기대값(KRW/trade)", cfg_engine.min_strategy_expectancy_krw);
-        double min_ev_pf = readDouble("전략 최소 Profit Factor", cfg_engine.min_strategy_profit_factor);
-        bool avoid_high_volatility = readYesNo("고변동 구간(HIGH_VOLATILITY) 진입 차단", cfg_engine.avoid_high_volatility);
-        bool avoid_trending_down = readYesNo("하락추세(TRENDING_DOWN) 진입 차단", cfg_engine.avoid_trending_down);
+        double min_expected_edge = cfg_engine.min_expected_edge_pct * 100.0;
+        double min_reward_risk = cfg_engine.min_reward_risk;
+        double min_rr_weak = cfg_engine.min_rr_weak_signal;
+        double min_rr_strong = cfg_engine.min_rr_strong_signal;
+        int min_ev_trades = cfg_engine.min_strategy_trades_for_ev;
+        double min_ev_krw = cfg_engine.min_strategy_expectancy_krw;
+        double min_ev_pf = cfg_engine.min_strategy_profit_factor;
+        bool avoid_high_volatility = cfg_engine.avoid_high_volatility;
+        bool avoid_trending_down = cfg_engine.avoid_trending_down;
+
+        if (advanced_mode) {
+            std::cout << "\n[리스크 설정]\n";
+            max_drawdown_pct = readDouble("전체 기간 최대 손실 허용(%)", max_drawdown_pct);
+            max_daily_loss_pct = readDouble("일일 손실 허용(%)", max_daily_loss_pct);
+            max_daily_loss_krw = readDouble("일일 손실 허용(KRW)", max_daily_loss_krw);
+            max_exposure_pct = readDouble("최대 투자 비중(%)", max_exposure_pct);
+            risk_per_trade = readDouble("거래당 투자 비중(%)", risk_per_trade);
+
+            std::cout << "\n[주문 제한]\n";
+            max_order_krw = readDouble("1회 주문 최대 금액(KRW)", max_order_krw);
+            min_order_krw = readDouble("1회 주문 최소 금액(KRW)", min_order_krw);
+            max_new_orders_per_scan = readInt("스캔당 신규 주문 최대 개수", max_new_orders_per_scan);
+            max_slippage = readDouble("허용 슬리피지(%)", max_slippage);
+            scan_interval = readInt("시장 스캔 주기(초)", scan_interval);
+
+            std::cout << "\n[진입 품질 게이트]\n";
+            min_expected_edge = readDouble("최소 순기대엣지(%)", min_expected_edge);
+            min_reward_risk = readDouble("최소 손익비(TP/SL)", min_reward_risk);
+            min_rr_weak = readDouble("약한 신호 최소 RR", min_rr_weak);
+            min_rr_strong = readDouble("강한 신호 최소 RR", min_rr_strong);
+            min_ev_trades = readInt("전략 EV 계산 최소 거래수", min_ev_trades);
+            min_ev_krw = readDouble("전략 최소 기대값(KRW/trade)", min_ev_krw);
+            min_ev_pf = readDouble("전략 최소 Profit Factor", min_ev_pf);
+            avoid_high_volatility = readYesNo("고변동 구간(HIGH_VOLATILITY) 진입 차단", avoid_high_volatility);
+            avoid_trending_down = readYesNo("하락추세(TRENDING_DOWN) 진입 차단", avoid_trending_down);
+        } else {
+            std::cout << "\n[간단 설정]\n";
+            live_profile = std::clamp(readInt("운영 프로파일 [1=SAFE, 2=BALANCED, 3=ACTIVE]", 2), 1, 3);
+            if (live_profile == 1) {
+                live_profile_name = "SAFE";
+                max_drawdown_pct = std::min(max_drawdown_pct, 12.0);
+                max_daily_loss_pct = std::min(max_daily_loss_pct, 3.0);
+                max_exposure_pct = std::min(max_exposure_pct, 70.0);
+                risk_per_trade = std::min(risk_per_trade, 0.35);
+                max_new_orders_per_scan = 1;
+                min_expected_edge = std::max(min_expected_edge, 0.14);
+                min_reward_risk = std::max(min_reward_risk, 1.35);
+                min_rr_weak = std::max(min_rr_weak, 2.0);
+                min_rr_strong = std::max(min_rr_strong, 1.3);
+                min_ev_trades = std::max(min_ev_trades, 40);
+                min_ev_pf = std::max(min_ev_pf, 1.00);
+                avoid_high_volatility = true;
+                avoid_trending_down = true;
+            } else if (live_profile == 3) {
+                live_profile_name = "ACTIVE";
+                max_drawdown_pct = std::max(max_drawdown_pct, 15.0);
+                max_daily_loss_pct = std::max(max_daily_loss_pct, 4.0);
+                max_exposure_pct = std::min(95.0, std::max(max_exposure_pct, 85.0));
+                risk_per_trade = std::min(1.20, std::max(risk_per_trade, 0.55));
+                max_new_orders_per_scan = std::max(max_new_orders_per_scan, 3);
+                min_expected_edge = std::max(0.02, min_expected_edge * 0.80);
+                min_reward_risk = std::max(1.00, min_reward_risk - 0.10);
+                min_rr_weak = std::max(1.20, min_rr_weak - 0.40);
+                min_rr_strong = std::max(0.90, min_rr_strong - 0.20);
+                min_ev_trades = std::max(5, std::min(min_ev_trades, 20));
+                min_ev_pf = std::max(0.85, std::min(min_ev_pf, 0.95));
+                avoid_high_volatility = false;
+                avoid_trending_down = false;
+            } else {
+                live_profile_name = "BALANCED";
+            }
+            scan_interval = readInt("시장 스캔 주기(초)", scan_interval);
+        }
 
         engine::EngineConfig engine_config;
         engine_config.mode = engine::TradingMode::LIVE;
@@ -450,6 +544,9 @@ int main(int argc, char* argv[]) {
 
         std::cout << "\n[설정 요약]\n";
         std::cout << "모드:            " << (dry_run ? "DRY RUN" : "LIVE") << "\n";
+        std::cout << "설정 방식:       "
+                  << (advanced_mode ? "ADVANCED(직접입력)" : (std::string("SIMPLE(") + live_profile_name + ")"))
+                  << "\n";
         std::cout << "동시 보유:       " << max_positions << "개\n";
         std::cout << "일일 거래 횟수:  최대 " << max_daily_trades << "회\n";
         std::cout << "최대 누적 손실:  " << max_drawdown_pct << "%\n";
@@ -471,6 +568,9 @@ int main(int argc, char* argv[]) {
         std::cout << "고변동 차단:     " << (engine_config.avoid_high_volatility ? "ON" : "OFF") << "\n";
         std::cout << "하락추세 차단:   " << (engine_config.avoid_trending_down ? "ON" : "OFF") << "\n";
         std::cout << "스캔 주기:       " << scan_interval << "초\n\n";
+        if (!advanced_mode) {
+            std::cout << "참고: 세부 임계치는 내부 적응형 정책이 실시간 보정합니다.\n\n";
+        }
 
         if (!readYesNo("이 설정으로 시작할까요?", true)) {
             std::cout << "취소했습니다.\n";

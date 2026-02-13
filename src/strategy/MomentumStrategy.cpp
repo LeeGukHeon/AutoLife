@@ -44,6 +44,35 @@ bool isShortTermChoppyForMomentum(const std::vector<Candle>& candles) {
     return (flips >= 7) && (net_move_pct < 0.005);
 }
 
+std::vector<Candle> aggregateCandles(const std::vector<Candle>& source, size_t span) {
+    if (span < 2 || source.size() < span) {
+        return {};
+    }
+
+    std::vector<Candle> aggregated;
+    aggregated.reserve(source.size() / span);
+
+    for (size_t i = 0; i + span <= source.size(); i += span) {
+        Candle out;
+        out.open = source[i].open;
+        out.close = source[i + span - 1].close;
+        out.high = source[i].high;
+        out.low = source[i].low;
+        out.volume = 0.0;
+        out.timestamp = source[i].timestamp;
+
+        for (size_t j = i; j < i + span; ++j) {
+            out.high = std::max(out.high, source[j].high);
+            out.low = std::min(out.low, source[j].low);
+            out.volume += source[j].volume;
+        }
+
+        aggregated.push_back(out);
+    }
+
+    return aggregated;
+}
+
 double computeMomentumAdaptiveStrengthFloor(
     const analytics::CoinMetrics& metrics,
     const analytics::RegimeAnalysis& regime
@@ -138,6 +167,15 @@ Signal MomentumStrategy::generateSignal(
     signal.market = market;
     signal.strategy_name = "Advanced Momentum";
     signal.timestamp = getCurrentTimestamp();
+    const bool has_preloaded_5m =
+        metrics.candles_by_tf.find("5m") != metrics.candles_by_tf.end() &&
+        !metrics.candles_by_tf.at("5m").empty();
+    const bool has_preloaded_1h =
+        metrics.candles_by_tf.find("1h") != metrics.candles_by_tf.end() &&
+        metrics.candles_by_tf.at("1h").size() >= 26;
+    signal.used_preloaded_tf_5m = has_preloaded_5m;
+    signal.used_preloaded_tf_1h = has_preloaded_1h;
+    signal.used_resampled_tf_fallback = !has_preloaded_5m;
     
     // ===== Hard Gates =====
     if (active_positions_.find(market) != active_positions_.end()) return signal;
@@ -225,7 +263,7 @@ Signal MomentumStrategy::generateSignal(
     total_score += volume_score;
     
     // --- (4) MTF & Order Flow (理쒕? 0.20) ---
-    auto mtf_signal = analyzeMultiTimeframe(candles);
+    auto mtf_signal = analyzeMultiTimeframe(metrics, candles);
     double mtf_score = mtf_signal.alignment_score * 0.10;
     total_score += mtf_score;
     
@@ -833,8 +871,8 @@ bool MomentumStrategy::isKSTestPassed(
 // ===== 3. Multi-Timeframe Analysis =====
 
 MultiTimeframeSignal MomentumStrategy::analyzeMultiTimeframe(
+    const analytics::CoinMetrics& metrics,
     const std::vector<Candle>& candles_1m
-
 ) const {
     MultiTimeframeSignal signal;
     
@@ -845,14 +883,23 @@ MultiTimeframeSignal MomentumStrategy::analyzeMultiTimeframe(
     // 1. 1遺꾨큺 遺꾩꽍 (?곗씠??異⑸텇)
     signal.tf_1m_bullish = isBullishOnTimeframe(candles_1m, signal.tf_1m);
     
-    // 2. 5遺꾨큺 遺꾩꽍 (200媛?湲곗? 40媛?-> ?곗씠??異⑸텇)
-    auto candles_5m = resampleTo5m(candles_1m);
+    // 2. 5분봉 분석: scanner preloaded TF 우선, 없으면 1m 리샘플 fallback
+    std::vector<Candle> candles_5m;
+    auto tf_5m_it = metrics.candles_by_tf.find("5m");
+    if (tf_5m_it != metrics.candles_by_tf.end() && !tf_5m_it->second.empty()) {
+        candles_5m = tf_5m_it->second;
+    } else {
+        candles_5m = resampleTo5m(candles_1m);
+    }
     if (!candles_5m.empty()) {
         signal.tf_5m_bullish = isBullishOnTimeframe(candles_5m, signal.tf_5m);
     }
     
-    // 3. 15遺꾨큺 遺꾩꽍 (200媛?湲곗? 13媛?-> 遺議깊븿!)
+    // 3. 15분봉 분석: 5m 충분 시 재집계(3x5m), 아니면 기존 1m 리샘플
     auto candles_15m = resampleTo15m(candles_1m);
+    if (candles_15m.size() < 26 && candles_5m.size() >= 78) {
+        candles_15m = aggregateCandles(candles_5m, 3);
+    }
     bool is_15m_valid = false; // 15遺꾨큺???먯닔 怨꾩궛???ｌ쓣吏 ?щ?
 
     // [?듭떖] 吏??怨꾩궛???꾩슂??理쒖냼 媛쒖닔(MACD 湲곗? 26媛?媛 ?덈뒗吏 ?뺤씤
@@ -861,7 +908,17 @@ MultiTimeframeSignal MomentumStrategy::analyzeMultiTimeframe(
         is_15m_valid = true; // ?곗씠?곌? 異⑸텇?섎?濡??먯닔?먯뿉 ?쇱썙以?
     }
     
-    // 4. [?섏젙] ?숈쟻 ?먯닔 怨꾩궛 (Dynamic Scoring)
+    // 4. 1시간봉 보조 확인 (있을 때만 반영)
+    bool is_1h_valid = false;
+    bool tf_1h_bullish = false;
+    MultiTimeframeSignal::TimeframeMetrics tf_1h_metrics;
+    auto tf_1h_it = metrics.candles_by_tf.find("1h");
+    if (tf_1h_it != metrics.candles_by_tf.end() && tf_1h_it->second.size() >= 26) {
+        tf_1h_bullish = isBullishOnTimeframe(tf_1h_it->second, tf_1h_metrics);
+        is_1h_valid = true;
+    }
+
+    // 5. 동적 점수 계산 (Dynamic Scoring)
     double total_score = 0.0;
     double max_possible_score = 0.0;
 
@@ -879,7 +936,13 @@ MultiTimeframeSignal MomentumStrategy::analyzeMultiTimeframe(
         if (signal.tf_15m_bullish) total_score += 1.0;
     }
     
-    // 0?쇰줈 ?섎늻湲?諛⑹?
+    // 1시간봉 반영 (데이터 있을 때만)
+    if (is_1h_valid) {
+        max_possible_score += 1.0;
+        if (tf_1h_bullish) total_score += 1.0;
+    }
+
+    // 0으로 나누기 방지
     signal.alignment_score = (max_possible_score > 0) 
                            ? (total_score / max_possible_score) 
                            : 0.0;
