@@ -1,6 +1,7 @@
 ﻿name: CI PR Gate
 
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches:
