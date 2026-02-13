@@ -303,8 +303,9 @@ void BacktestEngine::processCandle(const Candle& candle) {
         current_candles_.erase(current_candles_.begin()); // Keep window size
     }
     
-    // Need enough data
-    if (current_candles_.size() < 100) return;
+    // Let each strategy enforce its own warm-up requirement.
+    // A global 100-candle gate prevents short fixture datasets from producing any signal.
+    if (current_candles_.size() < 30) return;
 
     double current_price = candle.close;
     
@@ -532,17 +533,17 @@ void BacktestEngine::processCandle(const Candle& candle) {
         // Regime-aware minimum activation:
         // when there are no entries for a long time, ease thresholds slightly only in
         // non-bear regimes to avoid staying fully idle.
-        if (no_entry_streak_candles_ >= 120 &&
+        if (no_entry_streak_candles_ >= 45 &&
             regime.regime == analytics::MarketRegime::TRENDING_UP &&
-            metrics.liquidity_score >= 65.0 &&
-            metrics.volume_surge_ratio >= 1.4 &&
-            metrics.price_change_rate >= 0.20) {
-            filter_threshold = std::max(0.38, filter_threshold - 0.05);
+            metrics.liquidity_score >= 55.0 &&
+            metrics.volume_surge_ratio >= 1.2 &&
+            metrics.price_change_rate >= 0.10) {
+            filter_threshold = std::max(0.34, filter_threshold - 0.07);
             min_expected_value = std::max(0.0, min_expected_value - 0.00005);
-        } else if (no_entry_streak_candles_ >= 180 &&
+        } else if (no_entry_streak_candles_ >= 70 &&
                    regime.regime == analytics::MarketRegime::RANGING &&
-                   metrics.liquidity_score >= 60.0) {
-            filter_threshold = std::max(0.39, filter_threshold - 0.04);
+                   metrics.liquidity_score >= 50.0) {
+            filter_threshold = std::max(0.35, filter_threshold - 0.05);
             min_expected_value = std::max(0.0, min_expected_value - 0.00003);
         }
 

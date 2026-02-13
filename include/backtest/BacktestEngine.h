@@ -69,7 +69,7 @@ private:
     
     // Execution State
     std::vector<Candle> current_candles_;
-    double dynamic_filter_value_ = 0.5; // Self-learning filter
+    double dynamic_filter_value_ = 0.46; // Self-learning filter (backtest bootstrap)
     int no_entry_streak_candles_ = 0;   // Regime-aware minimum activation helper
     struct PendingBacktestOrder {
         Order order;
