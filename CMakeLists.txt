@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.20)
 
-set(CMAKE_TOOLCHAIN_FILE "D:/MyApps/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "")
+if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+    if(DEFINED ENV{VCPKG_ROOT} AND EXISTS "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
+        set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "")
+    elseif(EXISTS "D:/MyApps/vcpkg/scripts/buildsystems/vcpkg.cmake")
+        set(CMAKE_TOOLCHAIN_FILE "D:/MyApps/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "")
+    endif()
+endif()
 
 project(AutoLifeTradingSystem VERSION 1.0.0 LANGUAGES CXX)
 
@@ -30,6 +36,7 @@ set(LIB_SOURCES
     src/common/PathUtils.cpp
     src/network/JwtGenerator.cpp
     src/network/UpbitHttpClient.cpp
+    src/network/UpbitMyOrderWebSocketClient.cpp
     src/execution/RateLimiter.cpp
     src/analytics/MarketScanner.cpp
     src/analytics/TechnicalIndicators.cpp
@@ -42,13 +49,39 @@ set(LIB_SOURCES
     src/strategy/GridTradingStrategy.cpp
     src/risk/RiskManager.cpp
     src/engine/TradingEngine.cpp
+    src/engine/AdaptivePolicyController.cpp
+    src/engine/PerformanceStore.cpp
+    src/core/adapters/LegacyExecutionPlaneAdapter.cpp
+    src/core/adapters/LegacyPolicyLearningPlaneAdapter.cpp
+    src/core/adapters/LegacyRiskCompliancePlaneAdapter.cpp
+    src/core/adapters/UpbitComplianceAdapter.cpp
+    src/core/execution/OrderLifecycleStateMachine.cpp
+    src/core/orchestration/TradingCycleCoordinator.cpp
+    src/core/state/EventJournalJsonl.cpp
+    src/core/state/LearningStateStoreJson.cpp
     src/backtest/DataHistory.cpp
     src/backtest/BacktestEngine.cpp
     src/execution/OrderManager.cpp
+    src/execution/OrderStateMapper.cpp
     src/analytics/RegimeDetector.cpp
 )
 
 add_executable(AutoLifeTrading src/main.cpp ${LIB_SOURCES})
+add_executable(AutoLifeCancelOrder src/tools/CancelOrder.cpp src/common/Config.cpp src/common/PathUtils.cpp src/common/Logger.cpp src/network/JwtGenerator.cpp src/network/UpbitHttpClient.cpp src/execution/RateLimiter.cpp)
+add_executable(
+    AutoLifeLiveExecutionProbe
+    src/tools/LiveExecutionProbe.cpp
+    src/common/Config.cpp
+    src/common/PathUtils.cpp
+    src/common/Logger.cpp
+    src/network/JwtGenerator.cpp
+    src/network/UpbitHttpClient.cpp
+    src/network/UpbitMyOrderWebSocketClient.cpp
+    src/execution/RateLimiter.cpp
+    src/execution/OrderManager.cpp
+    src/execution/OrderStateMapper.cpp
+    src/core/execution/OrderLifecycleStateMachine.cpp
+)
 
 # [Test] Config Unit Test
 add_executable(AutoLifeTest tests/TestConfig.cpp ${LIB_SOURCES})
@@ -84,6 +117,31 @@ target_compile_definitions(AutoLifeTrading PRIVATE
     _WIN32_WINNT=0x0A00
     NOMINMAX
 )
+target_compile_definitions(AutoLifeLiveExecutionProbe PRIVATE
+    _WIN32_WINNT=0x0A00
+    NOMINMAX
+)
+
+target_link_libraries(AutoLifeCancelOrder PRIVATE
+    CURL::libcurl
+    OpenSSL::SSL
+    OpenSSL::Crypto
+    nlohmann_json::nlohmann_json
+    spdlog::spdlog
+)
+target_link_libraries(AutoLifeLiveExecutionProbe PRIVATE
+    CURL::libcurl
+    OpenSSL::SSL
+    OpenSSL::Crypto
+    nlohmann_json::nlohmann_json
+    spdlog::spdlog
+    Boost::system
+    Boost::thread
+)
+if(WIN32)
+    target_link_libraries(AutoLifeCancelOrder PRIVATE ws2_32 wsock32)
+    target_link_libraries(AutoLifeLiveExecutionProbe PRIVATE ws2_32 wsock32)
+endif()
 
 if(WIN32)
     target_link_libraries(AutoLifeTrading PRIVATE ws2_32 wsock32)
@@ -117,3 +175,21 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/README.md)
         COMMENT "Copying README"
     )
 endif()
+
+add_executable(
+    AutoLifeStateTest
+    tests/TestOrderStateMapper.cpp
+    src/execution/OrderStateMapper.cpp
+    src/core/execution/OrderLifecycleStateMachine.cpp
+)
+target_link_libraries(AutoLifeStateTest PRIVATE nlohmann_json::nlohmann_json)
+
+add_executable(AutoLifeEventJournalTest tests/TestEventJournal.cpp src/core/state/EventJournalJsonl.cpp)
+target_link_libraries(AutoLifeEventJournalTest PRIVATE nlohmann_json::nlohmann_json)
+
+add_executable(
+    AutoLifeExecutionStateTest
+    tests/TestExecutionStateMachine.cpp
+    src/core/execution/OrderLifecycleStateMachine.cpp
+)
+target_link_libraries(AutoLifeExecutionStateTest PRIVATE nlohmann_json::nlohmann_json)

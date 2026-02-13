@@ -76,12 +76,13 @@ struct Signal {
     std::string strategy_name;          // 전략 이름
     double strength;                    // 신호 강도 (0.0 ~ 1.0)
     double entry_price;                 // 진입 가격
+    double entry_amount;                // [NEW] 진입 예정 금액 (KRW) - 비율이 아닌 확정 금액
     double stop_loss;                   // 손절가
     double take_profit_1;               // [✅ 추가] 1차 익절가 (50% 청산)
     double take_profit_2;               // [✅ 추가] 2차 익절가 (100% 청산)
     double breakeven_trigger;           // 본전 이동 트리거 가격
     double trailing_start;              // 트레일링 시작 가격
-    double position_size;               // 포지션 크기 (비율)
+    double position_size;               // 포지션 크기 (비율, 참고용)
     
     // [✅ 추가] 주문 실행 정책
     OrderTypePolicy buy_order_type;     // 매수 주문 타입
@@ -104,6 +105,7 @@ struct Signal {
     double strategy_profit_factor;      // 전략 PF
     int strategy_trade_count;           // 전략 거래 수
     double score;                       // 통합 점수
+    analytics::MarketRegime market_regime; // signal-time market regime
     
     std::string reason;                 // 신호 발생 이유
     long long timestamp;                // 신호 발생 시간
@@ -132,6 +134,7 @@ struct Signal {
         , strategy_profit_factor(0.0)
         , strategy_trade_count(0)
         , score(0.0)
+        , market_regime(analytics::MarketRegime::UNKNOWN)
         , timestamp(0)
     {}
     

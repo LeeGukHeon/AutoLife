@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "strategy/IStrategy.h"
 #include "network/UpbitHttpClient.h"
@@ -9,21 +9,19 @@
 #include <mutex>
 
 namespace autolife {
+namespace risk {
+struct TradeHistory;
+}
 namespace strategy {
 
-// 전략 관리자 - 여러 전략 통합 관리
+// Aggregates strategy execution and signal selection/filtering.
 class StrategyManager {
 public:
     StrategyManager(std::shared_ptr<network::UpbitHttpClient> client);
-    
-    // 전략 등록
+
     void registerStrategy(std::shared_ptr<IStrategy> strategy);
-    
-    // [추가됨] 이름으로 전략 찾기 (TradingEngine에서 호출)
     std::shared_ptr<IStrategy> getStrategy(const std::string& name);
-    
-    // 모든 전략에서 신호 수집
-    // available_capital: 엔진에서 전달하는 현재 가용 자본 (원화)
+
     std::vector<Signal> collectSignals(
         const std::string& market,
         const analytics::CoinMetrics& metrics,
@@ -32,35 +30,59 @@ public:
         double available_capital,
         const analytics::RegimeAnalysis& regime
     );
-    
-    // 최적 신호 선택 (여러 전략 중 가장 강한 신호)
+
     Signal selectBestSignal(const std::vector<Signal>& signals);
-    
-    // 신호 필터링 (조건에 맞는 신호만)
+    Signal selectRobustSignal(
+        const std::vector<Signal>& signals,
+        analytics::MarketRegime regime
+    );
+
     std::vector<Signal> filterSignals(
         const std::vector<Signal>& signals,
-        double min_strength = 0.6
+        double min_strength = 0.6,
+        double min_expected_value = 0.0,
+        analytics::MarketRegime regime = analytics::MarketRegime::UNKNOWN
     );
-    
-    // 신호 합성 (여러 전략의 신호를 가중 평균)
-    Signal synthesizeSignals(const std::vector<Signal>& signals);
-    
-    // 전략별 통계 조회
-    std::map<std::string, IStrategy::Statistics> getAllStatistics() const;
-    
-    // 전략 활성화/비활성화
-    void enableStrategy(const std::string& name, bool enabled);
-    
-    // 활성화된 전략 목록
-    std::vector<std::string> getActiveStrategies() const;
-    
-    // 전체 승률 계산
-    double getOverallWinRate() const;
 
-    // 전략 목록 반환
+    Signal synthesizeSignals(const std::vector<Signal>& signals);
+
+    std::map<std::string, IStrategy::Statistics> getAllStatistics() const;
+    void enableStrategy(const std::string& name, bool enabled);
+    std::vector<std::string> getActiveStrategies() const;
+    double getOverallWinRate() const;
     std::vector<std::shared_ptr<IStrategy>> getStrategies() const;
-    
+    void refreshStrategyStatesFromHistory(
+        const std::vector<risk::TradeHistory>& history,
+        analytics::MarketRegime dominant_regime,
+        bool avoid_high_volatility,
+        bool avoid_trending_down,
+        int min_trades_for_ev,
+        double min_expectancy_krw,
+        double min_profit_factor
+    );
+
 private:
+    enum class StrategyRole {
+        SCALPING,
+        MOMENTUM,
+        BREAKOUT,
+        MEAN_REVERSION,
+        GRID,
+        OTHER
+    };
+
+    enum class RegimePolicy {
+        ALLOW,
+        HOLD,
+        BLOCK
+    };
+
+    struct PerformanceGate {
+        double min_win_rate = 0.0;
+        double min_profit_factor = 0.0;
+        int min_sample_trades = 0;
+    };
+
     Signal processStrategySignal(
         std::shared_ptr<IStrategy> strategy,
         const std::string& market,
@@ -74,9 +96,11 @@ private:
     std::vector<std::shared_ptr<IStrategy>> strategies_;
     std::shared_ptr<network::UpbitHttpClient> client_;
     mutable std::mutex mutex_;
-    
-    // 신호 강도 계산
+
     double calculateSignalScore(const Signal& signal) const;
+    StrategyRole detectStrategyRole(const std::string& strategy_name) const;
+    RegimePolicy getRegimePolicy(StrategyRole role, analytics::MarketRegime regime) const;
+    PerformanceGate getPerformanceGate(StrategyRole role, analytics::MarketRegime regime) const;
 };
 
 } // namespace strategy

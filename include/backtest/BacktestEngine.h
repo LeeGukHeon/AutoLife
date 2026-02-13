@@ -30,17 +30,37 @@ public:
 
     // Get results
     struct Result {
+        struct StrategySummary {
+            std::string strategy_name;
+            int total_trades = 0;
+            int winning_trades = 0;
+            int losing_trades = 0;
+            double win_rate = 0.0;
+            double total_profit = 0.0;
+            double avg_win_krw = 0.0;
+            double avg_loss_krw = 0.0;
+            double profit_factor = 0.0;
+        };
+
         double final_balance;
         double total_profit;
         double max_drawdown;
         int total_trades;
         int winning_trades;
+        int losing_trades;
+        double win_rate;
+        double avg_win_krw;
+        double avg_loss_krw;
+        double profit_factor;
+        double expectancy_krw;
+        std::vector<StrategySummary> strategy_summaries;
     };
     Result getResult() const;
 
 private:
 
     std::vector<Candle> history_data_;
+    engine::EngineConfig engine_config_;
     
     // Account State
     double balance_krw_;
@@ -50,6 +70,14 @@ private:
     // Execution State
     std::vector<Candle> current_candles_;
     double dynamic_filter_value_ = 0.5; // Self-learning filter
+    int no_entry_streak_candles_ = 0;   // Regime-aware minimum activation helper
+    struct PendingBacktestOrder {
+        Order order;
+        double requested_price = 0.0;
+        long long enqueued_at_ms = 0;
+    };
+    std::vector<PendingBacktestOrder> pending_orders_;
+    long long backtest_order_seq_ = 0;
     
     // Components
     std::shared_ptr<network::UpbitHttpClient> http_client_; // Mockable

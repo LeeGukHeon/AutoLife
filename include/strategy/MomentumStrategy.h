@@ -456,11 +456,26 @@ private:
     double calculateVolatility(const std::vector<Candle>& candles) const;
     
     long long getCurrentTimestamp() const;
+    bool canTradeNow();
+    void recordTrade();
+    void resetDailyCounters();
+    void resetHourlyCounters();
+    void checkCircuitBreaker();
+    bool isCircuitBreakerActive() const;
     engine::EngineConfig engine_config_;
     bool shouldGenerateSignal(
         double expected_return,
         double expected_sharpe
     ) const;
+
+    int daily_trades_count_ = 0;
+    int hourly_trades_count_ = 0;
+    int consecutive_losses_ = 0;
+    bool circuit_breaker_active_ = false;
+    long long circuit_breaker_until_ = 0;
+    long long current_day_start_ = 0;
+    long long current_hour_start_ = 0;
+    static constexpr long long CIRCUIT_BREAKER_COOLDOWN_MS = 3600000; // 1h
 };
 
 } // namespace strategy

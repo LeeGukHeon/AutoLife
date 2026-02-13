@@ -1,5 +1,6 @@
 #include "strategy/MeanReversionStrategy.h"
 #include "analytics/TechnicalIndicators.h"
+#include "common/Config.h"
 #include <algorithm>
 #include <cmath>
 #include <numeric>
@@ -8,6 +9,84 @@
 
 namespace autolife {
 namespace strategy {
+namespace {
+constexpr double kRelaxedMinReversionProb = 0.58;
+constexpr double kRelaxedMinConfidence = 0.50;
+
+double clamp01(double v) {
+    return std::clamp(v, 0.0, 1.0);
+}
+
+bool isMeanReversionRegimeTradable(
+    const analytics::CoinMetrics& metrics,
+    const analytics::RegimeAnalysis& regime
+) {
+    if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
+        return (metrics.liquidity_score >= 75.0 &&
+                metrics.volume_surge_ratio >= 1.5 &&
+                metrics.price_change_rate >= -0.7);
+    }
+    return true;
+}
+
+double computeMeanReversionAdaptiveLiquidityFloor(
+    const analytics::CoinMetrics& metrics,
+    const analytics::RegimeAnalysis& regime,
+    double base_floor
+) {
+    const double vol_t = clamp01(metrics.volatility / 6.0);
+    const double volume_relief_t = clamp01((metrics.volume_surge_ratio - 1.0) / 2.0);
+    double floor = base_floor + (vol_t * 7.0) - (volume_relief_t * 6.0);
+
+    if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
+        floor += 2.0;
+    } else if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
+        floor += 8.0;
+    } else if (regime.regime == analytics::MarketRegime::RANGING) {
+        floor -= 2.0;
+    }
+    return std::clamp(floor, 35.0, 80.0);
+}
+
+double computeMeanReversionAdaptiveStrengthFloor(
+    const analytics::CoinMetrics& metrics,
+    const analytics::RegimeAnalysis& regime,
+    double base_floor
+) {
+    const double vol_t = clamp01(metrics.volatility / 6.0);
+    const double liq_stress_t = clamp01((70.0 - metrics.liquidity_score) / 70.0);
+    const double floor = base_floor + (vol_t * 0.05) + (liq_stress_t * 0.07);
+
+    if (regime.regime == analytics::MarketRegime::RANGING) {
+        return std::clamp(floor - 0.06, 0.28, 0.65);
+    }
+    if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
+        return std::clamp(floor - 0.03, 0.30, 0.66);
+    }
+    if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
+        return std::clamp(floor + 0.05, 0.35, 0.72);
+    }
+    return std::clamp(floor - 0.01, 0.30, 0.66);
+}
+
+double computeMeanReversionAdaptiveRRFloor(
+    const analytics::CoinMetrics& metrics,
+    const analytics::RegimeAnalysis& regime
+) {
+    const double vol_t = clamp01(metrics.volatility / 6.0);
+    const double liq_t = clamp01((metrics.liquidity_score - 50.0) / 50.0);
+    double rr_floor = 1.28 + (vol_t * 0.20) - (liq_t * 0.12);
+
+    if (regime.regime == analytics::MarketRegime::RANGING) {
+        rr_floor -= 0.10;
+    } else if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
+        rr_floor += 0.18;
+    } else if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
+        rr_floor += 0.05;
+    }
+    return std::clamp(rr_floor, 1.10, 1.55);
+}
+}
 
 // ===== Constructor =====
 
@@ -70,7 +149,8 @@ Signal MeanReversionStrategy::generateSignal(
     double available_capital,
     const analytics::RegimeAnalysis& regime)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    const auto strategy_cfg = Config::getInstance().getMeanReversionConfig();
     
     Signal signal;
     signal.type = SignalType::NONE;
@@ -80,9 +160,10 @@ Signal MeanReversionStrategy::generateSignal(
     // ===== Hard Gates =====
     if (active_positions_.find(market) != active_positions_.end()) return signal;
     if (available_capital <= 0) return signal;
+    if (!isMeanReversionRegimeTradable(metrics, regime)) return signal;
     
     std::vector<Candle> candles_5m = resampleTo5m(candles);
-    if (candles_5m.size() < 150) return signal;
+    if (candles_5m.size() < 80) return signal;
     if (!canTradeNow()) return signal;
     
     checkCircuitBreaker();
@@ -94,45 +175,72 @@ Signal MeanReversionStrategy::generateSignal(
     // ===== Score-Based Evaluation =====
     double total_score = 0.0;
     
-    // --- (1) 평균 회귀 분석 (최대 0.40) ---
+    // --- (1) ?됯퇏 ?뚭? 遺꾩꽍 (理쒕? 0.40) ---
     MeanReversionSignalMetrics reversion = analyzeMeanReversion(market, metrics, candles_5m, current_price);
     total_score += reversion.strength * 0.40;
     
-    // --- (2) 유동성 (최대 0.10) ---
-    if (metrics.liquidity_score >= MIN_LIQUIDITY_SCORE) total_score += 0.10;
-    else if (metrics.liquidity_score >= MIN_LIQUIDITY_SCORE * 0.5) total_score += 0.05;
+    // --- (2) ?좊룞??(理쒕? 0.10) ---
+    const double adaptive_liq_floor = computeMeanReversionAdaptiveLiquidityFloor(
+        metrics, regime, strategy_cfg.min_liquidity_score);
+    const double liq_floor = adaptive_liq_floor * 0.85;
+    if (metrics.liquidity_score >= adaptive_liq_floor) total_score += 0.10;
+    else if (metrics.liquidity_score >= liq_floor) total_score += 0.07;
+    else if (metrics.liquidity_score >= adaptive_liq_floor * 0.70) total_score += 0.04;
     
-    // --- (3) 레짐 (최대 0.15) ---
+    // --- (3) ?덉쭚 (理쒕? 0.15) ---
     double regime_score = 0.0;
     switch (regime.regime) {
-        case analytics::MarketRegime::RANGING: regime_score = 0.15; break;    // 평균 회귀에 최적
-        case analytics::MarketRegime::HIGH_VOLATILITY: regime_score = 0.08; break;
-        case analytics::MarketRegime::TRENDING_UP: regime_score = 0.03; break;
-        case analytics::MarketRegime::TRENDING_DOWN: regime_score = 0.02; break;
+        case analytics::MarketRegime::RANGING: regime_score = 0.20; break;
+        case analytics::MarketRegime::HIGH_VOLATILITY: regime_score = 0.12; break;
+        case analytics::MarketRegime::TRENDING_UP: regime_score = 0.05; break;
+        case analytics::MarketRegime::TRENDING_DOWN: regime_score = 0.03; break;
         default: regime_score = 0.05; break;
     }
     total_score += regime_score;
     
-    // --- (4) RSI 역전 신호 (최대 0.20) ---
+    // --- (4) RSI ??쟾 ?좏샇 (理쒕? 0.20) ---
     auto prices = analytics::TechnicalIndicators::extractClosePrices(candles_5m);
     double rsi = analytics::TechnicalIndicators::calculateRSI(prices, 14);
     
-    if (rsi < 30) total_score += 0.20;         // 강한 과매도
-    else if (rsi < 40) total_score += 0.12;     // 과매도
-    else if (rsi < 50) total_score += 0.05;     // 약간 낮음
-    // 평균 회귀는 과매도에서 매수하므로 RSI 높으면 점수 없음
+    if (rsi < 30) total_score += 0.20;         // 媛뺥븳 怨쇰ℓ??
+    else if (rsi < 40) total_score += 0.12;     // 怨쇰ℓ??
+    else if (rsi < 50) total_score += 0.05;     // ?쎄컙 ??쓬
+    // ?됯퇏 ?뚭???怨쇰ℓ?꾩뿉??留ㅼ닔?섎?濡?RSI ?믪쑝硫??먯닔 ?놁쓬
     
-    // --- (5) 거래량 확인 (최대 0.15) ---
+    // --- (5) 嫄곕옒???뺤씤 (理쒕? 0.15) ---
     if (metrics.volume_surge_ratio >= 2.0) total_score += 0.15;
     else if (metrics.volume_surge_ratio >= 1.0) total_score += 0.08;
     else total_score += 0.03;
+
+    if (reversion.strength < 0.30 &&
+        (regime.regime == analytics::MarketRegime::RANGING ||
+         regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) &&
+        metrics.liquidity_score >= adaptive_liq_floor * 0.90 &&
+        metrics.volume_surge_ratio >= 0.85 &&
+        rsi >= 30.0 && rsi <= 55.0 &&
+        std::abs(metrics.price_change_rate) <= 1.2) {
+        total_score += 0.14;
+    }
     
-    // ===== 최종 판정 =====
+    // ===== 理쒖쥌 ?먯젙 =====
     signal.strength = std::clamp(total_score, 0.0, 1.0);
+
+    const double effective_strength_floor = computeMeanReversionAdaptiveStrengthFloor(
+        metrics, regime, strategy_cfg.min_signal_strength);
+    const bool fallback_entry_ok =
+        (regime.regime == analytics::MarketRegime::RANGING) &&
+        (metrics.liquidity_score >= adaptive_liq_floor * 0.88) &&
+        (metrics.volume_surge_ratio >= 0.80) &&
+        (rsi >= 28.0 && rsi <= 50.0) &&
+        (metrics.price_change_rate <= 0.8 && metrics.price_change_rate >= -1.5);
+    if (signal.strength < effective_strength_floor) {
+        if (!fallback_entry_ok) {
+            return signal;
+        }
+        signal.strength = effective_strength_floor;
+    }
     
-    if (signal.strength < 0.40) return signal;
-    
-    // ===== 신호 생성 =====
+    // ===== ?좏샇 ?앹꽦 =====
     signal.type = SignalType::BUY;
     signal.entry_price = current_price;
     signal.stop_loss = calculateStopLoss(current_price, candles_5m);
@@ -144,9 +252,25 @@ Signal MeanReversionStrategy::generateSignal(
     signal.max_retries = 3;
     signal.retry_wait_ms = 800;
     
-    // 포지션 사이징
+    // ?ъ????ъ씠吏?
     signal.position_size = calculatePositionSize(available_capital, current_price, signal.stop_loss, metrics);
-    
+    const double min_size_for_order = (available_capital > 0.0)
+        ? (MIN_ORDER_AMOUNT_KRW / available_capital)
+        : 1.0;
+    if (signal.position_size < min_size_for_order) {
+        signal.position_size = min_size_for_order;
+    }
+    signal.position_size = std::clamp(signal.position_size, 0.0, 1.0);
+
+    const double expected_return = (signal.take_profit_2 - signal.entry_price) / signal.entry_price;
+    const double stop_risk = std::max(1e-9, (signal.entry_price - signal.stop_loss) / signal.entry_price);
+    const double reward_risk = expected_return / stop_risk;
+    const double rr_floor = computeMeanReversionAdaptiveRRFloor(metrics, regime);
+    if (reward_risk < rr_floor) {
+        signal.type = SignalType::NONE;
+        return signal;
+    }
+
     double order_amount = available_capital * signal.position_size;
     if (order_amount < MIN_ORDER_AMOUNT_KRW) {
         signal.type = SignalType::NONE;
@@ -157,7 +281,7 @@ Signal MeanReversionStrategy::generateSignal(
         signal.type = SignalType::STRONG_BUY;
     }
     
-    spdlog::info("[MeanReversion] 🎯 BUY Signal - {} | Strength: {:.3f} | RSI: {:.1f}",
+    spdlog::info("[MeanReversion] ?렞 BUY Signal - {} | Strength: {:.3f} | RSI: {:.1f}",
                  market, signal.strength, rsi);
     
     last_signal_time_ = getCurrentTimestamp();
@@ -175,8 +299,8 @@ bool MeanReversionStrategy::shouldEnter(
     double current_price,
     const analytics::RegimeAnalysis& regime)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    (void)regime; // Used for future enhancements
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    const auto strategy_cfg = Config::getInstance().getMeanReversionConfig();
 
     if (active_positions_.find(market) != active_positions_.end()) {
         return false;
@@ -184,11 +308,17 @@ bool MeanReversionStrategy::shouldEnter(
 
     std::vector<Candle> candles_5m = resampleTo5m(candles);
 
-    if (candles_5m.size() < 150) {
+    if (candles_5m.size() < 80) {
         return false;
     }
 
-    if (metrics.liquidity_score < MIN_LIQUIDITY_SCORE) {
+    if (!isMeanReversionRegimeTradable(metrics, regime)) {
+        return false;
+    }
+
+    const double adaptive_liq_floor = computeMeanReversionAdaptiveLiquidityFloor(
+        metrics, regime, strategy_cfg.min_liquidity_score);
+    if (metrics.liquidity_score < adaptive_liq_floor * 0.85) {
         return false;
     }
 
@@ -202,7 +332,7 @@ bool MeanReversionStrategy::shouldEnter(
     }
 
     long long now = getCurrentTimestamp();
-    if ((now - last_signal_time_) < MIN_SIGNAL_INTERVAL_SEC * 1000) {
+    if ((now - last_signal_time_) < static_cast<long long>(strategy_cfg.min_signal_interval_sec) * 1000) {
         return false;
     }
 
@@ -216,7 +346,7 @@ bool MeanReversionStrategy::onSignalAccepted(const Signal& signal, double alloca
 {
     (void)allocated_capital;
 
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
 
     if (signal.market.empty()) {
         return false;
@@ -263,9 +393,9 @@ bool MeanReversionStrategy::shouldExit(
     double current_price,
     double holding_time_seconds)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     
-    // [수정] position_data_ 맵 사용
+    // [?섏젙] position_data_ 留??ъ슜
     if (position_data_.find(market) == position_data_.end()) {
         return false;
     }
@@ -279,28 +409,28 @@ bool MeanReversionStrategy::shouldExit(
         pos_data.highest_price = current_price;
     }
     
-    // ===== 1. 손절 (Stop Loss) =====
-    // pos_data.trailing_stop은 진입 시 초기 손절가로 설정됨
+    // ===== 1. ?먯젅 (Stop Loss) =====
+    // pos_data.trailing_stop? 吏꾩엯 ??珥덇린 ?먯젅媛濡??ㅼ젙??
     if (current_price <= pos_data.trailing_stop) {
         spdlog::info("[MeanReversion] Stop Loss / TS - {} | Price: {:.2f} <= {:.2f}", 
                      market, current_price, pos_data.trailing_stop);
-        return true; // [중요] 여기서 erase 하지 않음 (엔진이 updateStatistics 호출 시 처리)
+        return true; // [以묒슂] ?ш린??erase ?섏? ?딆쓬 (?붿쭊??updateStatistics ?몄텧 ??泥섎━)
     }
     
-    // ===== 2. Mean 도달 체크 (목표 평균가 회귀) =====
+    // ===== 2. Mean ?꾨떖 泥댄겕 (紐⑺몴 ?됯퇏媛 ?뚭?) =====
     double deviation_from_mean = 0.0;
     if (pos_data.target_mean != 0) {
         deviation_from_mean = std::abs(current_price - pos_data.target_mean) / pos_data.target_mean;
     }
     
-    // 평균가 근접(0.5% 오차)하고 수익 상태일 때
+    // ?됯퇏媛 洹쇱젒(0.5% ?ㅼ감)?섍퀬 ?섏씡 ?곹깭????
     if (deviation_from_mean < 0.005 && profit_pct > 0.01) {
         spdlog::info("[MeanReversion] Mean Reached - {} | Profit: {:.2f}% | Deviation: {:.2f}%",
                      market, profit_pct * 100, deviation_from_mean * 100);
         return true;
     }
     
-    // ===== 3. 트레일링 스탑 업데이트 =====
+    // ===== 3. ?몃젅?쇰쭅 ?ㅽ깙 ?낅뜲?댄듃 =====
     if (profit_pct >= TRAILING_ACTIVATION) {
         double new_trailing = pos_data.highest_price * (1.0 - TRAILING_DISTANCE);
         if (new_trailing > pos_data.trailing_stop) {
@@ -308,28 +438,28 @@ bool MeanReversionStrategy::shouldExit(
         }
     }
     
-    // ===== 4. 익절 2 (4%) - 전량 청산 =====
+    // ===== 4. ?듭젅 2 (4%) - ?꾨웾 泥?궛 =====
     if (!pos_data.tp2_hit && profit_pct >= BASE_TAKE_PROFIT_2) {
         spdlog::info("[MeanReversion] Take Profit 2 - {} | Profit: {:.2f}%", market, profit_pct * 100);
         return true;
     }
     
-    // ===== 5. 익절 1 (2%) - 부분 청산 기록 (전량 청산은 아님) =====
+    // ===== 5. ?듭젅 1 (2%) - 遺遺?泥?궛 湲곕줉 (?꾨웾 泥?궛? ?꾨떂) =====
     if (!pos_data.tp1_hit && profit_pct >= BASE_TAKE_PROFIT_1 && holding_minutes > 30.0) {
         pos_data.tp1_hit = true;
         spdlog::info("[MeanReversion] Take Profit 1 Hit - {}", market);
-        // 여기서 true 리턴 시 전량 청산되므로 false 유지 (엔진이 부분청산 처리)
+        // ?ш린??true 由ы꽩 ???꾨웾 泥?궛?섎?濡?false ?좎? (?붿쭊??遺遺꾩껌??泥섎━)
     }
     
-    // ===== 6. 시간 제한 (4시간) =====
+    // ===== 6. ?쒓컙 ?쒗븳 (4?쒓컙) =====
     if (holding_minutes >= MAX_HOLDING_TIME_MINUTES) {
         spdlog::info("[MeanReversion] Max Holding Time - {} | Profit: {:.2f}%", market, profit_pct * 100);
         return true;
     }
     
-    // ===== 7. Breakeven 이동 =====
+    // ===== 7. Breakeven ?대룞 =====
     if (shouldMoveToBreakeven(entry_price, current_price)) {
-        double breakeven_price = entry_price * 1.002; // 수수료 포함
+        double breakeven_price = entry_price * 1.002; // ?섏닔猷??ы븿
         if (pos_data.trailing_stop < breakeven_price) {
             pos_data.trailing_stop = breakeven_price;
         }
@@ -341,11 +471,11 @@ bool MeanReversionStrategy::shouldExit(
 // ===== Calculate Stop Loss =====
 
 double MeanReversionStrategy::calculateStopLoss(double entry_price, const std::vector<Candle>& candles) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (candles.size() < 16) return entry_price * (1.0 - BASE_STOP_LOSS);
 
     std::vector<double> true_ranges;
-    // [수정] 가장 마지막(현재) 15개 캔들을 뒤에서부터 훑음
+    // [?섏젙] 媛??留덉?留??꾩옱) 15媛?罹붾뱾???ㅼ뿉?쒕????묒쓬
     size_t end_idx = candles.size();
     for (size_t i = end_idx - 1; i > end_idx - 15; --i) {
         double high_low = candles[i].high - candles[i].low;
@@ -366,8 +496,8 @@ double MeanReversionStrategy::calculateTakeProfit(
     double entry_price,
     const std::vector<Candle>& candles)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    (void)candles;  // candles 파라미터 미사용
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    (void)candles;  // candles ?뚮씪誘명꽣 誘몄궗??
     return entry_price * (1.0 + BASE_TAKE_PROFIT_1);
 }
 
@@ -379,9 +509,9 @@ double MeanReversionStrategy::calculatePositionSize(
     double stop_loss,
     const analytics::CoinMetrics& metrics)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    (void)capital;  // capital 파라미터 미사용
-    (void)metrics;  // metrics 파라미터 미사용
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    (void)capital;  // capital ?뚮씪誘명꽣 誘몄궗??
+    (void)metrics;  // metrics ?뚮씪誘명꽣 誘몄궗??
     
     double risk_pct = (entry_price - stop_loss) / entry_price;
     
@@ -399,8 +529,8 @@ double MeanReversionStrategy::calculatePositionSize(
     double volatility = calculateVolatility(metrics.candles);
     double vol_adj = adjustForVolatility(half_kelly, volatility);
     
-    // Confidence adjustment (통계적 신뢰도 반영)
-    double confidence = 0.75;  // 기본값
+    // Confidence adjustment (?듦퀎???좊ː??諛섏쁺)
+    double confidence = 0.75;  // 湲곕낯媛?
     double conf_adj = adjustForConfidence(vol_adj, confidence);
     
     double position_size = std::clamp(conf_adj, 0.05, MAX_POSITION_SIZE);
@@ -412,14 +542,14 @@ double MeanReversionStrategy::calculatePositionSize(
 
 void MeanReversionStrategy::setEnabled(bool enabled)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     enabled_ = enabled;
     spdlog::info("[MeanReversionStrategy] Enabled: {}", enabled);
 }
 
 bool MeanReversionStrategy::isEnabled() const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     return enabled_;
 }
 
@@ -427,26 +557,26 @@ bool MeanReversionStrategy::isEnabled() const
 
 IStrategy::Statistics MeanReversionStrategy::getStatistics() const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     return stats_;
 }
 
-// [수정] market 인자 추가 및 포지션 목록 삭제 로직
+// [?섏젙] market ?몄옄 異붽? 諛??ъ???紐⑸줉 ??젣 濡쒖쭅
 void MeanReversionStrategy::updateStatistics(const std::string& market, bool is_win, double profit_loss)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     
-    // [중요] 포지션 목록에서 제거 (재진입 허용)
+    // [以묒슂] ?ъ???紐⑸줉?먯꽌 ?쒓굅 (?ъ쭊???덉슜)
     if (active_positions_.erase(market)) {
-        // active_positions_에 있었다면 position_data_에도 있을 것임
+        // active_positions_???덉뿀?ㅻ㈃ position_data_?먮룄 ?덉쓣 寃껋엫
         position_data_.erase(market);
         spdlog::info("[MeanReversion] Position Cleared - {} (Ready for next trade)", market);
     } else {
-        // 혹시 모르니 map에서도 확인 사살
+        // ?뱀떆 紐⑤Ⅴ??map?먯꽌???뺤씤 ?ъ궡
         position_data_.erase(market);
     }
     
-    // --- 통계 업데이트 (기존 로직 유지) ---
+    // --- ?듦퀎 ?낅뜲?댄듃 (湲곗〈 濡쒖쭅 ?좎?) ---
     stats_.total_signals++;
     
     if (is_win) {
@@ -491,7 +621,7 @@ void MeanReversionStrategy::updateStatistics(const std::string& market, bool is_
 
 void MeanReversionStrategy::setStatistics(const Statistics& stats)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     stats_ = stats;
 }
 
@@ -502,8 +632,8 @@ double MeanReversionStrategy::updateTrailingStop(
     double highest_price,
     double current_price)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    (void)current_price;  // current_price 파라미터 미사용
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    (void)current_price;  // current_price ?뚮씪誘명꽣 誘몄궗??
     
     double profit_pct = (highest_price - entry_price) / entry_price;
     
@@ -528,7 +658,7 @@ bool MeanReversionStrategy::shouldMoveToBreakeven(
 
 MeanReversionRollingStatistics MeanReversionStrategy::getRollingStatistics() const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     return rolling_stats_;
 }
 
@@ -672,14 +802,15 @@ std::vector<Candle> MeanReversionStrategy::getCachedCandles(
 
 bool MeanReversionStrategy::canTradeNow()
 {
+    const auto strategy_cfg = Config::getInstance().getMeanReversionConfig();
     resetDailyCounters();
     resetHourlyCounters();
     
-    if (daily_trades_count_ >= MAX_DAILY_REVERSION_TRADES) {
+    if (daily_trades_count_ >= strategy_cfg.max_daily_trades) {
         return false;
     }
     
-    if (hourly_trades_count_ >= MAX_HOURLY_REVERSION_TRADES) {
+    if (hourly_trades_count_ >= strategy_cfg.max_hourly_trades) {
         return false;
     }
     
@@ -725,6 +856,7 @@ void MeanReversionStrategy::resetHourlyCounters()
 
 void MeanReversionStrategy::checkCircuitBreaker()
 {
+    const auto strategy_cfg = Config::getInstance().getMeanReversionConfig();
     long long now = getCurrentTimestamp();
     
     if (circuit_breaker_active_ && now >= circuit_breaker_until_) {
@@ -732,7 +864,7 @@ void MeanReversionStrategy::checkCircuitBreaker()
         spdlog::info("[MeanReversion] Circuit breaker deactivated");
     }
     
-    if (consecutive_losses_ >= MAX_CONSECUTIVE_LOSSES && !circuit_breaker_active_) {
+    if (consecutive_losses_ >= strategy_cfg.max_consecutive_losses && !circuit_breaker_active_) {
         activateCircuitBreaker();
     }
 }
@@ -808,17 +940,17 @@ StatisticalMetrics MeanReversionStrategy::calculateStatisticalMetrics(
         stats.z_score_100 = calculateZScore(prices.back(), recent_100);
     }
     
-    // 2. Hurst Exponent (평균회귀 vs 추세 판별)
+    // 2. Hurst Exponent (?됯퇏?뚭? vs 異붿꽭 ?먮퀎)
     stats.hurst_exponent = calculateHurstExponent(candles);
     
-    // 3. Half-Life (회귀 속도)
+    // 3. Half-Life (?뚭? ?띾룄)
     stats.half_life = calculateHalfLife(candles);
     
-    // 4. ADF Test (정상성 검정)
+    // 4. ADF Test (?뺤긽??寃??
     stats.adf_statistic = calculateADFStatistic(prices);
     stats.is_stationary = (stats.adf_statistic < -2.86);  // 5% significance level
     
-    // 5. Autocorrelation (자기상관)
+    // 5. Autocorrelation (?먭린?곴?)
     stats.autocorrelation = calculateAutocorrelation(prices, 1);
     
     return stats;
@@ -841,7 +973,7 @@ double MeanReversionStrategy::calculateZScore(
 double MeanReversionStrategy::calculateHurstExponent(
     const std::vector<Candle>& candles) const
 {
-    // 데이터 부족 시 기본값 (Random Walk)
+    // ?곗씠??遺議???湲곕낯媛?(Random Walk)
     if (candles.size() < 100) return 0.5;
     
     std::vector<double> prices = extractPrices(candles, "close");
@@ -856,24 +988,24 @@ double MeanReversionStrategy::calculateHurstExponent(
         
         int num_subseries = static_cast<int>(prices.size() / lag);
         std::vector<double> rs_values;
-        rs_values.reserve(num_subseries); // 메모리 예약 (성능 향상)
+        rs_values.reserve(num_subseries); // 硫붾え由??덉빟 (?깅뒫 ?μ긽)
         
         for (int i = 0; i < num_subseries; i++) {
-            // 서브시리즈 추출
+            // ?쒕툕?쒕━利?異붿텧
             auto start_it = prices.begin() + i * lag;
             auto end_it = start_it + lag;
             
-            // 1. 평균 계산 (STL 사용으로 최적화)
+            // 1. ?됯퇏 怨꾩궛 (STL ?ъ슜?쇰줈 理쒖쟻??
             double sum = std::accumulate(start_it, end_it, 0.0);
             double mean = sum / lag;
             
-            // 2. 표준편차 & Range 동시 계산 (루프 통합)
+            // 2. ?쒖??몄감 & Range ?숈떆 怨꾩궛 (猷⑦봽 ?듯빀)
             double sum_sq_diff = 0.0;
             double current_cumsum = 0.0;
-            double max_cumsum = -1e9; // 매우 작은 수로 초기화
-            double min_cumsum = 1e9;  // 매우 큰 수로 초기화
+            double max_cumsum = -1e9; // 留ㅼ슦 ?묒? ?섎줈 珥덇린??
+            double min_cumsum = 1e9;  // 留ㅼ슦 ???섎줈 珥덇린??
             
-            // R/S 분석에서는 누적 편차의 시작점을 0으로 간주하는 것이 정확함
+            // R/S 遺꾩꽍?먯꽌???꾩쟻 ?몄감???쒖옉?먯쓣 0?쇰줈 媛꾩＜?섎뒗 寃껋씠 ?뺥솗??
             max_cumsum = std::max(max_cumsum, 0.0); 
             min_cumsum = std::min(min_cumsum, 0.0);
 
@@ -881,10 +1013,10 @@ double MeanReversionStrategy::calculateHurstExponent(
                 double val = *it;
                 double diff = val - mean;
                 
-                // 표준편차용
+                // ?쒖??몄감??
                 sum_sq_diff += diff * diff;
                 
-                // Range용 (누적 합)
+                // Range??(?꾩쟻 ??
                 current_cumsum += diff;
                 if (current_cumsum > max_cumsum) max_cumsum = current_cumsum;
                 if (current_cumsum < min_cumsum) min_cumsum = current_cumsum;
@@ -894,7 +1026,7 @@ double MeanReversionStrategy::calculateHurstExponent(
             double std_dev = std::sqrt(variance);
             double range = max_cumsum - min_cumsum;
             
-            // [안전장치] 표준편차나 Range가 0에 가까우면 무시 (log(0) 방지)
+            // [?덉쟾?μ튂] ?쒖??몄감??Range媛 0??媛源뚯슦硫?臾댁떆 (log(0) 諛⑹?)
             if (std_dev > 1e-9 && range > 1e-9) {
                 rs_values.push_back(range / std_dev);
             }
@@ -903,7 +1035,7 @@ double MeanReversionStrategy::calculateHurstExponent(
         if (!rs_values.empty()) {
             double avg_rs = calculateMean(rs_values);
             
-            // [안전장치] 최종 평균이 유효할 때만 로그 계산
+            // [?덉쟾?μ튂] 理쒖쥌 ?됯퇏???좏슚???뚮쭔 濡쒓렇 怨꾩궛
             if (avg_rs > 1e-9) {
                 log_rs.push_back(std::log(avg_rs));
                 log_n.push_back(std::log(static_cast<double>(lag)));
@@ -912,7 +1044,7 @@ double MeanReversionStrategy::calculateHurstExponent(
     }
     
     // Linear regression: log(R/S) = H * log(n) + c
-    // 점이 최소 3개는 있어야 신뢰할 수 있음
+    // ?먯씠 理쒖냼 3媛쒕뒗 ?덉뼱???좊ː?????덉쓬
     if (log_rs.size() < 3) return 0.5;
     
     double mean_x = calculateMean(log_n);
@@ -929,12 +1061,12 @@ double MeanReversionStrategy::calculateHurstExponent(
         denominator += dx * dx;
     }
     
-    // 분모가 0인 경우 방지
+    // 遺꾨え媛 0??寃쎌슦 諛⑹?
     if (std::abs(denominator) < 1e-9) return 0.5;
 
     double hurst = numerator / denominator;
     
-    // 결과값 클램핑 (0.0 ~ 1.0)
+    // 寃곌낵媛??대옩??(0.0 ~ 1.0)
     return std::clamp(hurst, 0.0, 1.0);
 }
 
@@ -983,7 +1115,7 @@ double MeanReversionStrategy::calculateADFStatistic(
     if (prices.size() < 50) return 0.0;
     
     // Augmented Dickey-Fuller Test
-    // Simplified version: Δy_t = α + β*y_{t-1} + ε_t
+    // Simplified version: ?y_t = 慣 + 棺*y_{t-1} + 琯_t
     
     std::vector<double> diff;
     std::vector<double> lagged;
@@ -1051,7 +1183,7 @@ BollingerBands MeanReversionStrategy::calculateBollingerBands(const std::vector<
     if (candles.size() < static_cast<size_t>(period)) return bb;
 
     std::vector<double> prices;
-    // [수정] 가장 최근 'period'만큼의 종가를 추출
+    // [?섏젙] 媛??理쒓렐 'period'留뚰겮??醫낃?瑜?異붿텧
     for (size_t i = candles.size() - period; i < candles.size(); ++i) {
         prices.push_back(candles[i].close);
     }
@@ -1063,7 +1195,7 @@ BollingerBands MeanReversionStrategy::calculateBollingerBands(const std::vector<
     
     if (bb.middle > 0) bb.bandwidth = (bb.upper - bb.lower) / bb.middle;
     
-    // [수정] 현재가(가장 최신) 기준으로 위치 파악
+    // [?섏젙] ?꾩옱媛(媛??理쒖떊) 湲곗??쇰줈 ?꾩튂 ?뚯븙
     double current_price = candles.back().close;
     if (bb.upper != bb.lower) bb.percent_b = (current_price - bb.lower) / (bb.upper - bb.lower);
 
@@ -1185,7 +1317,7 @@ VWAPAnalysis MeanReversionStrategy::calculateVWAPAnalysis(
 MRMarketRegime MeanReversionStrategy::detectMarketRegime(
     const StatisticalMetrics& stats) const
 {
-    // Hurst Exponent 기반 판별
+    // Hurst Exponent 湲곕컲 ?먮퀎
     if (stats.hurst_exponent < HURST_MEAN_REVERTING) {
         return MRMarketRegime::MEAN_REVERTING;
     } else if (stats.hurst_exponent > 0.55) {
@@ -1197,7 +1329,7 @@ MRMarketRegime MeanReversionStrategy::detectMarketRegime(
     return MRMarketRegime::UNKNOWN;
 }
 
-// ===== Mean Reversion Analysis (핵심) =====
+// ===== Mean Reversion Analysis (?듭떖) =====
 
 MeanReversionSignalMetrics MeanReversionStrategy::analyzeMeanReversion(
     const std::string& market,
@@ -1207,14 +1339,14 @@ MeanReversionSignalMetrics MeanReversionStrategy::analyzeMeanReversion(
 {
     MeanReversionSignalMetrics signal;
     
-    // 1. Statistical Metrics 계산
+    // 1. Statistical Metrics 怨꾩궛
     StatisticalMetrics stats = calculateStatisticalMetrics(candles);
     
-    // 2. Market Regime 판별
+    // 2. Market Regime ?먮퀎
     signal.regime = detectMarketRegime(stats);
     
-    // Mean Reverting 상태가 아니면 거래 안함
-    if (signal.regime != MRMarketRegime::MEAN_REVERTING) {
+    // Mean Reverting ?곹깭媛 ?꾨땲硫?嫄곕옒 ?덊븿
+    if (signal.regime == MRMarketRegime::TRENDING || signal.regime == MRMarketRegime::UNKNOWN) {
         return signal;
     }
     
@@ -1230,9 +1362,9 @@ MeanReversionSignalMetrics MeanReversionStrategy::analyzeMeanReversion(
     // 6. Kalman Filter State
     auto& kalman = getKalmanState(market);
     
-    // 7. 과매도 확인 (여러 조건 중 하나라도 만족)
+    // 7. 怨쇰ℓ???뺤씤 (?щ윭 議곌굔 以??섎굹?쇰룄 留뚯”)
     bool is_bb_oversold = (current_price <= bb.lower);
-    bool is_rsi_oversold = (rsi.oversold_count >= 2);  // 최소 2개 기간에서 과매도
+    bool is_rsi_oversold = (rsi.oversold_count >= 2);  // 理쒖냼 2媛?湲곌컙?먯꽌 怨쇰ℓ??
     bool is_z_score_extreme = (stats.z_score_20 <= Z_SCORE_EXTREME || 
                                stats.z_score_50 <= Z_SCORE_EXTREME);
     bool is_vwap_oversold = (current_price < vwap.vwap_lower);
@@ -1244,12 +1376,14 @@ MeanReversionSignalMetrics MeanReversionStrategy::analyzeMeanReversion(
                           (is_vwap_oversold ? 1 : 0) + 
                           (is_kalman_oversold ? 1 : 0);
     
-    // 최소 3개 이상의 과매도 신호 필요
-    if (oversold_signals < 3) {
+    // 理쒖냼 3媛??댁긽??怨쇰ℓ???좏샇 ?꾩슂
+    const int min_oversold_signals =
+        (signal.regime == MRMarketRegime::MEAN_REVERTING) ? 2 : 1;
+    if (oversold_signals < min_oversold_signals) {
         return signal;
     }
     
-    // 8. Signal Type 결정
+    // 8. Signal Type 寃곗젙
     if (is_bb_oversold && is_rsi_oversold) {
         signal.type = MeanReversionType::BOLLINGER_OVERSOLD;
     } else if (is_z_score_extreme) {
@@ -1262,10 +1396,12 @@ MeanReversionSignalMetrics MeanReversionStrategy::analyzeMeanReversion(
         signal.type = MeanReversionType::RSI_OVERSOLD;
     }
     
-    // 9. Reversion Probability 계산
+    // 9. Reversion Probability 怨꾩궛
     signal.reversion_probability = calculateReversionProbability(stats, bb, rsi, vwap);
     
-    if (signal.reversion_probability < MIN_REVERSION_PROBABILITY) {
+    const double prob_floor =
+        (signal.regime == MRMarketRegime::MEAN_REVERTING) ? kRelaxedMinReversionProb : 0.52;
+    if (signal.reversion_probability < prob_floor) {
         return signal;
     }
     
@@ -1276,7 +1412,7 @@ MeanReversionSignalMetrics MeanReversionStrategy::analyzeMeanReversion(
     signal.time_to_revert = estimateReversionTime(stats.half_life, 
                                                    std::abs(current_price - kalman.estimated_mean) / kalman.estimated_mean);
     
-    // 12. Confidence (통계적 신뢰도)
+    // 12. Confidence (?듦퀎???좊ː??
     signal.confidence = 0.0;
     signal.confidence += (stats.is_stationary ? 0.2 : 0.0);
     signal.confidence += (stats.hurst_exponent < 0.4 ? 0.2 : 0.1);
@@ -1284,13 +1420,17 @@ MeanReversionSignalMetrics MeanReversionStrategy::analyzeMeanReversion(
     signal.confidence += (std::abs(stats.autocorrelation) > 0.3 ? 0.2 : 0.0);
     signal.confidence += (oversold_signals >= 4 ? 0.2 : 0.1);
     
-    // 13. Signal Strength 계산
+    // 13. Signal Strength 怨꾩궛
     signal.strength = calculateSignalStrength(signal, stats, metrics);
     
     // 14. Validation
-    signal.is_valid = (signal.strength >= MIN_SIGNAL_STRENGTH && 
-                      signal.reversion_probability >= MIN_REVERSION_PROBABILITY &&
-                      signal.confidence >= 0.6);
+    const auto strategy_cfg = Config::getInstance().getMeanReversionConfig();
+    const double base_strength_floor = std::max(0.30, strategy_cfg.min_signal_strength);
+    const double valid_strength_floor =
+        (signal.regime == MRMarketRegime::MEAN_REVERTING) ? base_strength_floor : std::max(0.28, base_strength_floor - 0.10);
+    signal.is_valid = (signal.strength >= valid_strength_floor &&
+                      signal.reversion_probability >= prob_floor &&
+                      signal.confidence >= kRelaxedMinConfidence);
     
     return signal;
 }
@@ -1303,36 +1443,36 @@ double MeanReversionStrategy::calculateReversionProbability(
 {
     double probability = 0.5;  // Base 50%
     
-    // 1. Hurst Exponent (강한 평균회귀일수록 확률 증가)
+    // 1. Hurst Exponent (媛뺥븳 ?됯퇏?뚭??쇱닔濡??뺣쪧 利앷?)
     if (stats.hurst_exponent < 0.40) {
         probability += 0.20;
     } else if (stats.hurst_exponent < 0.45) {
         probability += 0.10;
     }
     
-    // 2. Stationarity (정상성)
+    // 2. Stationarity (?뺤긽??
     if (stats.is_stationary) {
         probability += 0.10;
     }
     
-    // 3. Half-Life (적정 범위)
+    // 3. Half-Life (?곸젙 踰붿쐞)
     if (stats.half_life > 5 && stats.half_life < 50) {
         probability += 0.10;
     }
     
-    // 4. Bollinger Bands (하단 돌파)
+    // 4. Bollinger Bands (?섎떒 ?뚰뙆)
     if (bb.percent_b < 0.1) {
         probability += 0.15;
     }
     
-    // 5. RSI (다중 과매도)
+    // 5. RSI (?ㅼ쨷 怨쇰ℓ??
     if (rsi.oversold_count >= 3) {
         probability += 0.15;
     } else if (rsi.oversold_count >= 2) {
         probability += 0.10;
     }
     
-    // 6. Z-Score (극단적 과매도)
+    // 6. Z-Score (洹밸떒??怨쇰ℓ??
     if (stats.z_score_50 <= -2.5) {
         probability += 0.15;
     } else if (stats.z_score_50 <= -2.0) {
@@ -1353,7 +1493,7 @@ double MeanReversionStrategy::estimateReversionTarget(
     const VWAPAnalysis& vwap,
     const KalmanFilterState& kalman) const
 {
-    // 여러 평균의 가중 평균
+    // ?щ윭 ?됯퇏??媛以??됯퇏
     std::vector<double> targets;
     std::vector<double> weights;
     
@@ -1386,7 +1526,7 @@ double MeanReversionStrategy::estimateReversionTime(
     double half_life,
     double current_deviation) const
 {
-    (void)current_deviation;  // current_deviation 파라미터 미사용
+    (void)current_deviation;  // current_deviation ?뚮씪誘명꽣 誘몄궗??
     
     if (half_life <= 0 || half_life > 100) {
         return 120.0;  // Default 2 hours
@@ -1471,7 +1611,7 @@ double MeanReversionStrategy::adjustForConfidence(
     double base_size,
     double confidence) const
 {
-    // Confidence가 높을수록 포지션 증가
+    // Confidence媛 ?믪쓣?섎줉 ?ъ???利앷?
     double conf_multiplier = 0.5 + (confidence * 0.5);
     return base_size * conf_multiplier;
 }
@@ -1502,23 +1642,31 @@ bool MeanReversionStrategy::isWorthTrading(
 bool MeanReversionStrategy::shouldGenerateMeanReversionSignal(
     const MeanReversionSignalMetrics& metrics) const
 {
+    const auto strategy_cfg = Config::getInstance().getMeanReversionConfig();
     if (!metrics.is_valid) {
         return false;
     }
-    
-    if (metrics.strength < MIN_SIGNAL_STRENGTH) {
-        return false;
-    }
-    
-    if (metrics.reversion_probability < MIN_REVERSION_PROBABILITY) {
-        return false;
-    }
-    
-    if (metrics.confidence < 0.6) {
-        return false;
-    }
-    
+
+    double required_strength = std::max(0.30, strategy_cfg.min_signal_strength);
     if (metrics.regime != MRMarketRegime::MEAN_REVERTING) {
+        required_strength = std::max(0.28, required_strength - 0.10);
+    }
+    if (metrics.strength < required_strength) {
+        return false;
+    }
+    
+    if (metrics.reversion_probability < kRelaxedMinReversionProb) {
+        return false;
+    }
+    
+    if (metrics.confidence < kRelaxedMinConfidence) {
+        return false;
+    }
+    
+    const bool regime_ok =
+        (metrics.regime == MRMarketRegime::MEAN_REVERTING) ||
+        (metrics.regime == MRMarketRegime::RANDOM_WALK && metrics.confidence >= 0.58);
+    if (!regime_ok) {
         return false;
     }
     
@@ -1552,7 +1700,7 @@ double MeanReversionStrategy::calculateVolatility(const std::vector<Candle>& can
     if (candles.size() < 21) return 0.02;
     
     std::vector<double> returns;
-    // [수정] 데이터의 맨 뒤(현재) 20개 구간의 수익률 계산
+    // [?섏젙] ?곗씠?곗쓽 留????꾩옱) 20媛?援ш컙???섏씡瑜?怨꾩궛
     for (size_t i = candles.size() - 20; i < candles.size(); ++i) {
         double ret = (candles[i].close - candles[i-1].close) / candles[i-1].close;
         returns.push_back(ret);
@@ -1602,8 +1750,8 @@ std::vector<Candle> MeanReversionStrategy::resampleTo5m(const std::vector<Candle
     std::vector<Candle> candles_5m;
     for (size_t i = 0; i + 5 <= candles_1m.size(); i += 5) {
         Candle candle_5m;
-        candle_5m.open = candles_1m[i].open;         // [수정] i가 가장 과거
-        candle_5m.close = candles_1m[i + 4].close;   // [수정] i+4가 가장 최신
+        candle_5m.open = candles_1m[i].open;         // [?섏젙] i媛 媛??怨쇨굅
+        candle_5m.close = candles_1m[i + 4].close;   // [?섏젙] i+4媛 媛??理쒖떊
         candle_5m.high = candles_1m[i].high;
         candle_5m.low = candles_1m[i].low;
         candle_5m.volume = 0;

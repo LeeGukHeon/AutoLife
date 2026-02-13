@@ -52,10 +52,14 @@ public:
     );
     nlohmann::json cancelOrder(const std::string& uuid);
     nlohmann::json getOrder(const std::string& uuid);
+
+    const std::string& getAccessKey() const { return access_key_; }
+    const std::string& getSecretKey() const { return secret_key_; }
     
 private:
     std::string access_key_;
     std::string secret_key_;
+    bool offline_mode_ = false;
     std::string base_url_;
     CURL* curl_;
     std::mutex mutex_;

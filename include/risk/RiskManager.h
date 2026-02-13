@@ -43,6 +43,11 @@ struct Position {
     // [NEW] ML 학습용 신호 정보
     double signal_filter;       // 진입 시 적용된 동적 필터값
     double signal_strength;     // 진입 신호의 강도
+    analytics::MarketRegime market_regime; // 진입 시 시장 레짐
+    double liquidity_score;     // 진입 시 유동성 점수
+    double volatility;          // 진입 시 변동성
+    double expected_value;      // 진입 시 기대값
+    double reward_risk_ratio;   // 진입 시 RR
     
         // [NEW] 펜딩 주문 추적 (Limit Order → Market 폴백 위해)
         std::string pending_order_uuid;     // 펜딩 중인 주문 UUID
@@ -59,6 +64,9 @@ struct Position {
         , breakeven_trigger(0), trailing_start(0)
         , pending_order_time(0), pending_order_price(0)
         , signal_filter(0.5), signal_strength(0.0)
+        , market_regime(analytics::MarketRegime::UNKNOWN)
+        , liquidity_score(0.0), volatility(0.0)
+        , expected_value(0.0), reward_risk_ratio(0.0)
     {}
 };
 
@@ -79,12 +87,20 @@ struct TradeHistory {
     // [NEW] ML 학습용 필터 정보
     double signal_filter;       // 거래 진입 시 적용된 신호 필터값 (0.45~0.55)
     double signal_strength;     // 거래 진입 신호의 강도 (0.0~1.0)
+    analytics::MarketRegime market_regime; // 거래 진입 시 시장 레짐
+    double liquidity_score;     // 거래 진입 시 유동성 점수
+    double volatility;          // 거래 진입 시 변동성
+    double expected_value;      // 거래 진입 시 기대값
+    double reward_risk_ratio;   // 거래 진입 시 RR
     
     TradeHistory()
         : entry_price(0), exit_price(0), quantity(0)
         , profit_loss(0), profit_loss_pct(0), fee_paid(0)
         , entry_time(0), exit_time(0)
         , signal_filter(0.5), signal_strength(0.0)
+        , market_regime(analytics::MarketRegime::UNKNOWN)
+        , liquidity_score(0.0), volatility(0.0)
+        , expected_value(0.0), reward_risk_ratio(0.0)
     {}
 };
 
@@ -132,8 +148,17 @@ public:
     // 1차 익절 (50% 청산)
     void partialExit(const std::string& market, double exit_price);
     
+    // [Fix] 소액 포지션이라 부분 익절을 못한 경우, 플래그만 강제로 켜기 (자본 변동 없음)
+    void setHalfClosed(const std::string& market, bool half_closed);
+    
     // [Phase 3] 부분 체결 시 수량만 업데이트 (포지션 유지)
     void updatePositionQuantity(const std::string& market, double new_quantity);
+    bool applyPartialSellFill(
+        const std::string& market,
+        double exit_price,
+        double sell_quantity,
+        const std::string& exit_reason
+    );
     
     // 현재 포지션 조회
     Position* getPosition(const std::string& market);
@@ -270,7 +295,12 @@ public:
     void setPositionSignalInfo(
         const std::string& market,
         double signal_filter,
-        double signal_strength
+        double signal_strength,
+        analytics::MarketRegime market_regime = analytics::MarketRegime::UNKNOWN,
+        double liquidity_score = 0.0,
+        double volatility = 0.0,
+        double expected_value = 0.0,
+        double reward_risk_ratio = 0.0
     );
 
     // ===== 그리드 자본/체결 처리 =====

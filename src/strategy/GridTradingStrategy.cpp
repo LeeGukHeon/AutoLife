@@ -1,5 +1,6 @@
 #include "strategy/GridTradingStrategy.h"
 #include "common/Logger.h"
+#include "common/Config.h"
 #include "analytics/TechnicalIndicators.h"
 #include <cmath>
 #include <algorithm>
@@ -81,6 +82,7 @@ Signal GridTradingStrategy::generateSignal(
     const analytics::RegimeAnalysis& regime)
 {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
+    const auto strategy_cfg = Config::getInstance().getGridTradingConfig();
 
     last_metrics_cache_[market] = metrics;
     last_candles_cache_[market] = candles;
@@ -109,8 +111,8 @@ Signal GridTradingStrategy::generateSignal(
     total_score += grid_signal.strength * 0.40;
     
     // --- (2) 유동성 (최대 0.10) ---
-    if (metrics.liquidity_score >= MIN_LIQUIDITY_SCORE) total_score += 0.10;
-    else if (metrics.liquidity_score >= MIN_LIQUIDITY_SCORE * 0.5) total_score += 0.05;
+    if (metrics.liquidity_score >= strategy_cfg.min_liquidity_score) total_score += 0.10;
+    else if (metrics.liquidity_score >= strategy_cfg.min_liquidity_score * 0.5) total_score += 0.05;
     
     // --- (3) 레짐 (최대 0.20) ---
     double regime_score = 0.0;
@@ -139,7 +141,7 @@ Signal GridTradingStrategy::generateSignal(
     // ===== 최종 판정 =====
     signal.strength = std::clamp(total_score, 0.0, 1.0);
     
-    if (signal.strength < 0.40) return signal;
+    if (signal.strength < strategy_cfg.min_signal_strength) return signal;
     
     // ===== 신호 생성 =====
     signal.type = SignalType::BUY;
@@ -186,6 +188,7 @@ bool GridTradingStrategy::shouldEnter(
     const analytics::RegimeAnalysis& regime)
 {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
+    const auto strategy_cfg = Config::getInstance().getGridTradingConfig();
     (void)regime; // Used for future enhancements
 
     if (active_positions_.find(market) != active_positions_.end()) {
@@ -193,7 +196,7 @@ bool GridTradingStrategy::shouldEnter(
     }
 
     if (candles.size() < 100) return false;
-    if (metrics.liquidity_score < MIN_LIQUIDITY_SCORE) return false;
+    if (metrics.liquidity_score < strategy_cfg.min_liquidity_score) return false;
 
     if (active_grids_.find(market) != active_grids_.end()) {
         return false;
@@ -205,7 +208,7 @@ bool GridTradingStrategy::shouldEnter(
     if (isCircuitBreakerActive()) return false;
 
     long long now = getCurrentTimestamp();
-    if ((now - last_signal_time_) < MIN_SIGNAL_INTERVAL_SEC * 1000) {
+    if ((now - last_signal_time_) < static_cast<long long>(strategy_cfg.min_signal_interval_sec) * 1000) {
         return false;
     }
 
@@ -321,13 +324,14 @@ double GridTradingStrategy::calculatePositionSize(
     (void)stop_loss;    // stop_loss 파라미터 미사용
     
     // Grid는 자본의 30%까지만 할당
-    double position_size = MAX_GRID_CAPITAL_PCT;
+    const auto strategy_cfg = Config::getInstance().getGridTradingConfig();
+    double position_size = strategy_cfg.max_grid_capital_pct;
     
     // 유동성에 따라 조정
     double liquidity_factor = std::min(metrics.liquidity_score / 100.0, 1.0);
     position_size *= liquidity_factor;
     
-    return std::clamp(position_size, 0.10, MAX_GRID_CAPITAL_PCT);
+    return std::clamp(position_size, 0.10, strategy_cfg.max_grid_capital_pct);
 }
 
 // ===== Enabled =====
@@ -933,14 +937,15 @@ std::vector<Candle> GridTradingStrategy::getCachedCandles(
 
 bool GridTradingStrategy::canTradeNow()
 {
+    const auto strategy_cfg = Config::getInstance().getGridTradingConfig();
     resetDailyCounters();
     resetHourlyCounters();
     
-    if (daily_trades_count_ >= MAX_DAILY_GRID_TRADES) {
+    if (daily_trades_count_ >= strategy_cfg.max_daily_trades) {
         return false;
     }
     
-    if (hourly_trades_count_ >= MAX_HOURLY_GRID_TRADES) {
+    if (hourly_trades_count_ >= strategy_cfg.max_hourly_trades) {
         return false;
     }
     
@@ -986,6 +991,7 @@ void GridTradingStrategy::resetHourlyCounters()
 
 void GridTradingStrategy::checkCircuitBreaker()
 {
+    const auto strategy_cfg = Config::getInstance().getGridTradingConfig();
     long long now = getCurrentTimestamp();
     
     if (circuit_breaker_active_ && now >= circuit_breaker_until_) {
@@ -993,7 +999,7 @@ void GridTradingStrategy::checkCircuitBreaker()
         spdlog::info("[GridTrading] Circuit breaker deactivated");
     }
     
-    if (consecutive_losses_ >= MAX_CONSECUTIVE_LOSSES && !circuit_breaker_active_) {
+    if (consecutive_losses_ >= strategy_cfg.max_consecutive_losses && !circuit_breaker_active_) {
         activateCircuitBreaker();
     }
 }
@@ -1555,10 +1561,11 @@ GridSignalMetrics GridTradingStrategy::analyzeGridOpportunity(
     double volatility = calculateVolatility(candles);
     
     // 3. Optimal Grid Count
+    const auto strategy_cfg = Config::getInstance().getGridTradingConfig();
     signal.optimal_grid_count = calculateOptimalGridCount(
         range.range_width_pct,
         volatility,
-        1000000.0 * MAX_GRID_CAPITAL_PCT
+        1000000.0 * strategy_cfg.max_grid_capital_pct
     );
     
     // 4. Optimal Spacing
@@ -1606,7 +1613,7 @@ GridSignalMetrics GridTradingStrategy::analyzeGridOpportunity(
     signal.strength += (1.0 - signal.risk_score) * 0.1;
     
     // 12. Validation
-    signal.is_valid = (signal.strength >= MIN_SIGNAL_STRENGTH &&
+    signal.is_valid = (signal.strength >= strategy_cfg.min_signal_strength &&
                       signal.is_profitable_after_fees &&
                       range.is_ranging);
     
@@ -2151,11 +2158,12 @@ long long GridTradingStrategy::getCurrentTimestamp() const
 bool GridTradingStrategy::shouldGenerateGridSignal(
     const GridSignalMetrics& metrics) const
 {
+    const auto strategy_cfg = Config::getInstance().getGridTradingConfig();
     if (!metrics.is_valid) {
         return false;
     }
     
-    if (metrics.strength < MIN_SIGNAL_STRENGTH) {
+    if (metrics.strength < strategy_cfg.min_signal_strength) {
         return false;
     }
     

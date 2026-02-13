@@ -1,4 +1,4 @@
-#include "risk/RiskManager.h"
+﻿#include "risk/RiskManager.h"
 #include "common/Logger.h"
 #include "common/Config.h"
 #include <algorithm>
@@ -18,21 +18,21 @@ RiskManager::RiskManager(double initial_capital)
     , daily_loss_limit_krw_(50000.0)
     , daily_start_date_(0)
     , max_positions_(10)
-    , max_daily_trades_(100)   // [Phase 2] 20→100 (전략 다양화 지원)
+    , max_daily_trades_(100)   // [Phase 2] from 20 to 100 (strategy diversification)
     , max_drawdown_pct_(0.10)  // 10%
-    , max_exposure_pct_(0.85)  // 총 자본 대비 기본 85%
-    , min_reentry_interval_(60)   // [Phase 2] 300초→60초 (기회 손실 방지)
+    , max_exposure_pct_(0.85)  // default exposure cap 85%
+    , min_reentry_interval_(60)   // [Phase 2] from 300s to 60s
     , max_capital_(initial_capital)
     , total_fees_paid_(0)
     , min_order_krw_(5000.0)
     , recommended_min_enter_krw_(6000.0)
 {
-    LOG_INFO("RiskManager 초기화 - 초기 자본: {:.0f} KRW", initial_capital);
+    LOG_INFO("RiskManager initialized - initial capital {:.0f} KRW", initial_capital);
     resetDailyCountIfNeeded();
     resetDailyLossIfNeeded();
 }
 
-// ===== 포지션 진입 =====
+// ===== Position Entry =====
 
 bool RiskManager::canEnterPosition(
     const std::string& market,
@@ -40,46 +40,46 @@ bool RiskManager::canEnterPosition(
     double position_size_ratio,
     const std::string& strategy_name
 ) {
-    // 스레드 안전성
+    // Thread-safe guard
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     
-    // [자정 리셋] daily_trade_count 자동 리셋
+    // Daily reset checks
     resetDailyCountIfNeeded();
     resetDailyLossIfNeeded();
     
-    // [1] 이미 포지션 보유 중인지 확인
+    // 1) already has position
     if (getPosition(market) != nullptr) {
-        LOG_WARN("{} 이미 포지션 보유 중", market);
+        LOG_WARN("{} already has an open position", market);
         return false;
     }
     
-    // [2] 최대 포지션 개수 초과
+    // 2) max active positions
     if (hasReachedMaxPositions()) {
-        LOG_WARN("최대 포지션 개수 도달 ({}/{})", positions_.size(), max_positions_);
+        LOG_WARN("max positions reached ({}/{})", positions_.size(), max_positions_);
         return false;
     }
     
-    // [3] 일일 거래 횟수 제한
+    // 3) daily trade limit
     if (hasReachedDailyTradeLimit()) {
-        LOG_WARN("일일 거래 횟수 제한 도달 ({}/{})", daily_trade_count_, max_daily_trades_);
+        LOG_WARN("daily trade limit reached ({}/{})", daily_trade_count_, max_daily_trades_);
         return false;
     }
     
-    // [4] 재진입 대기 시간
+    // 4) re-entry cooldown
     if (!canTradeMarket(market)) {
-        LOG_WARN("{} 재진입 대기 중", market);
+        LOG_WARN("{} re-entry cooldown active", market);
         return false;
     }
     
-    // [5] Drawdown 초과
+    // 5) drawdown guard
     if (isDrawdownExceeded()) {
-        LOG_ERROR("Drawdown 한계 초과! 거래 중단");
+        LOG_ERROR("Drawdown limit exceeded, trading blocked");
         return false;
     }
     
-    // ========== [핵심] 자금 관리 로직 ==========
+    // ===== Capital safety checks =====
     
-    // [투자액 계산] 모든 진행 중인 포지션의 총 투자액
+    // Invested amount in open positions
     double invested_sum = 0.0;
     for (const auto& [m, pos] : positions_) {
         invested_sum += pos.invested_amount;
@@ -90,65 +90,64 @@ bool RiskManager::canEnterPosition(
         reserved_sum += amount;
     }
     
-    // [가용자본] 현금 잔고 기준 (투자 중인 금액은 이미 포지션에 묶여 있음)
-    double available_cash = current_capital_ - reserved_sum;
+    // Cash available for new entries (subtract reserves and pending orders)
+    double available_cash = current_capital_ - reserved_sum - pending_order_capital_;
     if (available_cash < 0) available_cash = 0.0;
     
-    // [최소값 기준]
-    const double MIN_ORDER_KRW = Config::getInstance().getMinOrderKrw();
-    const double RECOMMENDED_MIN_ENTER_KRW = MIN_ORDER_KRW * 1.05; // [Phase 2] 5,250원 (소액 시드 지원)
+    // Exchange minimums
+    const double MIN_ORDER_KRW = min_order_krw_;
+    const double RECOMMENDED_MIN_ENTER_KRW = MIN_ORDER_KRW;
     
-    // [추가] 기본 손절 3% 적용 후에도 최소 주문금액+매도 수수료를 만족해야 함
+    // Base assumptions for stop/fee feasibility check
     const double BASE_STOP_LOSS_PCT = 0.03;
     const double FEE_RATE = Config::getInstance().getFeeRate();
     
-    // [position_size_ratio 정규화]
+    // Normalize requested ratio
     double normalized_ratio = std::clamp(position_size_ratio, 0.0, 1.0);
     if (std::fabs(normalized_ratio - position_size_ratio) > 0.001) {
-        LOG_WARN("{} - position_size_ratio 비정상: {:.4f} → {:.4f} (정규화됨)",
+        LOG_WARN("{} - normalized position_size_ratio {:.4f} -> {:.4f}",
                  market, position_size_ratio, normalized_ratio);
     }
     
-    // [가용자본 확인] 최소값 미만이면 진입 불가
+    // Minimum available cash check
     if (available_cash < RECOMMENDED_MIN_ENTER_KRW) {
-        LOG_WARN("{}★ 매수 불가: 가용자본 {:.0f}원 < 권장최소진입 {:.0f}원",
+        LOG_WARN("{} buy blocked: available {:.0f} < min required {:.0f}",
                  market, available_cash, RECOMMENDED_MIN_ENTER_KRW);
         return false;
     }
     
-    // [필요액 계산]
+    // Required amount for requested ratio
     double required_amount = available_cash * normalized_ratio;
     
-    // [최소 주문액 체크]
+    // Hard minimum order check
     if (required_amount < MIN_ORDER_KRW) {
-        LOG_WARN("{}★ 매수 불가: 진입액 {:.0f}원 < 업비트최소주문 {:.0f}원 (비중 {:.4f}→추천불가)",
+        LOG_WARN("{} buy blocked: {:.0f} < min order {:.0f} (ratio {:.4f})",
                  market, required_amount, MIN_ORDER_KRW, normalized_ratio);
         return false;
     }
 
-    // [Phase 2] 손절 후 매도 최소금액 검사 → 경고만 (소액 시드에서 진입 차단 방지)
+    // Soft warning: after stop-loss and fee, exit amount may be near minimum
     double min_required_for_exit = MIN_ORDER_KRW / ((1.0 - BASE_STOP_LOSS_PCT) * (1.0 - FEE_RATE));
     if (required_amount < min_required_for_exit) {
-        LOG_WARN("{}⚠ 주의: 손절 시 최소 매도금액 미충족 가능 (필요 {:.0f}원, 현재 {:.0f}원)",
+        LOG_WARN("{} warning: stop-loss exit may violate minimum order (need {:.0f}, got {:.0f})",
                  market, min_required_for_exit, required_amount);
-        // [Phase 2] hard block 제거 - 소액 시드에서도 진입 허용
     }
     
-    // [권장 최소값 체크]
+    // Recommended minimum check
     if (required_amount < RECOMMENDED_MIN_ENTER_KRW) {
-        LOG_WARN("{}★ 매수 불가: 진입액 {:.0f}원 < 권장최소진입 {:.0f}원 (비중 {:.4f})",
+        LOG_WARN("{} buy blocked: {:.0f} < recommended minimum {:.0f} (ratio {:.4f})",
                  market, required_amount, RECOMMENDED_MIN_ENTER_KRW, normalized_ratio);
         return false;
     }
     
-    // [범위 확인]
+    // Bound check
     if (required_amount > available_cash) {
-        LOG_ERROR("[내부오류] 계산 오류: 필요액 {:.0f} > 가용액 {:.0f}", 
+        LOG_ERROR("internal error: required {:.0f} > available {:.0f}",
                   required_amount, available_cash);
         return false;
     }
     
-    // [최악의 경우 손실 추정]
+    // Worst-case per-trade drawdown check
     double max_drawdown_per_trade = current_capital_ * (max_drawdown_pct_ / max_positions_);
     const double WORST_CASE_PRICE_MOVE_PCT = 0.02;   // 2% worst-case move
     const double ESTIMATED_TOTAL_FEE_PCT = 0.002;    // 0.2% total fees
@@ -156,23 +155,22 @@ bool RiskManager::canEnterPosition(
     double estimated_worst_loss = required_amount * worst_case_loss_pct;
 
     if (estimated_worst_loss > max_drawdown_per_trade) {
-        LOG_WARN("거래액이 최대 손실 한계 초과: 예상최대손실 {:.0f} > 허용한도 {:.0f}",
+        LOG_WARN("entry blocked: estimated worst loss {:.0f} > allowed {:.0f}",
                  estimated_worst_loss, max_drawdown_per_trade);
         return false;
     }
 
-    // [총 노출 확인]
+    // Total exposure check
     auto metrics = getRiskMetrics();
     double total_capital = metrics.total_capital;
     double allowed_investment = total_capital * max_exposure_pct_;
     if ((invested_sum + reserved_sum + required_amount) > allowed_investment) {
-        LOG_WARN("허용 투자 한도 초과: 현재투자 {:.0f} + 필요 {:.0f} > 허용 {:.0f} (비율 {:.2f})",
+        LOG_WARN("exposure exceeded: current {:.0f} + new {:.0f} > allowed {:.0f} (ratio {:.2f})",
                  invested_sum + reserved_sum, required_amount, allowed_investment, max_exposure_pct_);
         return false;
     }
     
-    // [성공]
-    LOG_INFO("{}✅ 매수 검증 성공: 가용자본 {:.0f}원, 진입액 {:.0f}원 (비중 {:.4f}={}%)",
+    LOG_INFO("{} buy validated: available {:.0f}, amount {:.0f} (ratio {:.4f}={}%)",
              market, available_cash, required_amount, normalized_ratio, 
              static_cast<int>(normalized_ratio * 100));
     
@@ -187,14 +185,14 @@ void RiskManager::setDailyLossLimitPct(double pct) {
     if (pct < 0.0) pct = 0.0;
     if (pct > 1.0) pct = 1.0;
     daily_loss_limit_pct_ = pct;
-    LOG_INFO("일 손실 한도 설정: {:.2f}%", daily_loss_limit_pct_ * 100.0);
+    LOG_INFO("Daily loss limit set: {:.2f}%", daily_loss_limit_pct_ * 100.0);
 }
 
 void RiskManager::setDailyLossLimitKrw(double krw) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (krw < 0.0) krw = 0.0;
     daily_loss_limit_krw_ = krw;
-    LOG_INFO("일 손실 한도 설정: {:.0f} KRW", daily_loss_limit_krw_);
+    LOG_INFO("Daily loss limit set: {:.0f} KRW", daily_loss_limit_krw_);
 }
 
 void RiskManager::setMinOrderKrw(double min_order_krw) {
@@ -202,7 +200,7 @@ void RiskManager::setMinOrderKrw(double min_order_krw) {
     if (min_order_krw < 0.0) min_order_krw = 0.0;
     min_order_krw_ = min_order_krw;
     recommended_min_enter_krw_ = std::max(6000.0, min_order_krw_ * 1.2);
-    LOG_INFO("최소 주문 금액 설정: {:.0f} KRW (권장 진입: {:.0f} KRW)",
+    LOG_INFO("Min order set: {:.0f} KRW (recommended entry: {:.0f} KRW)",
              min_order_krw_, recommended_min_enter_krw_);
 }
 
@@ -212,12 +210,14 @@ bool RiskManager::isDailyLossLimitExceeded() const {
 
     if (daily_start_capital_ <= 0.0) return false;
 
+    double invested = 0.0;
     double unrealized = 0.0;
     for (const auto& [market, pos] : positions_) {
+        invested += pos.invested_amount;
         unrealized += pos.unrealized_pnl;
     }
 
-    double equity = current_capital_ + unrealized;
+    double equity = current_capital_ + invested + unrealized;
     double loss_krw = daily_start_capital_ - equity;
     double loss_pct = loss_krw / daily_start_capital_;
 
@@ -234,12 +234,14 @@ double RiskManager::getDailyLossPct() const {
 
     if (daily_start_capital_ <= 0.0) return 0.0;
 
+    double invested = 0.0;
     double unrealized = 0.0;
     for (const auto& [market, pos] : positions_) {
+        invested += pos.invested_amount;
         unrealized += pos.unrealized_pnl;
     }
 
-    double equity = current_capital_ + unrealized;
+    double equity = current_capital_ + invested + unrealized;
     return (daily_start_capital_ - equity) / daily_start_capital_;
 }
 
@@ -254,53 +256,53 @@ void RiskManager::enterPosition(
     double breakeven_trigger,
     double trailing_start
 ) {
-    // [🔒 스레드 안전성] 포지션 추가는 TradingEngine 메인 스레드에서만 호출되므로
-    // 교착 상태 위험 없음. 단 recursive_mutex로 설정되어 있어 재진입도 안전.
+    // [???????곸쓨?????源놁벁?? ???????⑤베堉???TradingEngine 癲ル슢????????곸쓨??筌?諭??筌먦끉???嶺뚮ㅎ???????
+    // ?????뤆????ㅺ컼????ш낄援?????⑤챶苡? ??recursive_mutex?????源놁젳??筌뚯슦苑????怨쀪퐨 ??鶯????녳뵣 ???源놁벁.
     std::lock_guard<std::recursive_mutex> lock(mutex_);;
     
-    // [핵심 수정] 진입 금액 계산: 수수료 미리 포함
-    // 업비트 진입 수수료는 1회 0.05% (진입시) → invested_amount에 포함해야 함
+    // [????????쒓낯?? 癲ル슣??????ヂ???쎈눀???節뚮쳮雅? ??筌뚯슜鍮??雅?퍔瑗띰㎖??????
+    // ????뽯４??癲ル슣??????筌뚯슜鍮??룸챷???1??0.05% (癲ル슣????? ??invested_amount????????⑤；????
     double base_invested = entry_price * quantity;
-    double entry_fee = calculateFee(base_invested);  // 진입 수수료 (0.05%)
+    double entry_fee = calculateFee(base_invested);  // 癲ル슣??????筌뚯슜鍮??(0.05%)
     
-    // Position 객체에 수수료를 포함한 투자액 저장
+    // Position ??좊즵??꼯?????筌뚯슜鍮??룸챷?? ??????????????
     Position pos;
     pos.market = market;
     pos.entry_price = entry_price;
     pos.current_price = entry_price;
     pos.quantity = quantity;
-    pos.invested_amount = base_invested;  // [수정] 수수료는 현금에서 차감, 원금은 별도 추적
+    pos.invested_amount = base_invested;  // [???쒓낯?? ??筌뚯슜鍮??룸챷?????ш낄猷??????癲ル슓堉곤쭗?ㅒ? ?????? ?怨뚮옓??????⑤베毓??
     pos.entry_time = getCurrentTimestamp();
     pos.stop_loss = stop_loss;
     pos.take_profit_1 = take_profit_1;
     pos.take_profit_2 = take_profit_2;
     pos.strategy_name = strategy_name;
     pos.half_closed = false;
-    pos.highest_price = entry_price;  // [추가] Trailing SL용 최고가 초기화
+    pos.highest_price = entry_price;  // [??⑤베堉?] Trailing SL??癲ル슔?됭짆??筌? ?縕?猿녿뎨??
     pos.breakeven_trigger = breakeven_trigger;
     pos.trailing_start = trailing_start;
     
-    // [핵심] 자본금에서 수수료 차감
-    // 현금: 주식 구매비 + 수수료 모두 차감됨
-    current_capital_ -= entry_fee;
+    // [????? ???亦낆떓堉????산덩????筌뚯슜鍮??癲ル슓堉곤쭗?ㅒ?
+    // ??ш낄猷?? ??낆뒩???????쭕???+ ??筌뚯슜鍮??癲ル슢?꾤땟?嶺?癲ル슓堉곤쭗?ㅒ??
+    current_capital_ -= (base_invested + entry_fee);
     total_fees_paid_ += entry_fee;
     
-    // 포지션 등록
+    // ??????濚밸Ŧ援욃ㅇ?
     positions_[market] = pos;
     
-    // 거래 제한 및 통계 기록
+    // 癲꾧퀗????????モ뵲 ?????????れ삀??쎈뭄?
     last_trade_time_[market] = getCurrentTimestamp();
     daily_trade_count_++;
     
-    LOG_INFO("🔵 포지션 진입: {} | 전략: {} | 수량: {:.4f} | 구매가: {:.0f} | 수수료: {:.0f} | 투자원금: {:.0f} | 남은현금: {:.0f}",
+    LOG_INFO("Position entered: {} | strategy={} | qty={:.4f} | notional={:.0f} | fee={:.0f} | reserved={:.0f} | cash={:.0f}",
              market, strategy_name, quantity, base_invested, entry_fee, base_invested, current_capital_);
-    LOG_INFO("   └ 손절 {:.0f} ({:+.2f}%), 익절1 {:.0f} ({:+.2f}%), 익절2 {:.0f} ({:+.2f}%)",
+    LOG_INFO("   risk plan: SL={:.0f} ({:+.2f}%), TP1={:.0f} ({:+.2f}%), TP2={:.0f} ({:+.2f}%)",
              stop_loss, (stop_loss - entry_price) / entry_price * 100.0,
              take_profit_1, (take_profit_1 - entry_price) / entry_price * 100.0,
              take_profit_2, (take_profit_2 - entry_price) / entry_price * 100.0);
 }
 
-// ===== 포지션 업데이트 =====
+// ===== ?????????녿ぅ??熬곣뫀肄?=====
 
 void RiskManager::updatePosition(const std::string& market, double current_price) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);;
@@ -314,13 +316,13 @@ void RiskManager::updatePosition(const std::string& market, double current_price
         pos.highest_price = current_price;
     }
     
-    // 미실현 손익 계산
+    // 雅?퍔瑗띰㎖??????????節뚮쳮雅?
     double current_value = current_price * pos.quantity;
     pos.unrealized_pnl = current_value - pos.invested_amount;
     pos.unrealized_pnl_pct = (current_price - pos.entry_price) / pos.entry_price;
 }
 
-// ===== 포지션 청산 체크 =====
+// ===== ?????癲?雅?癲ル슪???띿물?=====
 
 bool RiskManager::shouldExitPosition(const std::string& market) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);;
@@ -331,22 +333,22 @@ bool RiskManager::shouldExitPosition(const std::string& market) {
     const auto& pos = it->second;
     double current_price = pos.current_price;
     
-    // 1. 손절
+    // 1. ?????
     if (current_price <= pos.stop_loss) {
-        LOG_WARN("{} 손절가 도달: {:.0f} <= {:.0f}", market, current_price, pos.stop_loss);
+        LOG_WARN("{} stop-loss hit: {:.0f} <= {:.0f}", market, current_price, pos.stop_loss);
         return true;
     }
     
-    // 2. 2차 익절 (전체 청산)
+    // 2. 2癲??????(??ш끽維??癲?雅?
     if (current_price >= pos.take_profit_2) {
-        LOG_INFO("{} 2차 익절가 도달: {:.0f} >= {:.0f}", market, current_price, pos.take_profit_2);
+        LOG_INFO("{} take-profit-2 hit: {:.0f} >= {:.0f}", market, current_price, pos.take_profit_2);
         return true;
     }
     
-    // 3. 1차 익절 (50% 청산) - 아직 안했으면
+    // 3. 1癲??????(50% 癲?雅? - ??ш끽維쀧빊?????낅뭄??野껊갭??
     if (!pos.half_closed && current_price >= pos.take_profit_1) {
-        LOG_INFO("{} 1차 익절가 도달: {:.0f} >= {:.0f}", market, current_price, pos.take_profit_1);
-        // 실제 청산은 partialExit()에서 처리
+        LOG_INFO("{} take-profit-1 hit: {:.0f} >= {:.0f}", market, current_price, pos.take_profit_1);
+        // ???源놁졆 癲?雅?? partialExit()?????癲ル슪?ｇ몭??
         return false;
     }
     
@@ -365,38 +367,38 @@ void RiskManager::exitPosition(
     
     auto& pos = it->second;
     
-    // 1. 매도 총액 계산
+    // 1. 癲ル슢???믩쇀???쒒뜮?뚮눀???節뚮쳮雅?
     double exit_value = exit_price * pos.quantity;
     
-    // [개선] 청산 수수료 계산 및 차감
-    // 업비트 청산 수수료: 0.25%
+    // [??좊즵獒뺣돀?? 癲?雅???筌뚯슜鍮????節뚮쳮雅???癲ル슓堉곤쭗?ㅒ?
+    // ????뽯４??癲?雅???筌뚯슜鍮?? 0.25%
     double exit_fee = calculateFee(exit_value);
     
-    // 2. 순수 확정 손익 계산
-    // Net Profit = (매도총액 - 매도수수료) - 진입금액
-    // (진입 수수료는 이미 차감됨)
+    // 2. ??筌?鍮??嶺뚮Ĳ??????????節뚮쳮雅?
+    // Net Profit = (癲ル슢???믩쇀熬곥끇竊?獄쏅챶彛?- 癲ル슢???믩쇀??筌뚯슜鍮?? - 癲ル슣???????怨뺤춸
+    // (癲ル슣??????筌뚯슜鍮??룸챷??????? 癲ル슓堉곤쭗?ㅒ??
     double net_profit = (exit_value - exit_fee) - pos.invested_amount;
     
-    // 3. 자본금 업데이트
-    // 현금 = 현금 + (매도총액 - 청산수수료)
+    // 3. ???亦낆떓堉?????녿ぅ??熬곣뫀肄?
+    // ??ш낄猷??= ??ш낄猷??+ (癲ル슢???믩쇀熬곥끇竊?獄쏅챶彛?- 癲?雅??筌뚯슜鍮??
     current_capital_ += (exit_value - exit_fee);
     total_fees_paid_ += exit_fee;
     
-    // 4. 최고 자본금(High Water Mark) 갱신 - MDD 기준점
+    // 4. 癲ル슔?됭짆?????亦낆떓堉?High Water Mark) ??좊즲???- MDD ??れ삀????
     if (current_capital_ > max_capital_) {
         max_capital_ = current_capital_;
     }
     
-    // 통계용 변동률
+    // ???????怨뚮뼚?????ｊ콪
     double raw_pnl_pct = (exit_price - pos.entry_price) / pos.entry_price;
     
-    // 거래 이력 기록
+    // 癲꾧퀗???????????れ삀??쎈뭄?
     recordTrade(pos, exit_price, exit_reason);
     
-    // 포지션 삭제
+    // ?????????
     positions_.erase(it);
     
-    LOG_INFO("🔴 포지션 청산: {} | 손익: {:.0f} ({:+.2f}%) | 이유: {} | 현재자본: {:.0f}",
+    LOG_INFO("Position exited: {} | pnl {:.0f} ({:+.2f}%) | reason={} | cash {:.0f}",
              market, net_profit, raw_pnl_pct * 100.0, exit_reason, current_capital_);
 }
 
@@ -408,39 +410,49 @@ void RiskManager::partialExit(const std::string& market, double exit_price) {
     
     auto& pos = it->second;
     
-    if (pos.half_closed) return; // 이미 1차 익절 완료
+    if (pos.half_closed) return; // ???? 1癲????????ш끽維??
     
-    // 50% 청산
+    // 50% 癲?雅?
     double exit_quantity = pos.quantity * 0.5;
     double exit_value = exit_price * exit_quantity;
     double fee = calculateFee(exit_value);
     double net_value = exit_value - fee;
     
-    // 자본 업데이트
+    // ???亦?????녿ぅ??熬곣뫀肄?
     current_capital_ += net_value;
     total_fees_paid_ += fee;
     
-    // 포지션 업데이트
+    // ?????????녿ぅ??熬곣뫀肄?
     pos.quantity -= exit_quantity;
     pos.invested_amount *= 0.5;
     pos.half_closed = true;
     
-    // 손절선을 본전으로 이동
+    // ???????モ섋キ??怨뚮옖筌????⑥???????
     pos.stop_loss = pos.entry_price;
     
     double profit = net_value - (pos.invested_amount);
     
-    LOG_INFO("1차 익절 (50%): {} - 청산가: {:.0f}, 수익: {:.0f}, 손절선 본전 이동",
+    LOG_INFO("First TP hit (50%): {} - exit price: {:.0f}, profit: {:.0f}, stop moved to breakeven",
              market, exit_price, profit);
 }
 
-// [Phase 3] 부분 체결 시 수량만 감소 (포지션 유지)
+// [Fix] ???筌???????쒓낮?????딅텑?????????癲ル슢履뉑쾮????濡ろ뜑??? ?????μ쐺獄쏅챷援▼＄???좊즴甕?影?곷퓠???諛몄툏??(???亦??怨뚮뼚??????⑤챶苡?
+void RiskManager::setHalfClosed(const std::string& market, bool half_closed) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    auto it = positions_.find(market);
+    if (it != positions_.end()) {
+        it->second.half_closed = half_closed;
+        LOG_INFO("{} half-closed flag set: {}", market, half_closed ? "TRUE" : "FALSE");
+    }
+}
+
+// [Phase 3] ??딅텑???癲ル슪?????????嚥??몌┼???좊즴???(????????)
 void RiskManager::updatePositionQuantity(const std::string& market, double new_quantity) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     
     auto it = positions_.find(market);
     if (it == positions_.end()) {
-        LOG_WARN("updatePositionQuantity: 포지션 없음 - {}", market);
+        LOG_WARN("updatePositionQuantity: position not found - {}", market);
         return;
     }
     
@@ -448,16 +460,87 @@ void RiskManager::updatePositionQuantity(const std::string& market, double new_q
     double old_quantity = pos.quantity;
     double sold_quantity = old_quantity - new_quantity;
     
-    // 매도된 만큼 자본금 회수
+    // 癲ル슢???믩쇀??癲ル슢???移????亦낆떓堉??????
     double freed_capital = sold_quantity * pos.entry_price;
     current_capital_ += freed_capital;
     
-    // 포지션 수량 및 투자금 업데이트
+    // ???????嚥????????熬곻퐢糾?????녿ぅ??熬곣뫀肄?
     pos.quantity = new_quantity;
     pos.invested_amount = new_quantity * pos.entry_price;
     
-    LOG_INFO("📊 포지션 수량 업데이트: {} ({:.8f} → {:.8f}), 자본 회수: {:.0f}원",
+    LOG_INFO("Position quantity updated: {} ({:.8f} -> {:.8f}), capital released: {:.0f}",
              market, old_quantity, new_quantity, freed_capital);
+}
+
+bool RiskManager::applyPartialSellFill(
+    const std::string& market,
+    double exit_price,
+    double sell_quantity,
+    const std::string& exit_reason
+) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+    auto it = positions_.find(market);
+    if (it == positions_.end()) {
+        return false;
+    }
+    if (exit_price <= 0.0 || sell_quantity <= 0.0) {
+        return false;
+    }
+
+    auto& pos = it->second;
+    if (pos.quantity <= 0.0) {
+        return false;
+    }
+
+    const double qty = std::min(sell_quantity, pos.quantity);
+    const double ratio = qty / pos.quantity;
+    const double allocated_entry_notional = pos.invested_amount * ratio;
+    const double exit_notional = exit_price * qty;
+    const double exit_fee = calculateFee(exit_notional);
+
+    current_capital_ += (exit_notional - exit_fee);
+    total_fees_paid_ += exit_fee;
+
+    TradeHistory trade;
+    trade.market = pos.market;
+    trade.entry_price = pos.entry_price;
+    trade.exit_price = exit_price;
+    trade.quantity = qty;
+    trade.entry_time = pos.entry_time;
+    trade.exit_time = getCurrentTimestamp();
+    trade.strategy_name = pos.strategy_name;
+    trade.exit_reason = exit_reason;
+    trade.signal_filter = pos.signal_filter;
+    trade.signal_strength = pos.signal_strength;
+    trade.market_regime = pos.market_regime;
+    trade.liquidity_score = pos.liquidity_score;
+    trade.volatility = pos.volatility;
+    trade.expected_value = pos.expected_value;
+    trade.reward_risk_ratio = pos.reward_risk_ratio;
+
+    const double entry_fee = calculateFee(allocated_entry_notional);
+    trade.fee_paid = entry_fee + exit_fee;
+    trade.profit_loss = exit_notional - allocated_entry_notional - trade.fee_paid;
+    trade.profit_loss_pct = (pos.entry_price > 0.0)
+        ? ((exit_price - pos.entry_price) / pos.entry_price)
+        : 0.0;
+    trade_history_.push_back(trade);
+
+    pos.quantity -= qty;
+    pos.invested_amount -= allocated_entry_notional;
+    if (pos.quantity < 1e-12) {
+        pos.quantity = 0.0;
+    }
+    if (pos.invested_amount < 1e-8) {
+        pos.invested_amount = 0.0;
+    }
+
+    if (pos.quantity <= 0.0) {
+        positions_.erase(it);
+    }
+
+    return true;
 }
 
 void RiskManager::moveStopToBreakeven(const std::string& market) {
@@ -469,7 +552,7 @@ void RiskManager::moveStopToBreakeven(const std::string& market) {
     auto& pos = it->second;
     pos.stop_loss = pos.entry_price;
     
-    LOG_INFO("{} 손절선 본전 이동: {:.0f}", market, pos.entry_price);
+    LOG_INFO("{} moved stop to breakeven at {:.0f}", market, pos.entry_price);
 }
 
 void RiskManager::updateStopLoss(const std::string& market, double new_stop_loss, const std::string& reason) {
@@ -484,7 +567,7 @@ void RiskManager::updateStopLoss(const std::string& market, double new_stop_loss
     if (new_stop_loss >= pos.current_price) return;
 
     pos.stop_loss = new_stop_loss;
-    LOG_INFO("{} 손절선 상향 ({}): {:.0f}", market, reason, new_stop_loss);
+    LOG_INFO("{} stop updated ({}): {:.0f}", market, reason, new_stop_loss);
 }
 
 void RiskManager::setPositionTrailingParams(
@@ -521,7 +604,7 @@ std::vector<Position> RiskManager::getAllPositions() const {
     return positions;
 }
 
-// ===== 손절 계산 =====
+// ===== ???????節뚮쳮雅?=====
 
 double RiskManager::calculateDynamicStopLoss(
     double entry_price,
@@ -531,27 +614,27 @@ double RiskManager::calculateDynamicStopLoss(
         return entry_price * 0.975; // Fallback: -2.5%
     }
     
-    // 1. Hard Stop (긴급 손절) - 완화됨
+    // 1. Hard Stop (??ヂ????????? - ??ш낄援???
     double hard_stop = entry_price * 0.975; // -2.5%
     
-    // 2. ATR-based Stop (배수 상향: 더 큰 손절 범위)
+    // 2. ATR-based Stop (?袁⑸즲??????ㅺ강?? ??????????類????
     double atr_stop = calculateATRStopLoss(entry_price, candles, 2.5);
     
     // 3. Support-based Stop
     double support_stop = calculateSupportStopLoss(entry_price, candles);
     
-    // 보수적인(완충 폭이 큰) 손절가 선택: 가장 낮은(=더 멀리) 손절가를 선택하여
-    // 과도한 조기 청산을 방지합니다.
+    // ?怨뚮옖?????ㅼ굣????ш끽維뽭뇡??????? ?????섎쨬??쎛 ???ャ뀕?? ??좊읈??????(=??癲ル슢議??? ?????섎쨬??쎛?????ャ뀕???筌뚯슦肉?
+    // ??貫?????釉뚰??㏓뎨?癲?雅???袁⑸젻泳???筌뤾퍓???
     double final_stop = std::min({hard_stop, atr_stop, support_stop});
 
-    // 안전장치: 진입가보다 높으면 기본 -2.5%로 설정
+    // ???源놁벁???? 癲ル슣????筌??怨뚮옖????亦껋꼨援?쭗?좎땡???れ삀???-2.5%?????源놁젳
     if (final_stop >= entry_price) {
         final_stop = entry_price * 0.975;
     }
 
-    LOG_INFO("손절가 계산: Hard={:.0f}, ATR={:.0f}, Support={:.0f}, Final={:.0f}",
+    LOG_INFO("Stop loss calc: hard={:.0f}, atr={:.0f}, support={:.0f}, final={:.0f}",
               hard_stop, atr_stop, support_stop, final_stop);
-    LOG_INFO("손절 정책: 보수적(완충) 선택 적용, 최소 -2.5% 보장");
+    LOG_INFO("Adjusted final stop loss to -2.5% floor");
 
     return final_stop;
 }
@@ -567,21 +650,21 @@ double RiskManager::calculateATRStopLoss(
         return entry_price * 0.975; // -2.5% fallback
     }
     
-    // ATR 기반 변동성 비율
+    // ATR ??れ삀??뫢??怨뚮뼚?????쀫렰 ?????
     double atr_percent = (atr / entry_price) * 100;
     
-    // 변동성에 따라 multiplier 조정
+    // ?怨뚮뼚?????쀫렰?????ㅻ깹??multiplier ?釉뚰???
     if (atr_percent < 1.0) {
-        multiplier = 1.5; // 낮은 변동성
+        multiplier = 1.5; // ??? ?怨뚮뼚?????쀫렰
     } else if (atr_percent < 3.0) {
-        multiplier = 2.0; // 중간 변동성
+        multiplier = 2.0; // 濚욌꼬?댄꺁???怨뚮뼚?????쀫렰
     } else {
-        multiplier = 2.5; // 높은 변동성
+        multiplier = 2.5; // ?亦? ?怨뚮뼚?????쀫렰
     }
     
     double stop_loss = entry_price - (atr * multiplier);
     
-    // 최소 -2.5%, 최대 -3.5% (손절 범위 완화)
+    // 癲ル슔?됭짆??-2.5%, 癲ル슔?됭짆? -3.5% (??????類??????ш낄援??
     double min_stop = entry_price * 0.975;
     double max_stop = entry_price * 0.965;
     
@@ -598,7 +681,7 @@ double RiskManager::calculateSupportStopLoss(
         return entry_price * 0.975; // -2.5%
     }
     
-    // 진입가보다 낮은 가장 가까운 지지선 찾기
+    // 癲ル슣????筌??怨뚮옖?????? ??좊읈?????좊읈?嚥싲갭큔???癲ル슣??癲ル슣????癲ル슓??젆癒る뎨?
     double nearest_support = 0;
     for (auto level : support_levels) {
         if (level < entry_price && level > nearest_support) {
@@ -607,14 +690,14 @@ double RiskManager::calculateSupportStopLoss(
     }
     
     if (nearest_support > 0) {
-        // 지지선 아래 0.5% (여유있게)
+        // 癲ル슣??癲ル슣??????ш끽維??0.5% (????????щ쿊)
         return nearest_support * 0.995;
     }
     
     return entry_price * 0.975; // -2.5%
 }
 
-// ===== 포지션 사이징 =====
+// ===== ?????????ル쵐??=====
 
 double RiskManager::calculateKellyPositionSize(
     double capital,
@@ -625,7 +708,7 @@ double RiskManager::calculateKellyPositionSize(
     if (avg_loss < 0.0001) return 0.05; // Fallback
     
     // Kelly Criterion: f = (p * b - q) / b
-    // p = 승률, q = 패율, b = 평균수익/평균손실
+    // p = ??꾩룆梨?? q = ???쒙쭗? b = ???????쒓낮???????????
     
     double b = avg_win / avg_loss;
     double p = win_rate;
@@ -633,10 +716,10 @@ double RiskManager::calculateKellyPositionSize(
     
     double kelly = (p * b - q) / b;
     
-    // Kelly의 25% 사용 (안전하게)
+    // Kelly??25% ????(???源놁벁????곕쿊)
     double position_ratio = kelly * 0.25;
     
-    // 최소 1%, 최대 10%
+    // 癲ル슔?됭짆??1%, 癲ル슔?됭짆? 10%
     return std::clamp(position_ratio, 0.01, 0.10);
 }
 
@@ -647,24 +730,24 @@ double RiskManager::calculateFeeAwarePositionSize(
     double take_profit,
     double fee_rate
 ) {
-    // Risk/Reward 계산 (수수료 반영)
+    // Risk/Reward ??節뚮쳮雅?(??筌뚯슜鍮???袁⑸즵???
     double risk = std::abs(entry_price - stop_loss) / entry_price;
     double reward = std::abs(take_profit - entry_price) / entry_price;
     
-    // 실제 Risk/Reward (수수료 포함)
+    // ???源놁졆 Risk/Reward (??筌뚯슜鍮??????
     double actual_risk = risk + fee_rate;
     double actual_reward = reward - fee_rate;
     
     if (actual_reward <= 0 || actual_risk <= 0) {
-        return 0.0; // 수익 불가능
+        return 0.0; // ???쒓낮????됰씭????
     }
     
     double rr_ratio = actual_reward / actual_risk;
     
-    // RR 비율에 따라 포지션 조정
+    // RR ?????????ㅻ깹????????釉뚰???
     // RR >= 2.0: 5%
     // RR >= 1.5: 3%
-    // RR < 1.5: 진입 안함
+    // RR < 1.5: 癲ル슣????????낆?
     
     if (rr_ratio >= 2.0) {
         return 0.05;
@@ -675,16 +758,16 @@ double RiskManager::calculateFeeAwarePositionSize(
     }
 }
 
-// ===== 리스크 관리 =====
+// ===== ?域밸Ŧ遊얕짆?????굿??=====
 
 bool RiskManager::canTradeMarket(const std::string& market) {
     auto it = last_trade_time_.find(market);
     if (it == last_trade_time_.end()) {
-        return true; // 첫 거래
+        return true; // 癲?癲꾧퀗????
     }
     
     long long elapsed = getCurrentTimestamp() - it->second;
-    return elapsed >= min_reentry_interval_ * 1000; // ms 단위
+    return elapsed >= min_reentry_interval_ * 1000; // ms ???쒙쭕?
 }
 
 bool RiskManager::hasReachedDailyTradeLimit() {
@@ -701,19 +784,19 @@ bool RiskManager::hasReachedMaxPositions() {
     return positions_.size() >= static_cast<size_t>(max_positions_);
 }
 
-// ===== 통계 및 모니터링 =====
+// ===== ???????癲ル슢?꾤땟?????ㅻ깹??=====
 
 RiskManager::RiskMetrics RiskManager::getRiskMetrics() const {
-    // [🔒 스레드 안전성] const 메서드이지만 mutable 멤버(max_capital_, total_fees_paid_)에
-    // 접근하므로 mutex 획득 필요. recursive_mutex이므로 재진입 안전.
-    // 업비트 API 호출 규칙 준수: 이 함수는 내부 메모리 계산만 수행하므로 API 부담 없음.
+    // [???????곸쓨?????源놁벁?? const 癲ル슢??袁λ빝??筌믨퀡?꾬┼??넊?癲?mutable 癲ル슢???볥뼀?max_capital_, total_fees_paid_)??
+    // ???쒋닪??????mutex ????볥뜪 ??ш끽維?? recursive_mutex????????鶯?????源놁벁.
+    // ????뽯４??API ?嶺뚮ㅎ??????獒??濚욌꼬裕뼘?? ????縕??????? 癲ル슢?????袁⑤렓???節뚮쳮雅?굞猷듿퐲????얜Ŧ類?????API ??딅텑??????⑤챶苡?
     std::lock_guard<std::recursive_mutex> lock(mutex_);;
     
     RiskMetrics metrics;
     
-    // ========== [개선된 계산 로직] ==========
+    // ========== [??좊즵獒뺣돀?????節뚮쳮雅??棺??짆?먰맪? ==========
     
-    // 1. 투자 중인 자본 및 미실현 손익 계산
+    // 1. ????濚욌꼬?댄꺍?????亦???雅?퍔瑗띰㎖??????????節뚮쳮雅?
     metrics.invested_capital = 0;
     metrics.unrealized_pnl = 0;
     
@@ -722,9 +805,9 @@ RiskManager::RiskMetrics RiskManager::getRiskMetrics() const {
         metrics.unrealized_pnl += pos.unrealized_pnl;
     }
     
-    // 2. 가용 현금
-    // = 현재 현금 잔고(current_capital_) - 예약 자본
-    // (투자 중인 자본은 이미 포지션에 묶여 있어 현금에서 차감된 상태)
+    // 2. ??좊읈?????ш낄猷??
+    // = ??ш끽維????ш낄猷????釉???current_capital_) - ???怨좊뭿 ???亦?
+    // (????濚욌꼬?댄꺍?????亦?? ???? ?????筌뚯슧諭????뽯탞?????怨쀪퐨 ??ш낄猷??????癲ル슓堉곤쭗?ㅒ?????ㅺ컼??
     metrics.reserved_capital = 0.0;
     for (const auto& [m, amount] : reserved_grid_capital_) {
         metrics.reserved_capital += amount;
@@ -733,21 +816,21 @@ RiskManager::RiskMetrics RiskManager::getRiskMetrics() const {
     metrics.available_capital = current_capital_ - metrics.reserved_capital - pending_order_capital_;
     if (metrics.available_capital < 0) metrics.available_capital = 0.0;
     
-    // 3. 총 자산 가치 (Equity)
-    // = 현금 (current_capital_) + 포지션 평가액 + 미실현 손익
-    double current_equity = current_capital_ + metrics.unrealized_pnl;
+    // 3. ?????????좊읈???(Equity)
+    // = ??ш낄猷??(current_capital_) + ??????????+ 雅?퍔瑗띰㎖????????
+    double current_equity = current_capital_ + metrics.invested_capital + metrics.unrealized_pnl;
     
-    // 4. 총 손익 계산
-    metrics.realized_pnl = current_capital_ - initial_capital_;  // 확정 손익
-    metrics.total_pnl = metrics.realized_pnl + metrics.unrealized_pnl;  // 전체 손익
+    // 4. ?????????節뚮쳮雅?
+    metrics.realized_pnl = (current_capital_ + metrics.invested_capital) - initial_capital_;
+    metrics.total_pnl = current_equity - initial_capital_;
     metrics.total_pnl_pct = (initial_capital_ > 0) ? (metrics.total_pnl / initial_capital_) : 0.0;
     
-    // 5. 총 자산 (올바른 계산)
-    // 총 자산 = 현금 + 미실현 손익
-    // (invested_capital은 이미 current_capital_에서 차감되었으므로 중복 계산 금지)
-    metrics.total_capital = current_capital_ + metrics.unrealized_pnl;
+    // 5. ???????(????筌???節뚮쳮雅?
+    // ???????= ??ш낄猷??+ 雅?퍔瑗띰㎖????????
+    // (invested_capital?? ???? current_capital_?????癲ル슓堉곤쭗?ㅒ??筌??????濚욌꼬?댄꺇????節뚮쳮雅???ヂ???)
+    metrics.total_capital = current_equity;
     
-    // 6. MDD (Max Drawdown) 계산
+    // 6. MDD (Max Drawdown) ??節뚮쳮雅?
     double peak = std::max(max_capital_, current_equity);
     if (peak > 0) {
         metrics.max_drawdown = (peak - current_equity) / peak;
@@ -756,7 +839,7 @@ RiskManager::RiskMetrics RiskManager::getRiskMetrics() const {
     }
     metrics.current_drawdown = metrics.max_drawdown;
     
-    // 7. 통계 매핑
+    // 7. ?????癲ル슢???⑸눀?
     metrics.total_trades = static_cast<int>(trade_history_.size());
     metrics.winning_trades = 0;
     metrics.losing_trades = 0;
@@ -829,24 +912,34 @@ void RiskManager::appendTradeHistory(const TradeHistory& trade) {
     trade_history_.push_back(trade);
 }
 
-// [NEW] 포지션의 신호 정보 설정 (ML 학습용)
+// [NEW] ??????쒓낮爰????レ챺繹??嶺뚮㉡?€쾮????源놁젳 (ML ???????
 void RiskManager::setPositionSignalInfo(
     const std::string& market,
     double signal_filter,
-    double signal_strength
+    double signal_strength,
+    analytics::MarketRegime market_regime,
+    double liquidity_score,
+    double volatility,
+    double expected_value,
+    double reward_risk_ratio
 ) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);;
     
     auto it = positions_.find(market);
     if (it == positions_.end()) {
-        LOG_WARN("{} 포지션을 찾을 수 없어 신호 정보 설정 실패", market);
+        LOG_WARN("{} setPositionSignalInfo failed: position not found", market);
         return;
     }
     
     it->second.signal_filter = signal_filter;
     it->second.signal_strength = signal_strength;
-    LOG_INFO("신호 정보 저장: {} (필터: {:.3f}, 강도: {:.3f})", 
-             market, signal_filter, signal_strength);
+    it->second.market_regime = market_regime;
+    it->second.liquidity_score = liquidity_score;
+    it->second.volatility = volatility;
+    it->second.expected_value = expected_value;
+    it->second.reward_risk_ratio = reward_risk_ratio;
+    LOG_INFO("Signal metadata saved: {} (filter {:.3f}, strength {:.3f}, liq {:.1f}, vol {:.2f}, ev {:.5f}, rr {:.2f})",
+             market, signal_filter, signal_strength, liquidity_score, volatility, expected_value, reward_risk_ratio);
 }
 
 bool RiskManager::reserveGridCapital(
@@ -859,22 +952,22 @@ bool RiskManager::reserveGridCapital(
     resetDailyCountIfNeeded();
 
     if (reserved_grid_capital_.count(market)) {
-        LOG_WARN("{} 그리드 자본 이미 예약됨", market);
+        LOG_WARN("{} grid capital already reserved", market);
         return false;
     }
 
     if (!canTradeMarket(market)) {
-        LOG_WARN("{} 재진입 대기 중", market);
+        LOG_WARN("{} re-entry cooldown active", market);
         return false;
     }
 
     if (hasReachedDailyTradeLimit()) {
-        LOG_WARN("일일 거래 횟수 제한 도달 ({}/{})", daily_trade_count_, max_daily_trades_);
+        LOG_WARN("daily trade limit reached ({}/{})", daily_trade_count_, max_daily_trades_);
         return false;
     }
 
     if (isDrawdownExceeded()) {
-        LOG_ERROR("Drawdown 한계 초과! 거래 중단");
+        LOG_ERROR("Drawdown limit exceeded, trading blocked");
         return false;
     }
 
@@ -898,14 +991,14 @@ bool RiskManager::reserveGridCapital(
     }
 
     if (amount > available_cash) {
-        LOG_WARN("{} 그리드 자본 예약 실패: 필요 {:.0f} > 가용 {:.0f}", market, amount, available_cash);
+        LOG_WARN("{} grid reserve failed: required {:.0f} > available {:.0f}", market, amount, available_cash);
         return false;
     }
 
     auto metrics = getRiskMetrics();
     double allowed_investment = metrics.total_capital * max_exposure_pct_;
     if ((invested_sum + reserved_sum + amount) > allowed_investment) {
-        LOG_WARN("허용 투자 한도 초과: 현재투자 {:.0f} + 필요 {:.0f} > 허용 {:.0f} (비율 {:.2f})",
+        LOG_WARN("exposure exceeded: current {:.0f} + new {:.0f} > allowed {:.0f} (ratio {:.2f})",
                  invested_sum + reserved_sum, amount, allowed_investment, max_exposure_pct_);
         return false;
     }
@@ -914,7 +1007,7 @@ bool RiskManager::reserveGridCapital(
     last_trade_time_[market] = getCurrentTimestamp();
     daily_trade_count_++;
 
-    LOG_INFO("그리드 자본 예약: {} | 금액 {:.0f} | 전략: {}", market, amount, strategy_name);
+    LOG_INFO("Grid capital reserved: {} | amount {:.0f} | strategy {}", market, amount, strategy_name);
     return true;
 }
 
@@ -935,7 +1028,7 @@ void RiskManager::releaseGridCapital(const std::string& market) {
         return;
     }
 
-    LOG_INFO("그리드 자본 해제: {} | 금액 {:.0f}", market, it->second);
+    LOG_INFO("Grid capital released: {} | amount {:.0f}", market, it->second);
     reserved_grid_capital_.erase(it);
 }
 
@@ -956,18 +1049,18 @@ bool RiskManager::applyGridFill(
 
     auto reserved_it = reserved_grid_capital_.find(market);
     if (reserved_it == reserved_grid_capital_.end()) {
-        LOG_WARN("그리드 자본 예약 없음: {}", market);
+        LOG_WARN("Grid capital reservation missing: {}", market);
         return false;
     }
 
     if (side == strategy::OrderSide::BUY) {
         double total_cost = amount + fee;
         if (reserved_it->second < total_cost) {
-            LOG_WARN("그리드 예약 자본 부족: {:.0f} < {:.0f}", reserved_it->second, total_cost);
+            LOG_WARN("Grid reserved capital insufficient: {:.0f} < {:.0f}", reserved_it->second, total_cost);
             return false;
         }
         if (current_capital_ < total_cost) {
-            LOG_WARN("그리드 매수 자본 부족: {:.0f} < {:.0f}", current_capital_, total_cost);
+            LOG_WARN("Grid buy capital insufficient: {:.0f} < {:.0f}", current_capital_, total_cost);
             return false;
         }
 
@@ -987,13 +1080,13 @@ bool RiskManager::applyGridFill(
 
     auto inv_it = grid_inventory_.find(market);
     if (inv_it == grid_inventory_.end() || inv_it->second.quantity <= 0.0) {
-        LOG_WARN("그리드 매도 실패(재고 없음): {}", market);
+        LOG_WARN("Grid sell failed (no inventory): {}", market);
         return false;
     }
 
     auto& inv = inv_it->second;
     if (inv.quantity < quantity) {
-        LOG_WARN("그리드 매도 수량 초과: {:.8f} > {:.8f}", quantity, inv.quantity);
+        LOG_WARN("Grid sell quantity exceeds inventory: {:.8f} > {:.8f}", quantity, inv.quantity);
         quantity = inv.quantity;
         amount = price * quantity;
         fee = calculateFee(amount);
@@ -1030,24 +1123,24 @@ bool RiskManager::applyGridFill(
     return true;
 }
 
-// ===== 설정 =====
+// ===== ???源놁젳 =====
 
 void RiskManager::setMaxPositions(int max_positions) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);;
     max_positions_ = max_positions;
-    LOG_INFO("최대 포지션 설정: {}", max_positions);
+    LOG_INFO("Max positions set: {}", max_positions);
 }
 
 void RiskManager::setMaxDailyTrades(int max_trades) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);;
     max_daily_trades_ = max_trades;
-    LOG_INFO("일일 최대 거래 설정: {}", max_trades);
+    LOG_INFO("Max daily trades set: {}", max_trades);
 }
 
 void RiskManager::setMaxDrawdown(double max_drawdown_pct) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);;
     max_drawdown_pct_ = max_drawdown_pct;
-    LOG_INFO("최대 Drawdown 설정: {:.1f}%", max_drawdown_pct * 100);
+    LOG_INFO("Max drawdown set: {:.1f}%", max_drawdown_pct * 100);
 }
 
 void RiskManager::setMaxExposurePct(double pct) {
@@ -1055,16 +1148,16 @@ void RiskManager::setMaxExposurePct(double pct) {
     if (pct <= 0.0) pct = 0.0;
     if (pct > 1.0) pct = 1.0;
     max_exposure_pct_ = pct;
-    LOG_INFO("최대 노출 비율 설정: {:.2f}%", max_exposure_pct_ * 100.0);
+    LOG_INFO("Max exposure set: {:.2f}%", max_exposure_pct_ * 100.0);
 }
 
 void RiskManager::setMinReentryInterval(int seconds) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);;
     min_reentry_interval_ = seconds;
-    LOG_INFO("재진입 대기 시간 설정: {}초", seconds);
+    LOG_INFO("Re-entry interval set: {}s", seconds);
 }
 
-// ===== Private 헬퍼 함수 =====
+// ===== Private ??????縕??=====
 
 double RiskManager::calculateFee(double amount) const {
     return amount * Config::getInstance().getFeeRate();
@@ -1085,11 +1178,16 @@ void RiskManager::recordTrade(
     trade.strategy_name = pos.strategy_name;
     trade.exit_reason = exit_reason;
     
-    // [NEW] ML 학습용 신호 정보 저장
+    // [NEW] ML ??????????レ챺繹??嶺뚮㉡?€쾮?????
     trade.signal_filter = pos.signal_filter;
     trade.signal_strength = pos.signal_strength;
+    trade.market_regime = pos.market_regime;
+    trade.liquidity_score = pos.liquidity_score;
+    trade.volatility = pos.volatility;
+    trade.expected_value = pos.expected_value;
+    trade.reward_risk_ratio = pos.reward_risk_ratio;
     
-    // 손익 계산
+    // ???????節뚮쳮雅?
     double exit_value = exit_price * pos.quantity;
     double entry_fee = calculateFee(pos.invested_amount);
     double exit_fee = calculateFee(exit_value);
@@ -1108,22 +1206,22 @@ long long RiskManager::getCurrentTimestamp() const {
 }
 
 void RiskManager::resetDailyCountIfNeeded() {
-    // 한국 표준시(KST) 기준 오전 9시 리셋
-    // UTC 기준 날짜가 바뀌는 시점이 한국 시간 오전 9시입니다.
+    // ??癰궽살쐿 ?????KST) ??れ삀?? ???源놁벁 9???域밸Ŧ遊??
+    // UTC ??れ삀?? ???モ???좊읈? ?袁⑸즴?????獒???筌믨퀣?????癰궽살쐿 ??癰??????源놁벁 9??筌믨퀡?????덊렡.
     
     time_t now = time(nullptr);
-    struct tm* tm_now = gmtime(&now); // UTC 기준 구조체 (POSIX 호환)
+    struct tm* tm_now = gmtime(&now); // UTC ??れ삀?? ????깼???삳읁?(POSIX ?嶺뚮ㅏ援??
     
-    // 오늘 날짜를 정수로 변환 (YYYYMMDD)
+    // ????몄툜 ???モ????嶺뚮Ĳ???띿뒙??怨뚮뼚???(YYYYMMDD)
     long long current_day = (tm_now->tm_year + 1900) * 10000 + (tm_now->tm_mon + 1) * 100 + tm_now->tm_mday;
     
     if (daily_reset_time_ == 0) {
         daily_reset_time_ = current_day;
     }
     
-    // 저장된 날짜와 다르면 (즉, 하루가 지났으면) 리셋
+    // ???潁뺛꺈彛????モ??? ????렺?異?(癲? ??嚥〓끉???좊읈? 癲ル슣???????좎떵? ?域밸Ŧ遊??
     if (current_day != daily_reset_time_) {
-        LOG_INFO("📅 날짜 변경 (UTC 00:00 / KST 09:00) -> 일일 거래량 초기화");
+        LOG_INFO("UTC day changed -> daily trade count reset");
         daily_trade_count_ = 0;
         daily_reset_time_ = current_day;
     }
@@ -1149,7 +1247,7 @@ void RiskManager::resetDailyLossIfNeeded() {
 void RiskManager::updateCapital(double amount_change) {
     current_capital_ += amount_change;
     
-    // 최고 자본금 갱신 (MDD 계산용)
+    // 癲ル슔?됭짆?????亦낆떓堉???좊즲???(MDD ??節뚮쳮雅??
     if (current_capital_ > max_capital_) {
         max_capital_ = current_capital_;
     }
@@ -1157,3 +1255,6 @@ void RiskManager::updateCapital(double amount_change) {
 
 } // namespace risk
 } // namespace autolife
+
+
+

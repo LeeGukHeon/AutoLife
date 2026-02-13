@@ -1,15 +1,59 @@
 #include "network/UpbitHttpClient.h"
 #include "common/Logger.h"
+#include <algorithm>
 #include <sstream>
 #include <thread>
 #include <chrono>
+#include <set>
+#include <cctype>
 
 namespace autolife {
 namespace network {
+namespace {
+bool isSensitiveKey(const std::string& key) {
+    static const std::set<std::string> kKeys = {
+        "access_key", "secret_key", "authorization", "bearer",
+        "jwt", "token", "api_key", "signature", "query_hash"
+    };
+    std::string lower = key;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return kKeys.find(lower) != kKeys.end();
+}
+
+void maskSensitiveJson(nlohmann::json& node) {
+    if (node.is_object()) {
+        for (auto it = node.begin(); it != node.end(); ++it) {
+            if (isSensitiveKey(it.key())) {
+                it.value() = "***";
+            } else {
+                maskSensitiveJson(it.value());
+            }
+        }
+        return;
+    }
+    if (node.is_array()) {
+        for (auto& item : node) {
+            maskSensitiveJson(item);
+        }
+    }
+}
+
+std::string sanitizeForLog(const std::string& text) {
+    try {
+        auto j = nlohmann::json::parse(text);
+        maskSensitiveJson(j);
+        return j.dump();
+    } catch (...) {
+        return text;
+    }
+}
+}
 
 UpbitHttpClient::UpbitHttpClient(const std::string& access_key, const std::string& secret_key)
     : access_key_(access_key)
     , secret_key_(secret_key)
+    , offline_mode_(access_key == "BACKTEST_KEY" || secret_key == "BACKTEST_SECRET")
     , base_url_("https://api.upbit.com")
     , rate_limiter_(std::make_shared<execution::RateLimiter>())
 {
@@ -39,6 +83,8 @@ HttpResponse UpbitHttpClient::get(
     else if (endpoint.find("/v1/orderbook") != std::string::npos) group = "orderbook";
     else if (endpoint.find("/v1/trades/") != std::string::npos) group = "trade";
     else if (endpoint.find("/v1/accounts") != std::string::npos) group = "accounts";
+    else if (endpoint.find("/v1/order") != std::string::npos ||
+             endpoint.find("/v1/orders") != std::string::npos) group = "order";
     
     rate_limiter_->acquire(group);
     
@@ -71,7 +117,12 @@ HttpResponse UpbitHttpClient::post(
     const std::string& endpoint,
     const nlohmann::json& body
 ) {
-    rate_limiter_->acquire("order");
+    std::string group = "order";
+    if (endpoint.find("/v1/orderbook") != std::string::npos) group = "orderbook";
+    else if (endpoint.find("/v1/ticker") != std::string::npos) group = "ticker";
+    else if (endpoint.find("/v1/candles/") != std::string::npos) group = "candle";
+
+    rate_limiter_->acquire(group);
     
     std::string url = base_url_ + endpoint;
     
@@ -95,7 +146,17 @@ HttpResponse UpbitHttpClient::post(
     headers["Content-Type"] = "application/json";
     
     // Body는 원본 JSON 그대로 전송
-    return performRequest("POST", url, body.dump(), headers);
+    auto response = performRequest("POST", url, body.dump(), headers);
+
+    if (response.headers.find("Remaining-Req") != response.headers.end()) {
+        rate_limiter_->updateFromHeader(response.headers["Remaining-Req"]);
+    }
+
+    if (response.isRateLimited() || response.isBlocked()) {
+        rate_limiter_->handleRateLimitError(response.status_code);
+    }
+
+    return response;
 }
 
 HttpResponse UpbitHttpClient::del(
@@ -129,6 +190,9 @@ HttpResponse UpbitHttpClient::del(
 }
 
 nlohmann::json UpbitHttpClient::getAccounts() {
+    if (offline_mode_) {
+        return nlohmann::json::array();
+    }
     auto response = get("/v1/accounts");
     if (response.isSuccess()) {
         return response.json();
@@ -137,6 +201,9 @@ nlohmann::json UpbitHttpClient::getAccounts() {
 }
 
 nlohmann::json UpbitHttpClient::getMarkets() {
+    if (offline_mode_) {
+        return nlohmann::json::array();
+    }
     auto response = get("/v1/market/all");
     if (response.isSuccess()) {
         return response.json();
@@ -145,6 +212,10 @@ nlohmann::json UpbitHttpClient::getMarkets() {
 }
 
 nlohmann::json UpbitHttpClient::getTicker(const std::string& market) {
+    if (offline_mode_) {
+        (void)market;
+        return nlohmann::json::array();
+    }
     std::map<std::string, std::string> params;
     params["markets"] = market;
     
@@ -156,6 +227,10 @@ nlohmann::json UpbitHttpClient::getTicker(const std::string& market) {
 }
 
 nlohmann::json UpbitHttpClient::getOrderBook(const std::string& market) {
+    if (offline_mode_) {
+        (void)market;
+        return nlohmann::json::array();
+    }
     std::map<std::string, std::string> params;
     params["markets"] = market;
     
@@ -171,6 +246,12 @@ nlohmann::json UpbitHttpClient::getCandles(
     const std::string& unit,
     int count
 ) {
+    if (offline_mode_) {
+        (void)market;
+        (void)unit;
+        (void)count;
+        return nlohmann::json::array();
+    }
     std::map<std::string, std::string> params;
     params["market"] = market;
     params["count"] = std::to_string(count);
@@ -188,6 +269,11 @@ nlohmann::json UpbitHttpClient::getCandlesDays(
     const std::string& market,
     int count
 ) {
+    if (offline_mode_) {
+        (void)market;
+        (void)count;
+        return nlohmann::json::array();
+    }
     std::map<std::string, std::string> params;
     params["market"] = market;
     params["count"] = std::to_string(count);
@@ -203,6 +289,10 @@ nlohmann::json UpbitHttpClient::getCandlesDays(
 // ========== 배치 요청 구현 ==========
 
 nlohmann::json UpbitHttpClient::getTickerBatch(const std::vector<std::string>& markets) {
+    if (offline_mode_) {
+        (void)markets;
+        return nlohmann::json::array();
+    }
     std::map<std::string, std::string> params;
     
     // 마켓 리스트를 콤마로 연결
@@ -221,6 +311,10 @@ nlohmann::json UpbitHttpClient::getTickerBatch(const std::vector<std::string>& m
 }
 
 nlohmann::json UpbitHttpClient::getOrderBookBatch(const std::vector<std::string>& markets) {
+    if (offline_mode_) {
+        (void)markets;
+        return nlohmann::json::array();
+    }
     std::map<std::string, std::string> params;
     
     std::ostringstream oss;
@@ -244,12 +338,17 @@ nlohmann::json UpbitHttpClient::placeOrder(
     const std::string& price,
     const std::string& ord_type
 ) {
+    if (offline_mode_) {
+        throw std::runtime_error("placeOrder unavailable in offline backtest mode");
+    }
     nlohmann::json body;
     body["market"] = market;
     body["side"] = side;
-    body["volume"] = volume;
     body["ord_type"] = ord_type;
-    
+
+    if (!volume.empty()) {
+        body["volume"] = volume;
+    }
     if (!price.empty()) {
         body["price"] = price;
     }
@@ -261,11 +360,16 @@ nlohmann::json UpbitHttpClient::placeOrder(
         return response.json();
     }
     
-    LOG_ERROR("주문 실패: {}", response.body);
-    throw std::runtime_error("Failed to place order: " + response.body);
+    const std::string safe_body = sanitizeForLog(response.body);
+    LOG_ERROR("주문 실패: {}", safe_body);
+    throw std::runtime_error("Failed to place order: " + safe_body);
 }
 
 nlohmann::json UpbitHttpClient::getOrder(const std::string& uuid) {
+    if (offline_mode_) {
+        (void)uuid;
+        return nlohmann::json::object();
+    }
     std::map<std::string, std::string> params;
     params["uuid"] = uuid;
     
@@ -275,12 +379,17 @@ nlohmann::json UpbitHttpClient::getOrder(const std::string& uuid) {
         return response.json();
     }
     
-    LOG_ERROR("주문 조회 실패: {} - {}", uuid, response.body);
-    throw std::runtime_error("Failed to get order: " + response.body);
+    const std::string safe_body = sanitizeForLog(response.body);
+    LOG_ERROR("주문 조회 실패: {} - {}", uuid, safe_body);
+    throw std::runtime_error("Failed to get order: " + safe_body);
 }
 
 
 nlohmann::json UpbitHttpClient::cancelOrder(const std::string& uuid) {
+    if (offline_mode_) {
+        (void)uuid;
+        return nlohmann::json::object();
+    }
     std::map<std::string, std::string> params;
     params["uuid"] = uuid;
     
@@ -289,7 +398,7 @@ nlohmann::json UpbitHttpClient::cancelOrder(const std::string& uuid) {
     if (response.isSuccess()) {
         return response.json();
     }
-    throw std::runtime_error("Failed to cancel order: " + response.body);
+    throw std::runtime_error("Failed to cancel order: " + sanitizeForLog(response.body));
 }
 
 HttpResponse UpbitHttpClient::performRequest(

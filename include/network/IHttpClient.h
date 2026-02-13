@@ -18,7 +18,12 @@ struct HttpResponse {
     bool isBlocked() const { return status_code == 418; }
     
     nlohmann::json json() const {
-        return nlohmann::json::parse(body);
+        if (body.empty()) return nlohmann::json();
+        try {
+            return nlohmann::json::parse(body);
+        } catch (const std::exception& e) {
+            throw std::runtime_error(std::string("JSON Parse Error: ") + e.what() + " | Body: " + body);
+        }
     }
 };
 

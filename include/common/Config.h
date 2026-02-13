@@ -18,6 +18,7 @@ public:
     std::string getSecretKey() const { return secret_key_; }
     double getInitialCapital() const { return initial_capital_; }
     void setInitialCapital(double v) { initial_capital_ = v; engine_config_.initial_capital = v; }
+    void setEnabledStrategies(const std::vector<std::string>& v) { engine_config_.enabled_strategies = v; }
     double getMaxDrawdown() const { return max_drawdown_; }
     double getPositionSizeRatio() const { return position_size_ratio_; }
     std::string getLogLevel() const { return log_level_; }
@@ -34,6 +35,10 @@ public:
     
     // Strategy Configs
     strategy::ScalpingStrategyConfig getScalpingConfig() const { return scalping_config_; }
+    strategy::MomentumStrategyConfig getMomentumConfig() const { return momentum_config_; }
+    strategy::BreakoutStrategyConfig getBreakoutConfig() const { return breakout_config_; }
+    strategy::MeanReversionStrategyConfig getMeanReversionConfig() const { return mean_reversion_config_; }
+    strategy::GridTradingStrategyConfig getGridTradingConfig() const { return grid_trading_config_; }
 
 private:
     Config() = default;
@@ -52,6 +57,10 @@ private:
 
     engine::EngineConfig engine_config_;
     strategy::ScalpingStrategyConfig scalping_config_;
+    strategy::MomentumStrategyConfig momentum_config_;
+    strategy::BreakoutStrategyConfig breakout_config_;
+    strategy::MeanReversionStrategyConfig mean_reversion_config_;
+    strategy::GridTradingStrategyConfig grid_trading_config_;
     double stop_loss_multiplier_ = 1.0;
 };
 

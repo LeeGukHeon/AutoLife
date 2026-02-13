@@ -57,3 +57,32 @@ vcpkg/
 *.swp
 *~
 .cache/
+
+# ===== Local Secret Overrides (Stage 12) =====
+.env.*
+!.env.example
+!.env.template
+config/config.local.json
+config/config.*.local.json
+config/*secret*.json
+config/*private*.json
+
+# ===== Runtime State & Temp (Stage 12) =====
+state/
+runtime/
+tmp/
+*.pid
+*.tmp
+*.bak
+
+# ===== Python Tooling Cache (Stage 12) =====
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# ===== Strict Live Artifacts (Explicit) =====
+build/*/logs/*.json
+build/*/logs/*.jsonl
+build/*/state/*.json
+build/*/state/*.jsonl

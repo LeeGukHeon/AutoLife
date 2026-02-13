@@ -35,8 +35,8 @@ inline double getTickSize(double price) {
     if (price >= 10000.0)   return 10.0;
     if (price >= 1000.0)    return 1.0;
     if (price >= 100.0)     return 1.0;
-    if (price >= 10.0)      return 0.01;
-    if (price >= 1.0)       return 0.001;
+    if (price >= 10.0)      return 0.1;
+    if (price >= 1.0)       return 0.01;
     return 0.0001;
 }
 

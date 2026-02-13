@@ -1,0 +1,28 @@
+{
+  "preset_name": "safe",
+  "description": "Conservative preset for personal use. Lower exposure and stricter entry quality.",
+  "trading": {
+    "max_new_orders_per_scan": 1,
+    "max_exposure_pct": 0.60,
+    "risk_per_trade_pct": 0.003,
+    "max_daily_loss_pct": 0.03,
+    "max_order_krw": 120000.0,
+    "min_expected_edge_pct": 0.0015,
+    "min_reward_risk": 1.40,
+    "min_rr_weak_signal": 2.0,
+    "min_rr_strong_signal": 1.4,
+    "min_strategy_trades_for_ev": 40,
+    "min_strategy_expectancy_krw": 0.0,
+    "min_strategy_profit_factor": 1.05,
+    "avoid_high_volatility": true,
+    "avoid_trending_down": true
+  },
+  "strategies": {
+    "scalping": {
+      "min_signal_strength": 0.74
+    },
+    "momentum": {
+      "min_signal_strength": 0.76
+    }
+  }
+}
