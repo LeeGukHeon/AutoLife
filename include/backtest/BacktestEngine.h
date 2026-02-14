@@ -43,6 +43,20 @@ public:
             double avg_loss_krw = 0.0;
             double profit_factor = 0.0;
         };
+        struct PatternSummary {
+            std::string strategy_name;
+            std::string regime;
+            std::string strength_bucket;
+            std::string expected_value_bucket;
+            std::string reward_risk_bucket;
+            int total_trades = 0;
+            int winning_trades = 0;
+            int losing_trades = 0;
+            double win_rate = 0.0;
+            double total_profit = 0.0;
+            double avg_profit_krw = 0.0;
+            double profit_factor = 0.0;
+        };
 
         double final_balance;
         double total_profit;
@@ -56,6 +70,7 @@ public:
         double profit_factor;
         double expectancy_krw;
         std::vector<StrategySummary> strategy_summaries;
+        std::vector<PatternSummary> pattern_summaries;
     };
     Result getResult() const;
 

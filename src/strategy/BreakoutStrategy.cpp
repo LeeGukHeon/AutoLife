@@ -14,6 +14,89 @@ double clamp01(double v) {
     return std::clamp(v, 0.0, 1.0);
 }
 
+bool isLikelyDescendingByTimestamp(const std::vector<Candle>& candles) {
+    if (candles.size() < 3) {
+        return false;
+    }
+    size_t asc = 0;
+    size_t desc = 0;
+    for (size_t i = 1; i < candles.size(); ++i) {
+        if (candles[i].timestamp > candles[i - 1].timestamp) {
+            asc++;
+        } else if (candles[i].timestamp < candles[i - 1].timestamp) {
+            desc++;
+        }
+    }
+    return desc > asc;
+}
+
+std::vector<Candle> ensureChronologicalCandles(const std::vector<Candle>& candles) {
+    if (!isLikelyDescendingByTimestamp(candles)) {
+        return candles;
+    }
+    std::vector<Candle> normalized(candles.rbegin(), candles.rend());
+    return normalized;
+}
+
+double computeDirectionalBias(const std::vector<Candle>& candles, size_t lookback) {
+    const auto ordered = ensureChronologicalCandles(candles);
+    if (ordered.size() < lookback + 1 || lookback < 3) {
+        return 0.0;
+    }
+
+    const size_t start = ordered.size() - lookback - 1;
+    const double start_close = ordered[start].close;
+    const double end_close = ordered.back().close;
+    if (start_close <= 0.0 || end_close <= 0.0) {
+        return 0.0;
+    }
+
+    int up_bars = 0;
+    int down_bars = 0;
+    for (size_t i = start + 1; i < ordered.size(); ++i) {
+        if (ordered[i].close > ordered[i - 1].close) {
+            up_bars++;
+        } else if (ordered[i].close < ordered[i - 1].close) {
+            down_bars++;
+        }
+    }
+
+    const double step_bias = static_cast<double>(up_bars - down_bars) / static_cast<double>(lookback);
+    const double price_move = (end_close - start_close) / start_close;
+    const double raw = (price_move * 14.0) + (step_bias * 0.45);
+    return std::clamp(raw, -1.0, 1.0);
+}
+
+double computeBreakoutHigherTfTrendBias(
+    const analytics::CoinMetrics& metrics,
+    const std::vector<Candle>& candles_5m
+) {
+    double bias_5m = 0.0;
+    const auto ordered_5m = ensureChronologicalCandles(candles_5m);
+    if (ordered_5m.size() >= 25) {
+        bias_5m = computeDirectionalBias(ordered_5m, 24);
+    }
+
+    double bias_1h = 0.0;
+    auto tf_1h_it = metrics.candles_by_tf.find("1h");
+    if (tf_1h_it != metrics.candles_by_tf.end() && tf_1h_it->second.size() >= 12) {
+        const auto candles_1h = ensureChronologicalCandles(tf_1h_it->second);
+        const size_t lookback = std::min<size_t>(12, candles_1h.size() - 1);
+        bias_1h = computeDirectionalBias(candles_1h, lookback);
+    } else if (ordered_5m.size() >= 49) {
+        // Fallback: wider 5m horizon as pseudo higher timeframe trend.
+        bias_1h = computeDirectionalBias(ordered_5m, 48);
+    }
+
+    double combined = (bias_5m * 0.55) + (bias_1h * 0.45);
+    if (metrics.order_book_imbalance < -0.10) {
+        combined -= 0.08;
+    } else if (metrics.order_book_imbalance > 0.12) {
+        combined += 0.05;
+    }
+    return std::clamp(combined, -1.0, 1.0);
+}
+
 double computeBreakoutAdaptiveStrengthFloor(
     const analytics::CoinMetrics& metrics,
     const analytics::RegimeAnalysis& regime,
@@ -26,21 +109,21 @@ double computeBreakoutAdaptiveStrengthFloor(
     const double book_imbalance_t = clamp01((-metrics.order_book_imbalance + 0.05) / 0.60);
     const double flow_t = std::max(sell_bias_t, book_imbalance_t);
 
-    double floor = base_floor + (vol_t * 0.06) + (liq_stress_t * 0.08) + (flow_t * 0.05);
+    double floor = base_floor + (vol_t * 0.07) + (liq_stress_t * 0.09) + (flow_t * 0.07);
     if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
-        floor += 0.03;
+        floor += 0.04;
     } else if (regime.regime == analytics::MarketRegime::RANGING) {
-        floor += 0.01;
+        floor += 0.015;
     } else if (regime.regime == analytics::MarketRegime::TRENDING_UP) {
         floor -= 0.01;
     } else if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
-        floor += 0.06;
+        floor += 0.08;
     }
 
-    if (metrics.liquidity_score >= 75.0 && metrics.volume_surge_ratio >= 1.6) {
+    if (metrics.liquidity_score >= 78.0 && metrics.volume_surge_ratio >= 1.9) {
         floor -= 0.04;
     }
-    return std::clamp(floor, 0.32, 0.70);
+    return std::clamp(floor, 0.35, 0.74);
 }
 
 double computeBreakoutAdaptiveLiquidityFloor(
@@ -70,9 +153,14 @@ bool isBreakoutRegimeTradable(
         case analytics::MarketRegime::TRENDING_UP:
             return true;
         case analytics::MarketRegime::HIGH_VOLATILITY:
-            return (metrics.liquidity_score >= 65.0 && metrics.volume_surge_ratio >= 1.2);
+            return (
+                metrics.liquidity_score >= 72.0 &&
+                metrics.volume_surge_ratio >= 1.9 &&
+                metrics.order_book_imbalance >= -0.02
+            );
         case analytics::MarketRegime::RANGING:
-            return (metrics.liquidity_score >= 68.0 && metrics.volume_surge_ratio >= 1.4);
+            // Stage 15 tuning: range breakout expectancy was structurally negative.
+            return false;
         default:
             return false;
     }
@@ -82,23 +170,71 @@ double computeBreakoutAtrMultipleFloor(const analytics::CoinMetrics& metrics) {
     const double vol_t = clamp01(metrics.volatility / 6.0);
     const double liq_stress_t = clamp01((65.0 - metrics.liquidity_score) / 65.0);
     const double volume_relief_t = clamp01((metrics.volume_surge_ratio - 1.0) / 2.0);
-    const double floor = 1.35 + (vol_t * 0.35) + (liq_stress_t * 0.35) - (volume_relief_t * 0.45);
-    return std::clamp(floor, 0.90, 2.00);
+    const double floor = 1.45 + (vol_t * 0.35) + (liq_stress_t * 0.40) - (volume_relief_t * 0.35);
+    return std::clamp(floor, 1.00, 2.10);
 }
 
 double computeBreakoutVolumeConfirmFloor(const analytics::CoinMetrics& metrics) {
     const double vol_t = clamp01(metrics.volatility / 6.0);
     const double liq_stress_t = clamp01((65.0 - metrics.liquidity_score) / 65.0);
     const double volume_relief_t = clamp01((metrics.volume_surge_ratio - 1.0) / 2.0);
-    const double floor = 0.48 + (vol_t * 0.10) + (liq_stress_t * 0.14) - (volume_relief_t * 0.18);
-    return std::clamp(floor, 0.30, 0.75);
+    const double floor = 0.52 + (vol_t * 0.11) + (liq_stress_t * 0.15) - (volume_relief_t * 0.16);
+    return std::clamp(floor, 0.36, 0.80);
 }
 
 double computeBreakoutMicroValidityFloor(const analytics::CoinMetrics& metrics) {
     const double liq_boost_t = clamp01((metrics.liquidity_score - 55.0) / 45.0);
     const double volume_boost_t = clamp01((metrics.volume_surge_ratio - 1.0) / 2.0);
-    const double floor = 0.42 - (liq_boost_t * 0.08) - (volume_boost_t * 0.05);
-    return std::clamp(floor, 0.30, 0.45);
+    const double floor = 0.44 - (liq_boost_t * 0.07) - (volume_boost_t * 0.04);
+    return std::clamp(floor, 0.33, 0.47);
+}
+
+double computeBreakoutSignalQualityFloor(
+    const analytics::CoinMetrics& metrics,
+    const analytics::RegimeAnalysis& regime,
+    double higher_tf_trend_bias
+) {
+    double floor = 0.24;
+    if (regime.regime == analytics::MarketRegime::TRENDING_UP) {
+        floor = 0.29;
+    } else if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
+        floor = 0.31;
+    } else if (regime.regime == analytics::MarketRegime::RANGING) {
+        floor = 0.27;
+    } else {
+        floor = 0.34;
+    }
+
+    if (higher_tf_trend_bias < 0.25) {
+        floor += 0.05;
+    }
+    if (higher_tf_trend_bias < 0.15) {
+        floor += 0.05;
+    }
+    if (metrics.volume_surge_ratio < 1.8) {
+        floor += 0.04;
+    }
+    if (metrics.liquidity_score < 68.0) {
+        floor += 0.03;
+    }
+    if (metrics.order_book_imbalance < -0.08) {
+        floor += 0.04;
+    }
+    if (metrics.buy_pressure < metrics.sell_pressure) {
+        floor += 0.03;
+    }
+
+    if (higher_tf_trend_bias >= 0.28 &&
+        metrics.volume_surge_ratio >= 2.4 &&
+        metrics.liquidity_score >= 72.0) {
+        floor -= 0.06;
+    }
+    if (higher_tf_trend_bias >= 0.20 &&
+        metrics.volume_surge_ratio >= 1.7 &&
+        metrics.liquidity_score >= 66.0) {
+        floor -= 0.07;
+    }
+    return std::clamp(floor, 0.24, 0.55);
 }
 }
 
@@ -173,6 +309,25 @@ Signal BreakoutStrategy::generateSignal(
     if (active_positions_.find(market) != active_positions_.end()) return signal;
     if (available_capital <= 0) return signal;
     if (!isBreakoutRegimeTradable(metrics, regime)) return signal;
+    const double pressure_total = std::max(1e-6, std::abs(metrics.buy_pressure) + std::abs(metrics.sell_pressure));
+    const double sell_bias = (metrics.sell_pressure - metrics.buy_pressure) / pressure_total;
+    if (metrics.order_book_imbalance < -0.20 &&
+        sell_bias > 0.10 &&
+        metrics.volume_surge_ratio < 1.8) {
+        return signal;
+    }
+    if (metrics.orderbook_snapshot.valid) {
+        double spread_hard_limit = 0.0032;
+        if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
+            spread_hard_limit = 0.0042;
+        } else if (regime.regime == analytics::MarketRegime::RANGING) {
+            spread_hard_limit = 0.0034;
+        }
+        if (metrics.orderbook_snapshot.spread_pct > spread_hard_limit &&
+            metrics.liquidity_score < 72.0) {
+            return signal;
+        }
+    }
     
     std::vector<Candle> candles_5m;
     auto tf_5m_it = metrics.candles_by_tf.find("5m");
@@ -187,8 +342,36 @@ Signal BreakoutStrategy::generateSignal(
     } else {
         candles_5m = resampleTo5m(candles);
     }
+    candles_5m = ensureChronologicalCandles(candles_5m);
     if (candles_5m.size() < 30) return signal;
+    const double higher_tf_trend_bias = computeBreakoutHigherTfTrendBias(metrics, candles_5m);
+    if (higher_tf_trend_bias < -0.18) {
+        return signal;
+    }
+    if (higher_tf_trend_bias < 0.02 && metrics.volume_surge_ratio < 2.0) {
+        return signal;
+    }
+    if (regime.regime == analytics::MarketRegime::TRENDING_UP) {
+        if (higher_tf_trend_bias < 0.10) {
+            return signal;
+        }
+        if (higher_tf_trend_bias < 0.18 &&
+            (metrics.volume_surge_ratio < 1.8 || metrics.liquidity_score < 64.0)) {
+            return signal;
+        }
+    }
+    if (regime.regime == analytics::MarketRegime::RANGING &&
+        higher_tf_trend_bias < 0.08 &&
+        metrics.volume_surge_ratio < 2.4) {
+        return signal;
+    }
     if (!canTradeNow()) return signal;
+    if (daily_trades_count_ >= 6 &&
+        (regime.regime != analytics::MarketRegime::TRENDING_UP ||
+         metrics.liquidity_score < 72.0 ||
+         metrics.volume_surge_ratio < 1.8)) {
+        return signal;
+    }
     
     checkCircuitBreaker();
     if (isCircuitBreakerActive()) return signal;
@@ -198,6 +381,14 @@ Signal BreakoutStrategy::generateSignal(
     
     // --- (1) 돌파 분석 (최대 0.40) ---
     BreakoutSignalMetrics breakout = analyzeBreakout(market, metrics, candles_5m, current_price);
+    if (!shouldGenerateBreakoutSignal(breakout)) {
+        return signal;
+    }
+    const double breakout_quality_floor =
+        computeBreakoutSignalQualityFloor(metrics, regime, higher_tf_trend_bias);
+    if (breakout.strength < breakout_quality_floor) {
+        return signal;
+    }
     total_score += breakout.strength * 0.40;
     
     // --- (2) 유동성 (최대 0.10) ---
@@ -220,6 +411,12 @@ Signal BreakoutStrategy::generateSignal(
     if (metrics.volume_surge_ratio >= 3.0) total_score += 0.15;
     else if (metrics.volume_surge_ratio >= 1.5) total_score += 0.10;
     else if (metrics.volume_surge_ratio >= 1.0) total_score += 0.05;
+
+    if (higher_tf_trend_bias >= 0.30) total_score += 0.10;
+    else if (higher_tf_trend_bias >= 0.15) total_score += 0.06;
+    else if (higher_tf_trend_bias >= 0.05) total_score += 0.03;
+    else if (higher_tf_trend_bias <= -0.20) total_score -= 0.10;
+    else if (higher_tf_trend_bias <= -0.08) total_score -= 0.06;
     
     // --- (5) 기술 지표 (최대 0.20) ---
     auto prices = analytics::TechnicalIndicators::extractClosePrices(candles_5m);
@@ -238,9 +435,26 @@ Signal BreakoutStrategy::generateSignal(
     
     // ===== 최종 판정 =====
     signal.strength = std::clamp(total_score, 0.0, 1.0);
-    
-    const double adaptive_strength_floor = computeBreakoutAdaptiveStrengthFloor(
+    if (regime.regime == analytics::MarketRegime::TRENDING_UP &&
+        signal.strength >= 0.55 &&
+        signal.strength < 0.70 &&
+        higher_tf_trend_bias < 0.30) {
+        return signal;
+    }
+
+    double adaptive_strength_floor = computeBreakoutAdaptiveStrengthFloor(
         metrics, regime, strategy_cfg.min_signal_strength);
+    if (higher_tf_trend_bias >= 0.25) {
+        adaptive_strength_floor = std::max(0.33, adaptive_strength_floor - 0.03);
+    } else if (higher_tf_trend_bias < 0.0) {
+        adaptive_strength_floor = std::min(0.78, adaptive_strength_floor + 0.04);
+    }
+    if (breakout.strength >= 0.72 &&
+        higher_tf_trend_bias >= 0.24 &&
+        metrics.volume_surge_ratio >= 1.8 &&
+        metrics.liquidity_score >= 70.0) {
+        adaptive_strength_floor = std::max(0.31, adaptive_strength_floor - 0.04);
+    }
     if (signal.strength < adaptive_strength_floor) return signal;
     
     // ===== 신호 생성 =====
@@ -270,9 +484,44 @@ Signal BreakoutStrategy::generateSignal(
         const double expected_return = (signal.take_profit_2 - current_price) / current_price;
         const double expected_rr = (signal.take_profit_2 - current_price) / risk;
         const double fee_rate = Config::getInstance().getFeeRate();
-        const double round_trip_cost = (fee_rate * 2.0) + (engine_cfg.max_slippage_pct * 2.0);
+        double spread_penalty = 0.0;
+        if (metrics.orderbook_snapshot.valid) {
+            spread_penalty = std::clamp(metrics.orderbook_snapshot.spread_pct * 0.60, 0.0, 0.0020);
+        }
+        const double round_trip_cost = (fee_rate * 2.0) + (engine_cfg.max_slippage_pct * 2.0) + spread_penalty;
         const double net_edge = expected_return - round_trip_cost;
-        if (expected_rr < strategy_cfg.min_risk_reward_ratio || net_edge <= engine_cfg.min_expected_edge_pct) {
+        double rr_floor = strategy_cfg.min_risk_reward_ratio;
+        if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
+            rr_floor = std::max(rr_floor, 1.70);
+        } else if (regime.regime == analytics::MarketRegime::RANGING) {
+            rr_floor = std::max(rr_floor, 1.60);
+        }
+        if (higher_tf_trend_bias < 0.08) {
+            rr_floor = std::max(rr_floor, 1.75);
+        } else if (higher_tf_trend_bias > 0.30) {
+            rr_floor = std::max(1.35, rr_floor - 0.15);
+        }
+        double edge_multiplier = 1.03;
+        if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
+            edge_multiplier = 1.10;
+        } else if (regime.regime == analytics::MarketRegime::RANGING) {
+            edge_multiplier = 1.06;
+        }
+        if (metrics.liquidity_score < 62.0) {
+            edge_multiplier = std::max(edge_multiplier, 1.08);
+        }
+        if (signal.strength >= 0.72 &&
+            metrics.liquidity_score >= 72.0 &&
+            metrics.volume_surge_ratio >= 1.8 &&
+            sell_bias <= 0.0) {
+            edge_multiplier = std::max(0.98, edge_multiplier - 0.05);
+        }
+        if (higher_tf_trend_bias < 0.0) {
+            edge_multiplier = std::max(edge_multiplier, 1.12);
+        } else if (higher_tf_trend_bias > 0.30) {
+            edge_multiplier = std::max(0.95, edge_multiplier - 0.05);
+        }
+        if (expected_rr < rr_floor || net_edge <= engine_cfg.min_expected_edge_pct * edge_multiplier) {
             signal.type = SignalType::NONE;
             return signal;
         }
@@ -313,6 +562,25 @@ bool BreakoutStrategy::shouldEnter(
     if (!isBreakoutRegimeTradable(metrics, regime)) {
         return false;
     }
+    const double pressure_total = std::max(1e-6, std::abs(metrics.buy_pressure) + std::abs(metrics.sell_pressure));
+    const double sell_bias = (metrics.sell_pressure - metrics.buy_pressure) / pressure_total;
+    if (metrics.order_book_imbalance < -0.20 &&
+        sell_bias > 0.10 &&
+        metrics.volume_surge_ratio < 1.8) {
+        return false;
+    }
+    if (metrics.orderbook_snapshot.valid) {
+        double spread_hard_limit = 0.0032;
+        if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
+            spread_hard_limit = 0.0042;
+        } else if (regime.regime == analytics::MarketRegime::RANGING) {
+            spread_hard_limit = 0.0034;
+        }
+        if (metrics.orderbook_snapshot.spread_pct > spread_hard_limit &&
+            metrics.liquidity_score < 72.0) {
+            return false;
+        }
+    }
 
     std::vector<Candle> candles_5m;
     auto tf_5m_it = metrics.candles_by_tf.find("5m");
@@ -321,8 +589,36 @@ bool BreakoutStrategy::shouldEnter(
     } else {
         candles_5m = resampleTo5m(candles);
     }
+    candles_5m = ensureChronologicalCandles(candles_5m);
 
     if (candles_5m.size() < 30) {
+        return false;
+    }
+    const double higher_tf_trend_bias = computeBreakoutHigherTfTrendBias(metrics, candles_5m);
+    if (higher_tf_trend_bias < -0.18) {
+        return false;
+    }
+    if (higher_tf_trend_bias < 0.02 && metrics.volume_surge_ratio < 2.0) {
+        return false;
+    }
+    if (regime.regime == analytics::MarketRegime::TRENDING_UP) {
+        if (higher_tf_trend_bias < 0.10) {
+            return false;
+        }
+        if (higher_tf_trend_bias < 0.18 &&
+            (metrics.volume_surge_ratio < 1.8 || metrics.liquidity_score < 64.0)) {
+            return false;
+        }
+    }
+    if (regime.regime == analytics::MarketRegime::RANGING &&
+        higher_tf_trend_bias < 0.08 &&
+        metrics.volume_surge_ratio < 2.4) {
+        return false;
+    }
+    if (daily_trades_count_ >= 6 &&
+        (regime.regime != analytics::MarketRegime::TRENDING_UP ||
+         metrics.liquidity_score < 72.0 ||
+         metrics.volume_surge_ratio < 1.8)) {
         return false;
     }
 
@@ -347,7 +643,12 @@ bool BreakoutStrategy::shouldEnter(
     }
 
     BreakoutSignalMetrics breakout = analyzeBreakout(market, metrics, candles_5m, current_price);
-    return shouldGenerateBreakoutSignal(breakout);
+    if (!shouldGenerateBreakoutSignal(breakout)) {
+        return false;
+    }
+    const double breakout_quality_floor =
+        computeBreakoutSignalQualityFloor(metrics, regime, higher_tf_trend_bias);
+    return breakout.strength >= breakout_quality_floor;
 }
 
 bool BreakoutStrategy::onSignalAccepted(const Signal& signal, double allocated_capital)

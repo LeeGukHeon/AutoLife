@@ -278,6 +278,16 @@ Signal MomentumStrategy::generateSignal(
     // Reject when microstructure is clearly one-sided against long entries.
     const double pressure_total_hard = std::max(1e-6, std::abs(metrics.buy_pressure) + std::abs(metrics.sell_pressure));
     const double buy_pressure_bias_hard = (metrics.buy_pressure - metrics.sell_pressure) / pressure_total_hard;
+    if (regime.regime == analytics::MarketRegime::TRENDING_UP) {
+        if (mtf_signal.alignment_score < 0.60) {
+            return signal;
+        }
+        if (order_flow.microstructure_score < 0.15 &&
+            buy_pressure_bias_hard < 0.02 &&
+            metrics.order_book_imbalance < 0.0) {
+            return signal;
+        }
+    }
     if (order_flow.microstructure_score < 0.08 && buy_pressure_bias_hard < -0.20) {
         return signal;
     }

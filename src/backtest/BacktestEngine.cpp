@@ -166,7 +166,10 @@ struct StrategyEdgeStats {
         return (trades > 0) ? (static_cast<double>(wins) / static_cast<double>(trades)) : 0.0;
     }
     double profitFactor() const {
-        return (gross_loss_abs > 1e-12) ? (gross_profit / gross_loss_abs) : 0.0;
+        if (gross_loss_abs > 1e-12) {
+            return gross_profit / gross_loss_abs;
+        }
+        return (gross_profit > 1e-12) ? 99.9 : 0.0;
     }
 };
 
@@ -187,6 +190,102 @@ std::map<std::string, StrategyEdgeStats> buildStrategyEdgeStats(const std::vecto
         }
     }
     return out;
+}
+
+std::string makeStrategyRegimeKey(const std::string& strategy_name, analytics::MarketRegime regime) {
+    return strategy_name + "|" + std::to_string(static_cast<int>(regime));
+}
+
+std::string makeMarketStrategyRegimeKey(
+    const std::string& market,
+    const std::string& strategy_name,
+    analytics::MarketRegime regime
+) {
+    return market + "|" + strategy_name + "|" + std::to_string(static_cast<int>(regime));
+}
+
+std::map<std::string, StrategyEdgeStats> buildStrategyRegimeEdgeStats(
+    const std::vector<risk::TradeHistory>& history
+) {
+    std::map<std::string, StrategyEdgeStats> out;
+    for (const auto& trade : history) {
+        if (trade.strategy_name.empty()) {
+            continue;
+        }
+        const std::string key = makeStrategyRegimeKey(trade.strategy_name, trade.market_regime);
+        auto& s = out[key];
+        s.trades++;
+        s.net_profit += trade.profit_loss;
+        if (trade.profit_loss > 0.0) {
+            s.wins++;
+            s.gross_profit += trade.profit_loss;
+        } else if (trade.profit_loss < 0.0) {
+            s.gross_loss_abs += std::abs(trade.profit_loss);
+        }
+    }
+    return out;
+}
+
+std::map<std::string, StrategyEdgeStats> buildMarketStrategyRegimeEdgeStats(
+    const std::vector<risk::TradeHistory>& history
+) {
+    std::map<std::string, StrategyEdgeStats> out;
+    for (const auto& trade : history) {
+        if (trade.strategy_name.empty() || trade.market.empty()) {
+            continue;
+        }
+        const std::string key = makeMarketStrategyRegimeKey(
+            trade.market, trade.strategy_name, trade.market_regime
+        );
+        auto& s = out[key];
+        s.trades++;
+        s.net_profit += trade.profit_loss;
+        if (trade.profit_loss > 0.0) {
+            s.wins++;
+            s.gross_profit += trade.profit_loss;
+        } else if (trade.profit_loss < 0.0) {
+            s.gross_loss_abs += std::abs(trade.profit_loss);
+        }
+    }
+    return out;
+}
+
+bool isLossFocusMarket(const std::string& market) {
+    const std::string lower = toLowerCopy(market);
+    return lower == "krw-ada" ||
+           lower == "krw-avax" ||
+           lower == "krw-xrp" ||
+           lower == "krw-sui" ||
+           lower == "krw-dot";
+}
+
+const char* regimeToLabel(analytics::MarketRegime regime) {
+    switch (regime) {
+        case analytics::MarketRegime::TRENDING_UP: return "TRENDING_UP";
+        case analytics::MarketRegime::TRENDING_DOWN: return "TRENDING_DOWN";
+        case analytics::MarketRegime::RANGING: return "RANGING";
+        case analytics::MarketRegime::HIGH_VOLATILITY: return "HIGH_VOLATILITY";
+        default: return "UNKNOWN";
+    }
+}
+
+std::string strengthBucket(double strength) {
+    if (strength < 0.55) return "strength_low";
+    if (strength < 0.70) return "strength_mid";
+    return "strength_high";
+}
+
+std::string expectedValueBucket(double expected_value) {
+    if (expected_value < 0.0) return "ev_negative";
+    if (expected_value < 0.0004) return "ev_neutral";
+    if (expected_value < 0.0010) return "ev_positive";
+    return "ev_high";
+}
+
+std::string rewardRiskBucket(double rr) {
+    if (rr < 1.20) return "rr_low";
+    if (rr < 1.60) return "rr_mid";
+    return "rr_high";
 }
 
 void normalizeSignalStopLossByRegime(strategy::Signal& signal, analytics::MarketRegime regime) {
@@ -564,6 +663,21 @@ void BacktestEngine::processCandle(const Candle& candle) {
     if (current_candles_.size() < 30) return;
 
     double current_price = candle.close;
+    auto notifyStrategyClosed = [&](const risk::Position& closed_position, double exit_price) {
+        if (!strategy_manager_ || closed_position.strategy_name.empty()) {
+            return;
+        }
+        auto strategy = strategy_manager_->getStrategy(closed_position.strategy_name);
+        if (!strategy) {
+            return;
+        }
+        const double fee_rate = Config::getInstance().getFeeRate();
+        const double exit_value = exit_price * closed_position.quantity;
+        const double entry_fee = closed_position.invested_amount * fee_rate;
+        const double exit_fee = exit_value * fee_rate;
+        const double net_pnl = exit_value - closed_position.invested_amount - entry_fee - exit_fee;
+        strategy->updateStatistics(closed_position.market, net_pnl > 0.0, net_pnl);
+    };
     
     // 2. Market/Regime Analysis
     auto regime = regime_detector_->analyzeRegime(current_candles_);
@@ -667,6 +781,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
     }
     if (risk_manager_->isDrawdownExceeded()) {
         if (position) {
+            const risk::Position closed_position = *position;
             const double forced_exit = current_price * (1.0 - exitSlippagePct(engine_config_));
             Order dd_order;
             dd_order.market = market_name_;
@@ -676,6 +791,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
             dd_order.strategy_name = position->strategy_name;
             executeOrder(dd_order, forced_exit);
             risk_manager_->exitPosition(market_name_, forced_exit, "MaxDrawdown");
+            notifyStrategyClosed(closed_position, forced_exit);
             position = nullptr;
         }
     }
@@ -703,6 +819,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
             const bool tp2_touched = (candle.high >= position->take_profit_2);
 
             if (stop_touched) {
+                const risk::Position closed_position = *position;
                 const double stop_fill = position->stop_loss * (1.0 - stopSlippagePct(engine_config_));
                 Order sl_order;
                 sl_order.market = market_name_;
@@ -712,6 +829,8 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 sl_order.strategy_name = position->strategy_name;
                 executeOrder(sl_order, stop_fill);
                 risk_manager_->exitPosition(market_name_, stop_fill, "StopLoss");
+                notifyStrategyClosed(closed_position, stop_fill);
+                position = nullptr;
             } else {
                 if (!position->half_closed && tp1_touched) {
                     const double tp1_fill = position->take_profit_1 * (1.0 - exitSlippagePct(engine_config_));
@@ -731,6 +850,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 if (position) {
                     const bool tp2_touched_after_partial = tp2_touched || (candle.high >= position->take_profit_2);
                     if (tp2_touched_after_partial) {
+                        const risk::Position closed_position = *position;
                         const double tp2_fill = position->take_profit_2 * (1.0 - exitSlippagePct(engine_config_));
                         Order tp2_order;
                         tp2_order.market = market_name_;
@@ -740,7 +860,10 @@ void BacktestEngine::processCandle(const Candle& candle) {
                         tp2_order.strategy_name = position->strategy_name;
                         executeOrder(tp2_order, tp2_fill);
                         risk_manager_->exitPosition(market_name_, tp2_fill, "TakeProfit2");
+                        notifyStrategyClosed(closed_position, tp2_fill);
+                        position = nullptr;
                     } else if (should_exit) {
+                        const risk::Position closed_position = *position;
                         // Execute Sell
                         Order order;
                         order.market = market_name_;
@@ -750,6 +873,8 @@ void BacktestEngine::processCandle(const Candle& candle) {
                         order.strategy_name = position->strategy_name;
                         executeOrder(order, order.price);
                         risk_manager_->exitPosition(market_name_, order.price, "StrategyExit");
+                        notifyStrategyClosed(closed_position, order.price);
+                        position = nullptr;
                     }
                 }
             }
@@ -842,13 +967,18 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 best_signal = strategy_manager_->selectBestSignal(candidate_signals);
             }
         }
+        const auto trade_history = risk_manager_->getTradeHistory();
+        const auto strategy_edge = buildStrategyEdgeStats(trade_history);
+        const auto strategy_regime_edge = buildStrategyRegimeEdgeStats(trade_history);
+        const auto market_strategy_regime_edge = buildMarketStrategyRegimeEdgeStats(trade_history);
 
         if (best_signal.type != strategy::SignalType::NONE) {
             best_signal.market_regime = regime.regime;
-            const auto strategy_edge = buildStrategyEdgeStats(risk_manager_->getTradeHistory());
             bool strategy_ev_ok = true;
             double adaptive_rr_add = 0.0;
             double adaptive_edge_add = 0.0;
+            double required_strength_floor = filter_threshold;
+            bool regime_pattern_block = false;
             auto stat_it = strategy_edge.find(best_signal.strategy_name);
             if (core_risk_enabled && stat_it != strategy_edge.end()) {
                 const auto& stat = stat_it->second;
@@ -881,6 +1011,109 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     }
                 }
             }
+            auto regime_it = strategy_regime_edge.find(
+                makeStrategyRegimeKey(best_signal.strategy_name, best_signal.market_regime)
+            );
+            if (core_risk_enabled && regime_it != strategy_regime_edge.end()) {
+                const auto& stat = regime_it->second;
+                if (stat.trades >= 6) {
+                    const double wr = stat.winRate();
+                    const double pf = stat.profitFactor();
+                    const double exp_krw = stat.expectancy();
+                    if (exp_krw < -20.0 || (wr < 0.30 && pf < 0.78)) {
+                        regime_pattern_block = true;
+                    }
+                    if (stat.trades >= 12 &&
+                        exp_krw < -15.0 &&
+                        (wr < 0.40 || pf < 0.90)) {
+                        required_strength_floor = std::max(required_strength_floor, 0.62);
+                        adaptive_rr_add += 0.20;
+                        adaptive_edge_add += 0.0003;
+                    }
+                    if (stat.trades >= 18 &&
+                        exp_krw < -22.0 &&
+                        wr < 0.20) {
+                        regime_pattern_block = true;
+                    }
+                    if (exp_krw < 0.0) {
+                        required_strength_floor += std::clamp((-exp_krw) / 2500.0, 0.0, 0.08);
+                        adaptive_rr_add += std::clamp((-exp_krw) / 1800.0, 0.0, 0.20);
+                        adaptive_edge_add += std::clamp((-exp_krw) / 200000.0, 0.0, 0.0004);
+                    } else if (exp_krw > 8.0 && wr >= 0.58 && pf >= 1.15) {
+                        required_strength_floor -= 0.02;
+                        adaptive_rr_add -= 0.08;
+                        adaptive_edge_add -= 0.00015;
+                    }
+                    if (wr < 0.42) {
+                        required_strength_floor += 0.03;
+                        adaptive_rr_add += 0.10;
+                        adaptive_edge_add += 0.0002;
+                    }
+                    if (pf < 0.95) {
+                        required_strength_floor += 0.02;
+                        adaptive_rr_add += 0.08;
+                        adaptive_edge_add += 0.0002;
+                    }
+                }
+            }
+            auto market_regime_it = market_strategy_regime_edge.find(
+                makeMarketStrategyRegimeKey(
+                    best_signal.market,
+                    best_signal.strategy_name,
+                    best_signal.market_regime
+                )
+            );
+            if (core_risk_enabled && market_regime_it != market_strategy_regime_edge.end()) {
+                const auto& stat = market_regime_it->second;
+                if (stat.trades >= 4) {
+                    const double wr = stat.winRate();
+                    const double pf = stat.profitFactor();
+                    const double exp_krw = stat.expectancy();
+                    const bool focus_market = isLossFocusMarket(best_signal.market);
+                    const bool momentum_trending_up =
+                        best_signal.strategy_name == "Advanced Momentum" &&
+                        best_signal.market_regime == analytics::MarketRegime::TRENDING_UP;
+
+                    if (exp_krw < -40.0 && wr < 0.25 && pf < 0.75) {
+                        regime_pattern_block = true;
+                    }
+                    if (exp_krw < -20.0 && wr < 0.35 && pf < 0.85) {
+                        required_strength_floor += 0.05;
+                        adaptive_rr_add += 0.15;
+                        adaptive_edge_add += 0.0003;
+                    } else if (exp_krw < -10.0) {
+                        required_strength_floor += 0.02;
+                        adaptive_rr_add += 0.08;
+                        adaptive_edge_add += 0.00015;
+                    } else if (exp_krw > 10.0 && wr >= 0.60 && pf >= 1.20) {
+                        required_strength_floor -= 0.02;
+                        adaptive_rr_add -= 0.06;
+                        adaptive_edge_add -= 0.0001;
+                    }
+
+                    if (focus_market && exp_krw < -12.0) {
+                        required_strength_floor += 0.03;
+                        adaptive_rr_add += 0.10;
+                        adaptive_edge_add += 0.0002;
+                    }
+                    if (focus_market && momentum_trending_up) {
+                        if (exp_krw < -8.0 && stat.trades >= 3) {
+                            required_strength_floor = std::max(required_strength_floor, 0.68);
+                            adaptive_rr_add += 0.18;
+                            adaptive_edge_add += 0.00035;
+                        }
+                        if (exp_krw < -15.0 && wr < 0.30 && stat.trades >= 5) {
+                            regime_pattern_block = true;
+                        }
+                    }
+                }
+            }
+            required_strength_floor = std::clamp(required_strength_floor, 0.35, 0.92);
+            const bool pattern_strength_ok = !regime_pattern_block && best_signal.strength >= required_strength_floor;
+            if (!pattern_strength_ok && core_risk_enabled) {
+                LOG_INFO("{} pattern gate blocked [{}]: strength {:.3f} < floor {:.3f} or severe regime loss",
+                         market_name_, best_signal.strategy_name, best_signal.strength, required_strength_floor);
+            }
 
             engine::EngineConfig tuned_cfg = engine_config_;
             if (core_risk_enabled && small_seed_mode) {
@@ -904,9 +1137,10 @@ void BacktestEngine::processCandle(const Candle& candle) {
             const bool risk_gate_ok =
                 !core_risk_enabled ||
                 (strategy_ev_ok &&
+                 pattern_strength_ok &&
                  passesRegimeGate(best_signal.market_regime, engine_config_) &&
                  passesEntryQualityGate(best_signal, tuned_cfg));
-            if (rebalanceSignalRiskReward(best_signal, tuned_cfg) && risk_gate_ok) {
+            if (pattern_strength_ok && rebalanceSignalRiskReward(best_signal, tuned_cfg) && risk_gate_ok) {
                 // Validate Risk
                 if (risk_manager_->canEnterPosition(
                     market_name_,
@@ -975,6 +1209,12 @@ void BacktestEngine::processCandle(const Candle& candle) {
                             (best_signal.expected_value != 0.0 ? best_signal.expected_value : net_edge),
                             rr
                         );
+                        auto selected_strategy = strategy_manager_->getStrategy(best_signal.strategy_name);
+                        if (selected_strategy &&
+                            !selected_strategy->onSignalAccepted(best_signal, order_amount)) {
+                            LOG_WARN("{} strategy accepted backtest entry but state registration was skipped: {}",
+                                     market_name_, best_signal.strategy_name);
+                        }
                         entry_executed = true;
                         }
                     }
@@ -1129,6 +1369,15 @@ BacktestEngine::Result BacktestEngine::getResult() const {
     double gross_profit = 0.0;
     double gross_loss_abs = 0.0;
     std::map<std::string, Result::StrategySummary> strategy_map;
+    struct PatternAgg {
+        int total_trades = 0;
+        int winning_trades = 0;
+        int losing_trades = 0;
+        double gross_profit = 0.0;
+        double gross_loss_abs = 0.0;
+        double total_profit = 0.0;
+    };
+    std::map<std::string, PatternAgg> pattern_map;
     if (risk_manager_) {
         const auto history = risk_manager_->getTradeHistory();
         closed_trades = static_cast<int>(history.size());
@@ -1150,6 +1399,23 @@ BacktestEngine::Result BacktestEngine::getResult() const {
                 ss.losing_trades++;
                 ss.avg_loss_krw += std::abs(trade.profit_loss); // temp as gross loss accumulator
             }
+
+            const std::string regime_label = regimeToLabel(trade.market_regime);
+            const std::string strength_bucket = strengthBucket(trade.signal_strength);
+            const std::string ev_bucket = expectedValueBucket(trade.expected_value);
+            const std::string rr_bucket = rewardRiskBucket(trade.reward_risk_ratio);
+            const std::string pattern_key =
+                strategy_name + "|" + regime_label + "|" + strength_bucket + "|" + ev_bucket + "|" + rr_bucket;
+            auto& pa = pattern_map[pattern_key];
+            pa.total_trades++;
+            pa.total_profit += trade.profit_loss;
+            if (trade.profit_loss > 0.0) {
+                pa.winning_trades++;
+                pa.gross_profit += trade.profit_loss;
+            } else if (trade.profit_loss < 0.0) {
+                pa.losing_trades++;
+                pa.gross_loss_abs += std::abs(trade.profit_loss);
+            }
         }
 
         for (auto& [_, ss] : strategy_map) {
@@ -1160,12 +1426,54 @@ BacktestEngine::Result BacktestEngine::getResult() const {
             const double gross_loss = ss.avg_loss_krw;
             ss.avg_win_krw = (ss.winning_trades > 0) ? (gross_win / static_cast<double>(ss.winning_trades)) : 0.0;
             ss.avg_loss_krw = (ss.losing_trades > 0) ? (gross_loss / static_cast<double>(ss.losing_trades)) : 0.0;
-            ss.profit_factor = (gross_loss > 1e-12) ? (gross_win / gross_loss) : 0.0;
+            if (gross_loss > 1e-12) {
+                ss.profit_factor = gross_win / gross_loss;
+            } else {
+                ss.profit_factor = (gross_win > 1e-12) ? 99.9 : 0.0;
+            }
             result.strategy_summaries.push_back(ss);
         }
         std::sort(result.strategy_summaries.begin(), result.strategy_summaries.end(),
             [](const Result::StrategySummary& a, const Result::StrategySummary& b) {
                 return a.total_profit > b.total_profit;
+            });
+
+        for (const auto& [key, pa] : pattern_map) {
+            const size_t p1 = key.find('|');
+            const size_t p2 = (p1 == std::string::npos) ? std::string::npos : key.find('|', p1 + 1);
+            const size_t p3 = (p2 == std::string::npos) ? std::string::npos : key.find('|', p2 + 1);
+            const size_t p4 = (p3 == std::string::npos) ? std::string::npos : key.find('|', p3 + 1);
+            if (p1 == std::string::npos || p2 == std::string::npos || p3 == std::string::npos || p4 == std::string::npos) {
+                continue;
+            }
+            Result::PatternSummary ps;
+            ps.strategy_name = key.substr(0, p1);
+            ps.regime = key.substr(p1 + 1, p2 - p1 - 1);
+            ps.strength_bucket = key.substr(p2 + 1, p3 - p2 - 1);
+            ps.expected_value_bucket = key.substr(p3 + 1, p4 - p3 - 1);
+            ps.reward_risk_bucket = key.substr(p4 + 1);
+            ps.total_trades = pa.total_trades;
+            ps.winning_trades = pa.winning_trades;
+            ps.losing_trades = pa.losing_trades;
+            ps.win_rate = (pa.total_trades > 0)
+                ? (static_cast<double>(pa.winning_trades) / static_cast<double>(pa.total_trades))
+                : 0.0;
+            ps.total_profit = pa.total_profit;
+            ps.avg_profit_krw = (pa.total_trades > 0)
+                ? (pa.total_profit / static_cast<double>(pa.total_trades))
+                : 0.0;
+            if (pa.gross_loss_abs > 1e-12) {
+                ps.profit_factor = pa.gross_profit / pa.gross_loss_abs;
+            } else {
+                ps.profit_factor = (pa.gross_profit > 1e-12) ? 99.9 : 0.0;
+            }
+            result.pattern_summaries.push_back(std::move(ps));
+        }
+        std::sort(result.pattern_summaries.begin(), result.pattern_summaries.end(),
+            [](const Result::PatternSummary& a, const Result::PatternSummary& b) {
+                if (a.strategy_name != b.strategy_name) return a.strategy_name < b.strategy_name;
+                if (a.regime != b.regime) return a.regime < b.regime;
+                return a.total_trades > b.total_trades;
             });
     } else {
         closed_trades = total_trades_;
@@ -1178,7 +1486,8 @@ BacktestEngine::Result BacktestEngine::getResult() const {
         : 0.0;
     const double avg_win_krw = (wins > 0) ? (gross_profit / static_cast<double>(wins)) : 0.0;
     const double avg_loss_krw = (losses > 0) ? (gross_loss_abs / static_cast<double>(losses)) : 0.0;
-    const double profit_factor = (gross_loss_abs > 1e-12) ? (gross_profit / gross_loss_abs) : 0.0;
+    const double profit_factor =
+        (gross_loss_abs > 1e-12) ? (gross_profit / gross_loss_abs) : ((gross_profit > 1e-12) ? 99.9 : 0.0);
     const double expectancy_krw = (closed_trades > 0)
         ? ((gross_profit - gross_loss_abs) / static_cast<double>(closed_trades))
         : 0.0;
@@ -1224,7 +1533,8 @@ void BacktestEngine::updateDynamicFilter() {
     }
 
     const double expectancy = sum_pnl / static_cast<double>(sample_n);
-    const double profit_factor = (gross_loss_abs > 1e-12) ? (gross_profit / gross_loss_abs) : 0.0;
+    const double profit_factor =
+        (gross_loss_abs > 1e-12) ? (gross_profit / gross_loss_abs) : ((gross_profit > 1e-12) ? 99.9 : 0.0);
     const double win_rate = static_cast<double>(wins) / static_cast<double>(sample_n);
 
     if (expectancy < 0.0 || profit_factor < 1.0) {

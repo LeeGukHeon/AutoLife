@@ -55,14 +55,14 @@ jobs:
       - name: Run Operational Gate (PR profile)
         shell: powershell
         run: |
-          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_ci_operational_gate.ps1 -IncludeBacktest
+          python scripts\run_ci_operational_gate.py -IncludeBacktest
 
       - name: Generate Profitability Exploratory Report (Non-blocking)
         if: always()
         continue-on-error: true
         shell: powershell
         run: |
-          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_profitability_exploratory.ps1
+          python scripts\run_profitability_exploratory.py
 
       - name: Upload Gate Artifacts
         if: always()

@@ -20,6 +20,7 @@
 #include <string>
 #include <thread>
 #include <chrono>
+#include <sstream>
 #include <vector>
 
 using namespace autolife;
@@ -91,6 +92,129 @@ static bool readYesNo(const std::string& prompt, bool default_val) {
 
     const char c = static_cast<char>(std::toupper(static_cast<unsigned char>(input[0])));
     return (c == 'Y');
+}
+
+static std::string toLowerCopy(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
+}
+
+static bool startsWith(const std::string& value, const std::string& prefix) {
+    return value.size() >= prefix.size() && value.compare(0, prefix.size(), prefix) == 0;
+}
+
+struct CompanionCheckResult {
+    bool applicable = false;
+    std::vector<std::string> missing_tokens;
+    std::vector<std::string> found_tokens;
+};
+
+static CompanionCheckResult checkHigherTfCompanions(const std::string& csv_path) {
+    CompanionCheckResult out;
+    std::filesystem::path primary(csv_path);
+    if (!std::filesystem::exists(primary) || !primary.has_parent_path()) {
+        return out;
+    }
+
+    const std::string stem_lower = toLowerCopy(primary.stem().string());
+    const std::string prefix = "upbit_";
+    const std::string pivot = "_1m_";
+    if (!startsWith(stem_lower, prefix)) {
+        return out;
+    }
+
+    const size_t market_begin = prefix.size();
+    const size_t market_end = stem_lower.find(pivot, market_begin);
+    if (market_end == std::string::npos || market_end <= market_begin) {
+        return out;
+    }
+    out.applicable = true;
+
+    const std::string market_token = stem_lower.substr(market_begin, market_end - market_begin);
+    const std::filesystem::path parent = primary.parent_path();
+
+    auto hasCompanion = [&](const std::string& token) {
+        const std::string expected_prefix = "upbit_" + market_token + "_" + token + "_";
+        for (const auto& entry : std::filesystem::directory_iterator(parent)) {
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+            if (toLowerCopy(entry.path().extension().string()) != ".csv") {
+                continue;
+            }
+            const std::string candidate_stem = toLowerCopy(entry.path().stem().string());
+            if (startsWith(candidate_stem, expected_prefix)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    for (const auto& token : {"5m", "60m", "240m"}) {
+        if (hasCompanion(token)) {
+            out.found_tokens.push_back(token);
+        } else {
+            out.missing_tokens.push_back(token);
+        }
+    }
+
+    return out;
+}
+
+static void printCompanionRequirementError(const std::string& csv_path, const CompanionCheckResult& check) {
+    std::cout << "실거래 동등 MTF 모드 검증 실패: " << csv_path << "\n";
+    if (!check.applicable) {
+        std::cout << "  파일명 규칙이 맞지 않습니다. 예: upbit_KRW_BTC_1m_12000.csv\n";
+        std::cout << "  companion(5m/60m/240m) 자동 매칭이 가능한 1m 파일을 지정하세요.\n";
+        return;
+    }
+
+    if (!check.missing_tokens.empty()) {
+        std::cout << "  누락된 companion TF: ";
+        for (size_t i = 0; i < check.missing_tokens.size(); ++i) {
+            if (i > 0) {
+                std::cout << ", ";
+            }
+            std::cout << check.missing_tokens[i];
+        }
+        std::cout << "\n";
+        std::cout << "  같은 폴더에 upbit_<market>_5m_*.csv / 60m / 240m 파일이 필요합니다.\n";
+    }
+}
+
+static std::vector<std::string> listRealDataPrimaryCsvs(bool require_companions) {
+    std::vector<std::string> out;
+    const std::filesystem::path root("data/backtest_real");
+    if (!std::filesystem::exists(root)) {
+        return out;
+    }
+
+    for (const auto& entry : std::filesystem::directory_iterator(root)) {
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+        const auto ext = toLowerCopy(entry.path().extension().string());
+        if (ext != ".csv") {
+            continue;
+        }
+        const std::string name_lower = toLowerCopy(entry.path().filename().string());
+        if (name_lower.find("_1m_") == std::string::npos) {
+            continue;
+        }
+
+        const std::string path_str = entry.path().string();
+        if (require_companions) {
+            auto check = checkHigherTfCompanions(path_str);
+            if (!check.applicable || !check.missing_tokens.empty()) {
+                continue;
+            }
+        }
+        out.push_back(path_str);
+    }
+
+    std::sort(out.begin(), out.end());
+    return out;
 }
 
 // 백테스트용 모의 데이터 생성
@@ -174,6 +298,7 @@ int main(int argc, char* argv[]) {
                 bool json_mode = false;
                 std::vector<std::string> cli_enabled_strategies;
                 double cli_initial_capital = -1.0;
+                bool cli_require_higher_tf_companions = false;
 
                 auto trim_copy = [](std::string s) {
                     const auto first = s.find_first_not_of(" \t\r\n");
@@ -197,6 +322,10 @@ int main(int argc, char* argv[]) {
                     const std::string arg = argv[i];
                     if (arg == "--json") {
                         json_mode = true;
+                        continue;
+                    }
+                    if (arg == "--require-higher-tf-companions") {
+                        cli_require_higher_tf_companions = true;
                         continue;
                     }
                     if (arg == "--strategies" && i + 1 < argc) {
@@ -235,11 +364,23 @@ int main(int argc, char* argv[]) {
                 }
 
                 std::cout << "백테스트 모드(CLI) 실행\n";
-                LOG_INFO("Starting Backtest Mode with file: {}", argv[2]);
+                const std::string cli_backtest_path = argv[2];
+                if (!std::filesystem::exists(cli_backtest_path)) {
+                    std::cerr << "백테스트 파일을 찾을 수 없습니다: " << cli_backtest_path << "\n";
+                    return 1;
+                }
+                if (cli_require_higher_tf_companions) {
+                    const auto check = checkHigherTfCompanions(cli_backtest_path);
+                    if (!check.applicable || !check.missing_tokens.empty()) {
+                        printCompanionRequirementError(cli_backtest_path, check);
+                        return 1;
+                    }
+                }
+                LOG_INFO("Starting Backtest Mode with file: {}", cli_backtest_path);
 
                 backtest::BacktestEngine bt_engine;
                 bt_engine.init(config);
-                bt_engine.loadData(argv[2]);
+                bt_engine.loadData(cli_backtest_path);
                 bt_engine.run();
 
                 auto result = bt_engine.getResult();
@@ -268,6 +409,23 @@ int main(int argc, char* argv[]) {
                             {"avg_win_krw", s.avg_win_krw},
                             {"avg_loss_krw", s.avg_loss_krw},
                             {"profit_factor", s.profit_factor}
+                        });
+                    }
+                    j["pattern_summaries"] = nlohmann::json::array();
+                    for (const auto& p : result.pattern_summaries) {
+                        j["pattern_summaries"].push_back({
+                            {"strategy_name", p.strategy_name},
+                            {"regime", p.regime},
+                            {"strength_bucket", p.strength_bucket},
+                            {"expected_value_bucket", p.expected_value_bucket},
+                            {"reward_risk_bucket", p.reward_risk_bucket},
+                            {"total_trades", p.total_trades},
+                            {"winning_trades", p.winning_trades},
+                            {"losing_trades", p.losing_trades},
+                            {"win_rate", p.win_rate},
+                            {"total_profit", p.total_profit},
+                            {"avg_profit_krw", p.avg_profit_krw},
+                            {"profit_factor", p.profit_factor}
                         });
                     }
                     std::cout << j.dump() << "\n";
@@ -315,20 +473,42 @@ int main(int argc, char* argv[]) {
             std::cout << "\n[백테스트 설정]\n";
 
             double bt_capital = readDouble("초기 자본금(KRW)", 1000000.0);
-            std::cout << "데이터 소스 [1=모의 생성, 2=기존 CSV] [기본값: 1]: ";
+            std::cout << "데이터 소스 [1=모의 생성, 2=기존 CSV 입력, 3=실데이터 목록 선택] [기본값: 3]: ";
             std::string source_input = readLine();
-            int source_choice = 1;
+            int source_choice = 3;
             int bt_candles = 0;
+            bool require_higher_tf_companions = false;
             try {
                 if (!source_input.empty()) {
                     source_choice = std::stoi(source_input);
                 }
             } catch (...) {
-                source_choice = 1;
+                source_choice = 3;
             }
 
             std::string csv_path;
-            if (source_choice == 2) {
+            if (source_choice == 3) {
+                require_higher_tf_companions = readYesNo(
+                    "실거래 동등 MTF 모드로 실행할까요? (1m + 5m/60m/240m companion 강제)",
+                    true
+                );
+                auto candidates = listRealDataPrimaryCsvs(require_higher_tf_companions);
+                if (candidates.empty()) {
+                    std::cout << "선택 가능한 실데이터 1m CSV가 없습니다.\n";
+                    std::cout << "경로: data/backtest_real\n";
+                    std::cout << "필요 파일 예: upbit_KRW_BTC_1m_12000.csv (+ 5m/60m/240m companion)\n";
+                    return 1;
+                }
+
+                std::cout << "\n실데이터 후보 목록\n";
+                for (size_t idx = 0; idx < candidates.size(); ++idx) {
+                    std::cout << "  [" << (idx + 1) << "] " << candidates[idx] << "\n";
+                }
+                int selected = readInt("실데이터 번호 선택", 1);
+                selected = std::clamp(selected, 1, static_cast<int>(candidates.size()));
+                csv_path = candidates[static_cast<size_t>(selected - 1)];
+                std::cout << "선택된 실데이터 CSV: " << csv_path << "\n\n";
+            } else if (source_choice == 2) {
                 std::string default_csv = "data/backtest_real/upbit_KRW_BTC_1m_12000.csv";
                 std::cout << "백테스트 CSV 경로 [기본값: " << default_csv << "]: ";
                 std::string input_csv = readLine();
@@ -338,6 +518,10 @@ int main(int argc, char* argv[]) {
                     std::cout << "CSV 파일을 찾을 수 없습니다: " << csv_path << "\n";
                     return 1;
                 }
+                require_higher_tf_companions = readYesNo(
+                    "실거래 동등 MTF 모드로 실행할까요? (1m + 5m/60m/240m companion 강제)",
+                    true
+                );
                 std::cout << "실데이터 CSV 사용: " << csv_path << "\n\n";
             } else {
                 bt_candles = readInt("시뮬레이션 캔들 수 (예: 500/1000/2000)", 2000);
@@ -350,6 +534,15 @@ int main(int argc, char* argv[]) {
                     return 1;
                 }
                 std::cout << "생성 완료: " << csv_path << " (" << bt_candles << "개 캔들)\n\n";
+            }
+
+            if (require_higher_tf_companions) {
+                const auto check = checkHigherTfCompanions(csv_path);
+                if (!check.applicable || !check.missing_tokens.empty()) {
+                    printCompanionRequirementError(csv_path, check);
+                    return 1;
+                }
+                std::cout << "MTF companion 검증 통과: 5m/60m/240m\n\n";
             }
 
             config.setInitialCapital(bt_capital);

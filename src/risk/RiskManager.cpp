@@ -411,29 +411,31 @@ void RiskManager::partialExit(const std::string& market, double exit_price) {
     auto& pos = it->second;
     
     if (pos.half_closed) return; // ???? 1癲????????ш끽維??
+    if (pos.quantity <= 0.0 || exit_price <= 0.0) return;
     
-    // 50% 癲?雅?
-    double exit_quantity = pos.quantity * 0.5;
-    double exit_value = exit_price * exit_quantity;
-    double fee = calculateFee(exit_value);
-    double net_value = exit_value - fee;
-    
-    // ???亦?????녿ぅ??熬곣뫀肄?
-    current_capital_ += net_value;
-    total_fees_paid_ += fee;
-    
-    // ?????????녿ぅ??熬곣뫀肄?
-    pos.quantity -= exit_quantity;
-    pos.invested_amount *= 0.5;
-    pos.half_closed = true;
-    
-    // ???????モ섋キ??怨뚮옖筌????⑥???????
-    pos.stop_loss = pos.entry_price;
-    
-    double profit = net_value - (pos.invested_amount);
-    
-    LOG_INFO("First TP hit (50%): {} - exit price: {:.0f}, profit: {:.0f}, stop moved to breakeven",
-             market, exit_price, profit);
+    // 50% 癲?雅? is accounted via the common partial-fill path so trade history / metrics stay aligned.
+    const double exit_quantity = pos.quantity * 0.5;
+    if (!applyPartialSellFill(market, exit_price, exit_quantity, "TakeProfit1")) {
+        LOG_WARN("First TP accounting failed: {} qty {:.8f} @ {:.0f}",
+                 market, exit_quantity, exit_price);
+        return;
+    }
+
+    auto updated = positions_.find(market);
+    if (updated != positions_.end()) {
+        updated->second.half_closed = true;
+        updated->second.stop_loss = updated->second.entry_price;
+    }
+
+    double realized_pnl = 0.0;
+    if (!trade_history_.empty()) {
+        const auto& last_trade = trade_history_.back();
+        if (last_trade.market == market && last_trade.exit_reason == "TakeProfit1") {
+            realized_pnl = last_trade.profit_loss;
+        }
+    }
+    LOG_INFO("First TP hit (50%): {} - exit price: {:.0f}, pnl: {:.0f}, stop moved to breakeven",
+             market, exit_price, realized_pnl);
 }
 
 // [Fix] ???筌???????쒓낮?????딅텑?????????癲ル슢履뉑쾮????濡ろ뜑??? ?????μ쐺獄쏅챷援▼＄???좊즴甕?影?곷퓠???諛몄툏??(???亦??怨뚮뼚??????⑤챶苡?

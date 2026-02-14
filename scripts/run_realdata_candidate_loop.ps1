@@ -31,7 +31,9 @@ param(
     [string]$OutputReportJson = ".\build\Release\logs\profitability_gate_report_realdata.json",
     [switch]$SkipFetch,
     [switch]$SkipHigherTfFetch,
-    [switch]$SkipTune
+    [switch]$SkipTune,
+    [switch]$RealDataOnly,
+    [switch]$RequireHigherTfCompanions
 )
 
 Set-StrictMode -Version Latest
@@ -67,23 +69,71 @@ function Build-RealDataFilePath {
     return Join-Path $OutputDir ("upbit_{0}_{1}m_{2}.csv" -f $safeMarket, $TfUnit, $RowCount)
 }
 
+function Test-HasHigherTfCompanions {
+    param([string]$PrimaryPath)
+
+    if ([string]::IsNullOrWhiteSpace($PrimaryPath) -or -not (Test-Path $PrimaryPath)) {
+        return $false
+    }
+
+    $stem = [System.IO.Path]::GetFileNameWithoutExtension($PrimaryPath).ToLowerInvariant()
+    if (-not $stem.StartsWith("upbit_") -or -not $stem.Contains("_1m_")) {
+        return $false
+    }
+
+    $pivot = $stem.IndexOf("_1m_")
+    if ($pivot -le 6) {
+        return $false
+    }
+
+    $marketToken = $stem.Substring(6, $pivot - 6)
+    $dirPath = Split-Path -Parent $PrimaryPath
+    foreach ($tf in @("5m", "60m", "240m")) {
+        $pattern = ("upbit_{0}_{1}_*.csv" -f $marketToken, $tf)
+        $hits = @(Get-ChildItem -Path $dirPath -File -Filter $pattern -ErrorAction SilentlyContinue)
+        if ($hits.Count -eq 0) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
 function Get-DatasetFiles {
-    param([string[]]$Dirs)
+    param(
+        [string[]]$Dirs,
+        [switch]$OnlyRealData,
+        [switch]$RequireHigherTfCompanions
+    )
     $items = @()
     foreach ($dirPath in $Dirs) {
         if (-not (Test-Path $dirPath)) {
             continue
         }
         $isRealDataDir = $dirPath.ToLowerInvariant().Contains("backtest_real")
-        $items += @(
+        if ($OnlyRealData.IsPresent -and -not $isRealDataDir) {
+            continue
+        }
+
+        $candidates = @(
             Get-ChildItem -Path $dirPath -File -Filter *.csv -ErrorAction SilentlyContinue |
                 Sort-Object Name |
                 Where-Object {
-                    if (-not $isRealDataDir) { return $true }
-                    $_.Name.ToLowerInvariant().Contains("_1m_")
-                } |
-                ForEach-Object { $_.FullName }
+                    if ($isRealDataDir) {
+                        return $_.Name.ToLowerInvariant().Contains("_1m_")
+                    }
+                    return (-not $OnlyRealData.IsPresent)
+                }
         )
+
+        foreach ($file in $candidates) {
+            if ($RequireHigherTfCompanions.IsPresent -and
+                $isRealDataDir -and
+                -not (Test-HasHigherTfCompanions -PrimaryPath $file.FullName)) {
+                continue
+            }
+            $items += $file.FullName
+        }
     }
     return @($items | Sort-Object -Unique)
 }
@@ -148,10 +198,22 @@ if (-not $SkipFetch.IsPresent) {
     }
 }
 
-$datasets = Get-DatasetFiles -Dirs @($resolvedBacktestDataDir, $resolvedCuratedDataDir, $resolvedRealDataDir)
+$datasetDirs = if ($RealDataOnly.IsPresent) {
+    @($resolvedRealDataDir)
+} else {
+    @($resolvedBacktestDataDir, $resolvedCuratedDataDir, $resolvedRealDataDir)
+}
+$datasets = Get-DatasetFiles `
+    -Dirs $datasetDirs `
+    -OnlyRealData:$RealDataOnly `
+    -RequireHigherTfCompanions:$RequireHigherTfCompanions
 if (@($datasets).Count -eq 0) {
     throw "No datasets found after fetch step."
 }
+Write-Host ("[RealDataLoop] dataset_mode={0}, require_higher_tf={1}, dataset_count={2}" -f `
+    $(if ($RealDataOnly.IsPresent) { "realdata_only" } else { "mixed" }), `
+    $RequireHigherTfCompanions.IsPresent, `
+    @($datasets).Count)
 
 Write-Host ("[RealDataLoop] Running profitability matrix with datasets={0}" -f @($datasets).Count)
 & $resolvedMatrixScript `
@@ -175,10 +237,18 @@ Write-Host ("[RealDataLoop] overall_gate_pass={0}" -f $report.overall_gate_pass)
 
 if (-not $SkipTune.IsPresent) {
     Write-Host "[RealDataLoop] Running candidate trade-density tuning with real datasets included"
-    & $resolvedTuneScript `
-        -DataDir $resolvedBacktestDataDir `
-        -CuratedDataDir $resolvedCuratedDataDir `
-        -ExtraDataDirs @($resolvedRealDataDir) | Out-Null
+    $tuneArgs = @(
+        "-DataDir", $resolvedBacktestDataDir,
+        "-CuratedDataDir", $resolvedCuratedDataDir,
+        "-ExtraDataDirs", $resolvedRealDataDir
+    )
+    if ($RealDataOnly.IsPresent) {
+        $tuneArgs += "-RealDataOnly"
+    }
+    if ($RequireHigherTfCompanions.IsPresent) {
+        $tuneArgs += "-RequireHigherTfCompanions"
+    }
+    & $resolvedTuneScript @tuneArgs | Out-Null
 }
 
 Write-Host "[RealDataLoop] Completed"

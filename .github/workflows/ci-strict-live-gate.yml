@@ -68,13 +68,13 @@ jobs:
       - name: Run Strict Operational Gate (Live Probe + Parity)
         shell: pwsh
         run: |
-          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_ci_operational_gate.ps1 -IncludeBacktest -RunLiveProbe -StrictExecutionParity
+          python scripts\run_ci_operational_gate.py -IncludeBacktest -RunLiveProbe -StrictExecutionParity
 
       - name: Generate Strict Live Trend + Alert Reports
         if: always()
         shell: pwsh
         run: |
-          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\generate_strict_live_gate_trend_alert.ps1 -GateProfile strict_live -ApplyTunedThresholds -ActionExecutionPolicy "$env:STRICT_LIVE_ACTION_EXECUTION_POLICY" -EnableActionFeedbackLoop
+          python scripts\generate_strict_live_gate_trend_alert.py -GateProfile strict_live -ApplyTunedThresholds -ActionExecutionPolicy "$env:STRICT_LIVE_ACTION_EXECUTION_POLICY" -EnableActionFeedbackLoop
 
       - name: Extract Manual Approval Requirement
         id: extract_manual_approval

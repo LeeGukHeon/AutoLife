@@ -6,7 +6,13 @@ param(
     [string[]]$ExtraDataDirs = @(".\data\backtest_real"),
     [string]$OutputDir = ".\build\Release\logs",
     [string]$SummaryCsv = ".\build\Release\logs\candidate_trade_density_tuning_summary.csv",
-    [string]$SummaryJson = ".\build\Release\logs\candidate_trade_density_tuning_summary.json"
+    [string]$SummaryJson = ".\build\Release\logs\candidate_trade_density_tuning_summary.json",
+    [ValidateSet("legacy_only", "diverse_light", "diverse_wide", "quality_focus")]
+    [string]$ScenarioMode = "legacy_only",
+    [int]$MaxScenarios = 0,
+    [switch]$IncludeLegacyScenarios,
+    [switch]$RealDataOnly,
+    [switch]$RequireHigherTfCompanions
 )
 
 Set-StrictMode -Version Latest
@@ -94,25 +100,91 @@ function Apply-CandidateComboToConfig {
     Set-OrAddProperty -ObjectValue $ConfigObject.strategies.mean_reversion -Name "min_signal_strength" -Value ([double]$Combo.mean_reversion_min_signal_strength)
 }
 
+function Test-HasHigherTfCompanions {
+    param([string]$PrimaryPath)
+
+    if ([string]::IsNullOrWhiteSpace($PrimaryPath) -or -not (Test-Path $PrimaryPath)) {
+        return $false
+    }
+
+    $stem = [System.IO.Path]::GetFileNameWithoutExtension($PrimaryPath).ToLowerInvariant()
+    if (-not $stem.StartsWith("upbit_") -or -not $stem.Contains("_1m_")) {
+        return $false
+    }
+
+    $pivot = $stem.IndexOf("_1m_")
+    if ($pivot -le 6) {
+        return $false
+    }
+
+    $marketToken = $stem.Substring(6, $pivot - 6)
+    $dirPath = Split-Path -Parent $PrimaryPath
+    foreach ($tf in @("5m", "60m", "240m")) {
+        $pattern = ("upbit_{0}_{1}_*.csv" -f $marketToken, $tf)
+        $hits = @(Get-ChildItem -Path $dirPath -File -Filter $pattern -ErrorAction SilentlyContinue)
+        if ($hits.Count -eq 0) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
 function Get-DatasetList {
-    param([string[]]$Dirs)
+    param(
+        [string[]]$Dirs,
+        [switch]$OnlyRealData,
+        [switch]$RequireHigherTfCompanions
+    )
     $all = @()
     foreach ($dirPath in $Dirs) {
         if (-not (Test-Path $dirPath)) {
             continue
         }
         $isRealDataDir = $dirPath.ToLowerInvariant().Contains("backtest_real")
-        $all += @(
+        if ($OnlyRealData.IsPresent -and -not $isRealDataDir) {
+            continue
+        }
+
+        $candidates = @(
             Get-ChildItem -Path $dirPath -File -Filter *.csv -ErrorAction SilentlyContinue |
                 Sort-Object Name |
                 Where-Object {
-                    if (-not $isRealDataDir) { return $true }
-                    $_.Name.ToLowerInvariant().Contains("_1m_")
-                } |
-                ForEach-Object { $_.FullName }
+                    if ($isRealDataDir) {
+                        return $_.Name.ToLowerInvariant().Contains("_1m_")
+                    }
+                    return (-not $OnlyRealData.IsPresent)
+                }
         )
+
+        foreach ($file in $candidates) {
+            if ($RequireHigherTfCompanions.IsPresent -and
+                $isRealDataDir -and
+                -not (Test-HasHigherTfCompanions -PrimaryPath $file.FullName)) {
+                continue
+            }
+            $all += $file.FullName
+        }
     }
     return @($all | Sort-Object -Unique)
+}
+
+function New-ComboVariant {
+    param(
+        $BaseCombo,
+        [string]$ComboId,
+        [string]$Description,
+        [hashtable]$Overrides
+    )
+    $clone = ($BaseCombo | ConvertTo-Json -Depth 16 | ConvertFrom-Json)
+    $clone.combo_id = $ComboId
+    $clone.description = $Description
+    if ($null -ne $Overrides) {
+        foreach ($key in $Overrides.Keys) {
+            $clone.$key = $Overrides[$key]
+        }
+    }
+    return $clone
 }
 
 $resolvedMatrixScript = Resolve-OrThrow -PathValue $MatrixScript -Label "Matrix script"
@@ -135,10 +207,17 @@ if ($null -ne $ExtraDataDirs) {
         $scanDirs += $extraDir
     }
 }
-$datasets = Get-DatasetList -Dirs $scanDirs
+$datasets = Get-DatasetList `
+    -Dirs $scanDirs `
+    -OnlyRealData:$RealDataOnly `
+    -RequireHigherTfCompanions:$RequireHigherTfCompanions
 if (@($datasets).Count -eq 0) {
-    throw "No datasets found under DataDir/CuratedDataDir/ExtraDataDirs."
+    throw "No datasets found under DataDir/CuratedDataDir/ExtraDataDirs with current filters."
 }
+Write-Host ("[TuneCandidate] dataset_mode={0}, require_higher_tf={1}, dataset_count={2}" -f `
+    $(if ($RealDataOnly.IsPresent) { "realdata_only" } else { "mixed" }), `
+    $RequireHigherTfCompanions.IsPresent, `
+    @($datasets).Count)
 
 $comboSpecs = @(
     [pscustomobject]@{
@@ -287,6 +366,125 @@ $comboSpecs = @(
     }
 )
 
+$legacyComboSpecs = @($comboSpecs)
+$generatedCombos = New-Object "System.Collections.Generic.List[object]"
+
+if ($ScenarioMode -ne "legacy_only") {
+    $baseBalanced = $legacyComboSpecs | Where-Object { $_.combo_id -eq "trade_density_balanced_c" } | Select-Object -First 1
+    $baseStrict = $legacyComboSpecs | Where-Object { $_.combo_id -eq "quality_strict_b" } | Select-Object -First 1
+    if ($null -eq $baseBalanced) {
+        throw "Missing baseline combo: trade_density_balanced_c"
+    }
+    if ($null -eq $baseStrict) {
+        throw "Missing baseline combo: quality_strict_b"
+    }
+
+    if ($ScenarioMode -eq "diverse_light" -or $ScenarioMode -eq "diverse_wide") {
+        $edgeGrid = if ($ScenarioMode -eq "diverse_wide") { @(0.0006, 0.0008, 0.0010, 0.0012, 0.0014, 0.0016) } else { @(0.0008, 0.0010, 0.0012, 0.0014) }
+        $rrGrid = if ($ScenarioMode -eq "diverse_wide") { @(1.05, 1.15, 1.25, 1.35) } else { @(1.10, 1.20, 1.30) }
+        $scalpGrid = if ($ScenarioMode -eq "diverse_wide") { @(0.62, 0.66, 0.70, 0.74) } else { @(0.64, 0.68, 0.72) }
+        $momGrid = if ($ScenarioMode -eq "diverse_wide") { @(0.60, 0.64, 0.68, 0.72, 0.76) } else { @(0.62, 0.68, 0.74) }
+        $breakoutGrid = if ($ScenarioMode -eq "diverse_wide") { @(0.35, 0.40, 0.45) } else { @(0.36, 0.42) }
+        $mrevGrid = if ($ScenarioMode -eq "diverse_wide") { @(0.35, 0.40, 0.45) } else { @(0.36, 0.42) }
+
+        $i = 0
+        foreach ($edge in $edgeGrid) {
+            foreach ($rr in $rrGrid) {
+                $scalp = $scalpGrid[$i % $scalpGrid.Count]
+                $mom = $momGrid[$i % $momGrid.Count]
+                $brk = $breakoutGrid[$i % $breakoutGrid.Count]
+                $mrev = $mrevGrid[$i % $mrevGrid.Count]
+                $weak = [Math]::Round([Math]::Min(2.20, $rr + 0.45), 2)
+                $strong = [Math]::Round([Math]::Max(0.80, $rr - 0.10), 2)
+                $evTrades = if ($rr -ge 1.30) { 35 } elseif ($rr -ge 1.20) { 25 } else { 18 }
+                $evExpect = if ($edge -ge 0.0014) { 0.0 } elseif ($edge -ge 0.0010) { -1.0 } else { -3.0 }
+                $evPf = if ($rr -ge 1.30) { 1.00 } elseif ($rr -ge 1.20) { 0.95 } else { 0.90 }
+                $avoidHv = ($edge -ge 0.0010)
+                $avoidDn = ($rr -ge 1.20)
+
+                $generatedCombos.Add((New-ComboVariant `
+                    -BaseCombo $baseBalanced `
+                    -ComboId ("scenario_" + $ScenarioMode + "_" + "{0:D3}" -f $i) `
+                    -Description ("Auto-generated " + $ScenarioMode + " scenario") `
+                    -Overrides @{
+                        max_new_orders_per_scan = if ($rr -ge 1.25) { 2 } else { 3 }
+                        min_expected_edge_pct = $edge
+                        min_reward_risk = $rr
+                        min_rr_weak_signal = $weak
+                        min_rr_strong_signal = $strong
+                        min_strategy_trades_for_ev = $evTrades
+                        min_strategy_expectancy_krw = $evExpect
+                        min_strategy_profit_factor = $evPf
+                        avoid_high_volatility = $avoidHv
+                        avoid_trending_down = $avoidDn
+                        scalping_min_signal_strength = $scalp
+                        momentum_min_signal_strength = $mom
+                        breakout_min_signal_strength = $brk
+                        mean_reversion_min_signal_strength = $mrev
+                    })) | Out-Null
+                $i++
+            }
+        }
+    }
+
+    if ($ScenarioMode -eq "quality_focus") {
+        $edgeGrid = @(0.0012, 0.0014, 0.0016, 0.0018)
+        $rrGrid = @(1.25, 1.35, 1.45)
+        $scalpGrid = @(0.70, 0.74, 0.78)
+        $momGrid = @(0.72, 0.76, 0.80)
+        $breakoutGrid = @(0.42, 0.46, 0.50)
+        $mrevGrid = @(0.42, 0.46, 0.50)
+
+        $i = 0
+        foreach ($edge in $edgeGrid) {
+            foreach ($rr in $rrGrid) {
+                $generatedCombos.Add((New-ComboVariant `
+                    -BaseCombo $baseStrict `
+                    -ComboId ("scenario_quality_focus_" + "{0:D3}" -f $i) `
+                    -Description "Auto-generated quality-focused scenario" `
+                    -Overrides @{
+                        max_new_orders_per_scan = 2
+                        min_expected_edge_pct = $edge
+                        min_reward_risk = $rr
+                        min_rr_weak_signal = [Math]::Round([Math]::Min(2.30, $rr + 0.60), 2)
+                        min_rr_strong_signal = [Math]::Round([Math]::Max(1.00, $rr - 0.05), 2)
+                        min_strategy_trades_for_ev = 35
+                        min_strategy_expectancy_krw = 0.0
+                        min_strategy_profit_factor = 1.00
+                        avoid_high_volatility = $true
+                        avoid_trending_down = $true
+                        scalping_min_signal_strength = $scalpGrid[$i % $scalpGrid.Count]
+                        momentum_min_signal_strength = $momGrid[$i % $momGrid.Count]
+                        breakout_min_signal_strength = $breakoutGrid[$i % $breakoutGrid.Count]
+                        mean_reversion_min_signal_strength = $mrevGrid[$i % $mrevGrid.Count]
+                    })) | Out-Null
+                $i++
+            }
+        }
+    }
+}
+
+if ($ScenarioMode -eq "legacy_only") {
+    $comboSpecs = @($legacyComboSpecs)
+} else {
+    $generatedArray = @($generatedCombos.ToArray())
+    if ($IncludeLegacyScenarios.IsPresent) {
+        $comboSpecs = @($legacyComboSpecs + $generatedArray)
+    } else {
+        $comboSpecs = $generatedArray
+    }
+}
+
+if ($MaxScenarios -gt 0 -and @($comboSpecs).Count -gt $MaxScenarios) {
+    $comboSpecs = @($comboSpecs | Select-Object -First $MaxScenarios)
+}
+
+if (@($comboSpecs).Count -eq 0) {
+    throw "No tuning combos selected. Check ScenarioMode/MaxScenarios."
+}
+
+Write-Host ("[TuneCandidate] scenario_mode={0}, combo_count={1}" -f $ScenarioMode, @($comboSpecs).Count)
+
 $originalBuildConfigRaw = Get-Content -Raw -Path $resolvedBuildConfig -Encoding UTF8
 $rows = New-Object "System.Collections.Generic.List[object]"
 
@@ -318,7 +516,10 @@ try {
         $profileCsvPath = Resolve-OrThrow -PathValue $profileCsvRelPath -Label ("Profile CSV (" + $combo.combo_id + ")")
         $reportJsonPath = Resolve-OrThrow -PathValue $reportJsonRelPath -Label ("Report JSON (" + $combo.combo_id + ")")
         $report = Get-Content -Raw -Path $reportJsonPath -Encoding UTF8 | ConvertFrom-Json
-        $summary = $report.profile_summaries | Select-Object -First 1
+        $summary = $report.profile_summaries | Where-Object { $_.profile_id -eq "core_full" } | Select-Object -First 1
+        if ($null -eq $summary) {
+            throw "core_full profile summary not found for combo=$($combo.combo_id)"
+        }
 
         $rows.Add([pscustomobject]@{
             combo_id = [string]$combo.combo_id
@@ -359,6 +560,8 @@ $sortedRows | Export-Csv -Path $resolvedSummaryCsv -NoTypeInformation -Encoding 
 
 $reportOut = [ordered]@{
     generated_at = (Get-Date).ToString("o")
+    dataset_mode = if ($RealDataOnly.IsPresent) { "realdata_only" } else { "mixed" }
+    require_higher_tf_companions = [bool]$RequireHigherTfCompanions.IsPresent
     dataset_dirs = $scanDirs
     dataset_count = @($datasets).Count
     datasets = $datasets
