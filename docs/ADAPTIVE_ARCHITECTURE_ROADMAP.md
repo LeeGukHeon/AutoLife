@@ -1,4 +1,4 @@
-﻿# Adaptive Architecture Roadmap
+# Adaptive Architecture Roadmap
 
 ## Problem Statement
 Static strategy thresholds create a structural trade-off:
@@ -49,7 +49,7 @@ Completed:
 - Fee-inclusive small-seed matrix re-run completed (`build/Release/logs/small_seed_summary.json`).
 - Release build passes.
 - Real-data candidate loop established:
-  - `scripts/run_realdata_candidate_loop.ps1` (fetch -> matrix -> tuning).
+  - `scripts/run_realdata_candidate_loop.py` (fetch -> matrix -> tuning).
   - Upbit historical 1m datasets integrated into profitability gate workflow.
 - Live/Backtest operator UX simplification:
   - `main` live mode supports `SIMPLE(SAFE/BALANCED/ACTIVE)` profile mode.

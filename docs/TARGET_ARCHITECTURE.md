@@ -135,7 +135,7 @@
 ## 전환 실행 현황 (2026-02-13, Stage 0~8 완료)
 1. 완료된 단계
 - Stage 0 (기준선 고정): baseline 캡처 스크립트 추가 및 최신 baseline 산출물 생성 완료.
-  - `scripts/capture_baseline.ps1`
+  - `scripts/capture_baseline.py`
   - `build/Release/logs/*baseline_20260213_141137*`
 - Stage 1 (모듈 경계 스캐폴딩): `core/contracts + adapters + orchestration` 추가, legacy 브리지 연결 완료.
   - `include/core/contracts/*`
@@ -160,10 +160,10 @@
     - replay 중 reduced/closed 이벤트의 trade history 보강
     - reconcile 외부청산 시 `POSITION_CLOSED` 저널 기록
 - Stage 3 심화 2차(검증 자동화): 실제 재기동 기반 복구 검증 루프 완료.
-  - `scripts/validate_recovery_state.ps1`
-  - `scripts/validate_recovery_e2e.ps1`
-  - `scripts/validate_replay_reconcile_diff.ps1`
-  - `scripts/validate_operational_readiness.ps1`
+  - `scripts/validate_recovery_state.py`
+  - `scripts/validate_recovery_e2e.py`
+  - `scripts/validate_replay_reconcile_diff.py`
+  - `scripts/validate_operational_readiness.py`
   - 산출물:
     - `build/Release/logs/recovery_state_validation.json`
     - `build/Release/logs/recovery_e2e_report.json`
@@ -218,27 +218,27 @@
     - `src/backtest/BacktestEngine.cpp`의 `submitted/filled` 이벤트에서 동일 스키마 생성
     - `build/Release/logs/execution_updates_backtest.jsonl`
   - 자동 검증:
-    - 신규 `scripts/validate_execution_parity.ps1`
-    - `scripts/validate_operational_readiness.ps1`에 parity 리포트(`build/Release/logs/execution_parity_report.json`) 통합
+    - 신규 `scripts/validate_execution_parity.py`
+    - `scripts/validate_operational_readiness.py`에 parity 리포트(`build/Release/logs/execution_parity_report.json`) 통합
     - `-StrictExecutionParity` 옵션으로 hard-fail 가능(기본은 기존 체인 비파괴)
 - Stage 7 (small-seed CI 게이트 강화 + parity strict 닫기) 완료.
-  - `scripts/validate_operational_readiness.ps1` 인터페이스 정리:
+  - `scripts/validate_operational_readiness.py` 인터페이스 정리:
     - strict 조합 명시 지원: `-StrictLogCheck -StrictExecutionParity [-IncludeBacktest]`
     - legacy 호환 유지: `-NoStrictLogCheck` 그대로 유지
     - 충돌 조합(`-StrictLogCheck` + `-NoStrictLogCheck`)은 즉시 실패
   - live parity 아티팩트 생성 경로 고정:
     - 신규 툴: `AutoLifeLiveExecutionProbe` (`src/tools/LiveExecutionProbe.cpp`)
-    - 보조 스크립트: `scripts/generate_live_execution_probe.ps1`
+    - 보조 스크립트: `scripts/generate_live_execution_probe.py`
     - 산출물: `build/Release/logs/execution_updates_live.jsonl`
   - 최종 strict 게이트 통과:
-    - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate_operational_readiness.ps1 -StrictLogCheck -StrictExecutionParity -IncludeBacktest`
+    - `python scripts/validate_operational_readiness.py -StrictLogCheck -StrictExecutionParity -IncludeBacktest`
 - Stage 8 (CI 워크플로우 연동 + 운영 권한 분리) 완료.
   - CI 워크플로우 분리:
     - PR 게이트: `.github/workflows/ci-pr-gate.yml`
     - strict live 게이트(스케줄/수동): `.github/workflows/ci-strict-live-gate.yml`
   - CI 실행 래퍼/fixture 추가:
-    - `scripts/prepare_operational_readiness_fixture.ps1`
-    - `scripts/run_ci_operational_gate.ps1`
+    - `scripts/prepare_operational_readiness_fixture.py`
+    - `scripts/run_ci_operational_gate.py`
   - 운영 권한 분리 runbook 문서화:
     - `docs/STRICT_GATE_RUNBOOK_2026-02-13.md`
 
@@ -258,16 +258,16 @@
   - `AutoLifeStateTest`
   - `AutoLifeEventJournalTest`
 - live parity probe 통과:
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate_live_execution_probe.ps1`
+  - `python scripts/generate_live_execution_probe.py`
 - 복구 검증 통과:
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate_recovery_state.ps1`
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate_recovery_e2e.ps1`
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate_recovery_e2e.ps1 -StrictLogCheck -OutputJson build/Release/logs/recovery_e2e_report_strict.json -StateValidationJson build/Release/logs/recovery_state_validation_strict.json`
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate_replay_reconcile_diff.ps1 -Strict`
+  - `python scripts/validate_recovery_state.py`
+  - `python scripts/validate_recovery_e2e.py`
+  - `python scripts/validate_recovery_e2e.py -StrictLogCheck -OutputJson build/Release/logs/recovery_e2e_report_strict.json -StateValidationJson build/Release/logs/recovery_state_validation_strict.json`
+  - `python scripts/validate_replay_reconcile_diff.py -Strict`
 - parity 검증 통과:
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate_execution_parity.ps1 -Strict`
+  - `python scripts/validate_execution_parity.py -Strict`
 - 운영 준비 검증(최종 strict 조합) 통과:
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate_operational_readiness.ps1 -StrictLogCheck -StrictExecutionParity -IncludeBacktest`
+  - `python scripts/validate_operational_readiness.py -StrictLogCheck -StrictExecutionParity -IncludeBacktest`
 - baseline 캡처 재실행 통과(기존 성능 지표 수준 유지).
 
 4. 미완료(다음 단계 핵심)
@@ -276,9 +276,9 @@
 5. strict gate 실행 절차 / 실패 대응(runbook)
 - 권장 실행 순서:
   - PR 게이트:
-    - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_ci_operational_gate.ps1 -IncludeBacktest`
+    - `python scripts/run_ci_operational_gate.py -IncludeBacktest`
   - strict live 게이트:
-    - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_ci_operational_gate.ps1 -IncludeBacktest -RunLiveProbe -StrictExecutionParity`
+    - `python scripts/run_ci_operational_gate.py -IncludeBacktest -RunLiveProbe -StrictExecutionParity`
 - 실패 대응:
   - `strict_failed_live_execution_updates_missing`:
     - live probe 재실행 후 `build/Release/logs/execution_updates_live.jsonl` 생성 여부 확인.
@@ -298,7 +298,7 @@
 - Stage 0~8 완료.
 - Stage 8 완료 내용:
   - CI 워크플로우 분리: .github/workflows/ci-pr-gate.yml, .github/workflows/ci-strict-live-gate.yml
-  - CI 실행 래퍼/fixture: scripts/prepare_operational_readiness_fixture.ps1, scripts/run_ci_operational_gate.ps1
+  - CI 실행 래퍼/fixture: scripts/prepare_operational_readiness_fixture.py, scripts/run_ci_operational_gate.py
   - 운영 runbook: docs/STRICT_GATE_RUNBOOK_2026-02-13.md
 
 이번 컨텍스트 목표(Stage 9):
@@ -322,14 +322,14 @@
 마지막 검증:
 - Release 빌드
 - 테스트 4종 PASS
-- validate_operational_readiness.ps1 (strict 조합) PASS
+- validate_operational_readiness.py (strict 조합) PASS
 - Stage 9 신규 집계/경보 스크립트 PASS
 - 실행한 명령/결과/산출물 경로를 요약 보고`
 
 ## Stage 9 Update (2026-02-13)
 - strict live gate trend/alert automation is now integrated without changing legacy default behaviors.
 - Added script:
-  - `scripts/generate_strict_live_gate_trend_alert.ps1`
+  - `scripts/generate_strict_live_gate_trend_alert.py`
 - Input reports:
   - `build/Release/logs/execution_parity_report.json`
   - `build/Release/logs/operational_readiness_report.json`
@@ -352,7 +352,7 @@
 ## Stage 10 Update (2026-02-13)
 - strict live gate threshold tuning and action-response automation is integrated with legacy-safe defaults.
 - Updated script:
-  - `scripts/generate_strict_live_gate_trend_alert.ps1`
+  - `scripts/generate_strict_live_gate_trend_alert.py`
 - New outputs:
   - `build/Release/logs/strict_live_gate_threshold_tuning_report.json`
   - `build/Release/logs/strict_live_gate_action_response_report.json`
@@ -402,7 +402,7 @@
   - conditional job `strict_live_resume_approval_gate` is triggered only when manual approval is required.
   - resume approval job is bound to Environment `strict-live-resume` (required reviewers boundary).
 - feedback-loop operational stabilization is extended with weekly drift checks:
-  - `scripts/generate_strict_live_gate_trend_alert.ps1`
+  - `scripts/generate_strict_live_gate_trend_alert.py`
   - weekly accumulation fields in tuning report:
     - `tuning_readiness.feedback_weekly_*`
     - `feedback_loop.weekly_signal`
@@ -417,7 +417,7 @@
 
 ## Stage 13 Update (2026-02-13)
 - profitability validation matrix is now automated for architecture-path comparison:
-  - `scripts/run_profitability_matrix.ps1`
+  - `scripts/run_profitability_matrix.py`
   - profile set:
     - `legacy_default`
     - `core_bridge_only`
@@ -441,7 +441,7 @@
 - personal-use distribution baseline is now documented and scripted:
   - `README.md`
   - `docs/PERSONAL_USE_NOTICE.md`
-  - `scripts/apply_trading_preset.ps1`
+  - `scripts/apply_trading_preset.py`
   - `config/presets/safe.json`
   - `config/presets/active.json`
 - PR CI now includes exploratory profitability report as non-blocking telemetry:

@@ -85,35 +85,36 @@ def run_fetch_script(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--fetch-script", default=r".\scripts\fetch_upbit_historical_candles.py")
-    parser.add_argument("--matrix-script", default=r".\scripts\run_profitability_matrix.py")
-    parser.add_argument("--tune-script", default=r".\scripts\tune_candidate_gate_trade_density.py")
-    parser.add_argument("--real-data-dir", default=r".\data\backtest_real")
-    parser.add_argument("--backtest-data-dir", default=r".\data\backtest")
-    parser.add_argument("--curated-data-dir", default=r".\data\backtest_curated")
+    parser.add_argument("--fetch-script", "-FetchScript", default=r".\scripts\fetch_upbit_historical_candles.py")
+    parser.add_argument("--matrix-script", "-MatrixScript", default=r".\scripts\run_profitability_matrix.py")
+    parser.add_argument("--tune-script", "-TuneScript", default=r".\scripts\tune_candidate_gate_trade_density.py")
+    parser.add_argument("--real-data-dir", "-RealDataDir", default=r".\data\backtest_real")
+    parser.add_argument("--backtest-data-dir", "-BacktestDataDir", default=r".\data\backtest")
+    parser.add_argument("--curated-data-dir", "-CuratedDataDir", default=r".\data\backtest_curated")
     parser.add_argument(
         "--markets",
+        "-Markets",
         nargs="*",
         default=[
             "KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL", "KRW-DOGE", "KRW-ADA",
             "KRW-AVAX", "KRW-LINK", "KRW-DOT", "KRW-TRX", "KRW-SUI", "KRW-BCH",
         ],
     )
-    parser.add_argument("--unit", default="1")
-    parser.add_argument("--candles", type=int, default=12000)
-    parser.add_argument("--candles5m", type=int, default=4000)
-    parser.add_argument("--candles1h", type=int, default=1200)
-    parser.add_argument("--candles4h", type=int, default=600)
-    parser.add_argument("--chunk-size", type=int, default=200)
-    parser.add_argument("--sleep-ms", type=int, default=120)
-    parser.add_argument("--output-matrix-csv", default=r".\build\Release\logs\profitability_matrix_realdata.csv")
-    parser.add_argument("--output-profile-csv", default=r".\build\Release\logs\profitability_profile_summary_realdata.csv")
-    parser.add_argument("--output-report-json", default=r".\build\Release\logs\profitability_gate_report_realdata.json")
-    parser.add_argument("--skip-fetch", action="store_true")
-    parser.add_argument("--skip-higher-tf-fetch", action="store_true")
-    parser.add_argument("--skip-tune", action="store_true")
-    parser.add_argument("--real-data-only", action="store_true")
-    parser.add_argument("--require-higher-tf-companions", action="store_true")
+    parser.add_argument("--unit", "-Unit", default="1")
+    parser.add_argument("--candles", "-Candles", type=int, default=12000)
+    parser.add_argument("--candles5m", "-Candles5m", type=int, default=4000)
+    parser.add_argument("--candles1h", "-Candles1h", type=int, default=1200)
+    parser.add_argument("--candles4h", "-Candles4h", type=int, default=600)
+    parser.add_argument("--chunk-size", "-ChunkSize", type=int, default=200)
+    parser.add_argument("--sleep-ms", "-SleepMs", type=int, default=120)
+    parser.add_argument("--output-matrix-csv", "-OutputMatrixCsv", default=r".\build\Release\logs\profitability_matrix_realdata.csv")
+    parser.add_argument("--output-profile-csv", "-OutputProfileCsv", default=r".\build\Release\logs\profitability_profile_summary_realdata.csv")
+    parser.add_argument("--output-report-json", "-OutputReportJson", default=r".\build\Release\logs\profitability_gate_report_realdata.json")
+    parser.add_argument("--skip-fetch", "-SkipFetch", action="store_true")
+    parser.add_argument("--skip-higher-tf-fetch", "-SkipHigherTfFetch", action="store_true")
+    parser.add_argument("--skip-tune", "-SkipTune", action="store_true")
+    parser.add_argument("--real-data-only", "-RealDataOnly", action="store_true")
+    parser.add_argument("--require-higher-tf-companions", "-RequireHigherTfCompanions", action="store_true")
     args = parser.parse_args()
 
     fetch_script = pathlib.Path(args.fetch_script).resolve()
@@ -177,7 +178,7 @@ def main() -> int:
     if proc.returncode != 0:
         raise RuntimeError(f"run_profitability_matrix.py failed (exit={proc.returncode})")
 
-    report = json.loads(output_report_json.read_text(encoding="utf-8"))
+    report = json.loads(output_report_json.read_text(encoding="utf-8-sig"))
     core_full = next((x for x in report.get("profile_summaries", []) if x.get("profile_id") == "core_full"), None)
     if core_full is not None:
         print(f"[RealDataLoop] core_full.avg_profit_factor={core_full.get('avg_profit_factor')}")

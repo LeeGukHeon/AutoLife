@@ -36,7 +36,7 @@
 
 3. realdata matrix 재실행
 - 명령:
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_realdata_candidate_loop.ps1 -SkipFetch -SkipTune`
+  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune`
 - 완료 조건:
   - 최신 `profitability_gate_report_realdata.json` 수치 갱신 및 비교표 작성.
 
@@ -70,29 +70,29 @@
 
 ## Quick Runbook
 1. 수집 포함 전체 루프
-- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_realdata_candidate_loop.ps1`
+- `python scripts/run_realdata_candidate_loop.py`
 
 2. 수집 생략 matrix만
-- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_realdata_candidate_loop.ps1 -SkipFetch -SkipTune`
+- `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune`
 
 3. exploratory 점검
-- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_profitability_exploratory.ps1`
+- `python scripts/run_profitability_exploratory.py`
 
 4. preset 적용 점검
-- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/apply_trading_preset.ps1 -Preset safe`
-- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/apply_trading_preset.ps1 -Preset active`
+- `python scripts/apply_trading_preset.py -Preset safe`
+- `python scripts/apply_trading_preset.py -Preset active`
 
 
 ## Stage 15 Progress Update (2026-02-13, late session)
 
 ### Completed in this context
 - Added loss-contributor analysis script:
-  - `scripts/analyze_loss_contributors.ps1`
+  - `scripts/analyze_loss_contributors.py`
   - outputs:
     - `build/Release/logs/loss_contributor_by_market.csv`
     - `build/Release/logs/loss_contributor_by_strategy.csv`
 - Re-ran realdata candidate matrix loop without refetch/tune:
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_realdata_candidate_loop.ps1 -SkipFetch -SkipTune`
+  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune`
 - Implemented first-pass strategy filter tightening (internal logic only):
   - `src/strategy/BreakoutStrategy.cpp`
   - `src/strategy/ScalpingStrategy.cpp`
@@ -125,7 +125,7 @@
 - P1-1: adjust tuning objective weighting to prioritize expectancy/profitable_ratio over trade density.
 
 ### New automation loop (added)
-- Script: `scripts/run_candidate_auto_improvement_loop.ps1`
+- Script: `scripts/run_candidate_auto_improvement_loop.py`
 - Loop flow:
   - realdata matrix run -> tuning combo search -> best combo apply -> re-validation
   - optional loss-contributor analysis per iteration
@@ -137,7 +137,7 @@
   - `build/Release/logs/candidate_auto_improvement_iterations.csv`
   - `build/Release/logs/candidate_auto_improvement_summary.json`
 - Quick run:
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_candidate_auto_improvement_loop.ps1 -MaxIterations 3 -MaxRuntimeMinutes 90 -RunLossAnalysis`
+  - `python scripts/run_candidate_auto_improvement_loop.py -MaxIterations 3 -MaxRuntimeMinutes 90 -RunLossAnalysis`
 
 ## Stage 15 Strategy Refactor Update (2026-02-13, current)
 
@@ -154,14 +154,14 @@
 - Build PASS:
   - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release -j 6`
 - Exploratory script PASS (execution):
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_profitability_exploratory.ps1`
+  - `python scripts/run_profitability_exploratory.py`
 - Preset script PASS (execution):
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/apply_trading_preset.ps1 -Preset safe -ConfigPath .\build\Release\logs\verify_preset_safe.json -SourceConfigPath .\config\config.json`
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/apply_trading_preset.ps1 -Preset active -ConfigPath .\build\Release\logs\verify_preset_active.json -SourceConfigPath .\config\config.json`
+  - `python scripts/apply_trading_preset.py -Preset safe -ConfigPath .\build\Release\logs\verify_preset_safe.json -SourceConfigPath .\config\config.json`
+  - `python scripts/apply_trading_preset.py -Preset active -ConfigPath .\build\Release\logs\verify_preset_active.json -SourceConfigPath .\config\config.json`
 
 ### Latest realdata candidate re-check (core_full)
 - Command:
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_realdata_candidate_loop.ps1 -SkipFetch -SkipTune`
+  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune`
 - Result:
   - `overall_gate_pass=false`
   - `avg_profit_factor=1.1106` (PF gate pass)
@@ -180,7 +180,7 @@
 
 ### Run setup
 - Command:
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_candidate_auto_improvement_loop.ps1 -MaxIterations 1 -TuneScenarioMode diverse_wide -TuneMaxScenarios 12 -MaxRuntimeMinutes 180`
+  - `python .\scripts\run_candidate_auto_improvement_loop.py -MaxIterations 1 -TuneScenarioMode diverse_wide -TuneMaxScenarios 12 -MaxRuntimeMinutes 180`
 - Notes:
   - realdata baseline/post-apply validation included (`-SkipFetch` path via loop default).
   - tune phase evaluated 12 diverse-wide scenarios.
@@ -219,7 +219,7 @@
 
 ### New analysis tool
 - Added:
-  - `scripts/analyze_entry_pattern_bias.ps1`
+  - `scripts/analyze_entry_pattern_bias.py`
 - Output artifacts:
   - `build/Release/logs/entry_patterns_winning.csv`
   - `build/Release/logs/entry_patterns_losing.csv`
@@ -243,7 +243,7 @@
 
 ### Re-check after applying pattern-aware gate
 - Command:
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_realdata_candidate_loop.ps1 -SkipFetch -SkipTune`
+  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune`
 - Core result:
   - `avg_profit_factor=1.1346` (pass)
   - `avg_total_trades=15.9444` (pass)
@@ -261,14 +261,14 @@
 
 ### Sequence executed in this context
 1. Root-cause rerun:
-   - `scripts/analyze_loss_contributors.ps1`
-   - `scripts/analyze_entry_pattern_bias.ps1 -MaxDatasets 18 -MinPatternTrades 6`
+   - `scripts/analyze_loss_contributors.py`
+   - `scripts/analyze_entry_pattern_bias.py -MaxDatasets 18 -MinPatternTrades 6`
 2. Strategy filter update:
    - `src/strategy/BreakoutStrategy.cpp`
    - `src/strategy/ScalpingStrategy.cpp`
 3. Validation loop:
-   - `scripts/run_realdata_candidate_loop.ps1 -SkipFetch -SkipTune`
-   - `scripts/tune_candidate_gate_trade_density.ps1 -ScenarioMode diverse_wide -MaxScenarios 4`
+   - `scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune`
+   - `scripts/tune_candidate_gate_trade_density.py -ScenarioMode diverse_wide -MaxScenarios 4`
 
 ### Key observations
 - Loss concentration after first strict block was:
@@ -281,7 +281,7 @@
 
 ### Latest baseline snapshot (after second filter adjustment)
 - Command:
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_realdata_candidate_loop.ps1 -SkipFetch -SkipTune`
+  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune`
 - `core_full`:
   - `avg_profit_factor = 1.1049` (PASS)
   - `avg_total_trades = 10.7778` (PASS)
@@ -291,7 +291,7 @@
 
 ### Latest short wide tuning (4 scenarios)
 - Command:
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tune_candidate_gate_trade_density.ps1 -ScenarioMode diverse_wide -MaxScenarios 4`
+  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode diverse_wide -MaxScenarios 4`
 - Best-by-gap candidate from summary:
   - `scenario_diverse_wide_003`
   - `avg_profit_factor = 1.1049`
@@ -323,7 +323,7 @@
   - `build/Release/AutoLifeTrading.exe --backtest .\data\backtest\sample_trend_1m.csv --json`
   - `build/Release/AutoLifeTrading.exe --backtest .\data\backtest\auto_sim_500.csv --json`
 - Exploratory matrix rerun: PASS (script), gate currently FAIL
-  - `powershell -ExecutionPolicy Bypass -File .\scripts\run_profitability_exploratory.ps1`
+  - `python .\scripts\run_profitability_exploratory.py`
   - report: `build/Release/logs/profitability_gate_report_exploratory.json`
 
 ### Current exploratory note
@@ -337,7 +337,7 @@
 
 ### Post-alignment candidate re-check (realdata, no fetch/tune)
 - Command:
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_realdata_candidate_loop.ps1 -SkipFetch -SkipTune`
+  - `python .\scripts\run_realdata_candidate_loop.py -SkipFetch -SkipTune`
 - `core_full` snapshot:
   - `avg_profit_factor = 0.4242` (FAIL)
   - `avg_total_trades = 4.2778` (FAIL)
@@ -388,8 +388,8 @@
      - `src/backtest/BacktestEngine.cpp`
      - `src/engine/TradingEngine.cpp`
   2. Rebuild and rerun:
-     - `scripts/run_profitability_exploratory.ps1`
-     - `scripts/run_realdata_candidate_loop.ps1 -SkipFetch -SkipTune`
+     - `scripts/run_profitability_exploratory.py`
+     - `scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune`
 - Latest checkpoints:
   - exploratory:
     - `core_full.avg_profit_factor = 66.6`
@@ -408,7 +408,7 @@
 
 ### Tune kick-off result (2026-02-14, diverse_light x4)
 - Command:
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\tune_candidate_gate_trade_density.ps1 -ScenarioMode diverse_light -MaxScenarios 4`
+  - `python .\scripts\tune_candidate_gate_trade_density.py -ScenarioMode diverse_light -MaxScenarios 4`
 - Output:
   - `build/Release/logs/candidate_trade_density_tuning_summary.csv`
   - `build/Release/logs/candidate_trade_density_tuning_summary.json`
@@ -427,14 +427,14 @@
   - `-RealDataOnly`
   - `-RequireHigherTfCompanions`
 - Applied scripts:
-  - `scripts/run_realdata_candidate_loop.ps1`
-  - `scripts/tune_candidate_gate_trade_density.ps1`
+  - `scripts/run_realdata_candidate_loop.py`
+  - `scripts/tune_candidate_gate_trade_density.py`
 - Behavior:
   - only `backtest_real` `*_1m_*` primary datasets are used
   - each primary dataset must have matching `5m/60m/240m` companion CSV in same folder
 - Verified commands:
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_realdata_candidate_loop.ps1 -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions`
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\tune_candidate_gate_trade_density.ps1 -ScenarioMode legacy_only -MaxScenarios 1 -RealDataOnly -RequireHigherTfCompanions`
+  - `python .\scripts\run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions`
+  - `python .\scripts\tune_candidate_gate_trade_density.py -ScenarioMode legacy_only -MaxScenarios 1 -RealDataOnly -RequireHigherTfCompanions`
 
 ### Backtest UX update (2026-02-14)
 - `src/main.cpp` updated for backtest usability and live-parity enforcement.
@@ -464,7 +464,7 @@
   - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release --target AutoLifeTrading` PASS
 - Realdata candidate recheck:
   - command:
-    - `powershell -ExecutionPolicy Bypass -File scripts/run_realdata_candidate_loop.ps1 -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions`
+    - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions`
   - core_full:
     - `avg_profit_factor = 11.2958` (PASS)
     - `avg_total_trades = 4.5556` (FAIL)

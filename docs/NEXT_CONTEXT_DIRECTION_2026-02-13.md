@@ -1,4 +1,4 @@
-﻿# Next Context Direction (2026-02-13)
+# Next Context Direction (2026-02-13)
 
 ## Current Objective
 - 목표: `TARGET_ARCHITECTURE` 기준으로 기존 코드베이스를 깨지 않고 단계적으로 이전.
@@ -9,7 +9,7 @@
 
 ## Latest Progress Snapshot (2026-02-13)
 1. Stage 0 완료: baseline 고정
-- `scripts/capture_baseline.ps1` 추가.
+- `scripts/capture_baseline.py` 추가.
 - baseline 산출물 생성 완료:
   - `build/Release/logs/small_seed_matrix_baseline_20260213_141137.csv`
   - `build/Release/logs/readiness_report_baseline_20260213_141137.json`
@@ -72,17 +72,17 @@
   - replay 과정에서 open position 재구성 + trade history 보강(REDUCED/CLOSED)
   - 외부 청산 reconcile 시 `POSITION_CLOSED` 저널 기록 추가
 - 검증 보강:
-  - 신규 스크립트 `scripts/validate_recovery_state.ps1`
+  - 신규 스크립트 `scripts/validate_recovery_state.py`
     - snapshot/journal 존재/파싱/seq 증가/워터마크 정합성 검사
     - replay 후 예측 open position 수 산출 리포트 생성
 
 7. Stage 3 심화 2차(검증 자동화) 완료
 - 신규:
-  - `scripts/validate_recovery_e2e.ps1`
-  - `scripts/validate_replay_reconcile_diff.ps1`
-  - `scripts/validate_operational_readiness.ps1`
+  - `scripts/validate_recovery_e2e.py`
+  - `scripts/validate_replay_reconcile_diff.py`
+  - `scripts/validate_operational_readiness.py`
 - 기능:
-  - `validate_recovery_state.ps1` 선행 실행 및 결과 결합
+  - `validate_recovery_state.py` 선행 실행 및 결과 결합
   - 엔진 로그(`autolife*.log`)에서 복구 단계 마커 자동 스캔
     - `State snapshot loaded`
     - `State restore: journal replay applied` 또는 `no replay events applied`
@@ -94,10 +94,10 @@
     - `build/Release/logs/operational_readiness_report.json`
 - 상태:
   - 2026-02-13 실제 재기동 1회 수행 후 복구 마커 3종 확인
-  - 실제 경로(`build/Release/state/*`, `build/Release/logs/autolife.log`) 기준 `validate_recovery_e2e.ps1` 경고 0 PASS
+  - 실제 경로(`build/Release/state/*`, `build/Release/logs/autolife.log`) 기준 `validate_recovery_e2e.py` 경고 0 PASS
   - `-StrictLogCheck` 모드 PASS
-  - replay vs reconcile 차이 요약(`validate_replay_reconcile_diff.ps1 -Strict`) PASS
-  - 운영/CI 진입점으로 `validate_operational_readiness.ps1` 추가
+  - replay vs reconcile 차이 요약(`validate_replay_reconcile_diff.py -Strict`) PASS
+  - 운영/CI 진입점으로 `validate_operational_readiness.py` 추가
 
 8. Stage 5 준비 1차 완료: 공통 실행 상태머신 스캐폴딩
 - 신규:
@@ -132,8 +132,8 @@
   - `src/backtest/BacktestEngine.cpp`의 `executeOrder(submitted)`/`checkOrders(filled)`에서 동일 스키마 생성
   - JSONL 아티팩트 출력: `build/Release/logs/execution_updates_backtest.jsonl`
 - 검증 자동화:
-  - 신규 `scripts/validate_execution_parity.ps1` 추가(스키마/enum/양측 호환성 점검)
-  - `scripts/validate_operational_readiness.ps1`에 parity 리포트 결합
+  - 신규 `scripts/validate_execution_parity.py` 추가(스키마/enum/양측 호환성 점검)
+  - `scripts/validate_operational_readiness.py`에 parity 리포트 결합
     - 기본 모드: 산출물 누락 시 warning 기반(기존 strict 복구 체인 비파괴)
     - 옵션: `-StrictExecutionParity`로 누락/불일치 hard-fail 가능
 - 신규 리포트:
@@ -141,32 +141,32 @@
 
 11. Stage 7 완료: small-seed CI 게이트 고도화 + execution parity strict 닫기
 - CI 진입점 정리:
-  - `scripts/validate_operational_readiness.ps1`에 `-StrictLogCheck` 명시 옵션 추가
+  - `scripts/validate_operational_readiness.py`에 `-StrictLogCheck` 명시 옵션 추가
   - strict 조합 표준화: `-StrictLogCheck -StrictExecutionParity [-IncludeBacktest]`
   - legacy 호환 유지: `-NoStrictLogCheck` 옵션 유지
 - live parity strict 닫기:
   - 신규 probe 실행 파일: `AutoLifeLiveExecutionProbe` (`src/tools/LiveExecutionProbe.cpp`)
-  - 자동 실행 스크립트: `scripts/generate_live_execution_probe.ps1`
+  - 자동 실행 스크립트: `scripts/generate_live_execution_probe.py`
   - live 아티팩트 생성 확인: `build/Release/logs/execution_updates_live.jsonl`
 - 최종 strict 검증:
-  - `validate_execution_parity.ps1 -Strict` PASS
-  - `validate_operational_readiness.ps1 -StrictLogCheck -StrictExecutionParity -IncludeBacktest` PASS
+  - `validate_execution_parity.py -Strict` PASS
+  - `validate_operational_readiness.py -StrictLogCheck -StrictExecutionParity -IncludeBacktest` PASS
 
 12. Stage 8 완료: CI 워크플로우 연동 + 운영 권한 분리(runbook)
 - 워크플로우 분리:
   - PR 게이트: `.github/workflows/ci-pr-gate.yml`
   - strict live 게이트(스케줄/수동): `.github/workflows/ci-strict-live-gate.yml`
 - CI 게이트 실행 래퍼/fixture:
-  - `scripts/prepare_operational_readiness_fixture.ps1`
-  - `scripts/run_ci_operational_gate.ps1`
+  - `scripts/prepare_operational_readiness_fixture.py`
+  - `scripts/run_ci_operational_gate.py`
 - 운영 문서:
   - `docs/STRICT_GATE_RUNBOOK_2026-02-13.md`
 - strict live 게이트 표준 명령:
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_ci_operational_gate.ps1 -IncludeBacktest -RunLiveProbe -StrictExecutionParity`
+  - `python scripts/run_ci_operational_gate.py -IncludeBacktest -RunLiveProbe -StrictExecutionParity`
 
 13. Stage 9 완료: strict live 결과 집계/경보 자동화
 - 신규 집계/경보 스크립트:
-  - `scripts/generate_strict_live_gate_trend_alert.ps1`
+  - `scripts/generate_strict_live_gate_trend_alert.py`
 - 입력 리포트:
   - `build/Release/logs/execution_parity_report.json`
   - `build/Release/logs/operational_readiness_report.json`
@@ -186,7 +186,7 @@
 
 14. Stage 10 완료: 임계치 운영 튜닝 + 실패 패턴 자동 조치
 - Stage 9 스크립트 확장:
-  - `scripts/generate_strict_live_gate_trend_alert.ps1`
+  - `scripts/generate_strict_live_gate_trend_alert.py`
 - 신규 산출물:
   - `build/Release/logs/strict_live_gate_threshold_tuning_report.json`
   - `build/Release/logs/strict_live_gate_action_response_report.json`
@@ -202,7 +202,7 @@
 
 15. Stage 11 완료: 자동 조치 실행 경계 분리 + 경보-조치 피드백 루프
 - 스크립트 확장:
-  - `scripts/generate_strict_live_gate_trend_alert.ps1`
+  - `scripts/generate_strict_live_gate_trend_alert.py`
 - 실행 경계 분리:
   - 신규 파라미터 `-ActionExecutionPolicy` (`report-only`, `safe-auto-execute`)
   - 정책별 `execution_boundary` 자동 분류(`critical => report-only`, 안전군 warning/info => safe-auto-execute 후보)
@@ -229,24 +229,24 @@
   - `AutoLifeStateTest` PASS
   - `AutoLifeEventJournalTest` PASS
 - Recovery validation script:
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate_recovery_state.ps1` PASS
+  - `python scripts/validate_recovery_state.py` PASS
 - Recovery E2E script:
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate_recovery_e2e.ps1` PASS (warnings 0)
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate_recovery_e2e.ps1 -StrictLogCheck -OutputJson build/Release/logs/recovery_e2e_report_strict.json -StateValidationJson build/Release/logs/recovery_state_validation_strict.json` PASS
+  - `python scripts/validate_recovery_e2e.py` PASS (warnings 0)
+  - `python scripts/validate_recovery_e2e.py -StrictLogCheck -OutputJson build/Release/logs/recovery_e2e_report_strict.json -StateValidationJson build/Release/logs/recovery_state_validation_strict.json` PASS
 - Replay/Reconcile diff script:
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate_replay_reconcile_diff.ps1 -Strict` PASS
+  - `python scripts/validate_replay_reconcile_diff.py -Strict` PASS
 - Execution parity script:
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate_execution_parity.ps1 -Strict` PASS
+  - `python scripts/validate_execution_parity.py -Strict` PASS
 - Live execution probe:
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate_live_execution_probe.ps1 -Market KRW-BTC -NotionalKrw 5100 -DiscountPct 2.0 -CancelDelayMs 1500` PASS
+  - `python scripts/generate_live_execution_probe.py -Market KRW-BTC -NotionalKrw 5100 -DiscountPct 2.0 -CancelDelayMs 1500` PASS
 - Operational readiness script (strict gate):
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate_operational_readiness.ps1 -StrictLogCheck -StrictExecutionParity -IncludeBacktest` PASS
+  - `python scripts/validate_operational_readiness.py -StrictLogCheck -StrictExecutionParity -IncludeBacktest` PASS
 - Stage 10 trend+tuning+action script:
-  - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate_strict_live_gate_trend_alert.ps1 -GateProfile strict_live -ApplyTunedThresholds` PASS
+  - `python scripts/generate_strict_live_gate_trend_alert.py -GateProfile strict_live -ApplyTunedThresholds` PASS
 - Backtest sample run:
   - `AutoLifeTrading.exe --backtest <absolute_csv_path> --json` 실행 확인
 - Baseline recapture:
-  - `scripts/capture_baseline.ps1` PASS
+  - `scripts/capture_baseline.py` PASS
 
 ## Stage 12 Update (2026-02-13)
 - 승인 강제 연동:
@@ -255,7 +255,7 @@
   - `strict_live_resume_approval_gate` job이 `manual_approval_required == true`일 때만 실행되도록 연결.
   - `strict_live_resume_approval_gate`는 GitHub Environment(`strict-live-resume`)를 사용해 required reviewers 승인 경계와 직접 연결.
 - 피드백 루프 운영 안정화:
-  - `scripts/generate_strict_live_gate_trend_alert.ps1`에 주간 누적/드리프트 점검 규칙 추가.
+  - `scripts/generate_strict_live_gate_trend_alert.py`에 주간 누적/드리프트 점검 규칙 추가.
   - tuning report 확장:
     - `tuning_readiness.feedback_weekly_*`
     - `feedback_loop.weekly_signal`
@@ -271,7 +271,7 @@
 
 ## Stage 13 Update (2026-02-13)
 - 수익성 검증 자동화 스크립트 추가:
-  - `scripts/run_profitability_matrix.ps1`
+  - `scripts/run_profitability_matrix.py`
 - 검증 범위:
   - 구조 플래그 프로파일별 매트릭스 실행:
     - `legacy_default`
@@ -300,8 +300,8 @@
     - `README.md`
     - `docs/PERSONAL_USE_NOTICE.md`
   - 신규 스크립트:
-    - `scripts/run_profitability_exploratory.ps1` (PR CI non-blocking 리포트용)
-    - `scripts/apply_trading_preset.ps1` (safe/active 프리셋 적용)
+    - `scripts/run_profitability_exploratory.py` (PR CI non-blocking 리포트용)
+    - `scripts/apply_trading_preset.py` (safe/active 프리셋 적용)
   - 신규 프리셋:
     - `config/presets/safe.json`
     - `config/presets/active.json`
@@ -323,7 +323,7 @@
   - 신규 `.env` / `.env.example` 생성(키 이동용).
   - `src/common/Config.cpp`에서 config 파일의 API 키는 무시하고 env(`UPBIT_ACCESS_KEY`, `UPBIT_SECRET_KEY`)만 사용하도록 고정.
 - candidate 승격 준비(확장 데이터셋 재실행):
-  - `scripts/run_profitability_matrix.ps1`를 `data/backtest + data/backtest_curated` 전체(14개)로 재실행.
+  - `scripts/run_profitability_matrix.py`를 `data/backtest + data/backtest_curated` 전체(14개)로 재실행.
   - 결과:
     - `build/Release/logs/profitability_gate_report.json`
     - `overall_gate_pass = false`
@@ -335,8 +335,8 @@
       - `min_avg_trades <= 1.8`
 - CI/운영 검증:
   - PR 워크플로 로컬 재현:
-    - `scripts/run_ci_operational_gate.ps1 -IncludeBacktest` PASS
-    - `scripts/run_profitability_exploratory.ps1` PASS
+    - `scripts/run_ci_operational_gate.py -IncludeBacktest` PASS
+    - `scripts/run_profitability_exploratory.py` PASS
   - exploratory 산출물:
     - `build/Release/logs/profitability_gate_report_exploratory.json`
     - `overall_gate_pass = true`
@@ -408,9 +408,9 @@
 ## Stage 15 Addendum (2026-02-13, Real-data Candidate Loop + UX Simplification)
 - 실데이터 기반 반복 루프 추가:
   - 신규:
-    - `scripts/run_realdata_candidate_loop.ps1`
+    - `scripts/run_realdata_candidate_loop.py`
   - 확장:
-    - `scripts/tune_candidate_gate_trade_density.ps1`
+    - `scripts/tune_candidate_gate_trade_density.py`
       - `-ExtraDataDirs` 추가(기본 `data/backtest_real`)
       - 중복 dataset 제거(`Sort-Object -Unique`)
 - 실데이터 수집/검증 실행:
@@ -437,8 +437,8 @@
     - 완화(open) 계열은 성능 악화.
     - strict 계열이 PF/expectancy를 개선했지만 `expectancy>=0`, `profitable_ratio>=0.55`는 여전히 미충족.
 - 마지막 검증 상태:
-  - `scripts/run_profitability_exploratory.ps1` PASS (`overall_gate_pass=true`, `dataset_count=14`)
-  - `scripts/apply_trading_preset.ps1` safe/active PASS (검증용 임시 config 경로)
+  - `scripts/run_profitability_exploratory.py` PASS (`overall_gate_pass=true`, `dataset_count=14`)
+  - `scripts/apply_trading_preset.py` safe/active PASS (검증용 임시 config 경로)
 - 런타임 UX 단순화:
   - `src/main.cpp`
     - 실거래 설정에 `SIMPLE(SAFE/BALANCED/ACTIVE)` 모드 추가.
@@ -463,7 +463,7 @@
   - `core_risk` on일 때만 EV/Regime/Entry quality risk gate 강화 적용.
   - `core_execution` on/off에 따라 백테스트 체결 슬리피지 모델 분기 적용.
 - 실데이터 수집 루프 확장:
-  - `scripts/run_realdata_candidate_loop.ps1`
+  - `scripts/run_realdata_candidate_loop.py`
   - 1m 외 추가 수집 기본 포함:
     - `5m`(`Candles5m=4000`)
     - `60m`(`Candles1h=1200`)
@@ -499,7 +499,7 @@
 
 ## Immediate Next Steps (Priority Order)
 1. Stage 13 수익성 gate 통과 조건 재검증
-- `scripts/run_realdata_candidate_loop.ps1` 기반으로 실데이터 마켓/기간을 주간 확장.
+- `scripts/run_realdata_candidate_loop.py` 기반으로 실데이터 마켓/기간을 주간 확장.
 - `profitability_matrix_realdata.csv`에서 음수 기대값 상위 마켓별 원인(전략/레짐/체결비용) 분해.
 
 2. exploratory -> candidate 승격 기준 정의
@@ -538,7 +538,7 @@
   - strict live 승인 강제 연동(GitHub Environment `strict-live-resume` + manual_approval bridge)
   - feedback loop 주간 drift 점검 + guardrail cap 반영
 - Stage 13 완료 내용:
-  - 신규 스크립트: scripts/run_profitability_matrix.ps1
+  - 신규 스크립트: scripts/run_profitability_matrix.py
   - 구조 비교 프로파일:
     - legacy_default
     - core_bridge_only
@@ -571,6 +571,6 @@
 - 기존 strict 복구 검증 체인 깨지지 않게 유지
 
 마지막 검증:
-- scripts/run_profitability_matrix.ps1 PASS(실행 성공)
+- scripts/run_profitability_matrix.py PASS(실행 성공)
 - build/Release/logs/profitability_gate_report.json 생성 확인
 - overall_gate_pass 상태와 미통과 원인 요약 보고`
