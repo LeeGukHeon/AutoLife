@@ -965,7 +965,8 @@ void TradingEngine::executeSignals() {
                 const double pf = stat.profitFactor();
                 const double exp_krw = stat.expectancy();
 
-                if (exp_krw < -20.0 || (wr < 0.30 && pf < 0.78)) {
+                if (stat.trades >= 10 &&
+                    (exp_krw < -20.0 || (wr < 0.30 && pf < 0.78))) {
                     regime_pattern_block = true;
                 }
                 if (stat.trades >= 12 &&
@@ -1019,7 +1020,8 @@ void TradingEngine::executeSignals() {
                     signal.strategy_name == "Advanced Momentum" &&
                     signal.market_regime == analytics::MarketRegime::TRENDING_UP;
 
-                if (exp_krw < -40.0 && wr < 0.25 && pf < 0.75) {
+                if (stat.trades >= 6 &&
+                    exp_krw < -40.0 && wr < 0.25 && pf < 0.75) {
                     regime_pattern_block = true;
                 }
                 if (exp_krw < -20.0 && wr < 0.35 && pf < 0.85) {
@@ -1047,7 +1049,7 @@ void TradingEngine::executeSignals() {
                         regime_rr_add += 0.18;
                         regime_edge_add += 0.00035;
                     }
-                    if (exp_krw < -15.0 && wr < 0.30 && stat.trades >= 5) {
+                    if (exp_krw < -15.0 && wr < 0.30 && stat.trades >= 7) {
                         regime_pattern_block = true;
                     }
                 }

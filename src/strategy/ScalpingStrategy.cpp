@@ -372,8 +372,9 @@ Signal ScalpingStrategy::generateSignal(
         higher_tf_trend_bias < 0.05) {
         return signal;
     }
-    if (regime.regime == analytics::MarketRegime::RANGING) {
-        // Stage 15 tuning: ranging-scalping edge was consistently negative.
+    if (regime.regime == analytics::MarketRegime::RANGING ||
+        regime.regime == analytics::MarketRegime::UNKNOWN) {
+        // Pattern analysis: ranging/unknown scalping had persistent negative expectancy.
         return signal;
     }
     if (regime.regime == analytics::MarketRegime::TRENDING_UP) {
@@ -643,6 +644,16 @@ Signal ScalpingStrategy::generateSignal(
     } else if (higher_tf_trend_bias < 0.0) {
         effective_strength_floor = std::min(0.78, effective_strength_floor + 0.03);
     }
+    if (regime.regime == analytics::MarketRegime::TRENDING_UP &&
+        bullish_impulse &&
+        higher_tf_trend_bias >= 0.18 &&
+        metrics.liquidity_score >= 72.0 &&
+        metrics.volume_surge_ratio >= 1.50 &&
+        buy_pressure_bias_gate >= 0.04 &&
+        metrics.order_book_imbalance >= 0.0) {
+        // In clear bullish-flow conditions, avoid over-pruning mid-strength setups.
+        effective_strength_floor = std::max(0.56, effective_strength_floor - 0.11);
+    }
     if (higher_tf_trend_bias < -0.12) {
         effective_strength_floor = std::min(0.80, effective_strength_floor + 0.03);
     }
@@ -852,7 +863,8 @@ bool ScalpingStrategy::shouldEnter(
         higher_tf_trend_bias < 0.05) {
         return false;
     }
-    if (regime.regime == analytics::MarketRegime::RANGING) {
+    if (regime.regime == analytics::MarketRegime::RANGING ||
+        regime.regime == analytics::MarketRegime::UNKNOWN) {
         return false;
     }
     if (regime.regime == analytics::MarketRegime::TRENDING_UP) {

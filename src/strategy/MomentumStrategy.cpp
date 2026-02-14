@@ -288,6 +288,17 @@ Signal MomentumStrategy::generateSignal(
             return signal;
         }
     }
+    if (regime.regime == analytics::MarketRegime::RANGING) {
+        const bool ranging_quality =
+            mtf_signal.alignment_score >= 0.70 &&
+            order_flow.microstructure_score >= 0.18 &&
+            buy_pressure_bias_hard >= 0.03 &&
+            metrics.volume_surge_ratio >= 1.25 &&
+            metrics.liquidity_score >= 64.0;
+        if (!ranging_quality) {
+            return signal;
+        }
+    }
     if (order_flow.microstructure_score < 0.08 && buy_pressure_bias_hard < -0.20) {
         return signal;
     }
@@ -328,11 +339,22 @@ Signal MomentumStrategy::generateSignal(
     
     const double dynamic_strength_floor = computeMomentumAdaptiveStrengthFloor(metrics, regime);
     double effective_strength_floor = std::max(dynamic_strength_floor, strategy_cfg.min_signal_strength);
+    if (regime.regime == analytics::MarketRegime::TRENDING_UP &&
+        mtf_signal.alignment_score >= 0.68 &&
+        order_flow.microstructure_score >= 0.22 &&
+        metrics.liquidity_score >= 62.0 &&
+        metrics.volume_surge_ratio >= 1.20 &&
+        buy_pressure_bias >= 0.05) {
+        effective_strength_floor = std::max(0.52, effective_strength_floor - 0.12);
+    }
     if ((regime.regime == analytics::MarketRegime::TRENDING_UP ||
          regime.regime == analytics::MarketRegime::RANGING) &&
         metrics.liquidity_score >= 62.0 &&
         metrics.volume_surge_ratio >= 1.05) {
         effective_strength_floor = std::max(0.27, effective_strength_floor - 0.07);
+    }
+    if (regime.regime == analytics::MarketRegime::RANGING) {
+        effective_strength_floor = std::max(effective_strength_floor, 0.66);
     }
     if (signal.strength < effective_strength_floor) {
         return signal;

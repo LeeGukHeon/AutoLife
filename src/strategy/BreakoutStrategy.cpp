@@ -159,8 +159,13 @@ bool isBreakoutRegimeTradable(
                 metrics.order_book_imbalance >= -0.02
             );
         case analytics::MarketRegime::RANGING:
-            // Stage 15 tuning: range breakout expectancy was structurally negative.
-            return false;
+            // Allow only selective range-breakouts with clear flow and liquidity.
+            return (
+                metrics.liquidity_score >= 66.0 &&
+                metrics.volume_surge_ratio >= 1.50 &&
+                metrics.order_book_imbalance >= -0.03 &&
+                std::abs(metrics.price_change_rate) >= 0.12
+            );
         default:
             return false;
     }
@@ -361,8 +366,8 @@ Signal BreakoutStrategy::generateSignal(
         }
     }
     if (regime.regime == analytics::MarketRegime::RANGING &&
-        higher_tf_trend_bias < 0.08 &&
-        metrics.volume_surge_ratio < 2.4) {
+        higher_tf_trend_bias < 0.05 &&
+        metrics.volume_surge_ratio < 2.0) {
         return signal;
     }
     if (!canTradeNow()) return signal;
@@ -611,8 +616,8 @@ bool BreakoutStrategy::shouldEnter(
         }
     }
     if (regime.regime == analytics::MarketRegime::RANGING &&
-        higher_tf_trend_bias < 0.08 &&
-        metrics.volume_surge_ratio < 2.4) {
+        higher_tf_trend_bias < 0.05 &&
+        metrics.volume_surge_ratio < 2.0) {
         return false;
     }
     if (daily_trades_count_ >= 6 &&
