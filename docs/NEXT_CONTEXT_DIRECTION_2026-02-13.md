@@ -574,3 +574,49 @@
 - scripts/run_profitability_matrix.py PASS(실행 성공)
 - build/Release/logs/profitability_gate_report.json 생성 확인
 - overall_gate_pass 상태와 미통과 원인 요약 보고`
+
+## Stage 15 Progress Update (2026-02-14)
+- Focus:
+  - Candidate profitability bottleneck reduction (avg_total_trades / avg_expectancy_krw)
+  - Keep core bridge + strict live gate chain unchanged
+- Code updates:
+  - `src/strategy/ScalpingStrategy.cpp`
+    - Re-blocked `RANGING` and `UNKNOWN` scalping entries (data-driven: persistent negative expectancy pattern)
+  - `src/strategy/MomentumStrategy.cpp`
+    - Added stricter `RANGING` quality gate (MTF + microstructure + pressure + liquidity + volume)
+    - Added selective floor relaxation for high-quality `TRENDING_UP` setups
+  - `src/strategy/BreakoutStrategy.cpp`
+    - Switched from full block to selective `RANGING` tradability gate
+  - `src/strategy/StrategyManager.cpp`
+    - `RANGING` policy restored to conservative handling for scalping (`HOLD`)
+  - `src/engine/TradingEngine.cpp`
+    - Softened early regime-pattern hard block on low sample size
+- Build verification:
+  - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release` PASS
+- Candidate loop verification (realdata-only + higher TF companions required):
+  - Command:
+    - `python .\scripts\tune_candidate_gate_trade_density.py -ScenarioMode legacy_only -MaxScenarios 1 -RealDataOnly -RequireHigherTfCompanions`
+  - Baseline improvement (core_full):
+    - `avg_total_trades`: `3.8182 -> 4.8889`
+    - `avg_expectancy_krw`: `-15.3413 -> -10.2176`
+    - `profitable_ratio`: `0.0909 -> 0.3333`
+    - `overall_gate_pass`: still `false` (main blocker: trades + expectancy)
+  - Diverse-light (4 combos) best:
+    - `scenario_diverse_light_002`
+    - `avg_total_trades=4.8889`, `avg_expectancy_krw=-10.1461`, `profitable_ratio=0.3333`
+- Key artifacts:
+  - `build/Release/logs/profitability_gate_report_baseline_current.json`
+  - `build/Release/logs/profitability_profile_summary_baseline_current.csv`
+  - `build/Release/logs/candidate_trade_density_tuning_summary.json`
+  - `build/Release/logs/candidate_trade_density_tuning_summary.csv`
+
+## Stage 15 Next TODO
+- Strategy-side:
+  - Increase quality trade frequency from non-ranged scalping and high-quality momentum trend-up entries
+  - Activate/test mean reversion contribution (currently near-zero execution share) without degrading expectancy
+- Loop-side:
+  - Run wider `diverse_wide` screening with current code and keep top-N by `(expectancy, profitable_ratio, trades)`
+  - Add stop condition for long auto-loops (max-iteration and no-improvement early stop)
+- Gate-side:
+  - Recheck candidate with expanded real datasets after each strategy patch
+  - Keep strict live gate and recovery chain unchanged (no policy relaxation in strict workflows)
