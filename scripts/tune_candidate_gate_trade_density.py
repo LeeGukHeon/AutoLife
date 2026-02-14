@@ -173,7 +173,7 @@ def build_combo_specs(scenario_mode: str, include_legacy: bool, max_scenarios: i
     return combos
 
 
-def main() -> int:
+def main(argv=None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--matrix-script", "-MatrixScript", default=r".\scripts\run_profitability_matrix.py")
     parser.add_argument("--build-config-path", "-BuildConfigPath", default=r".\build\Release\config\config.json")
@@ -188,7 +188,7 @@ def main() -> int:
     parser.add_argument("--include-legacy-scenarios", "-IncludeLegacyScenarios", action="store_true")
     parser.add_argument("--real-data-only", "-RealDataOnly", action="store_true")
     parser.add_argument("--require-higher-tf-companions", "-RequireHigherTfCompanions", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     matrix_script = resolve_or_throw(args.matrix_script, "Matrix script")
     build_config = resolve_or_throw(args.build_config_path, "Build config")

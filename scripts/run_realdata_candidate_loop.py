@@ -83,7 +83,7 @@ def run_fetch_script(
         raise RuntimeError(f"fetch script failed: script={fetch_script}, market={market}, unit={unit}")
 
 
-def main() -> int:
+def main(argv=None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--fetch-script", "-FetchScript", default=r".\scripts\fetch_upbit_historical_candles.py")
     parser.add_argument("--matrix-script", "-MatrixScript", default=r".\scripts\run_profitability_matrix.py")
@@ -115,7 +115,7 @@ def main() -> int:
     parser.add_argument("--skip-tune", "-SkipTune", action="store_true")
     parser.add_argument("--real-data-only", "-RealDataOnly", action="store_true")
     parser.add_argument("--require-higher-tf-companions", "-RequireHigherTfCompanions", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     fetch_script = pathlib.Path(args.fetch_script).resolve()
     matrix_script = pathlib.Path(args.matrix_script).resolve()
