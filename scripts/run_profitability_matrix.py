@@ -141,6 +141,11 @@ def main() -> int:
         default=r".\build\Release\logs\profitability_profile_summary.csv",
     )
     parser.add_argument("--output-json", default=r".\build\Release\logs\profitability_gate_report.json")
+    parser.add_argument(
+        "--profile-ids",
+        nargs="*",
+        default=["legacy_default", "core_bridge_only", "core_policy_risk", "core_full"],
+    )
     parser.add_argument("--include-walk-forward", action="store_true")
     parser.add_argument("--walk-forward-script", default=r".\scripts\walk_forward_validate.py")
     parser.add_argument("--walk-forward-input", default=r".\data\backtest\simulation_2000.csv")
@@ -152,6 +157,7 @@ def main() -> int:
     parser.add_argument("--min-expectancy-krw", type=float, default=0.0)
     parser.add_argument("--max-drawdown-pct", type=float, default=12.0)
     parser.add_argument("--min-profitable-ratio", type=float, default=0.55)
+    parser.add_argument("--min-avg-win-rate-pct", type=float, default=0.0)
     parser.add_argument("--min-avg-trades", type=int, default=10)
     parser.add_argument("--exclude-low-trade-runs-for-gate", action="store_true")
     parser.add_argument("--min-trades-per-run-for-gate", type=int, default=5)
@@ -200,7 +206,7 @@ def main() -> int:
     if not dataset_paths:
         raise RuntimeError("No datasets configured. Set --dataset-names.")
 
-    profile_specs = [
+    all_profile_specs = [
         {
             "profile_id": "legacy_default",
             "description": "All core plane flags disabled.",
@@ -234,6 +240,10 @@ def main() -> int:
             "execution": True,
         },
     ]
+    requested_profile_ids = {str(x).strip() for x in args.profile_ids if str(x).strip()}
+    profile_specs = [p for p in all_profile_specs if p["profile_id"] in requested_profile_ids]
+    if not profile_specs:
+        raise RuntimeError("No valid profiles selected. Check --profile-ids.")
 
     original_config_raw = resolved_config_path.read_text(encoding="utf-8-sig")
     rows: List[Dict[str, Any]] = []
@@ -286,6 +296,7 @@ def main() -> int:
 
         avg_profit_factor = round(safe_avg([float(r["profit_factor"]) for r in gate_items]), 4) if gate_items else 0.0
         avg_expectancy = round(safe_avg([float(r["expectancy_krw"]) for r in gate_items]), 4) if gate_items else 0.0
+        avg_win_rate_pct = round(safe_avg([float(r["win_rate_pct"]) for r in gate_items]), 4) if gate_items else 0.0
         peak_drawdown = round(max((float(r["max_drawdown_pct"]) for r in gate_items), default=0.0), 4)
         avg_trades = round(safe_avg([float(r["total_trades"]) for r in gate_items]), 4) if gate_items else 0.0
         sum_profit = round(sum(float(r["total_profit_krw"]) for r in gate_items), 4) if gate_items else 0.0
@@ -295,6 +306,7 @@ def main() -> int:
         gate_expectancy_pass = avg_expectancy >= args.min_expectancy_krw
         gate_drawdown_pass = peak_drawdown <= args.max_drawdown_pct
         gate_profitable_ratio_pass = profitable_ratio >= args.min_profitable_ratio
+        gate_win_rate_pass = avg_win_rate_pct >= args.min_avg_win_rate_pct
         gate_trades_pass = avg_trades >= args.min_avg_trades
         gate_pass = (
             gate_sample_pass
@@ -302,6 +314,7 @@ def main() -> int:
             and gate_expectancy_pass
             and gate_drawdown_pass
             and gate_profitable_ratio_pass
+            and gate_win_rate_pass
             and gate_trades_pass
         )
 
@@ -315,6 +328,7 @@ def main() -> int:
                 "profitable_ratio": profitable_ratio,
                 "avg_profit_factor": avg_profit_factor,
                 "avg_expectancy_krw": avg_expectancy,
+                "avg_win_rate_pct": avg_win_rate_pct,
                 "peak_max_drawdown_pct": peak_drawdown,
                 "avg_total_trades": avg_trades,
                 "total_profit_sum_krw": sum_profit,
@@ -323,6 +337,7 @@ def main() -> int:
                 "gate_expectancy_pass": gate_expectancy_pass,
                 "gate_drawdown_pass": gate_drawdown_pass,
                 "gate_profitable_ratio_pass": gate_profitable_ratio_pass,
+                "gate_win_rate_pass": gate_win_rate_pass,
                 "gate_trades_pass": gate_trades_pass,
                 "gate_pass": gate_pass,
             }
@@ -418,6 +433,7 @@ def main() -> int:
             "min_expectancy_krw": args.min_expectancy_krw,
             "max_drawdown_pct": args.max_drawdown_pct,
             "min_profitable_ratio": args.min_profitable_ratio,
+            "min_avg_win_rate_pct": args.min_avg_win_rate_pct,
             "min_avg_trades": args.min_avg_trades,
             "exclude_low_trade_runs_for_gate": bool(args.exclude_low_trade_runs_for_gate),
             "min_trades_per_run_for_gate": args.min_trades_per_run_for_gate,

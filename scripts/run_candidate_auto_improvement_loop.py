@@ -44,11 +44,20 @@ def parse_args(argv=None):
     parser.add_argument("--min-profit-factor", "-MinProfitFactor", type=float, default=1.00)
     parser.add_argument("--min-expectancy-krw", "-MinExpectancyKrw", type=float, default=0.0)
     parser.add_argument("--min-profitable-ratio", "-MinProfitableRatio", type=float, default=0.55)
+    parser.add_argument("--min-avg-win-rate-pct", "-MinAvgWinRatePct", type=float, default=48.0)
     parser.add_argument("--min-avg-trades", "-MinAvgTrades", type=float, default=10.0)
     parser.add_argument("--improvement-epsilon", "-ImprovementEpsilon", type=float, default=0.05)
     parser.add_argument("--tune-scenario-mode", "-TuneScenarioMode", default="diverse_light")
     parser.add_argument("--tune-max-scenarios", "-TuneMaxScenarios", type=int, default=16)
     parser.add_argument("--tune-include-legacy-scenarios", "-TuneIncludeLegacyScenarios", action="store_true")
+    parser.add_argument("--tune-screen-dataset-limit", "-TuneScreenDatasetLimit", type=int, default=8)
+    parser.add_argument("--tune-screen-top-k", "-TuneScreenTopK", type=int, default=6)
+    parser.add_argument("--tune-objective-min-avg-trades", "-TuneObjectiveMinAvgTrades", type=float, default=None)
+    parser.add_argument("--tune-objective-min-profitable-ratio", "-TuneObjectiveMinProfitableRatio", type=float, default=None)
+    parser.add_argument("--tune-objective-min-avg-win-rate-pct", "-TuneObjectiveMinAvgWinRatePct", type=float, default=None)
+    parser.add_argument("--tune-objective-min-expectancy-krw", "-TuneObjectiveMinExpectancyKrw", type=float, default=None)
+    parser.add_argument("--real-data-only", "-RealDataOnly", action="store_true")
+    parser.add_argument("--require-higher-tf-companions", "-RequireHigherTfCompanions", action="store_true")
     parser.add_argument("--fetch-each-iteration", "-FetchEachIteration", action="store_true")
     parser.add_argument("--skip-tune-phase", "-SkipTunePhase", action="store_true")
     parser.add_argument("--run-loss-analysis", "-RunLossAnalysis", action="store_true")
@@ -60,24 +69,45 @@ def compute_objective_score(
     avg_profit_factor: float,
     avg_expectancy_krw: float,
     profitable_ratio: float,
+    avg_win_rate_pct: float,
     avg_total_trades: float,
     min_trades_floor: float,
+    min_profitable_ratio: float,
+    min_avg_win_rate_pct: float,
+    min_expectancy_krw: float,
 ) -> float:
-    score = 0.0
-    score += (avg_expectancy_krw * 8.0)
-    score += (profitable_ratio * 1200.0)
-    score += ((avg_profit_factor - 1.0) * 220.0)
-    score += (min(avg_total_trades, 20.0) * 18.0)
+    penalty = 0.0
     if avg_total_trades < min_trades_floor:
-        score -= (500.0 + ((min_trades_floor - avg_total_trades) * 40.0))
+        penalty += 6000.0 + ((min_trades_floor - avg_total_trades) * 800.0)
+    if profitable_ratio < min_profitable_ratio:
+        penalty += 6000.0 + ((min_profitable_ratio - profitable_ratio) * 9000.0)
+    if avg_win_rate_pct < min_avg_win_rate_pct:
+        penalty += 4000.0 + ((min_avg_win_rate_pct - avg_win_rate_pct) * 180.0)
+    if avg_expectancy_krw < min_expectancy_krw:
+        penalty += 6000.0 + ((min_expectancy_krw - avg_expectancy_krw) * 120.0)
     if avg_profit_factor < 1.0:
-        score -= ((1.0 - avg_profit_factor) * 300.0)
-    if avg_expectancy_krw < 0.0:
-        score += (avg_expectancy_krw * 3.0)
+        penalty += (1.0 - avg_profit_factor) * 2500.0
+
+    if penalty > 0.0:
+        return round(-penalty + (avg_profit_factor * 10.0), 6)
+
+    score = 0.0
+    score += (avg_expectancy_krw * 25.0)
+    score += (profitable_ratio * 4000.0)
+    score += (avg_win_rate_pct * 40.0)
+    score += ((avg_profit_factor - 1.0) * 300.0)
+    score += (min(avg_total_trades, 30.0) * 40.0)
     return round(score, 6)
 
 
-def target_satisfied(core_summary: Optional[Dict[str, Any]], min_pf: float, min_exp: float, min_ratio: float, min_trades: float) -> bool:
+def target_satisfied(
+    core_summary: Optional[Dict[str, Any]],
+    min_pf: float,
+    min_exp: float,
+    min_ratio: float,
+    min_trades: float,
+    min_win_rate_pct: float,
+) -> bool:
     if core_summary is None:
         return False
     return (
@@ -85,10 +115,17 @@ def target_satisfied(core_summary: Optional[Dict[str, Any]], min_pf: float, min_
         and float(core_summary.get("avg_expectancy_krw", 0.0)) >= min_exp
         and float(core_summary.get("profitable_ratio", 0.0)) >= min_ratio
         and float(core_summary.get("avg_total_trades", 0.0)) >= min_trades
+        and float(core_summary.get("avg_win_rate_pct", 0.0)) >= min_win_rate_pct
     )
 
 
-def get_core_snapshot(report_path, min_trades_floor: float) -> Dict[str, Any]:
+def get_core_snapshot(
+    report_path,
+    min_trades_floor: float,
+    min_profitable_ratio: float,
+    min_avg_win_rate_pct: float,
+    min_expectancy_krw: float,
+) -> Dict[str, Any]:
     report = json.loads(report_path.read_text(encoding="utf-8-sig"))
     core = next((x for x in report.get("profile_summaries", []) if x.get("profile_id") == "core_full"), None)
     if core is None:
@@ -97,8 +134,12 @@ def get_core_snapshot(report_path, min_trades_floor: float) -> Dict[str, Any]:
         float(core.get("avg_profit_factor", 0.0)),
         float(core.get("avg_expectancy_krw", 0.0)),
         float(core.get("profitable_ratio", 0.0)),
+        float(core.get("avg_win_rate_pct", 0.0)),
         float(core.get("avg_total_trades", 0.0)),
         min_trades_floor,
+        min_profitable_ratio,
+        min_avg_win_rate_pct,
+        min_expectancy_krw,
     )
     return {
         "report": report,
@@ -150,7 +191,13 @@ def apply_combo_to_config_files(build_config_path, source_config_path, combo, sy
         source_config_path.write_text(json.dumps(source_cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def select_best_combo_from_tune_summary(tune_summary_path, min_trades_floor: float) -> Dict[str, Any]:
+def select_best_combo_from_tune_summary(
+    tune_summary_path,
+    min_trades_floor: float,
+    min_profitable_ratio: float,
+    min_avg_win_rate_pct: float,
+    min_expectancy_krw: float,
+) -> Dict[str, Any]:
     payload = json.loads(tune_summary_path.read_text(encoding="utf-8-sig"))
     combos = payload.get("combos")
     summary = payload.get("summary")
@@ -172,8 +219,12 @@ def select_best_combo_from_tune_summary(tune_summary_path, min_trades_floor: flo
             float(row.get("avg_profit_factor", 0.0)),
             float(row.get("avg_expectancy_krw", 0.0)),
             float(row.get("profitable_ratio", 0.0)),
+            float(row.get("avg_win_rate_pct", 0.0)),
             float(row.get("avg_total_trades", 0.0)),
             min_trades_floor,
+            min_profitable_ratio,
+            min_avg_win_rate_pct,
+            min_expectancy_krw,
         )
         gate_bonus = 0.0
         if bool(row.get("overall_gate_pass", False)):
@@ -193,6 +244,7 @@ def select_best_combo_from_tune_summary(tune_summary_path, min_trades_floor: flo
                 "avg_profit_factor": float(row.get("avg_profit_factor", 0.0)),
                 "avg_expectancy_krw": float(row.get("avg_expectancy_krw", 0.0)),
                 "profitable_ratio": float(row.get("profitable_ratio", 0.0)),
+                "avg_win_rate_pct": float(row.get("avg_win_rate_pct", 0.0)),
                 "avg_total_trades": float(row.get("avg_total_trades", 0.0)),
                 "overall_gate_pass": bool(row.get("overall_gate_pass", False)),
                 "profile_gate_pass": bool(row.get("profile_gate_pass", False)),
@@ -205,6 +257,7 @@ def select_best_combo_from_tune_summary(tune_summary_path, min_trades_floor: flo
         key=lambda x: (
             float(x["objective_with_gate_bonus"]),
             float(x["avg_expectancy_krw"]),
+            float(x["avg_win_rate_pct"]),
             float(x["profitable_ratio"]),
             float(x["avg_profit_factor"]),
             float(x["avg_total_trades"]),
@@ -233,6 +286,26 @@ def main(argv=None) -> int:
     best_snapshot: Optional[Dict[str, Any]] = None
     best_combo_id = ""
     consecutive_no_improve = 0
+    tune_objective_min_avg_trades = (
+        float(args.tune_objective_min_avg_trades)
+        if args.tune_objective_min_avg_trades is not None
+        else float(args.min_avg_trades)
+    )
+    tune_objective_min_profitable_ratio = (
+        float(args.tune_objective_min_profitable_ratio)
+        if args.tune_objective_min_profitable_ratio is not None
+        else float(args.min_profitable_ratio)
+    )
+    tune_objective_min_avg_win_rate_pct = (
+        float(args.tune_objective_min_avg_win_rate_pct)
+        if args.tune_objective_min_avg_win_rate_pct is not None
+        else float(args.min_avg_win_rate_pct)
+    )
+    tune_objective_min_expectancy_krw = (
+        float(args.tune_objective_min_expectancy_krw)
+        if args.tune_objective_min_expectancy_krw is not None
+        else float(args.min_expectancy_krw)
+    )
 
     for iteration in range(1, int(args.max_iterations) + 1):
         elapsed_minutes = (datetime.now(tz=timezone.utc) - started_at).total_seconds() / 60.0
@@ -246,13 +319,23 @@ def main(argv=None) -> int:
         if not args.fetch_each_iteration:
             real_loop_argv.append("--skip-fetch")
         real_loop_argv.append("--skip-tune")
+        if args.real_data_only:
+            real_loop_argv.append("--real-data-only")
+        if args.require_higher_tf_companions:
+            real_loop_argv.append("--require-higher-tf-companions")
         rc = run_realdata_candidate_loop.main(real_loop_argv)
         if rc != 0:
             raise RuntimeError(f"Realdata candidate loop (baseline) failed (exit={rc})")
         if not gate_report_path.exists():
             raise RuntimeError(f"Gate report not found after baseline run: {gate_report_path}")
 
-        snapshot = get_core_snapshot(gate_report_path, float(args.min_avg_trades))
+        snapshot = get_core_snapshot(
+            gate_report_path,
+            tune_objective_min_avg_trades,
+            tune_objective_min_profitable_ratio,
+            tune_objective_min_avg_win_rate_pct,
+            tune_objective_min_expectancy_krw,
+        )
         core = snapshot["core"]
         is_target = target_satisfied(
             core,
@@ -260,6 +343,7 @@ def main(argv=None) -> int:
             float(args.min_expectancy_krw),
             float(args.min_profitable_ratio),
             float(args.min_avg_trades),
+            float(args.min_avg_win_rate_pct),
         )
         rows.append(
             {
@@ -272,6 +356,7 @@ def main(argv=None) -> int:
                 "avg_profit_factor": float(core.get("avg_profit_factor", 0.0)),
                 "avg_expectancy_krw": float(core.get("avg_expectancy_krw", 0.0)),
                 "avg_total_trades": float(core.get("avg_total_trades", 0.0)),
+                "avg_win_rate_pct": float(core.get("avg_win_rate_pct", 0.0)),
                 "profitable_ratio": float(core.get("profitable_ratio", 0.0)),
                 "objective_score": float(snapshot["objective_score"]),
                 "target_satisfied": bool(is_target),
@@ -311,16 +396,38 @@ def main(argv=None) -> int:
             str(args.tune_scenario_mode),
             "--max-scenarios",
             str(args.tune_max_scenarios),
+            "--screen-dataset-limit",
+            str(args.tune_screen_dataset_limit),
+            "--screen-top-k",
+            str(args.tune_screen_top_k),
+            "--objective-min-avg-trades",
+            str(tune_objective_min_avg_trades),
+            "--objective-min-profitable-ratio",
+            str(tune_objective_min_profitable_ratio),
+            "--objective-min-avg-win-rate-pct",
+            str(tune_objective_min_avg_win_rate_pct),
+            "--objective-min-expectancy-krw",
+            str(tune_objective_min_expectancy_krw),
         ]
         if args.tune_include_legacy_scenarios:
             tune_argv.append("--include-legacy-scenarios")
+        if args.real_data_only:
+            tune_argv.append("--real-data-only")
+        if args.require_higher_tf_companions:
+            tune_argv.append("--require-higher-tf-companions")
         rc = tune_candidate_gate_trade_density.main(tune_argv)
         if rc != 0:
             raise RuntimeError(f"Candidate tuning failed (exit={rc})")
         if not tune_summary_path.exists():
             raise RuntimeError(f"Tune summary json not found: {tune_summary_path}")
 
-        best_combo = select_best_combo_from_tune_summary(tune_summary_path, float(args.min_avg_trades))
+        best_combo = select_best_combo_from_tune_summary(
+            tune_summary_path,
+            tune_objective_min_avg_trades,
+            tune_objective_min_profitable_ratio,
+            tune_objective_min_avg_win_rate_pct,
+            tune_objective_min_expectancy_krw,
+        )
         print(
             f"[AutoImprove] Iteration {iteration} selected_combo={best_combo['combo_id']} "
             f"objective={best_combo['objective_with_gate_bonus']}"
@@ -339,7 +446,13 @@ def main(argv=None) -> int:
         if not gate_report_path.exists():
             raise RuntimeError(f"Gate report not found after post-apply run: {gate_report_path}")
 
-        post_snapshot = get_core_snapshot(gate_report_path, float(args.min_avg_trades))
+        post_snapshot = get_core_snapshot(
+            gate_report_path,
+            tune_objective_min_avg_trades,
+            tune_objective_min_profitable_ratio,
+            tune_objective_min_avg_win_rate_pct,
+            tune_objective_min_expectancy_krw,
+        )
         post_core = post_snapshot["core"]
         post_target = target_satisfied(
             post_core,
@@ -347,6 +460,7 @@ def main(argv=None) -> int:
             float(args.min_expectancy_krw),
             float(args.min_profitable_ratio),
             float(args.min_avg_trades),
+            float(args.min_avg_win_rate_pct),
         )
         rows.append(
             {
@@ -359,6 +473,7 @@ def main(argv=None) -> int:
                 "avg_profit_factor": float(post_core.get("avg_profit_factor", 0.0)),
                 "avg_expectancy_krw": float(post_core.get("avg_expectancy_krw", 0.0)),
                 "avg_total_trades": float(post_core.get("avg_total_trades", 0.0)),
+                "avg_win_rate_pct": float(post_core.get("avg_win_rate_pct", 0.0)),
                 "profitable_ratio": float(post_core.get("profitable_ratio", 0.0)),
                 "objective_score": float(post_snapshot["objective_score"]),
                 "target_satisfied": bool(post_target),
@@ -419,11 +534,18 @@ def main(argv=None) -> int:
             "scenario_mode": args.tune_scenario_mode,
             "max_scenarios": int(args.tune_max_scenarios),
             "include_legacy": bool(args.tune_include_legacy_scenarios),
+            "screen_dataset_limit": int(args.tune_screen_dataset_limit),
+            "screen_top_k": int(args.tune_screen_top_k),
+            "objective_min_avg_trades": tune_objective_min_avg_trades,
+            "objective_min_profitable_ratio": tune_objective_min_profitable_ratio,
+            "objective_min_avg_win_rate_pct": tune_objective_min_avg_win_rate_pct,
+            "objective_min_expectancy_krw": tune_objective_min_expectancy_krw,
         },
         "targets": {
             "min_profit_factor": float(args.min_profit_factor),
             "min_expectancy_krw": float(args.min_expectancy_krw),
             "min_profitable_ratio": float(args.min_profitable_ratio),
+            "min_avg_win_rate_pct": float(args.min_avg_win_rate_pct),
             "min_avg_trades": float(args.min_avg_trades),
         },
         "best_objective_score": float(best_objective),
@@ -435,6 +557,7 @@ def main(argv=None) -> int:
                 "avg_profit_factor": float(best_snapshot["core"].get("avg_profit_factor", 0.0)),
                 "avg_expectancy_krw": float(best_snapshot["core"].get("avg_expectancy_krw", 0.0)),
                 "avg_total_trades": float(best_snapshot["core"].get("avg_total_trades", 0.0)),
+                "avg_win_rate_pct": float(best_snapshot["core"].get("avg_win_rate_pct", 0.0)),
                 "profitable_ratio": float(best_snapshot["core"].get("profitable_ratio", 0.0)),
                 "core_full_gate_pass": bool(best_snapshot["core"].get("gate_pass", False)),
             }
@@ -462,6 +585,7 @@ def main(argv=None) -> int:
         print(f"best_avg_profit_factor={best_snapshot['core'].get('avg_profit_factor')}")
         print(f"best_avg_expectancy_krw={best_snapshot['core'].get('avg_expectancy_krw')}")
         print(f"best_avg_total_trades={best_snapshot['core'].get('avg_total_trades')}")
+        print(f"best_avg_win_rate_pct={best_snapshot['core'].get('avg_win_rate_pct')}")
         print(f"best_profitable_ratio={best_snapshot['core'].get('profitable_ratio')}")
     return 0
 

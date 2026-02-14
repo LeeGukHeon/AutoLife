@@ -173,6 +173,131 @@ def build_combo_specs(scenario_mode: str, include_legacy: bool, max_scenarios: i
     return combos
 
 
+def select_evenly_spaced_datasets(datasets: List[pathlib.Path], limit: int) -> List[pathlib.Path]:
+    if limit <= 0 or len(datasets) <= limit:
+        return datasets
+    if limit == 1:
+        return [datasets[len(datasets) // 2]]
+    step = (len(datasets) - 1) / float(limit - 1)
+    indices = sorted({int(round(i * step)) for i in range(limit)})
+    if len(indices) < limit:
+        existing = set(indices)
+        for i in range(len(datasets)):
+            if i in existing:
+                continue
+            indices.append(i)
+            if len(indices) >= limit:
+                break
+        indices = sorted(indices[:limit])
+    return [datasets[i] for i in indices]
+
+
+def compute_combo_objective(
+    avg_profit_factor: float,
+    avg_expectancy_krw: float,
+    profitable_ratio: float,
+    avg_total_trades: float,
+    avg_win_rate_pct: float,
+    min_avg_trades: float,
+    min_profitable_ratio: float,
+    min_avg_win_rate_pct: float,
+    min_expectancy_krw: float,
+) -> float:
+    penalty = 0.0
+    if avg_total_trades < min_avg_trades:
+        penalty += 6000.0 + ((min_avg_trades - avg_total_trades) * 800.0)
+    if profitable_ratio < min_profitable_ratio:
+        penalty += 6000.0 + ((min_profitable_ratio - profitable_ratio) * 9000.0)
+    if avg_win_rate_pct < min_avg_win_rate_pct:
+        penalty += 4000.0 + ((min_avg_win_rate_pct - avg_win_rate_pct) * 180.0)
+    if avg_expectancy_krw < min_expectancy_krw:
+        penalty += 6000.0 + ((min_expectancy_krw - avg_expectancy_krw) * 120.0)
+    if avg_profit_factor < 1.0:
+        penalty += (1.0 - avg_profit_factor) * 2500.0
+
+    if penalty > 0.0:
+        # Keep all infeasible combos below feasible ones while preserving ordering.
+        return round(-penalty + (avg_profit_factor * 10.0), 6)
+
+    score = 0.0
+    score += (avg_expectancy_krw * 25.0)
+    score += (profitable_ratio * 4000.0)
+    score += (avg_win_rate_pct * 40.0)
+    score += ((avg_profit_factor - 1.0) * 300.0)
+    score += (min(avg_total_trades, 30.0) * 40.0)
+    return round(score, 6)
+
+
+def evaluate_combo(
+    matrix_script: pathlib.Path,
+    build_config: pathlib.Path,
+    original_build_raw: str,
+    combo: Dict[str, Any],
+    datasets: List[pathlib.Path],
+    output_dir: pathlib.Path,
+    stage_name: str,
+    profile_ids: List[str],
+) -> Dict[str, Any]:
+    cfg = json.loads(original_build_raw)
+    apply_candidate_combo_to_config(cfg, combo)
+    build_config.write_text(json.dumps(cfg, ensure_ascii=False, indent=4), encoding="utf-8", newline="\n")
+
+    suffix = f"{combo['combo_id']}_{stage_name}"
+    matrix_csv_rel = output_dir / f"profitability_matrix_{suffix}.csv"
+    profile_csv_rel = output_dir / f"profitability_profile_summary_{suffix}.csv"
+    report_json_rel = output_dir / f"profitability_gate_report_{suffix}.json"
+
+    cmd = [
+        sys.executable,
+        str(matrix_script),
+        "--dataset-names",
+        *[str(x) for x in datasets],
+        "--profile-ids",
+        *profile_ids,
+        "--exclude-low-trade-runs-for-gate",
+        "--min-trades-per-run-for-gate",
+        "1",
+        "--output-csv",
+        str(matrix_csv_rel),
+        "--output-profile-csv",
+        str(profile_csv_rel),
+        "--output-json",
+        str(report_json_rel),
+    ]
+    proc = subprocess.run(cmd)
+    if proc.returncode != 0:
+        raise RuntimeError(f"run_profitability_matrix.py failed for combo={combo['combo_id']} stage={stage_name}")
+
+    report = json.loads(report_json_rel.read_text(encoding="utf-8-sig"))
+    target_profile = "core_full" if "core_full" in profile_ids else profile_ids[0]
+    summary = next((x for x in report.get("profile_summaries", []) if x.get("profile_id") == target_profile), None)
+    if summary is None:
+        raise RuntimeError(f"{target_profile} profile summary not found for combo={combo['combo_id']} stage={stage_name}")
+
+    return {
+        "combo_id": combo["combo_id"],
+        "description": combo["description"],
+        "stage": stage_name,
+        "target_profile": target_profile,
+        "overall_gate_pass": bool(report.get("overall_gate_pass", False)),
+        "profile_gate_pass": bool(report.get("profile_gate_pass", False)),
+        "runs_used_for_gate": int(summary.get("runs_used_for_gate", 0)),
+        "excluded_low_trade_runs": int(summary.get("excluded_low_trade_runs", 0)),
+        "avg_profit_factor": float(summary.get("avg_profit_factor", 0.0)),
+        "avg_expectancy_krw": float(summary.get("avg_expectancy_krw", 0.0)),
+        "avg_total_trades": float(summary.get("avg_total_trades", 0.0)),
+        "avg_win_rate_pct": float(summary.get("avg_win_rate_pct", 0.0)),
+        "profitable_ratio": float(summary.get("profitable_ratio", 0.0)),
+        "gate_profit_factor_pass": bool(summary.get("gate_profit_factor_pass", False)),
+        "gate_trades_pass": bool(summary.get("gate_trades_pass", False)),
+        "gate_profitable_ratio_pass": bool(summary.get("gate_profitable_ratio_pass", False)),
+        "gate_expectancy_pass": bool(summary.get("gate_expectancy_pass", False)),
+        "report_json": str(report_json_rel.resolve()),
+        "profile_csv": str(profile_csv_rel.resolve()),
+        "matrix_csv": str(matrix_csv_rel.resolve()),
+    }
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--matrix-script", "-MatrixScript", default=r".\scripts\run_profitability_matrix.py")
@@ -188,6 +313,14 @@ def main(argv=None) -> int:
     parser.add_argument("--include-legacy-scenarios", "-IncludeLegacyScenarios", action="store_true")
     parser.add_argument("--real-data-only", "-RealDataOnly", action="store_true")
     parser.add_argument("--require-higher-tf-companions", "-RequireHigherTfCompanions", action="store_true")
+    parser.add_argument("--screen-dataset-limit", "-ScreenDatasetLimit", type=int, default=8)
+    parser.add_argument("--screen-top-k", "-ScreenTopK", type=int, default=6)
+    parser.add_argument("--screen-profile-ids", "-ScreenProfileIds", nargs="*", default=["core_full"])
+    parser.add_argument("--final-profile-ids", "-FinalProfileIds", nargs="*", default=["core_full"])
+    parser.add_argument("--objective-min-avg-trades", "-ObjectiveMinAvgTrades", type=float, default=8.0)
+    parser.add_argument("--objective-min-profitable-ratio", "-ObjectiveMinProfitableRatio", type=float, default=0.50)
+    parser.add_argument("--objective-min-avg-win-rate-pct", "-ObjectiveMinAvgWinRatePct", type=float, default=48.0)
+    parser.add_argument("--objective-min-expectancy-krw", "-ObjectiveMinExpectancyKrw", type=float, default=0.0)
     args = parser.parse_args(argv)
 
     matrix_script = resolve_or_throw(args.matrix_script, "Matrix script")
@@ -215,61 +348,104 @@ def main(argv=None) -> int:
     print(f"[TuneCandidate] scenario_mode={args.scenario_mode}, combo_count={len(combo_specs)}")
 
     original_build_raw = build_config.read_text(encoding="utf-8-sig")
+    screen_profile_ids = [str(x).strip() for x in args.screen_profile_ids if str(x).strip()]
+    final_profile_ids = [str(x).strip() for x in args.final_profile_ids if str(x).strip()]
+    if not screen_profile_ids:
+        screen_profile_ids = ["core_full"]
+    if not final_profile_ids:
+        final_profile_ids = ["core_full"]
+
+    screen_datasets = select_evenly_spaced_datasets(datasets, int(args.screen_dataset_limit))
+    do_screening = int(args.screen_dataset_limit) > 0 and len(screen_datasets) < len(datasets)
+    print(
+        f"[TuneCandidate] screening={'on' if do_screening else 'off'}, "
+        f"screen_dataset_count={len(screen_datasets)}, final_dataset_count={len(datasets)}"
+    )
+
+    screen_rows: List[Dict[str, Any]] = []
     rows: List[Dict[str, Any]] = []
     try:
         for combo in combo_specs:
-            print(f"[TuneCandidate] Running combo: {combo['combo_id']}")
-            cfg = json.loads(original_build_raw)
-            apply_candidate_combo_to_config(cfg, combo)
-            build_config.write_text(json.dumps(cfg, ensure_ascii=False, indent=4), encoding="utf-8", newline="\n")
-
-            matrix_csv_rel = output_dir / f"profitability_matrix_{combo['combo_id']}.csv"
-            profile_csv_rel = output_dir / f"profitability_profile_summary_{combo['combo_id']}.csv"
-            report_json_rel = output_dir / f"profitability_gate_report_{combo['combo_id']}.json"
-
-            cmd = [
-                sys.executable,
-                str(matrix_script),
-                "--dataset-names",
-                *[str(x) for x in datasets],
-                "--exclude-low-trade-runs-for-gate",
-                "--min-trades-per-run-for-gate",
-                "1",
-                "--output-csv",
-                str(matrix_csv_rel),
-                "--output-profile-csv",
-                str(profile_csv_rel),
-                "--output-json",
-                str(report_json_rel),
-            ]
-            proc = subprocess.run(cmd)
-            if proc.returncode != 0:
-                raise RuntimeError(f"run_profitability_matrix.py failed for combo={combo['combo_id']}")
-
-            report = json.loads(report_json_rel.read_text(encoding="utf-8-sig"))
-            summary = next((x for x in report.get("profile_summaries", []) if x.get("profile_id") == "core_full"), None)
-            if summary is None:
-                raise RuntimeError(f"core_full profile summary not found for combo={combo['combo_id']}")
-
-            rows.append(
-                {
-                    "combo_id": combo["combo_id"],
-                    "description": combo["description"],
-                    "overall_gate_pass": bool(report.get("overall_gate_pass", False)),
-                    "profile_gate_pass": bool(report.get("profile_gate_pass", False)),
-                    "runs_used_for_gate": int(summary.get("runs_used_for_gate", 0)),
-                    "excluded_low_trade_runs": int(summary.get("excluded_low_trade_runs", 0)),
-                    "avg_profit_factor": float(summary.get("avg_profit_factor", 0.0)),
-                    "avg_expectancy_krw": float(summary.get("avg_expectancy_krw", 0.0)),
-                    "avg_total_trades": float(summary.get("avg_total_trades", 0.0)),
-                    "profitable_ratio": float(summary.get("profitable_ratio", 0.0)),
-                    "gate_profit_factor_pass": bool(summary.get("gate_profit_factor_pass", False)),
-                    "gate_trades_pass": bool(summary.get("gate_trades_pass", False)),
-                    "report_json": str(report_json_rel.resolve()),
-                    "profile_csv": str(profile_csv_rel.resolve()),
-                    "matrix_csv": str(matrix_csv_rel.resolve()),
-                }
+            print(f"[TuneCandidate][Screen] Running combo: {combo['combo_id']}")
+            screen_row = evaluate_combo(
+                matrix_script=matrix_script,
+                build_config=build_config,
+                original_build_raw=original_build_raw,
+                combo=combo,
+                datasets=screen_datasets if do_screening else datasets,
+                output_dir=output_dir,
+                stage_name="screen",
+                profile_ids=screen_profile_ids,
             )
+            screen_objective = compute_combo_objective(
+                avg_profit_factor=float(screen_row.get("avg_profit_factor", 0.0)),
+                avg_expectancy_krw=float(screen_row.get("avg_expectancy_krw", 0.0)),
+                profitable_ratio=float(screen_row.get("profitable_ratio", 0.0)),
+                avg_total_trades=float(screen_row.get("avg_total_trades", 0.0)),
+                avg_win_rate_pct=float(screen_row.get("avg_win_rate_pct", 0.0)),
+                min_avg_trades=float(args.objective_min_avg_trades),
+                min_profitable_ratio=float(args.objective_min_profitable_ratio),
+                min_avg_win_rate_pct=float(args.objective_min_avg_win_rate_pct),
+                min_expectancy_krw=float(args.objective_min_expectancy_krw),
+            )
+            screen_row["objective_score"] = screen_objective
+            screen_row["constraint_pass"] = (
+                float(screen_row.get("avg_total_trades", 0.0)) >= float(args.objective_min_avg_trades)
+                and float(screen_row.get("profitable_ratio", 0.0)) >= float(args.objective_min_profitable_ratio)
+                and float(screen_row.get("avg_win_rate_pct", 0.0)) >= float(args.objective_min_avg_win_rate_pct)
+                and float(screen_row.get("avg_expectancy_krw", 0.0)) >= float(args.objective_min_expectancy_krw)
+            )
+            screen_rows.append(screen_row)
+
+        selected_combo_ids = [x["combo_id"] for x in combo_specs]
+        if do_screening:
+            screen_sorted = sorted(
+                screen_rows,
+                key=lambda x: (
+                    bool(x.get("constraint_pass", False)),
+                    float(x.get("objective_score", 0.0)),
+                    float(x.get("avg_expectancy_krw", 0.0)),
+                    float(x.get("avg_win_rate_pct", 0.0)),
+                    float(x.get("profitable_ratio", 0.0)),
+                    float(x.get("avg_total_trades", 0.0)),
+                ),
+                reverse=True,
+            )
+            selected_combo_ids = [x["combo_id"] for x in screen_sorted[: max(1, int(args.screen_top_k))]]
+            print(f"[TuneCandidate] screened_top_k={len(selected_combo_ids)}")
+
+        screen_map = {str(x["combo_id"]): x for x in screen_rows}
+        combos_for_final = [x for x in combo_specs if x["combo_id"] in set(selected_combo_ids)]
+        for combo in combos_for_final:
+            print(f"[TuneCandidate][Final] Running combo: {combo['combo_id']}")
+            final_row = evaluate_combo(
+                matrix_script=matrix_script,
+                build_config=build_config,
+                original_build_raw=original_build_raw,
+                combo=combo,
+                datasets=datasets,
+                output_dir=output_dir,
+                stage_name="final",
+                profile_ids=final_profile_ids,
+            )
+            final_objective = compute_combo_objective(
+                avg_profit_factor=float(final_row.get("avg_profit_factor", 0.0)),
+                avg_expectancy_krw=float(final_row.get("avg_expectancy_krw", 0.0)),
+                profitable_ratio=float(final_row.get("profitable_ratio", 0.0)),
+                avg_total_trades=float(final_row.get("avg_total_trades", 0.0)),
+                avg_win_rate_pct=float(final_row.get("avg_win_rate_pct", 0.0)),
+                min_avg_trades=float(args.objective_min_avg_trades),
+                min_profitable_ratio=float(args.objective_min_profitable_ratio),
+                min_avg_win_rate_pct=float(args.objective_min_avg_win_rate_pct),
+                min_expectancy_krw=float(args.objective_min_expectancy_krw),
+            )
+            final_row["objective_score"] = final_objective
+            linked_screen = screen_map.get(str(combo["combo_id"]), {})
+            final_row["screen_objective_score"] = float(linked_screen.get("objective_score", 0.0))
+            final_row["screen_avg_total_trades"] = float(linked_screen.get("avg_total_trades", 0.0))
+            final_row["screen_profitable_ratio"] = float(linked_screen.get("profitable_ratio", 0.0))
+            final_row["screen_avg_win_rate_pct"] = float(linked_screen.get("avg_win_rate_pct", 0.0))
+            rows.append(final_row)
     finally:
         build_config.write_text(original_build_raw, encoding="utf-8", newline="\n")
 
@@ -278,7 +454,14 @@ def main(argv=None) -> int:
 
     sorted_rows = sorted(
         rows,
-        key=lambda x: (float(x["avg_total_trades"]), float(x["avg_profit_factor"]), float(x["avg_expectancy_krw"])),
+        key=lambda x: (
+            float(x.get("objective_score", 0.0)),
+            float(x.get("avg_expectancy_krw", 0.0)),
+            float(x.get("avg_win_rate_pct", 0.0)),
+            float(x.get("profitable_ratio", 0.0)),
+            float(x.get("avg_total_trades", 0.0)),
+            float(x.get("avg_profit_factor", 0.0)),
+        ),
         reverse=True,
     )
     with summary_csv.open("w", encoding="utf-8", newline="") as f:
@@ -293,7 +476,20 @@ def main(argv=None) -> int:
         "dataset_dirs": [str(x) for x in scan_dirs],
         "dataset_count": len(datasets),
         "datasets": [str(x) for x in datasets],
+        "screening": {
+            "enabled": bool(do_screening),
+            "screen_dataset_limit": int(args.screen_dataset_limit),
+            "screen_dataset_count": len(screen_datasets),
+            "screen_top_k": int(args.screen_top_k),
+            "screen_profile_ids": screen_profile_ids,
+            "final_profile_ids": final_profile_ids,
+            "objective_min_avg_trades": float(args.objective_min_avg_trades),
+            "objective_min_profitable_ratio": float(args.objective_min_profitable_ratio),
+            "objective_min_avg_win_rate_pct": float(args.objective_min_avg_win_rate_pct),
+            "objective_min_expectancy_krw": float(args.objective_min_expectancy_krw),
+        },
         "combos": combo_specs,
+        "screen_summary": screen_rows,
         "summary": sorted_rows,
     }
     ensure_parent_directory(summary_json)

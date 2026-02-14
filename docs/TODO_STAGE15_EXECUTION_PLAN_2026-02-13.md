@@ -262,6 +262,41 @@
 ### Sequence executed in this context
 1. Root-cause rerun:
    - `scripts/analyze_loss_contributors.py`
+
+## Stage 15 Fast Loop Refactor (2026-02-14, current)
+
+### Why this refactor
+- Existing candidate auto-improvement loop was too slow (`scenario_count x dataset_count x profile_count` explosion).
+- Parameter-only tuning kept selecting low-trade/high-PF combinations that did not satisfy practical live targets.
+
+### What changed
+- Added two-stage tuning in `scripts/tune_candidate_gate_trade_density.py`:
+  - Stage 1: screen all combos on a small evenly-spaced dataset subset.
+  - Stage 2: run full evaluation only for screened top-k combos.
+- Added profile selection in `scripts/run_profitability_matrix.py`:
+  - `--profile-ids ...` (used to run fast tuning on `core_full` only).
+- Added win-rate aggregation in profile summary:
+  - `avg_win_rate_pct`, `gate_win_rate_pass`, `min_avg_win_rate_pct`.
+- Reworked objective scoring in `scripts/run_candidate_auto_improvement_loop.py`:
+  - hard penalties for failing minimum `avg_total_trades`, `profitable_ratio`, `avg_win_rate_pct`, `expectancy`.
+  - avoids selecting deceptive high-PF but low-trade/low-win-rate combos.
+- Added loop/tuning control options:
+  - auto-loop: `--real-data-only`, `--require-higher-tf-companions`,
+    `--tune-screen-dataset-limit`, `--tune-screen-top-k`,
+    `--tune-objective-min-*`.
+
+### Validation snapshot
+- Tuning smoke run (realdata-only, 4 combos, screen 4 -> top2 final):
+  - command time: ~40s
+  - output: `build/Release/logs/smoke_tune_summary.json`
+- Auto loop smoke run (realdata-only, 1 iteration, 6 combos, screen 4 -> top2 final):
+  - command time: ~115s
+  - output: `build/Release/logs/candidate_auto_improvement_summary.json`
+
+### Next TODO
+- Move from parameter-only recovery to strategy-logic recovery:
+  - prioritize reducing recurring losing entries by regime/strategy bucket.
+  - keep minimum live constraints fixed (`trades`, `win-rate`, `profitable-ratio`, `expectancy`) while tuning.
    - `scripts/analyze_entry_pattern_bias.py -MaxDatasets 18 -MinPatternTrades 6`
 2. Strategy filter update:
    - `src/strategy/BreakoutStrategy.cpp`
