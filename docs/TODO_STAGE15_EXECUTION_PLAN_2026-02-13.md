@@ -1452,3 +1452,64 @@
 - Follow-up:
   - finalize burn-in/rollback/cleanup sequence in:
     - `docs/CORE_MIGRATION_FINALIZATION_2026-02-15.md`
+
+## Stage 15 EV/Bucket Consistency Patch (2026-02-15)
+
+### Step 1 completed
+- Goal: align pre-filter EV, calibrated edge, and EV bucket labeling semantics.
+- Code updates:
+  - `src/strategy/StrategyManager.cpp`
+    - Added cost-aware pre-filter EV calculation (partial round-trip cost at manager stage).
+    - Added implied-win blending with strategy history (win-rate/profit-factor weighted by sample size).
+  - `src/engine/TradingEngine.cpp`
+    - Added strategy-history prior in `computeCalibratedExpectedEdgePct`.
+  - `src/backtest/BacktestEngine.cpp`
+    - Added same strategy-history prior in `computeCalibratedExpectedEdgePct` (live/backtest parity).
+    - Tightened EV bucket thresholds: neutral `<0.0015`, positive `<0.0035`.
+    - Made EV bucket alignment conservative (realized outcome can demote, not promote).
+
+### Verification
+- Build: PASS
+  - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release`
+- Realdata candidate loop: PASS (script execution)
+  - `python scripts/run_realdata_candidate_loop.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --run-both-hostility-modes --gate-min-avg-trades 8 --matrix-max-workers 1 --matrix-backtest-retry-count 2`
+- Current snapshot (core_full) remained stable on this patch:
+  - `avg_profit_factor=12.0024`
+  - `avg_total_trades=8.0`
+  - `avg_expectancy_krw=2.2395`
+  - strict `overall_gate_pass=false` (profitable_ratio bottleneck)
+  - adaptive `overall_gate_pass=true`
+
+## Stage 15 Step 2 Update (2026-02-15, Momentum Post-Entry Control)
+
+### What was tried
+- Entry hardening attempt on Momentum/Scalping archetype filters was tested first.
+- That direction reduced trade count and worsened expectancy in revalidation, so it was rolled back.
+
+### What is kept (effective patch)
+- Kept Step 1 EV/bucket consistency changes.
+- Added targeted post-entry risk tightening for `Momentum / TREND_REACCELERATION` only:
+  - file: `src/strategy/MomentumStrategy.cpp`
+  - tighter invalidation/progress floors at entry-context creation
+  - faster early/mid/late weak-hold exits in `shouldExit`
+  - additional stricter early-cut when `flow_bias` is weak.
+
+### Verification (sequential build -> run)
+- Build PASS:
+  - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release`
+- Loop PASS:
+  - `python scripts/run_realdata_candidate_loop.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --run-both-hostility-modes --gate-min-avg-trades 8 --matrix-max-workers 1 --matrix-backtest-retry-count 2`
+
+### Latest snapshot (core_full)
+- `avg_profit_factor=12.0938` (up from 12.0024)
+- `avg_total_trades=8.0` (maintained)
+- `avg_expectancy_krw=3.7766` (up from 2.2395)
+- `profitable_ratio=0.5556` (up from 0.4444)
+- strict `overall_gate_pass=true`
+- adaptive `overall_gate_pass=true`
+
+### Root-cause refresh
+- `python scripts/analyze_root_cause_diagnostics.py --profile-id core_full --max-workers 4`
+- Totals shifted to positive expectancy:
+  - `avg_expectancy_krw=0.1665`
+  - `total_profit_krw=11.9874`
