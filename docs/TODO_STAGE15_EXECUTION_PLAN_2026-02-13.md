@@ -1431,3 +1431,24 @@
     - `Advanced Momentum / TREND_REACCELERATION / TRENDING_UP / ev_high`
     - `Advanced Momentum / BREAKOUT_CONTINUATION / RANGING / ev_positive`
     - `Advanced Scalping / PULLBACK_RECLAIM / TRENDING_UP / ev_neutral`
+
+## Stage 15 Update (2026-02-15, core default-on migration finalized)
+- Completed:
+  - PR #3 merged (`5935368`)
+    - strict hostility trades-only threshold chain integrated
+    - CI operational gate script hardened (missing fallback dataset/artifact-empty no longer hard-fail)
+  - PR #4 merged (`ead34cf`)
+    - core plane defaults switched to ON:
+      - `include/engine/EngineConfig.h`
+      - `src/common/Config.cpp`
+  - CI PR Gate passes confirmed on both PRs:
+    - run `22033385134` (PR #3)
+    - run `22033569111` (PR #4)
+
+- Current policy:
+  - runtime default path: core
+  - legacy path: explicit config opt-out only
+
+- Follow-up:
+  - finalize burn-in/rollback/cleanup sequence in:
+    - `docs/CORE_MIGRATION_FINALIZATION_2026-02-15.md`
