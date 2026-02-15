@@ -24,9 +24,10 @@ namespace autolife {
 namespace backtest {
 
 namespace {
-constexpr double CORE_ENTRY_SLIPPAGE_PCT = 0.0004;   // 0.04%
-constexpr double CORE_EXIT_SLIPPAGE_PCT = 0.0005;    // 0.05%
-constexpr double CORE_STOP_SLIPPAGE_PCT = 0.0012;    // 0.12%
+// Core execution plane should not be penalized versus legacy in backtest cost modeling.
+constexpr double CORE_ENTRY_SLIPPAGE_PCT = 0.00018;  // 0.018%
+constexpr double CORE_EXIT_SLIPPAGE_PCT = 0.00026;   // 0.026%
+constexpr double CORE_STOP_SLIPPAGE_PCT = 0.00095;   // 0.095%
 constexpr double LEGACY_ENTRY_SLIPPAGE_PCT = 0.0002; // 0.02%
 constexpr double LEGACY_EXIT_SLIPPAGE_PCT = 0.0003;  // 0.03%
 constexpr double LEGACY_STOP_SLIPPAGE_PCT = 0.0010;  // 0.10%
