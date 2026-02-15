@@ -258,6 +258,53 @@
   - `Breakout Strategy / TRENDING_UP / strength_low / ev_high / rr_high`:
     - trades `48`, win_rate `0.5833`, avg_profit `37.3067`
 - Recommendation highlights:
+
+## Stage 15 Reacceleration Gate Tuning Update (2026-02-15, current)
+
+### Scope
+- Focused bottleneck after #11: `Advanced Momentum / TREND_REACCELERATION / TRENDING_UP`.
+- Goal: improve expectancy while keeping trade count near practical range (not over-forcing entries in hostile market).
+
+### Code changes
+- `src/strategy/MomentumStrategy.cpp`
+  - Tightened `TREND_REACCELERATION` archetype classification thresholds.
+  - Added strong/weak reacc quality split and applied differentiated:
+    - strength floor relaxation
+    - position size scale
+    - RR floor
+    - net-edge floor
+  - Tightened reacc early/mid/late exit behavior for weak-quality contexts.
+  - Lowered adaptive block activation threshold for underperforming reacc archetype in `TRENDING_UP`.
+- `src/engine/TradingEngine.cpp`
+  - Added calibrated-edge penalty for `Momentum + TREND_REACCELERATION + TRENDING_UP`.
+  - Added second-stage archetype quality gate for same pattern (quality-based block, not unconditional market hard block).
+- `src/backtest/BacktestEngine.cpp`
+  - Mirrored live-path changes to keep live/backtest parity.
+
+### Validation commands
+- Build:
+  - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release`
+- Candidate loop (realdata only):
+  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions`
+- Root-cause diagnostics:
+  - `python scripts/analyze_root_cause_diagnostics.py --profile-id core_full --max-workers 1`
+
+### Latest snapshot (core_full)
+- From `build/Release/logs/profitability_profile_summary_realdata.csv`:
+  - `avg_profit_factor = 12.3473`
+  - `avg_total_trades = 7.2222`
+  - `avg_expectancy_krw = 5.6638`
+  - `profitable_ratio = 0.5556`
+  - `gate_pass = true`
+- From `build/Release/logs/root_cause_loss_patterns.csv`:
+  - Remaining top loss pattern:
+    - `Advanced Momentum / TREND_REACCELERATION / TRENDING_UP / ev_high`
+    - `total_trades=27`, `win_rate=0.4074`, `avg_profit_krw=-4.2437`
+
+### Notes
+- `BREAKOUT_CONTINUATION / TRENDING_UP` for Momentum remains blocked via prior #11 path.
+- Trade count is lower than earlier 8+ baseline but still above hostility-adaptive effective threshold and gate-pass.
+- Next pass should target reacceleration loss tail without forcing trade density in hostile datasets.
   - `Advanced Scalping / RANGING`: `recommended_min_strength=0.62`, `recommend_block=true` (medium confidence)
   - `Advanced Scalping / TRENDING_UP`: `recommended_min_strength=0.62`, `recommend_block=true` (medium confidence)
   - `Breakout Strategy / RANGING`: `recommended_min_strength=0.62`, `recommend_block=true` (low confidence)
@@ -1535,3 +1582,39 @@
 
 ### Root-cause impact
 - `BREAKOUT_CONTINUATION,TRENDING_UP` dropped out from top-loss pattern list in latest diagnostics.
+
+## Stage 15 Step 4 Update (2026-02-15, Scalping PullbackReclaim Quality Gate)
+
+### Targeted change
+- Bottleneck focus: `Advanced Scalping / PULLBACK_RECLAIM / TRENDING_UP`.
+- Applied quality-tiered filtering and risk control for pullback reclaim:
+  - stronger baseline archetype classification thresholds
+  - explicit pullback quality tier (`LOW/MEDIUM/HIGH`) and low-tier block
+  - stricter setup/trigger floors for non-high-quality pullbacks
+  - reduced strength-floor relaxation in pullback path
+  - higher edge/RR requirements for non-high-quality pullbacks
+  - reduced position size for non-high-quality pullbacks
+  - tighter weak-quality pullback exits in `shouldExit`
+- File:
+  - `src/strategy/ScalpingStrategy.cpp`
+
+### Verification
+- Build PASS:
+  - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release`
+- Loop PASS:
+  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions`
+- Root-cause PASS:
+  - `python scripts/analyze_root_cause_diagnostics.py --profile-id core_full --max-workers 1`
+
+### Snapshot delta (core_full)
+- before step4: PF `12.3473`, trades `7.2222`, expectancy `5.6638`, profitable_ratio `0.5556`
+- after step4:  PF `12.5628`, trades `6.6667`, expectancy `6.8766`, profitable_ratio `0.5556`
+- strict/adaptive: `overall_gate_pass=true`
+
+### Root-cause impact
+- `Advanced Scalping` aggregate shifted positive in latest diagnostics:
+  - `total_trades=5`, `win_rate=0.8`, `avg_profit_krw=4.1354`
+- Remaining scalping loss pocket:
+  - `PULLBACK_RECLAIM/TRENDING_UP/ev_positive`: `3 trades`, `avg_profit_krw=-3.0858`
+- Primary remaining bottleneck is still:
+  - `Advanced Momentum / TREND_REACCELERATION / TRENDING_UP`
