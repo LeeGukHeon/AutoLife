@@ -98,6 +98,7 @@ def run_profitability_matrix(
     matrix_max_workers: int,
     matrix_backtest_retry_count: int,
     enable_hostility_adaptive_thresholds: bool,
+    enable_hostility_adaptive_trades_only: bool,
     require_higher_tf_companions: bool,
     enable_adaptive_state_io: bool,
 ) -> Dict[str, Any]:
@@ -128,6 +129,8 @@ def run_profitability_matrix(
     ]
     if enable_hostility_adaptive_thresholds:
         matrix_cmd.append("--enable-hostility-adaptive-thresholds")
+    if enable_hostility_adaptive_trades_only:
+        matrix_cmd.append("--enable-hostility-adaptive-trades-only")
     if require_higher_tf_companions:
         matrix_cmd.append("--require-higher-tf-companions")
     if enable_adaptive_state_io:
@@ -207,6 +210,18 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--disable-hostility-adaptive-thresholds",
         dest="enable_hostility_adaptive_thresholds",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--enable-hostility-adaptive-trades-only",
+        "-EnableHostilityAdaptiveTradesOnly",
+        dest="enable_hostility_adaptive_trades_only",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--disable-hostility-adaptive-trades-only",
+        dest="enable_hostility_adaptive_trades_only",
         action="store_false",
     )
     parser.add_argument("--skip-fetch", "-SkipFetch", action="store_true")
@@ -296,6 +311,7 @@ def main(argv=None) -> int:
             matrix_max_workers=args.matrix_max_workers,
             matrix_backtest_retry_count=args.matrix_backtest_retry_count,
             enable_hostility_adaptive_thresholds=False,
+            enable_hostility_adaptive_trades_only=bool(args.enable_hostility_adaptive_trades_only),
             require_higher_tf_companions=args.require_higher_tf_companions,
             enable_adaptive_state_io=bool(args.enable_adaptive_state_io),
         )
@@ -311,6 +327,7 @@ def main(argv=None) -> int:
             matrix_max_workers=args.matrix_max_workers,
             matrix_backtest_retry_count=args.matrix_backtest_retry_count,
             enable_hostility_adaptive_thresholds=True,
+            enable_hostility_adaptive_trades_only=False,
             require_higher_tf_companions=args.require_higher_tf_companions,
             enable_adaptive_state_io=bool(args.enable_adaptive_state_io),
         )
@@ -333,6 +350,8 @@ def main(argv=None) -> int:
         print_report_snapshot("selected", selected_report)
         report = selected_report
     else:
+        selected_adaptive = bool(args.enable_hostility_adaptive_thresholds)
+        selected_trades_only = (not selected_adaptive) and bool(args.enable_hostility_adaptive_trades_only)
         report = run_profitability_matrix(
             matrix_script=matrix_script,
             datasets=datasets,
@@ -343,6 +362,7 @@ def main(argv=None) -> int:
             matrix_max_workers=args.matrix_max_workers,
             matrix_backtest_retry_count=args.matrix_backtest_retry_count,
             enable_hostility_adaptive_thresholds=bool(args.enable_hostility_adaptive_thresholds),
+            enable_hostility_adaptive_trades_only=selected_trades_only,
             require_higher_tf_companions=bool(args.require_higher_tf_companions),
             enable_adaptive_state_io=bool(args.enable_adaptive_state_io),
         )
@@ -374,6 +394,10 @@ def main(argv=None) -> int:
             tune_cmd.append("--enable-hostility-adaptive-thresholds")
         else:
             tune_cmd.append("--disable-hostility-adaptive-thresholds")
+        if args.enable_hostility_adaptive_trades_only:
+            tune_cmd.append("--enable-hostility-adaptive-trades-only")
+        else:
+            tune_cmd.append("--disable-hostility-adaptive-trades-only")
         tune_proc = subprocess.run(tune_cmd)
         if tune_proc.returncode != 0:
             raise RuntimeError(f"tune_candidate_gate_trade_density.py failed (exit={tune_proc.returncode})")

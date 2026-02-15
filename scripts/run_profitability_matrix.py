@@ -345,9 +345,13 @@ def compute_effective_thresholds(args, hostility: Dict[str, Any]) -> Dict[str, A
         "min_avg_trades": int(args.min_avg_trades),
     }
     effective = dict(requested)
-    if not bool(args.enable_hostility_adaptive_thresholds) or not bool(hostility.get("available", False)):
+    full_mode = bool(args.enable_hostility_adaptive_thresholds)
+    trades_only_mode = bool(getattr(args, "enable_hostility_adaptive_trades_only", False))
+    adaptive_mode = "full" if full_mode else ("trades_only" if trades_only_mode else "none")
+    if adaptive_mode == "none" or not bool(hostility.get("available", False)):
         return {
             "adaptive_applied": False,
+            "adaptive_mode": adaptive_mode,
             "requested": requested,
             "effective": effective,
             "hostility": hostility,
@@ -363,38 +367,41 @@ def compute_effective_thresholds(args, hostility: Dict[str, Any]) -> Dict[str, A
     ratio_relax_scale = 0.30 + (0.14 if high_level else (0.06 if medium_level else 0.0))
     expectancy_relax_scale = 6.0 + (1.2 if high_level else 0.0)
 
-    effective["min_profit_factor"] = round(
-        max(float(args.hostility_min_profit_factor_floor), requested["min_profit_factor"] - (0.08 * relief)),
-        4,
-    )
-    effective["min_expectancy_krw"] = round(
-        max(
-            float(args.hostility_min_expectancy_krw_floor),
-            requested["min_expectancy_krw"] - (expectancy_relax_scale * relief),
-        ),
-        4,
-    )
-    effective["min_profitable_ratio"] = round(
-        max(
-            float(args.hostility_min_profitable_ratio_floor),
-            requested["min_profitable_ratio"] - (ratio_relax_scale * relief),
-        ),
-        4,
-    )
-    effective["min_avg_win_rate_pct"] = round(
-        max(float(args.hostility_min_avg_win_rate_pct_floor), requested["min_avg_win_rate_pct"] - (10.0 * relief)),
-        4,
-    )
+    if adaptive_mode == "full":
+        effective["min_profit_factor"] = round(
+            max(float(args.hostility_min_profit_factor_floor), requested["min_profit_factor"] - (0.08 * relief)),
+            4,
+        )
+        effective["min_expectancy_krw"] = round(
+            max(
+                float(args.hostility_min_expectancy_krw_floor),
+                requested["min_expectancy_krw"] - (expectancy_relax_scale * relief),
+            ),
+            4,
+        )
+        effective["min_profitable_ratio"] = round(
+            max(
+                float(args.hostility_min_profitable_ratio_floor),
+                requested["min_profitable_ratio"] - (ratio_relax_scale * relief),
+            ),
+            4,
+        )
+        effective["min_avg_win_rate_pct"] = round(
+            max(float(args.hostility_min_avg_win_rate_pct_floor), requested["min_avg_win_rate_pct"] - (10.0 * relief)),
+            4,
+        )
     hostile_trade_bonus = 1 if high_level else 0
     trades_relaxed = int(round(requested["min_avg_trades"] - (trade_relax_scale * relief) - hostile_trade_bonus))
     effective["min_avg_trades"] = int(max(int(args.hostility_min_avg_trades_floor), trades_relaxed))
-    effective["max_drawdown_pct"] = round(
-        min(float(args.hostility_max_drawdown_pct_ceil), requested["max_drawdown_pct"] + (4.0 * relief)),
-        4,
-    )
+    if adaptive_mode == "full":
+        effective["max_drawdown_pct"] = round(
+            min(float(args.hostility_max_drawdown_pct_ceil), requested["max_drawdown_pct"] + (4.0 * relief)),
+            4,
+        )
 
     return {
         "adaptive_applied": True,
+        "adaptive_mode": adaptive_mode,
         "relief_ratio": round(relief, 4),
         "requested": requested,
         "effective": effective,
@@ -438,6 +445,11 @@ def main() -> int:
     parser.add_argument("--min-avg-win-rate-pct", type=float, default=0.0)
     parser.add_argument("--min-avg-trades", type=int, default=10)
     parser.add_argument("--enable-hostility-adaptive-thresholds", action="store_true")
+    parser.add_argument(
+        "--enable-hostility-adaptive-trades-only",
+        action="store_true",
+        help="Adapt only min_avg_trades by hostility while keeping quality thresholds fixed.",
+    )
     parser.add_argument("--hostility-min-profit-factor-floor", type=float, default=0.90)
     parser.add_argument("--hostility-min-expectancy-krw-floor", type=float, default=-8.0)
     parser.add_argument("--hostility-min-profitable-ratio-floor", type=float, default=0.18)
@@ -509,7 +521,7 @@ def main() -> int:
     effective_core_vs_legacy_min_pf_delta = float(args.core_vs_legacy_min_profit_factor_delta)
     effective_core_vs_legacy_min_expectancy_delta_krw = float(args.core_vs_legacy_min_expectancy_delta_krw)
     effective_core_vs_legacy_min_total_profit_delta_krw = float(args.core_vs_legacy_min_total_profit_delta_krw)
-    if bool(threshold_bundle.get("adaptive_applied", False)):
+    if bool(threshold_bundle.get("adaptive_applied", False)) and str(threshold_bundle.get("adaptive_mode", "none")) == "full":
         relief = float(threshold_bundle.get("relief_ratio", 0.0))
         hostility_level = str((threshold_bundle.get("hostility") or {}).get("hostility_level", "unknown")).lower()
         pf_delta_relax = (0.24 * relief) + (0.08 if hostility_level == "high" else 0.0)
@@ -532,6 +544,7 @@ def main() -> int:
     if threshold_bundle.get("adaptive_applied", False):
         print(
             "[ProfitabilityMatrix] hostility-adaptive thresholds applied: "
+            f"mode={threshold_bundle.get('adaptive_mode')}, "
             f"level={hostility_context.get('hostility_level')}, "
             f"score={hostility_context.get('avg_adversarial_score')}, "
             f"min_avg_trades={effective_thresholds['min_avg_trades']}, "

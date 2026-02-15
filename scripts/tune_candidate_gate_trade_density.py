@@ -607,6 +607,7 @@ def evaluate_combo(
     gate_min_avg_trades: int,
     require_higher_tf_companions: bool,
     enable_hostility_adaptive_thresholds: bool,
+    enable_hostility_adaptive_trades_only: bool,
     matrix_max_workers: int,
     matrix_backtest_retry_count: int,
     eval_cache: Dict[str, Any],
@@ -624,6 +625,7 @@ def evaluate_combo(
         "gate_min_avg_trades": int(gate_min_avg_trades),
         "require_higher_tf_companions": bool(require_higher_tf_companions),
         "enable_hostility_adaptive_thresholds": bool(enable_hostility_adaptive_thresholds),
+        "enable_hostility_adaptive_trades_only": bool(enable_hostility_adaptive_trades_only),
         "matrix_max_workers": int(matrix_max_workers),
         "matrix_backtest_retry_count": int(matrix_backtest_retry_count),
         "datasets_sig_hash": datasets_sig_hash,
@@ -672,6 +674,8 @@ def evaluate_combo(
         cmd.append("--require-higher-tf-companions")
     if enable_hostility_adaptive_thresholds:
         cmd.append("--enable-hostility-adaptive-thresholds")
+    if enable_hostility_adaptive_trades_only:
+        cmd.append("--enable-hostility-adaptive-trades-only")
     cmd.extend(["--max-workers", str(max(1, int(matrix_max_workers)))])
     cmd.extend(["--backtest-retry-count", str(max(1, int(matrix_backtest_retry_count)))])
     proc = subprocess.run(cmd)
@@ -788,6 +792,18 @@ def main(argv=None) -> int:
         action="store_false",
     )
     parser.add_argument(
+        "--enable-hostility-adaptive-trades-only",
+        "-EnableHostilityAdaptiveTradesOnly",
+        dest="enable_hostility_adaptive_trades_only",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--disable-hostility-adaptive-trades-only",
+        dest="enable_hostility_adaptive_trades_only",
+        action="store_false",
+    )
+    parser.add_argument(
         "--use-effective-thresholds-for-objective",
         "-UseEffectiveThresholdsForObjective",
         dest="use_effective_thresholds_for_objective",
@@ -878,6 +894,7 @@ def main(argv=None) -> int:
                     gate_min_avg_trades=int(args.gate_min_avg_trades),
                     require_higher_tf_companions=bool(args.require_higher_tf_companions),
                     enable_hostility_adaptive_thresholds=bool(args.enable_hostility_adaptive_thresholds),
+                    enable_hostility_adaptive_trades_only=bool(args.enable_hostility_adaptive_trades_only),
                     matrix_max_workers=int(args.matrix_max_workers),
                     matrix_backtest_retry_count=int(args.matrix_backtest_retry_count),
                     eval_cache=eval_cache,
@@ -944,6 +961,7 @@ def main(argv=None) -> int:
                     gate_min_avg_trades=int(args.gate_min_avg_trades),
                     require_higher_tf_companions=bool(args.require_higher_tf_companions),
                     enable_hostility_adaptive_thresholds=bool(args.enable_hostility_adaptive_thresholds),
+                    enable_hostility_adaptive_trades_only=bool(args.enable_hostility_adaptive_trades_only),
                     matrix_max_workers=int(args.matrix_max_workers),
                     matrix_backtest_retry_count=int(args.matrix_backtest_retry_count),
                     eval_cache=eval_cache,
@@ -1021,6 +1039,7 @@ def main(argv=None) -> int:
             "objective_min_expectancy_krw": float(args.objective_min_expectancy_krw),
             "objective_mode": str(args.objective_mode),
             "enable_hostility_adaptive_thresholds": bool(args.enable_hostility_adaptive_thresholds),
+            "enable_hostility_adaptive_trades_only": bool(args.enable_hostility_adaptive_trades_only),
             "use_effective_thresholds_for_objective": bool(args.use_effective_thresholds_for_objective),
         },
         "combos": combo_specs,
