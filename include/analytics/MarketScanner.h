@@ -9,6 +9,7 @@
 #include <vector>
 #include <map>
 #include <memory>
+#include <chrono>
 
 namespace autolife {
 namespace analytics {
@@ -92,9 +93,17 @@ public:
     double calculateCompositeScore(const CoinMetrics& metrics);
     
 private:
+    struct CandleCacheEntry {
+        std::vector<Candle> candles;
+        std::chrono::steady_clock::time_point last_update_time{};
+        std::chrono::steady_clock::time_point last_full_sync_time{};
+    };
+
     std::shared_ptr<network::UpbitHttpClient> client_;
     std::vector<CoinMetrics> cached_metrics_;
     std::chrono::steady_clock::time_point last_scan_time_;
+    std::chrono::steady_clock::time_point last_candle_api_call_time_{};
+    std::map<std::string, CandleCacheEntry> candle_cache_;
     
     // 헬퍼 함수들
     std::vector<std::string> getAllKRWMarkets();
@@ -102,6 +111,16 @@ private:
     std::vector<Candle> getRecentCandles(const std::string& market, int count);
     std::vector<Candle> getRecentCandles(const std::string& market, const std::string& unit, int count);
     std::vector<Candle> getRecentDayCandles(const std::string& market, int count);
+    std::vector<Candle> getCandlesWithRollingCache(
+        const std::string& market,
+        const std::string& unit,
+        int count,
+        bool day_candle);
+    static long long getCandleFrameMs(const std::string& unit, bool day_candle);
+    static std::string getCandleCacheKey(const std::string& market, const std::string& unit, bool day_candle);
+    static std::vector<Candle> keepRecentCandles(const std::vector<Candle>& candles, int count);
+    static void mergeCandles(std::vector<Candle>& base, const std::vector<Candle>& incoming, int max_count);
+    void throttleCandleApiCall();
         // 이미 조회된 데이터로 분석 (API 호출 없음)
     double analyzeOrderBookImbalance(const nlohmann::json& orderbook);
     std::pair<int, int> analyzeWalls(const nlohmann::json& orderbook);  // {buy_walls, sell_walls}

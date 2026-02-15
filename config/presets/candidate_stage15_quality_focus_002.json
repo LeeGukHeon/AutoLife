@@ -1,0 +1,30 @@
+{
+    "preset_name": "candidate_stage15_quality_focus_002",
+    "description": "Stage 15 quality_focus winner (scenario_quality_focus_002).",
+    "trading": {
+        "max_new_orders_per_scan": 2,
+        "min_expected_edge_pct": 0.0014,
+        "min_reward_risk": 1.4,
+        "min_rr_weak_signal": 1.95,
+        "min_rr_strong_signal": 1.3,
+        "min_strategy_trades_for_ev": 45,
+        "min_strategy_expectancy_krw": 0.0,
+        "min_strategy_profit_factor": 1.08,
+        "avoid_high_volatility": true,
+        "avoid_trending_down": true
+    },
+    "strategies": {
+        "scalping": {
+            "min_signal_strength": 0.76
+        },
+        "momentum": {
+            "min_signal_strength": 0.78
+        },
+        "breakout": {
+            "min_signal_strength": 0.46
+        },
+        "mean_reversion": {
+            "min_signal_strength": 0.45
+        }
+    }
+}

@@ -1,14 +1,14 @@
-﻿# Strict Gate Runbook (2026-02-13)
+# Strict Gate Runbook (2026-02-13)
 
 ## Purpose
-- Separate CI gates by risk level while keeping `validate_operational_readiness.ps1` as the single operational entrypoint.
+- Separate CI gates by risk level while keeping `validate_operational_readiness.py` as the single operational entrypoint.
 
 ## Gate Profiles
 1. PR gate (no live order)
 - Workflow: `.github/workflows/ci-pr-gate.yml`
 - Command:
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_ci_operational_gate.ps1 -IncludeBacktest
+python scripts/run_ci_operational_gate.py -IncludeBacktest
 ```
 - Includes:
   - Release build
@@ -21,7 +21,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_ci_operational_g
 - Workflow: `.github/workflows/ci-strict-live-gate.yml`
 - Command:
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_ci_operational_gate.ps1 -IncludeBacktest -RunLiveProbe -StrictExecutionParity
+python scripts/run_ci_operational_gate.py -IncludeBacktest -RunLiveProbe -StrictExecutionParity
 ```
 - Includes:
   - all PR gate checks
@@ -32,7 +32,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_ci_operational_g
   - action boundary separation (`report-only` vs `safe-auto-execute`) + feedback loop metadata
 
 ## Stage 9-13 Operational Outputs
-- Aggregation script: `scripts/generate_strict_live_gate_trend_alert.ps1`
+- Aggregation script: `scripts/generate_strict_live_gate_trend_alert.py`
 - History:
   - `build/Release/logs/strict_live_gate_history.jsonl`
 - Daily summary:
@@ -110,7 +110,7 @@ Stage 12 approval enforcement + weekly feedback stabilization:
 
 Stage 13 profitability validation matrix:
 - Script:
-  - `scripts/run_profitability_matrix.ps1`
+  - `scripts/run_profitability_matrix.py`
 - Baseline vs candidate structure profiles:
   - `legacy_default`
   - `core_bridge_only`
@@ -136,8 +136,8 @@ Stage 13 profitability validation matrix:
 
 Stage 14 personal-use packaging alignment:
 - New helper scripts:
-  - `scripts/run_profitability_exploratory.ps1`
-  - `scripts/apply_trading_preset.ps1`
+  - `scripts/run_profitability_exploratory.py`
+  - `scripts/apply_trading_preset.py`
 - Presets:
   - `config/presets/safe.json`
   - `config/presets/active.json`
@@ -160,7 +160,7 @@ Recommended policy:
 - Rotate keys on schedule and on any incident.
 
 ## Probe Safety Controls
-- Probe script: `scripts/generate_live_execution_probe.ps1`
+- Probe script: `scripts/generate_live_execution_probe.py`
 - Binary: `build/Release/AutoLifeLiveExecutionProbe.exe`
 - Defaults:
   - market: `KRW-BTC`
@@ -184,7 +184,7 @@ Recommended policy:
   - `Account state synchronization completed`
 
 4. `backtest_readiness_failed`
-- Re-run `scripts/validate_readiness.ps1`.
+- Re-run `scripts/validate_readiness.py`.
 - Verify dataset directory (`data/backtest`) and output artifacts under `build/Release/logs`.
 
 5. `strict_live_gate_history_parse_errors`
@@ -253,10 +253,10 @@ Recommended policy:
 
 ## Local Reproduction
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_ci_operational_gate.ps1 -IncludeBacktest
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_ci_operational_gate.ps1 -IncludeBacktest -RunLiveProbe -StrictExecutionParity
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate_strict_live_gate_trend_alert.ps1 -GateProfile strict_live -ApplyTunedThresholds -ActionExecutionPolicy safe-auto-execute -EnableActionFeedbackLoop
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_profitability_matrix.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_profitability_exploratory.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/apply_trading_preset.ps1 -Preset safe
+python scripts/run_ci_operational_gate.py -IncludeBacktest
+python scripts/run_ci_operational_gate.py -IncludeBacktest -RunLiveProbe -StrictExecutionParity
+python scripts/generate_strict_live_gate_trend_alert.py -GateProfile strict_live -ApplyTunedThresholds -ActionExecutionPolicy safe-auto-execute -EnableActionFeedbackLoop
+python scripts/run_profitability_matrix.py
+python scripts/run_profitability_exploratory.py
+python scripts/apply_trading_preset.py -Preset safe
 ```

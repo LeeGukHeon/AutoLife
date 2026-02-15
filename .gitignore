@@ -34,6 +34,7 @@ config/*.json
 logs/
 *.log
 *.csv
+!data/backtest/simulation_large.csv
 # ===== IDE & 에디터 =====
 .vs/
 .vscode/settings.json
@@ -68,7 +69,7 @@ config/*secret*.json
 config/*private*.json
 
 # ===== Runtime State & Temp (Stage 12) =====
-state/
+/state/
 runtime/
 tmp/
 *.pid

@@ -2,10 +2,14 @@
 #include "analytics/TechnicalIndicators.h"
 #include "common/Logger.h"
 #include "common/Config.h"
+#include "common/PathUtils.h"
 #include <chrono>
 #include <algorithm>
 #include <numeric>
 #include <cmath>
+#include <fstream>
+#include <filesystem>
+#include <cstdlib>
 
 #undef max
 #undef min
@@ -15,6 +19,70 @@ namespace strategy {
 namespace {
 double clamp01(double v) {
     return std::clamp(v, 0.0, 1.0);
+}
+
+int makeArchetypeRegimeKey(int archetype, analytics::MarketRegime regime) {
+    return (archetype * 100) + static_cast<int>(regime);
+}
+
+std::filesystem::path getScalpingArchetypeStatsPath() {
+    return utils::PathUtils::resolveRelativePath("state/scalping_archetype_stats.json");
+}
+
+bool disableAdaptiveArchetypeStateIo() {
+    std::string value;
+#ifdef _WIN32
+    char* raw = nullptr;
+    size_t len = 0;
+    if (_dupenv_s(&raw, &len, "AUTOLIFE_DISABLE_ADAPTIVE_STATE_IO") != 0 || raw == nullptr) {
+        return false;
+    }
+    value.assign(raw);
+    free(raw);
+#else
+    const char* raw = std::getenv("AUTOLIFE_DISABLE_ADAPTIVE_STATE_IO");
+    if (raw == nullptr) {
+        return false;
+    }
+    value.assign(raw);
+#endif
+    return !(value.empty() || value == "0" || value == "false" || value == "FALSE");
+}
+
+long long normalizeTimestampMs(long long ts) {
+    if (ts > 0 && ts < 1000000000000LL) {
+        return ts * 1000LL;
+    }
+    return ts;
+}
+
+long long currentWallClockMs() {
+    using namespace std::chrono;
+    return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+}
+
+bool isLikelyDescendingByTimestamp(const std::vector<Candle>& candles) {
+    if (candles.size() < 3) {
+        return false;
+    }
+    size_t asc = 0;
+    size_t desc = 0;
+    for (size_t i = 1; i < candles.size(); ++i) {
+        if (candles[i].timestamp > candles[i - 1].timestamp) {
+            asc++;
+        } else if (candles[i].timestamp < candles[i - 1].timestamp) {
+            desc++;
+        }
+    }
+    return desc > asc;
+}
+
+std::vector<Candle> ensureChronologicalCandles(const std::vector<Candle>& candles) {
+    if (!isLikelyDescendingByTimestamp(candles)) {
+        return candles;
+    }
+    std::vector<Candle> normalized(candles.rbegin(), candles.rend());
+    return normalized;
 }
 
 bool isShortTermChoppyWhipsaw(const std::vector<Candle>& candles) {
@@ -72,14 +140,361 @@ double computeScalpingAdaptiveStrengthFloor(
     const double pressure_total = std::max(1e-6, std::abs(metrics.buy_pressure) + std::abs(metrics.sell_pressure));
     const double sell_bias_t = clamp01((metrics.sell_pressure - metrics.buy_pressure) / pressure_total);
     const double book_imbalance_t = clamp01((-metrics.order_book_imbalance + 0.05) / 0.60);
-    double floor = 0.40 + (vol_t * 0.08) + (liq_t * 0.06) + (sell_bias_t * 0.03) + (book_imbalance_t * 0.03);
+    double floor = 0.41 + (vol_t * 0.09) + (liq_t * 0.07) + (sell_bias_t * 0.04) + (book_imbalance_t * 0.04);
 
     if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
-        floor += 0.03;
+        floor += 0.04;
     } else if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
-        floor += 0.02;
+        floor += 0.03;
     }
-    return std::clamp(floor, 0.40, 0.60);
+    return std::clamp(floor, 0.42, 0.64);
+}
+
+std::vector<Candle> aggregateCandlesByStep(const std::vector<Candle>& candles, size_t step) {
+    const auto ordered = ensureChronologicalCandles(candles);
+    if (step <= 1 || ordered.size() < step) {
+        return ordered;
+    }
+    std::vector<Candle> out;
+    out.reserve(ordered.size() / step);
+    for (size_t i = 0; i + step <= ordered.size(); i += step) {
+        Candle merged;
+        merged.open = ordered[i].open;
+        merged.close = ordered[i + step - 1].close;
+        merged.high = ordered[i].high;
+        merged.low = ordered[i].low;
+        merged.volume = 0.0;
+        merged.timestamp = ordered[i].timestamp;
+        for (size_t j = i; j < i + step; ++j) {
+            merged.high = std::max(merged.high, ordered[j].high);
+            merged.low = std::min(merged.low, ordered[j].low);
+            merged.volume += ordered[j].volume;
+        }
+        out.push_back(merged);
+    }
+    return out;
+}
+
+double computeDirectionalBias(const std::vector<Candle>& candles, size_t lookback) {
+    const auto ordered = ensureChronologicalCandles(candles);
+    if (ordered.size() < lookback + 1 || lookback < 3) {
+        return 0.0;
+    }
+    const size_t start = ordered.size() - lookback - 1;
+    const double start_close = ordered[start].close;
+    const double end_close = ordered.back().close;
+    if (start_close <= 0.0 || end_close <= 0.0) {
+        return 0.0;
+    }
+
+    int up_bars = 0;
+    int down_bars = 0;
+    for (size_t i = start + 1; i < ordered.size(); ++i) {
+        if (ordered[i].close > ordered[i - 1].close) {
+            up_bars++;
+        } else if (ordered[i].close < ordered[i - 1].close) {
+            down_bars++;
+        }
+    }
+    const double step_bias = static_cast<double>(up_bars - down_bars) / static_cast<double>(lookback);
+    const double price_move = (end_close - start_close) / start_close;
+    return std::clamp((price_move * 16.0) + (step_bias * 0.50), -1.0, 1.0);
+}
+
+double computeScalpingHigherTfTrendBias(
+    const analytics::CoinMetrics& metrics,
+    const std::vector<Candle>& candles_1m
+) {
+    std::vector<Candle> candles_5m;
+    auto tf_5m_it = metrics.candles_by_tf.find("5m");
+    if (tf_5m_it != metrics.candles_by_tf.end() && tf_5m_it->second.size() >= 20) {
+        candles_5m = ensureChronologicalCandles(tf_5m_it->second);
+    } else {
+        candles_5m = aggregateCandlesByStep(candles_1m, 5);
+    }
+
+    double bias_5m = 0.0;
+    if (candles_5m.size() >= 20) {
+        bias_5m = computeDirectionalBias(candles_5m, std::min<size_t>(20, candles_5m.size() - 1));
+    }
+
+    double bias_1h = 0.0;
+    auto tf_1h_it = metrics.candles_by_tf.find("1h");
+    if (tf_1h_it != metrics.candles_by_tf.end() && tf_1h_it->second.size() >= 10) {
+        const auto candles_1h = ensureChronologicalCandles(tf_1h_it->second);
+        bias_1h = computeDirectionalBias(candles_1h, std::min<size_t>(10, candles_1h.size() - 1));
+    } else if (candles_5m.size() >= 37) {
+        bias_1h = computeDirectionalBias(candles_5m, 36);
+    }
+
+    double combined = (bias_5m * 0.60) + (bias_1h * 0.40);
+    if (metrics.order_book_imbalance < -0.15) {
+        combined -= 0.08;
+    } else if (metrics.order_book_imbalance > 0.15) {
+        combined += 0.05;
+    }
+    return std::clamp(combined, -1.0, 1.0);
+}
+
+bool hasBullishImpulse(const std::vector<Candle>& candles) {
+    if (candles.size() < 4) {
+        return false;
+    }
+    const size_t n = candles.size();
+    int bullish_count = 0;
+    for (size_t i = n - 3; i < n; ++i) {
+        if (candles[i].close > candles[i].open) {
+            bullish_count++;
+        }
+    }
+    if (bullish_count < 2) {
+        return false;
+    }
+    return candles[n - 1].close > candles[n - 2].close &&
+           candles[n - 2].close > candles[n - 3].close;
+}
+
+bool passesScalpingRangingQualityGate(
+    const analytics::CoinMetrics& metrics,
+    double higher_tf_trend_bias,
+    bool bullish_impulse,
+    double buy_pressure_bias
+) {
+    const double abs_change = std::abs(metrics.price_change_rate);
+    const bool regime_flow_ok =
+        metrics.volume_surge_ratio >= 1.30 &&
+        metrics.liquidity_score >= 62.0 &&
+        metrics.order_book_imbalance >= -0.02 &&
+        buy_pressure_bias >= 0.01;
+    const bool directional_ok =
+        higher_tf_trend_bias >= 0.08 ||
+        (higher_tf_trend_bias >= 0.02 && bullish_impulse && buy_pressure_bias >= 0.03);
+    const bool move_ok = abs_change >= 0.08 && abs_change <= 1.35;
+    return regime_flow_ok && directional_ok && move_ok && bullish_impulse;
+}
+
+bool passesScalpingUnknownQualityGate(
+    const analytics::CoinMetrics& metrics,
+    double higher_tf_trend_bias,
+    bool bullish_impulse,
+    double buy_pressure_bias
+) {
+    return higher_tf_trend_bias >= 0.16 &&
+           bullish_impulse &&
+           metrics.volume_surge_ratio >= 1.55 &&
+           metrics.liquidity_score >= 66.0 &&
+           metrics.order_book_imbalance >= 0.0 &&
+           buy_pressure_bias >= 0.05;
+}
+
+enum class ScalpingEntryArchetype : int {
+    NONE = 0,
+    PULLBACK_RECLAIM = 1,
+    BREAKOUT_CONTINUATION = 2,
+};
+
+const char* scalpingArchetypeToLabel(ScalpingEntryArchetype archetype) {
+    switch (archetype) {
+        case ScalpingEntryArchetype::PULLBACK_RECLAIM:
+            return "PULLBACK_RECLAIM";
+        case ScalpingEntryArchetype::BREAKOUT_CONTINUATION:
+            return "BREAKOUT_CONTINUATION";
+        default:
+            return "UNSPECIFIED";
+    }
+}
+
+struct ScalpingArchetypeState {
+    ScalpingEntryArchetype archetype = ScalpingEntryArchetype::NONE;
+    double invalidation_drawdown_pct = 0.0;
+    double progress_floor_10m = 0.0;
+    double progress_floor_20m = 0.0;
+};
+
+ScalpingArchetypeState classifyScalpingEntryArchetype(
+    const std::vector<Candle>& candles,
+    const analytics::CoinMetrics& metrics,
+    double higher_tf_trend_bias,
+    bool bullish_impulse,
+    double buy_pressure_bias,
+    double mtf_alignment,
+    double flow_score
+) {
+    ScalpingArchetypeState state;
+    const auto ordered = ensureChronologicalCandles(candles);
+    if (ordered.size() < 24) {
+        return state;
+    }
+
+    const auto prices = analytics::TechnicalIndicators::extractClosePrices(ordered);
+    const double ema8 = analytics::TechnicalIndicators::calculateEMA(prices, 8);
+    const double ema21 = analytics::TechnicalIndicators::calculateEMA(prices, 21);
+    if (ema8 <= 0.0 || ema21 <= 0.0) {
+        return state;
+    }
+
+    const size_t n = ordered.size();
+    const double last_close = ordered.back().close;
+    const double prev_close = ordered[n - 2].close;
+    if (last_close <= 0.0 || prev_close <= 0.0) {
+        return state;
+    }
+
+    double recent_high_12 = ordered[n - 13].high;
+    double recent_low_12 = ordered[n - 13].low;
+    for (size_t i = n - 13; i < n - 1; ++i) {
+        recent_high_12 = std::max(recent_high_12, ordered[i].high);
+        recent_low_12 = std::min(recent_low_12, ordered[i].low);
+    }
+    double recent_low_5 = ordered[n - 5].low;
+    for (size_t i = n - 5; i < n; ++i) {
+        recent_low_5 = std::min(recent_low_5, ordered[i].low);
+    }
+
+    const double last_range = std::max(1e-9, ordered.back().high - ordered.back().low);
+    const double close_location =
+        std::clamp((last_close - ordered.back().low) / last_range, 0.0, 1.0);
+    const double body_ratio =
+        std::clamp(std::abs(last_close - ordered.back().open) / last_range, 0.0, 1.0);
+    const double breakout_excess =
+        (recent_high_12 > 0.0) ? ((last_close / recent_high_12) - 1.0) : 0.0;
+    const double pullback_depth =
+        (ema8 > 0.0) ? std::max(0.0, (ema8 - recent_low_5) / ema8) : 0.0;
+    const double consolidation_span_pct =
+        (recent_low_12 > 0.0) ? ((recent_high_12 - recent_low_12) / recent_low_12) : 0.0;
+
+    const bool reclaim_structure_ok =
+        prev_close <= ema8 * 1.0010 &&
+        last_close >= ema8 * 1.0008 &&
+        last_close >= prev_close * 1.0003 &&
+        pullback_depth >= 0.0006 &&
+        pullback_depth <= 0.0105 &&
+        close_location >= 0.55 &&
+        body_ratio >= 0.38;
+
+    const bool breakout_structure_ok =
+        breakout_excess >= 0.0006 &&
+        breakout_excess <= 0.0095 &&
+        close_location >= 0.62 &&
+        body_ratio >= 0.42 &&
+        consolidation_span_pct <= 0.032;
+
+    const bool pullback_reclaim =
+        higher_tf_trend_bias >= 0.14 &&
+        bullish_impulse &&
+        mtf_alignment >= 0.52 &&
+        metrics.liquidity_score >= 62.0 &&
+        metrics.volume_surge_ratio >= 1.12 &&
+        flow_score >= 0.08 &&
+        buy_pressure_bias >= -0.01 &&
+        ema8 >= ema21 * 0.998 &&
+        recent_low_5 <= ema8 * 0.998 &&
+        reclaim_structure_ok &&
+        last_close >= ema8 * 1.0002;
+
+    const bool breakout_continuation =
+        higher_tf_trend_bias >= 0.18 &&
+        bullish_impulse &&
+        mtf_alignment >= 0.58 &&
+        metrics.liquidity_score >= 64.0 &&
+        metrics.volume_surge_ratio >= 1.35 &&
+        flow_score >= 0.14 &&
+        buy_pressure_bias >= 0.02 &&
+        metrics.price_change_rate <= 2.8 &&
+        breakout_structure_ok &&
+        last_close > recent_high_12 * 1.0006;
+
+    if (breakout_continuation) {
+        state.archetype = ScalpingEntryArchetype::BREAKOUT_CONTINUATION;
+        state.invalidation_drawdown_pct = 0.0048;
+        state.progress_floor_10m = 0.0010;
+        state.progress_floor_20m = 0.0022;
+        return state;
+    }
+    if (pullback_reclaim) {
+        state.archetype = ScalpingEntryArchetype::PULLBACK_RECLAIM;
+        state.invalidation_drawdown_pct = 0.0033;
+        state.progress_floor_10m = 0.0003;
+        state.progress_floor_20m = 0.0010;
+        return state;
+    }
+    return state;
+}
+
+double computeScalpingSetupScore(
+    const analytics::CoinMetrics& metrics,
+    const analytics::RegimeAnalysis& regime,
+    double higher_tf_trend_bias,
+    bool bullish_impulse,
+    double mtf_alignment,
+    double flow_score
+) {
+    double regime_fit = 0.45;
+    switch (regime.regime) {
+        case analytics::MarketRegime::TRENDING_UP:
+            regime_fit = 1.00;
+            break;
+        case analytics::MarketRegime::RANGING:
+            regime_fit = 0.35;
+            break;
+        case analytics::MarketRegime::HIGH_VOLATILITY:
+            regime_fit = 0.30;
+            break;
+        case analytics::MarketRegime::TRENDING_DOWN:
+            regime_fit = 0.18;
+            break;
+        default:
+            regime_fit = 0.25;
+            break;
+    }
+
+    const double trend_fit = clamp01((higher_tf_trend_bias + 0.15) / 0.55);
+    const double liq_fit = clamp01((metrics.liquidity_score - 52.0) / 26.0);
+    const double volume_fit = clamp01((metrics.volume_surge_ratio - 1.0) / 1.6);
+    const double mtf_fit = clamp01(mtf_alignment);
+    const double impulse_fit = bullish_impulse ? 1.0 : 0.35;
+    const double flow_fit = clamp01((flow_score + 0.05) / 0.65);
+
+    const double setup_score =
+        (regime_fit * 0.24) +
+        (trend_fit * 0.24) +
+        (liq_fit * 0.16) +
+        (volume_fit * 0.14) +
+        (mtf_fit * 0.10) +
+        (impulse_fit * 0.06) +
+        (flow_fit * 0.06);
+    return std::clamp(setup_score, 0.0, 1.0);
+}
+
+double computeScalpingTriggerScore(
+    const analytics::CoinMetrics& metrics,
+    double rsi,
+    double macd_histogram,
+    double macd_hist_delta,
+    double buy_pressure_bias,
+    double flow_score
+) {
+    double rsi_fit = 0.10;
+    if (rsi >= 32.0 && rsi <= 62.0) {
+        rsi_fit = 1.0;
+    } else if (rsi >= 25.0 && rsi <= 70.0) {
+        rsi_fit = 0.70;
+    }
+
+    const double macd_fit = clamp01((macd_histogram + 0.0008) / 0.0030);
+    const double macd_delta_fit = clamp01((macd_hist_delta + 0.0004) / 0.0016);
+    const double pressure_fit = clamp01((buy_pressure_bias + 0.02) / 0.18);
+    const double flow_fit = clamp01((flow_score + 0.05) / 0.65);
+    const double move_fit = clamp01((std::abs(metrics.price_change_rate) - 0.05) / 1.25);
+
+    const double trigger_score =
+        (rsi_fit * 0.20) +
+        (macd_fit * 0.25) +
+        (macd_delta_fit * 0.15) +
+        (pressure_fit * 0.16) +
+        (flow_fit * 0.16) +
+        (move_fit * 0.08);
+    return std::clamp(trigger_score, 0.0, 1.0);
 }
 
 void adaptScalpingStopsByLiquidityVolatility(
@@ -136,6 +551,7 @@ ScalpingStrategy::ScalpingStrategy(std::shared_ptr<network::UpbitHttpClient> cli
     // Initialize time counters
     current_day_start_ = getCurrentTimestamp();
     current_hour_start_ = getCurrentTimestamp();
+    loadAdaptiveArchetypeStats();
 }
 
 StrategyInfo ScalpingStrategy::getInfo() const {
@@ -163,6 +579,20 @@ Signal ScalpingStrategy::generateSignal(
     signal.market = market;
     signal.strategy_name = "Advanced Scalping";
     signal.timestamp = getCurrentTimestamp();
+    pending_entry_contexts_.erase(market);
+    if (!candles.empty()) {
+        latest_market_timestamp_ms_ = normalizeTimestampMs(candles.back().timestamp);
+        signal.timestamp = latest_market_timestamp_ms_;
+    }
+    const auto tf_5m_it = metrics.candles_by_tf.find("5m");
+    const auto tf_1h_it = metrics.candles_by_tf.find("1h");
+    const bool has_preloaded_5m =
+        (tf_5m_it != metrics.candles_by_tf.end() && tf_5m_it->second.size() >= 20);
+    const bool has_preloaded_1h =
+        (tf_1h_it != metrics.candles_by_tf.end() && tf_1h_it->second.size() >= 10);
+    signal.used_preloaded_tf_5m = has_preloaded_5m;
+    signal.used_preloaded_tf_1h = has_preloaded_1h;
+    signal.used_resampled_tf_fallback = !has_preloaded_5m;
     
     // ===== Hard Gates (early return on rejection) =====
     // 1) Skip if already in position for this market
@@ -219,19 +649,106 @@ Signal ScalpingStrategy::generateSignal(
         return signal;
     }
 
+    const double higher_tf_trend_bias = computeScalpingHigherTfTrendBias(metrics, candles);
+    const bool bullish_impulse = hasBullishImpulse(candles);
+    const double pressure_total_gate =
+        std::max(1e-6, std::abs(metrics.buy_pressure) + std::abs(metrics.sell_pressure));
+    const double buy_pressure_bias_gate =
+        (metrics.buy_pressure - metrics.sell_pressure) / pressure_total_gate;
+    const bool ranging_quality_ok = passesScalpingRangingQualityGate(
+        metrics, higher_tf_trend_bias, bullish_impulse, buy_pressure_bias_gate
+    );
+    const bool unknown_quality_ok = passesScalpingUnknownQualityGate(
+        metrics, higher_tf_trend_bias, bullish_impulse, buy_pressure_bias_gate
+    );
+    if (higher_tf_trend_bias < -0.22) {
+        return signal;
+    }
+    if (higher_tf_trend_bias < -0.10 && !bullish_impulse) {
+        return signal;
+    }
+    if (regime.regime == analytics::MarketRegime::TRENDING_DOWN &&
+        higher_tf_trend_bias < 0.05) {
+        return signal;
+    }
+    if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
+        const bool downtrend_counter_momentum_quality =
+            higher_tf_trend_bias >= 0.18 &&
+            bullish_impulse &&
+            metrics.volume_surge_ratio >= 1.70 &&
+            metrics.liquidity_score >= 68.0 &&
+            metrics.order_book_imbalance >= 0.05 &&
+            buy_pressure_bias_gate >= 0.08;
+        if (!downtrend_counter_momentum_quality) {
+            return signal;
+        }
+    }
+    if (regime.regime == analytics::MarketRegime::RANGING) {
+        // Pattern analysis baseline: scalping in ranging remained structurally weak.
+        return signal;
+    }
+    if (regime.regime == analytics::MarketRegime::UNKNOWN) {
+        return signal;
+    }
+    if (regime.regime == analytics::MarketRegime::TRENDING_UP) {
+        const bool trend_up_strict_quality =
+            higher_tf_trend_bias >= 0.24 &&
+            bullish_impulse &&
+            metrics.volume_surge_ratio >= 1.6 &&
+            metrics.liquidity_score >= 66.0 &&
+            metrics.order_book_imbalance >= -0.04;
+        const bool trend_up_flow_quality =
+            higher_tf_trend_bias >= 0.14 &&
+            bullish_impulse &&
+            metrics.volume_surge_ratio >= 1.30 &&
+            metrics.liquidity_score >= 60.0 &&
+            metrics.order_book_imbalance >= 0.0 &&
+            buy_pressure_bias_gate >= 0.03;
+        if (!trend_up_strict_quality && !trend_up_flow_quality) {
+            return signal;
+        }
+        if (metrics.price_change_rate > 1.4 &&
+            metrics.volume_surge_ratio < 2.2 &&
+            (metrics.order_book_imbalance < 0.03 || buy_pressure_bias_gate < 0.06)) {
+            return signal;
+        }
+        if (metrics.price_change_rate > 2.4 &&
+            metrics.volume_surge_ratio < 2.7 &&
+            buy_pressure_bias_gate < 0.03 &&
+            metrics.order_book_imbalance < -0.02) {
+            return signal;
+        }
+    }
+
     // 4.6) Regime-aware hard filters to suppress structurally weak entries.
     if (regime.regime == analytics::MarketRegime::RANGING) {
         const double abs_change = std::abs(metrics.price_change_rate);
-        if (abs_change < 0.15 && metrics.volume_surge_ratio < 1.2) {
+        if (abs_change < 0.18 && metrics.volume_surge_ratio < 1.25) {
+            return signal;
+        }
+        if (higher_tf_trend_bias < 0.0 && metrics.volume_surge_ratio < 1.5 && !ranging_quality_ok) {
             return signal;
         }
     }
     if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
-        if (metrics.liquidity_score < 55.0 || metrics.volume_surge_ratio < 1.3) {
+        if (metrics.liquidity_score < 58.0 || metrics.volume_surge_ratio < 1.45) {
             return signal;
         }
     }
-    if (metrics.order_book_imbalance < -0.25 && metrics.buy_pressure < metrics.sell_pressure) {
+    if (metrics.order_book_imbalance < -0.20 &&
+        metrics.buy_pressure < metrics.sell_pressure &&
+        metrics.volume_surge_ratio < 1.4) {
+        return signal;
+    }
+    if (metrics.orderbook_snapshot.valid &&
+        metrics.orderbook_snapshot.spread_pct > 0.0032 &&
+        metrics.liquidity_score < 68.0) {
+        return signal;
+    }
+    if (daily_trades_count_ >= 7 &&
+        (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY ||
+         metrics.liquidity_score < 68.0 ||
+         metrics.volume_surge_ratio < 1.3)) {
         return signal;
     }
     
@@ -239,8 +756,6 @@ Signal ScalpingStrategy::generateSignal(
     if (available_capital <= 0) {
         return signal;
     }
-    
-    LOG_INFO("{} - [Scalping] score-based analysis start", market);
     
     // ===== Score-Based Evaluation =====
     // Weighted category scores, clamped to [0.0, 1.0]
@@ -262,17 +777,18 @@ Signal ScalpingStrategy::generateSignal(
     
     // MACD ?먯닔 (0.00 ~ 0.10)
     double macd_score = 0.0;
-    if (macd.histogram > 0) {
-        macd_score = 0.10;  // ?묒쓽 ?덉뒪?좉렇??
-    } else {
-        // ?댁쟾 MACD 怨꾩궛
+    double macd_hist_delta = 0.0;
+    if (prices.size() >= 3) {
         std::vector<double> prev_prices(prices.begin(), prices.end() - 1);
         auto macd_prev = analytics::TechnicalIndicators::calculateMACD(prev_prices, 12, 26, 9);
-        if (macd.histogram > macd_prev.histogram) {
-            macd_score = 0.06; // ?섎씫 ?뷀솕 (?곸듅 ?꾪솚 以?
-        } else {
-            macd_score = 0.00; // ?섎씫 媛??
-        }
+        macd_hist_delta = macd.histogram - macd_prev.histogram;
+    }
+    if (macd.histogram > 0) {
+        macd_score = 0.10;  // ?묒쓽 ?덉뒪?좉렇??
+    } else if (macd_hist_delta > 0.0) {
+        macd_score = 0.06; // ?섎씫 ?뷀솕 (?곸듅 ?꾪솚 以?
+    } else {
+        macd_score = 0.00; // ?섎씫 媛??
     }
     total_score += macd_score;
     
@@ -346,6 +862,42 @@ Signal ScalpingStrategy::generateSignal(
     auto mtf_signal = analyzeScalpingTimeframes(candles);
     double mtf_score = mtf_signal.alignment_score * 0.10;
     total_score += mtf_score;
+    double mtf_5m_score = 0.0;
+    if (has_preloaded_5m) {
+        const auto candles_5m = ensureChronologicalCandles(tf_5m_it->second);
+        if (candles_5m.size() >= 4) {
+            const size_t start_5m = candles_5m.size() - 4;
+            int bullish_5m = 0;
+            for (size_t i = start_5m; i < candles_5m.size(); ++i) {
+                if (candles_5m[i].close >= candles_5m[i].open) {
+                    bullish_5m++;
+                }
+            }
+            if (bullish_5m >= 3) {
+                mtf_5m_score += 0.03;
+            } else if (bullish_5m == 2) {
+                mtf_5m_score += 0.015;
+            }
+            const double base_5m = candles_5m[start_5m].close;
+            if (base_5m > 0.0) {
+                const double move_5m = (candles_5m.back().close - base_5m) / base_5m;
+                if (move_5m > 0.008) {
+                    mtf_5m_score += 0.015;
+                } else if (move_5m < -0.010) {
+                    mtf_5m_score -= 0.03;
+                }
+            }
+        }
+    }
+    total_score += mtf_5m_score;
+
+    double trend_score = 0.0;
+    if (higher_tf_trend_bias >= 0.30) trend_score = 0.12;
+    else if (higher_tf_trend_bias >= 0.15) trend_score = 0.08;
+    else if (higher_tf_trend_bias >= 0.05) trend_score = 0.04;
+    else if (higher_tf_trend_bias <= -0.20) trend_score = -0.12;
+    else if (higher_tf_trend_bias <= -0.08) trend_score = -0.06;
+    total_score += trend_score;
 
     // Quality adjustment: reduce low-quality flow/liquidity combinations.
     const double flow_direction = std::clamp(metrics.order_book_imbalance, -1.0, 1.0);
@@ -354,22 +906,124 @@ Signal ScalpingStrategy::generateSignal(
     const double liquidity_t = clamp01((metrics.liquidity_score - 55.0) / 35.0);
     const double flow_t = clamp01((flow_direction + 0.10) / 0.70);
     const double pressure_t = clamp01((buy_pressure_bias + 0.10) / 0.70);
-    const double quality_factor = std::clamp(0.85 + (0.08 * liquidity_t) + (0.05 * flow_t) + (0.03 * pressure_t), 0.76, 1.04);
+    const double quality_factor = std::clamp(0.83 + (0.09 * liquidity_t) + (0.05 * flow_t) + (0.03 * pressure_t), 0.72, 1.03);
     total_score *= quality_factor;
 
-    if (metrics.price_change_rate > 0.0 && flow_direction < -0.20) {
+    if (metrics.price_change_rate > 0.0 && flow_direction < -0.18) {
+        total_score -= 0.04;
+    }
+    if (metrics.volume_surge_ratio < 1.05 && metrics.price_change_rate < 0.25) {
+        total_score -= 0.02;
+    }
+    if (metrics.buy_pressure < metrics.sell_pressure && flow_direction < -0.15) {
+        total_score -= 0.02;
+    }
+    if (higher_tf_trend_bias < -0.08) {
         total_score -= 0.03;
-    }
-    if (metrics.volume_surge_ratio < 1.0 && metrics.price_change_rate < 0.2) {
-        total_score -= 0.015;
+    } else if (higher_tf_trend_bias > 0.25 && bullish_impulse) {
+        total_score += 0.02;
     }
     
-    // ===== 理쒖쥌 ?좏샇 媛뺣룄 =====
-    signal.strength = std::clamp(total_score, 0.0, 1.0);
-    
-    LOG_INFO("{} - [Scalping] total score: {:.3f} (RSI:{:.2f} MACD:{:.2f} Chg:{:.2f} Pat:{:.2f} Reg:{:.2f} Vol:{:.2f} OF:{:.2f} MTF:{:.2f})",
-             market, signal.strength, rsi_score, macd_score, change_score, pattern_score, 
-             regime_score, volume_score, orderflow_score, mtf_score);
+    // ===== Setup + Trigger split (logic-first, not threshold-only) =====
+    const double setup_score = computeScalpingSetupScore(
+        metrics,
+        regime,
+        higher_tf_trend_bias,
+        bullish_impulse,
+        mtf_signal.alignment_score,
+        order_flow.microstructure_score
+    );
+    const double trigger_score = computeScalpingTriggerScore(
+        metrics,
+        rsi,
+        macd.histogram,
+        macd_hist_delta,
+        buy_pressure_bias,
+        order_flow.microstructure_score
+    );
+    const auto archetype_state = classifyScalpingEntryArchetype(
+        candles,
+        metrics,
+        higher_tf_trend_bias,
+        bullish_impulse,
+        buy_pressure_bias,
+        mtf_signal.alignment_score,
+        order_flow.microstructure_score
+    );
+    if (archetype_state.archetype == ScalpingEntryArchetype::NONE) {
+        return signal;
+    }
+    const int archetype_id = static_cast<int>(archetype_state.archetype);
+    const double archetype_bias = getArchetypeQualityBias(archetype_id, regime.regime);
+
+    double setup_floor = 0.60;
+    double trigger_floor = 0.56;
+    switch (regime.regime) {
+        case analytics::MarketRegime::TRENDING_UP:
+            setup_floor = 0.58;
+            trigger_floor = 0.54;
+            break;
+        case analytics::MarketRegime::HIGH_VOLATILITY:
+            setup_floor = 0.66;
+            trigger_floor = 0.62;
+            break;
+        case analytics::MarketRegime::TRENDING_DOWN:
+            setup_floor = 0.70;
+            trigger_floor = 0.66;
+            break;
+        case analytics::MarketRegime::RANGING:
+            setup_floor = 0.72;
+            trigger_floor = 0.67;
+            break;
+        default:
+            setup_floor = 0.64;
+            trigger_floor = 0.60;
+            break;
+    }
+    if (higher_tf_trend_bias >= 0.25) {
+        setup_floor = std::max(0.55, setup_floor - 0.03);
+        trigger_floor = std::max(0.50, trigger_floor - 0.03);
+    } else if (higher_tf_trend_bias <= -0.10) {
+        setup_floor = std::min(0.82, setup_floor + 0.04);
+        trigger_floor = std::min(0.82, trigger_floor + 0.04);
+    }
+    if (archetype_state.archetype == ScalpingEntryArchetype::BREAKOUT_CONTINUATION) {
+        setup_floor = std::max(setup_floor, 0.64);
+        trigger_floor = std::max(trigger_floor, 0.58);
+    } else if (archetype_state.archetype == ScalpingEntryArchetype::PULLBACK_RECLAIM) {
+        setup_floor = std::max(setup_floor, 0.58);
+        trigger_floor = std::max(trigger_floor, 0.52);
+    }
+    const bool severe_archetype_bias = archetype_bias <= -0.18;
+    const bool severe_bias_quality_shortfall =
+        mtf_signal.alignment_score < 0.76 &&
+        (setup_score < 0.78 || trigger_score < 0.74);
+    if (severe_archetype_bias && severe_bias_quality_shortfall) {
+        return signal;
+    }
+    if (archetype_bias < 0.0) {
+        const double penalty = std::min(0.14, -archetype_bias * 0.45);
+        setup_floor = std::min(0.88, setup_floor + penalty);
+        trigger_floor = std::min(0.88, trigger_floor + (penalty * 0.85));
+    } else if (archetype_bias > 0.0) {
+        const double bonus = std::min(0.05, archetype_bias * 0.25);
+        setup_floor = std::max(0.48, setup_floor - bonus);
+        trigger_floor = std::max(0.46, trigger_floor - (bonus * 0.85));
+    }
+    if (setup_score < setup_floor || trigger_score < trigger_floor) {
+        return signal;
+    }
+
+    const double base_strength = std::clamp(total_score, 0.0, 1.0);
+    const double archetype_bonus =
+        (archetype_state.archetype == ScalpingEntryArchetype::BREAKOUT_CONTINUATION) ? 0.03 : 0.01;
+    signal.strength = std::clamp(
+        (base_strength * 0.54) + (setup_score * 0.26) + (trigger_score * 0.18) + archetype_bonus,
+        0.0,
+        1.0
+    );
+    LOG_INFO("{} - [Scalping] score {:.3f} setup {:.3f} trigger {:.3f} (floors {:.3f}/{:.3f})",
+             market, signal.strength, setup_score, trigger_score, setup_floor, trigger_floor);
     
     // ===== Adaptive strength gate =====
     const auto& strategy_cfg = Config::getInstance().getScalpingConfig();
@@ -381,16 +1035,49 @@ Signal ScalpingStrategy::generateSignal(
         regime.regime != analytics::MarketRegime::TRENDING_DOWN &&
         regime.regime != analytics::MarketRegime::HIGH_VOLATILITY) {
         // Prevent over-suppression in healthy markets: allow slightly lower trigger.
-        effective_strength_floor = std::max(0.35, effective_strength_floor - 0.02);
+        effective_strength_floor = std::max(0.36, effective_strength_floor - 0.015);
     }
     if ((regime.regime == analytics::MarketRegime::TRENDING_UP ||
          regime.regime == analytics::MarketRegime::RANGING) &&
         metrics.liquidity_score >= 65.0 &&
         order_flow.bid_ask_spread > 0.0 &&
         order_flow.bid_ask_spread <= 0.08 &&
-        metrics.volume_surge_ratio >= 1.05) {
+        metrics.volume_surge_ratio >= 1.15) {
         // Keep minimum sample flow in favorable regimes for tunability.
-        effective_strength_floor = std::max(0.33, effective_strength_floor - 0.03);
+        effective_strength_floor = std::max(0.35, effective_strength_floor - 0.015);
+    }
+    if (higher_tf_trend_bias >= 0.25) {
+        effective_strength_floor = std::max(0.33, effective_strength_floor - 0.02);
+    } else if (higher_tf_trend_bias < 0.0) {
+        effective_strength_floor = std::min(0.78, effective_strength_floor + 0.03);
+    }
+    if (regime.regime == analytics::MarketRegime::RANGING) {
+        // Ranging mode is now allowed selectively; keep a stricter floor.
+        effective_strength_floor = std::max(effective_strength_floor, ranging_quality_ok ? 0.62 : 0.68);
+    } else if (regime.regime == analytics::MarketRegime::UNKNOWN) {
+        effective_strength_floor = std::max(effective_strength_floor, unknown_quality_ok ? 0.68 : 0.74);
+    }
+    if (regime.regime == analytics::MarketRegime::TRENDING_UP &&
+        bullish_impulse &&
+        higher_tf_trend_bias >= 0.18 &&
+        metrics.liquidity_score >= 72.0 &&
+        metrics.volume_surge_ratio >= 1.50 &&
+        buy_pressure_bias_gate >= 0.04 &&
+        metrics.order_book_imbalance >= 0.0) {
+        // In clear bullish-flow conditions, avoid over-pruning mid-strength setups.
+        effective_strength_floor = std::max(0.52, effective_strength_floor - 0.14);
+    }
+    if (regime.regime == analytics::MarketRegime::TRENDING_UP &&
+        archetype_state.archetype == ScalpingEntryArchetype::PULLBACK_RECLAIM &&
+        higher_tf_trend_bias >= 0.22 &&
+        mtf_signal.alignment_score >= 0.68 &&
+        order_flow.microstructure_score >= 0.16 &&
+        buy_pressure_bias_gate >= 0.03 &&
+        metrics.liquidity_score >= 68.0) {
+        effective_strength_floor = std::max(0.50, effective_strength_floor - 0.05);
+    }
+    if (higher_tf_trend_bias < -0.12) {
+        effective_strength_floor = std::min(0.80, effective_strength_floor + 0.03);
     }
     if (signal.strength < effective_strength_floor) {
         LOG_INFO("{} - [Scalping] dynamic strength gate: {:.3f} < {:.3f} (dynamic {:.3f}, cfg {:.3f})",
@@ -403,7 +1090,6 @@ Signal ScalpingStrategy::generateSignal(
     auto stops = calculateScalpingDynamicStops(current_price, candles);
     adaptScalpingStopsByLiquidityVolatility(metrics, current_price, stops);
     
-    signal.type = SignalType::BUY;
     signal.entry_price = current_price;
     signal.stop_loss = stops.stop_loss;
     signal.take_profit_1 = stops.take_profit_1;
@@ -425,11 +1111,11 @@ Signal ScalpingStrategy::generateSignal(
         observed_spread_pct = metrics.orderbook_snapshot.spread_pct * 100.0;
     }
     if (observed_spread_pct > 0.0) {
-        double spread_hard_limit = 0.28;
+        double spread_hard_limit = 0.24;
         if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
-            spread_hard_limit = 0.38;
+            spread_hard_limit = 0.34;
         } else if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
-            spread_hard_limit = 0.24;
+            spread_hard_limit = 0.22;
         }
         if (observed_spread_pct > spread_hard_limit) {
             LOG_INFO("{} - [Scalping] spread hard gate: {:.3f}% > {:.3f}%",
@@ -439,33 +1125,50 @@ Signal ScalpingStrategy::generateSignal(
     }
 
     // Cost model: fee + slippage floor + spread-dependent execution penalty.
-    const double spread_penalty = std::max(0.0, observed_spread_pct) / 100.0 * 0.6;
-    const double slippage_assumption = std::clamp(engine_cfg.max_slippage_pct * 0.35, 0.0006, 0.0014);
+    const double spread_penalty = std::max(0.0, observed_spread_pct) / 100.0 * 0.7;
+    const double slippage_assumption = std::clamp(engine_cfg.max_slippage_pct * 0.35, 0.0007, 0.0015);
     const double round_trip_cost = (fee_rate * 2.0) + (slippage_assumption * 2.0) + spread_penalty;
 
-    double edge_multiplier = 1.02;
+    double edge_multiplier = 1.07;
     if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY ||
         regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
-        edge_multiplier = 1.08;
+        edge_multiplier = 1.12;
     } else if (metrics.liquidity_score < 60.0) {
-        edge_multiplier = 1.06;
+        edge_multiplier = 1.10;
     }
     if (signal.strength >= 0.72 &&
         metrics.liquidity_score >= 70.0 &&
         observed_spread_pct > 0.0 &&
         observed_spread_pct <= 0.07 &&
+        order_flow.microstructure_score >= 0.40 &&
         regime.regime != analytics::MarketRegime::TRENDING_DOWN) {
-        edge_multiplier = std::max(0.97, edge_multiplier - 0.05);
+        edge_multiplier = std::max(0.99, edge_multiplier - 0.03);
+    }
+    if (higher_tf_trend_bias < 0.0) {
+        edge_multiplier = std::max(edge_multiplier, 1.13);
+    }
+    if (higher_tf_trend_bias < -0.15) {
+        edge_multiplier = std::max(edge_multiplier, 1.18);
+    } else if (higher_tf_trend_bias > 0.30) {
+        edge_multiplier = std::max(0.96, edge_multiplier - 0.05);
+    }
+    if (regime.regime == analytics::MarketRegime::RANGING) {
+        edge_multiplier = std::max(edge_multiplier, ranging_quality_ok ? 1.10 : 1.18);
+    } else if (regime.regime == analytics::MarketRegime::UNKNOWN) {
+        edge_multiplier = std::max(edge_multiplier, unknown_quality_ok ? 1.14 : 1.22);
     }
 
-    const double confidence_bonus = std::max(0.0, signal.strength - 0.65) * 0.0008;
+    const double confidence_bonus = std::max(0.0, signal.strength - 0.65) * 0.0006;
     double micro_quality_bonus = 0.0;
     if (metrics.liquidity_score >= 70.0 &&
         observed_spread_pct > 0.0 &&
         observed_spread_pct <= 0.08 &&
-        order_flow.microstructure_score >= 0.45 &&
+        order_flow.microstructure_score >= 0.50 &&
         regime.regime != analytics::MarketRegime::TRENDING_DOWN) {
-        micro_quality_bonus = 0.00035;
+        micro_quality_bonus = 0.00025;
+    }
+    if (higher_tf_trend_bias > 0.25 && bullish_impulse) {
+        micro_quality_bonus += 0.00015;
     }
     const double adjusted_expected_return = expected_return + confidence_bonus;
     const double adjusted_expected_return_with_quality = adjusted_expected_return + micro_quality_bonus;
@@ -477,7 +1180,20 @@ Signal ScalpingStrategy::generateSignal(
     }
     const double stop_risk = std::max(1e-9, (signal.entry_price - signal.stop_loss) / signal.entry_price);
     const double reward_risk = expected_return / stop_risk;
-    const double rr_floor = std::max(1.15, strategy_cfg.min_risk_reward_ratio * 0.75);
+    double rr_floor = std::max(1.25, strategy_cfg.min_risk_reward_ratio * 0.80);
+    if (higher_tf_trend_bias < 0.0) {
+        rr_floor = std::max(rr_floor, 1.40);
+    }
+    if (higher_tf_trend_bias < -0.15) {
+        rr_floor = std::max(rr_floor, 1.55);
+    } else if (higher_tf_trend_bias > 0.25) {
+        rr_floor = std::max(1.15, rr_floor - 0.10);
+    }
+    if (regime.regime == analytics::MarketRegime::RANGING) {
+        rr_floor = std::max(rr_floor, ranging_quality_ok ? 1.40 : 1.55);
+    } else if (regime.regime == analytics::MarketRegime::UNKNOWN) {
+        rr_floor = std::max(rr_floor, unknown_quality_ok ? 1.48 : 1.62);
+    }
     if (reward_risk < rr_floor) {
         return signal;
     }
@@ -494,8 +1210,30 @@ Signal ScalpingStrategy::generateSignal(
         const double sell_bias_t = clamp01((metrics.sell_pressure - metrics.buy_pressure) / pressure_total_pos);
         const double book_imbalance_t = clamp01((-metrics.order_book_imbalance + 0.05) / 0.60);
         const double flow_penalty_t = std::max(sell_bias_t, book_imbalance_t);
-        const double adaptive_scale = std::clamp(1.0 - (vol_t * 0.40) - (liq_t * 0.35) - (flow_penalty_t * 0.25), 0.35, 1.0);
+        double adaptive_scale = std::clamp(1.0 - (vol_t * 0.40) - (liq_t * 0.35) - (flow_penalty_t * 0.25), 0.35, 1.0);
+        if (higher_tf_trend_bias < -0.10) {
+            adaptive_scale *= 0.80;
+        } else if (higher_tf_trend_bias < 0.0) {
+            adaptive_scale *= 0.88;
+        } else if (higher_tf_trend_bias > 0.25) {
+            adaptive_scale *= 1.08;
+        }
+        adaptive_scale = std::clamp(adaptive_scale, 0.28, 1.05);
         pos_metrics.final_position_size *= adaptive_scale;
+    }
+    {
+        double archetype_size_scale = 1.0;
+        if (regime.regime == analytics::MarketRegime::TRENDING_UP) {
+            if (archetype_state.archetype == ScalpingEntryArchetype::BREAKOUT_CONTINUATION) {
+                archetype_size_scale = 0.55;
+            } else if (archetype_state.archetype == ScalpingEntryArchetype::PULLBACK_RECLAIM) {
+                archetype_size_scale = 0.70;
+            }
+        } else if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY ||
+                   regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
+            archetype_size_scale = 0.60;
+        }
+        pos_metrics.final_position_size *= archetype_size_scale;
     }
     const double min_order_krw = std::max(5000.0, engine_cfg.min_order_krw);
     if (available_capital < min_order_krw) {
@@ -523,17 +1261,33 @@ Signal ScalpingStrategy::generateSignal(
     signal.position_size = std::clamp(order_amount / available_capital, 0.0, 1.0);
     
     // Upgrade to strong buy on high score
+    signal.type = SignalType::BUY;
     if (signal.strength >= 0.70) {
         signal.type = SignalType::STRONG_BUY;
     }
     
     signal.reason = fmt::format(
-        "Scalping: Score={:.0f}% Regime={} RSI={:.0f} Vol={:.1f}x",
+        "Scalping: Score={:.0f}% Regime={} RSI={:.0f} Vol={:.1f}x Trend={:.2f}",
         signal.strength * 100,
         static_cast<int>(regime.regime),
         rsi,
-        metrics.volume_surge_ratio
+        metrics.volume_surge_ratio,
+        higher_tf_trend_bias
     );
+
+    EntryDecisionContext entry_ctx;
+    entry_ctx.setup_score = setup_score;
+    entry_ctx.trigger_score = trigger_score;
+    entry_ctx.signal_strength = signal.strength;
+    entry_ctx.trend_bias = higher_tf_trend_bias;
+    entry_ctx.flow_bias = buy_pressure_bias;
+    entry_ctx.archetype = static_cast<int>(archetype_state.archetype);
+    entry_ctx.invalidation_drawdown_pct = archetype_state.invalidation_drawdown_pct;
+    entry_ctx.progress_floor_10m = archetype_state.progress_floor_10m;
+    entry_ctx.progress_floor_20m = archetype_state.progress_floor_20m;
+    entry_ctx.regime = regime.regime;
+    pending_entry_contexts_[market] = entry_ctx;
+    signal.entry_archetype = scalpingArchetypeToLabel(archetype_state.archetype);
     
     last_signal_time_ = getCurrentTimestamp();
     
@@ -550,10 +1304,71 @@ bool ScalpingStrategy::shouldEnter(
     double current_price,
     const analytics::RegimeAnalysis& regime
 ) {
-    (void)current_price;
-    (void)regime; // Used in generateSignal mainly, but available here if needed for deeper filter
-    
     if (candles.size() < 30) return false;
+
+    const double higher_tf_trend_bias = computeScalpingHigherTfTrendBias(metrics, candles);
+    const double pressure_total_gate =
+        std::max(1e-6, std::abs(metrics.buy_pressure) + std::abs(metrics.sell_pressure));
+    const double buy_pressure_bias_gate =
+        (metrics.buy_pressure - metrics.sell_pressure) / pressure_total_gate;
+    const bool bullish_impulse = hasBullishImpulse(candles);
+    if (higher_tf_trend_bias < -0.22) {
+        return false;
+    }
+    if (higher_tf_trend_bias < -0.10 && !bullish_impulse) {
+        return false;
+    }
+    if (regime.regime == analytics::MarketRegime::TRENDING_DOWN &&
+        higher_tf_trend_bias < 0.05) {
+        return false;
+    }
+    if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
+        const bool downtrend_counter_momentum_quality =
+            higher_tf_trend_bias >= 0.18 &&
+            bullish_impulse &&
+            metrics.volume_surge_ratio >= 1.70 &&
+            metrics.liquidity_score >= 68.0 &&
+            metrics.order_book_imbalance >= 0.05 &&
+            buy_pressure_bias_gate >= 0.08;
+        if (!downtrend_counter_momentum_quality) {
+            return false;
+        }
+    }
+    if (regime.regime == analytics::MarketRegime::RANGING) {
+        return false;
+    }
+    if (regime.regime == analytics::MarketRegime::UNKNOWN) {
+        return false;
+    }
+    if (regime.regime == analytics::MarketRegime::TRENDING_UP) {
+        const bool trend_up_strict_quality =
+            higher_tf_trend_bias >= 0.24 &&
+            bullish_impulse &&
+            metrics.volume_surge_ratio >= 1.6 &&
+            metrics.liquidity_score >= 66.0 &&
+            metrics.order_book_imbalance >= -0.04;
+        const bool trend_up_flow_quality =
+            higher_tf_trend_bias >= 0.14 &&
+            bullish_impulse &&
+            metrics.volume_surge_ratio >= 1.30 &&
+            metrics.liquidity_score >= 60.0 &&
+            metrics.order_book_imbalance >= 0.0 &&
+            buy_pressure_bias_gate >= 0.03;
+        if (!trend_up_strict_quality && !trend_up_flow_quality) {
+            return false;
+        }
+        if (metrics.price_change_rate > 1.4 &&
+            metrics.volume_surge_ratio < 2.2 &&
+            (metrics.order_book_imbalance < 0.03 || buy_pressure_bias_gate < 0.06)) {
+            return false;
+        }
+        if (metrics.price_change_rate > 2.4 &&
+            metrics.volume_surge_ratio < 2.7 &&
+            buy_pressure_bias_gate < 0.03 &&
+            metrics.order_book_imbalance < -0.02) {
+            return false;
+        }
+    }
     
     double dynamic_liquidity_score = 50.0;
     // 1) Volume spike check (or minimum liquidity fallback)
@@ -601,6 +1416,11 @@ bool ScalpingStrategy::shouldEnter(
         LOG_INFO("{} - volatility too low ({:.2f}%)", market, abs_change);
         return false;
     }
+    if (regime.regime == analytics::MarketRegime::RANGING &&
+        higher_tf_trend_bias < 0.0 &&
+        metrics.volume_surge_ratio < 1.5) {
+        return false;
+    }
     
     // 5) Rebound / support validation
     size_t n = candles.size();
@@ -643,9 +1463,84 @@ bool ScalpingStrategy::shouldEnter(
     if (metrics.liquidity_score < dynamic_liquidity_score) {
         return false;
     }
+
+    const auto mtf_signal = analyzeScalpingTimeframes(candles);
+    const auto order_flow = analyzeUltraFastOrderFlow(metrics, current_price);
+    const double setup_score = computeScalpingSetupScore(
+        metrics,
+        regime,
+        higher_tf_trend_bias,
+        bullish_impulse,
+        mtf_signal.alignment_score,
+        order_flow.microstructure_score
+    );
+    const double trigger_score = computeScalpingTriggerScore(
+        metrics,
+        rsi,
+        current_hist,
+        current_hist - prev_hist,
+        buy_pressure_bias_gate,
+        order_flow.microstructure_score
+    );
+    const auto archetype_state = classifyScalpingEntryArchetype(
+        candles,
+        metrics,
+        higher_tf_trend_bias,
+        bullish_impulse,
+        buy_pressure_bias_gate,
+        mtf_signal.alignment_score,
+        order_flow.microstructure_score
+    );
+    if (archetype_state.archetype == ScalpingEntryArchetype::NONE) {
+        return false;
+    }
+    const int archetype_id = static_cast<int>(archetype_state.archetype);
+    const double archetype_bias = getArchetypeQualityBias(archetype_id, regime.regime);
+    double setup_floor = 0.60;
+    double trigger_floor = 0.56;
+    if (regime.regime == analytics::MarketRegime::TRENDING_UP) {
+        setup_floor = 0.58;
+        trigger_floor = 0.54;
+    } else if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
+        setup_floor = 0.66;
+        trigger_floor = 0.62;
+    } else if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
+        setup_floor = 0.70;
+        trigger_floor = 0.66;
+    }
+    if (higher_tf_trend_bias >= 0.25) {
+        setup_floor = std::max(0.55, setup_floor - 0.03);
+        trigger_floor = std::max(0.50, trigger_floor - 0.03);
+    }
+    if (archetype_state.archetype == ScalpingEntryArchetype::BREAKOUT_CONTINUATION) {
+        setup_floor = std::max(setup_floor, 0.64);
+        trigger_floor = std::max(trigger_floor, 0.58);
+    } else if (archetype_state.archetype == ScalpingEntryArchetype::PULLBACK_RECLAIM) {
+        setup_floor = std::max(setup_floor, 0.58);
+        trigger_floor = std::max(trigger_floor, 0.52);
+    }
+    const bool severe_archetype_bias = archetype_bias <= -0.18;
+    const bool severe_bias_quality_shortfall =
+        mtf_signal.alignment_score < 0.76 &&
+        (setup_score < 0.78 || trigger_score < 0.74);
+    if (severe_archetype_bias && severe_bias_quality_shortfall) {
+        return false;
+    }
+    if (archetype_bias < 0.0) {
+        const double penalty = std::min(0.14, -archetype_bias * 0.45);
+        setup_floor = std::min(0.88, setup_floor + penalty);
+        trigger_floor = std::min(0.88, trigger_floor + (penalty * 0.85));
+    } else if (archetype_bias > 0.0) {
+        const double bonus = std::min(0.05, archetype_bias * 0.25);
+        setup_floor = std::max(0.48, setup_floor - bonus);
+        trigger_floor = std::max(0.46, trigger_floor - (bonus * 0.85));
+    }
+    if (setup_score < setup_floor || trigger_score < trigger_floor) {
+        return false;
+    }
     
-    LOG_INFO("{} - scalping entry conditions passed (RSI: {:.1f}, change: {:.2f}%)",
-              market, rsi, metrics.price_change_rate);
+    LOG_INFO("{} - scalping entry passed (setup {:.2f}, trigger {:.2f}, RSI {:.1f}, trend_bias {:.2f})",
+              market, setup_score, trigger_score, rsi, higher_tf_trend_bias);
     
     return true;
 }
@@ -656,9 +1551,110 @@ bool ScalpingStrategy::shouldExit(
     double current_price,
     double holding_time_seconds
 ) {
-    (void)market;
-    (void)entry_price;
-    (void)current_price;
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    const double pnl_pct = (entry_price > 0.0)
+        ? ((current_price - entry_price) / entry_price)
+        : 0.0;
+
+    double early_cut_minutes = 7.0;
+    double early_cut_loss = -0.0035;
+    double mid_cut_minutes = 15.0;
+    double mid_cut_loss = -0.0010;
+    double late_cut_minutes = 20.0;
+    double late_flat_floor = 0.0008;
+
+    const auto ctx_it = active_entry_contexts_.find(market);
+    if (ctx_it != active_entry_contexts_.end()) {
+        const auto& ctx = ctx_it->second;
+        const bool is_breakout_cont =
+            ctx.archetype == static_cast<int>(ScalpingEntryArchetype::BREAKOUT_CONTINUATION);
+        const bool is_pullback_reclaim =
+            ctx.archetype == static_cast<int>(ScalpingEntryArchetype::PULLBACK_RECLAIM);
+
+        if (is_breakout_cont) {
+            // Continuation entries must show quick follow-through; otherwise losses cluster.
+            early_cut_minutes = 6.0;
+            early_cut_loss = -0.0027;
+            mid_cut_minutes = 12.0;
+            mid_cut_loss = -0.0004;
+            late_cut_minutes = 16.0;
+            late_flat_floor = 0.0010;
+        } else if (is_pullback_reclaim) {
+            // Reclaim entries should recover early; stale recoveries tend to decay.
+            early_cut_minutes = 7.0;
+            early_cut_loss = -0.0030;
+            mid_cut_minutes = 14.0;
+            mid_cut_loss = -0.0007;
+            late_cut_minutes = 19.0;
+            late_flat_floor = 0.0008;
+        }
+
+        if (ctx.invalidation_drawdown_pct > 0.0 &&
+            pnl_pct <= -ctx.invalidation_drawdown_pct) {
+            return true;
+        }
+        const double quality = (ctx.setup_score * 0.60) + (ctx.trigger_score * 0.40);
+        if (quality < 0.56) {
+            early_cut_minutes = 5.0;
+            early_cut_loss = -0.0028;
+            mid_cut_minutes = 11.0;
+            mid_cut_loss = -0.0004;
+            late_cut_minutes = 16.0;
+            late_flat_floor = 0.0012;
+        } else if (quality >= 0.74 && ctx.trend_bias >= 0.22) {
+            early_cut_minutes = 9.0;
+            early_cut_loss = -0.0044;
+            mid_cut_minutes = 18.0;
+            mid_cut_loss = -0.0018;
+            late_cut_minutes = 24.0;
+            late_flat_floor = 0.0004;
+        }
+
+        if (ctx.regime == analytics::MarketRegime::HIGH_VOLATILITY ||
+            ctx.regime == analytics::MarketRegime::TRENDING_DOWN) {
+            early_cut_minutes = std::min(early_cut_minutes, 6.0);
+            early_cut_loss = std::max(early_cut_loss, -0.0031);
+            late_flat_floor = std::max(late_flat_floor, 0.0010);
+        }
+        if (ctx.progress_floor_10m > 0.0 &&
+            holding_time_seconds >= 10.0 * 60.0 &&
+            pnl_pct < ctx.progress_floor_10m) {
+            return true;
+        }
+        if (ctx.progress_floor_20m > 0.0 &&
+            holding_time_seconds >= 20.0 * 60.0 &&
+            pnl_pct < ctx.progress_floor_20m) {
+            return true;
+        }
+        if (is_breakout_cont) {
+            if (holding_time_seconds >= 7.0 * 60.0 && pnl_pct < -0.0002) {
+                return true;
+            }
+            if (holding_time_seconds >= 12.0 * 60.0 && pnl_pct < 0.0003) {
+                return true;
+            }
+        } else if (is_pullback_reclaim) {
+            if (holding_time_seconds >= 9.0 * 60.0 && pnl_pct <= -0.0013) {
+                return true;
+            }
+            if (holding_time_seconds >= 15.0 * 60.0 && pnl_pct < 0.0001) {
+                return true;
+            }
+        }
+    }
+
+    // Early damage control: cut quickly when short-horizon move fails immediately.
+    if (holding_time_seconds >= early_cut_minutes * 60.0 && pnl_pct <= early_cut_loss) {
+        return true;
+    }
+    // If scalping momentum does not recover in the first 15 minutes, reduce tail loss.
+    if (holding_time_seconds >= mid_cut_minutes * 60.0 && pnl_pct <= mid_cut_loss) {
+        return true;
+    }
+    // Stagnant positions degrade edge for scalping.
+    if (holding_time_seconds >= late_cut_minutes * 60.0 && pnl_pct < late_flat_floor) {
+        return true;
+    }
 
     // ?쒓컙 ?먯젅 (5遺?
     if (holding_time_seconds >= MAX_HOLDING_TIME) {
@@ -723,16 +1719,44 @@ bool ScalpingStrategy::onSignalAccepted(const Signal& signal, double allocated_c
     auto inserted = active_positions_.insert(signal.market).second;
     if (inserted) {
         recordTrade();
+        EntryDecisionContext ctx;
+        auto pending_it = pending_entry_contexts_.find(signal.market);
+        if (pending_it != pending_entry_contexts_.end()) {
+            ctx = pending_it->second;
+            pending_entry_contexts_.erase(pending_it);
+        }
+        ctx.signal_strength = std::max(ctx.signal_strength, signal.strength);
+        ctx.accepted_timestamp_ms = getCurrentTimestamp();
+        active_entry_contexts_[signal.market] = ctx;
+    } else {
+        pending_entry_contexts_.erase(signal.market);
     }
-    return true;
+    return inserted;
 }
 
 void ScalpingStrategy::updateStatistics(const std::string& market, bool is_win, double profit_loss) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    
+    EntryDecisionContext closed_ctx;
+    bool has_closed_ctx = false;
+    auto ctx_it = active_entry_contexts_.find(market);
+    if (ctx_it != active_entry_contexts_.end()) {
+        closed_ctx = ctx_it->second;
+        has_closed_ctx = true;
+    }
+
     // Remove market from active set when position is closed.
     if (active_positions_.erase(market)) {
         LOG_INFO("{} - scalping active-position flag cleared (position closed)", market);
+    }
+    active_entry_contexts_.erase(market);
+    pending_entry_contexts_.erase(market);
+    if (has_closed_ctx && closed_ctx.archetype != 0) {
+        recordArchetypeOutcome(
+            closed_ctx.archetype,
+            closed_ctx.regime,
+            is_win,
+            profit_loss
+        );
     }
     
     // Existing statistics flow
@@ -802,6 +1826,133 @@ bool ScalpingStrategy::shouldMoveToBreakeven(
 ScalpingRollingStatistics ScalpingStrategy::getRollingStatistics() const {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     return rolling_stats_;
+}
+
+double ScalpingStrategy::getArchetypeQualityBias(
+    int archetype,
+    analytics::MarketRegime regime
+) const {
+    const auto it = archetype_adaptive_stats_.find(makeArchetypeRegimeKey(archetype, regime));
+    if (it == archetype_adaptive_stats_.end()) {
+        return 0.0;
+    }
+    const auto& st = it->second;
+    if (st.trades < ADAPTIVE_ARCHETYPE_MIN_TRADES) {
+        return 0.0;
+    }
+    const double win_rate = static_cast<double>(st.wins) / std::max(1, st.trades);
+    const double expectancy = st.pnl_sum / std::max(1, st.trades);
+    const double win_component = std::clamp((win_rate - 0.50) * 0.60, -0.18, 0.18);
+    const double expectancy_component = std::clamp(expectancy / 35.0, -0.12, 0.12);
+    const double ema_component = std::clamp(st.pnl_ema / 25.0, -0.10, 0.10);
+    return std::clamp(win_component + expectancy_component + ema_component, -0.22, 0.16);
+}
+
+void ScalpingStrategy::recordArchetypeOutcome(
+    int archetype,
+    analytics::MarketRegime regime,
+    bool is_win,
+    double profit_loss
+) {
+    auto& st = archetype_adaptive_stats_[makeArchetypeRegimeKey(archetype, regime)];
+    st.trades += 1;
+    if (is_win) {
+        st.wins += 1;
+    }
+    st.pnl_sum += profit_loss;
+    if (st.trades == 1) {
+        st.pnl_ema = profit_loss;
+    } else {
+        st.pnl_ema = (st.pnl_ema * 0.82) + (profit_loss * 0.18);
+    }
+    saveAdaptiveArchetypeStats();
+}
+
+void ScalpingStrategy::loadAdaptiveArchetypeStats() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (disableAdaptiveArchetypeStateIo()) {
+        return;
+    }
+    try {
+        const auto path = getScalpingArchetypeStatsPath();
+        if (!std::filesystem::exists(path)) {
+            return;
+        }
+
+        std::ifstream in(path.string(), std::ios::binary);
+        if (!in.is_open()) {
+            LOG_WARN("Failed to open scalping adaptive stats file: {}", path.string());
+            return;
+        }
+
+        nlohmann::json payload;
+        in >> payload;
+        if (!payload.contains("stats") || !payload["stats"].is_array()) {
+            return;
+        }
+
+        std::map<int, ArchetypeAdaptiveStats> loaded;
+        for (const auto& row : payload["stats"]) {
+            if (!row.is_object()) {
+                continue;
+            }
+            const int key = row.value("key", 0);
+            if (key == 0) {
+                continue;
+            }
+
+            ArchetypeAdaptiveStats s;
+            s.trades = std::max(0, row.value("trades", 0));
+            s.wins = std::max(0, row.value("wins", 0));
+            s.pnl_sum = row.value("pnl_sum", 0.0);
+            s.pnl_ema = row.value("pnl_ema", 0.0);
+            loaded[key] = s;
+        }
+
+        archetype_adaptive_stats_ = std::move(loaded);
+        LOG_INFO(
+            "Scalping adaptive archetype stats loaded: path={}, entries={}",
+            path.string(),
+            archetype_adaptive_stats_.size()
+        );
+    } catch (const std::exception& e) {
+        LOG_WARN("Failed to load scalping adaptive archetype stats: {}", e.what());
+    }
+}
+
+void ScalpingStrategy::saveAdaptiveArchetypeStats() const {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (disableAdaptiveArchetypeStateIo()) {
+        return;
+    }
+    try {
+        const auto path = getScalpingArchetypeStatsPath();
+        std::filesystem::create_directories(path.parent_path());
+
+        nlohmann::json payload;
+        payload["schema_version"] = 1;
+        payload["saved_at_ms"] = currentWallClockMs();
+        payload["stats"] = nlohmann::json::array();
+        for (const auto& kv : archetype_adaptive_stats_) {
+            const auto& s = kv.second;
+            nlohmann::json row;
+            row["key"] = kv.first;
+            row["trades"] = s.trades;
+            row["wins"] = s.wins;
+            row["pnl_sum"] = s.pnl_sum;
+            row["pnl_ema"] = s.pnl_ema;
+            payload["stats"].push_back(std::move(row));
+        }
+
+        std::ofstream out(path.string(), std::ios::binary | std::ios::trunc);
+        if (!out.is_open()) {
+            LOG_WARN("Failed to open scalping adaptive stats file for write: {}", path.string());
+            return;
+        }
+        out << payload.dump(2);
+    } catch (const std::exception& e) {
+        LOG_WARN("Failed to save scalping adaptive archetype stats: {}", e.what());
+    }
 }
 
 // ===== API ?몄텧 愿由?(?낅퉬??Rate Limit 以?? =====
@@ -963,6 +2114,9 @@ bool ScalpingStrategy::isCircuitBreakerActive() const {
 }
 
 long long ScalpingStrategy::getCurrentTimestamp() const {
+    if (latest_market_timestamp_ms_ > 0) {
+        return latest_market_timestamp_ms_;
+    }
     return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()
     ).count();
@@ -1774,6 +2928,8 @@ bool ScalpingStrategy::shouldGenerateScalpingSignal(
 
 void ScalpingStrategy::updateState(const std::string& market, double current_price) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
+    (void)market;
+    (void)current_price;
     
     // ScalpingStrategy??珥덈떒??대?濡??ㅼ떆媛?異붿쟻????以묒슂
     // ?섏?留??꾩슂??留덉씠?щ줈?ㅽ뀒?댄듃 ?낅뜲?댄듃 媛??

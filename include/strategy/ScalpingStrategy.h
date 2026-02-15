@@ -200,6 +200,29 @@ private:
     
     // [신규 추가] 중복 진입 방지를 위한 활성 포지션 목록
     std::set<std::string> active_positions_;
+    struct EntryDecisionContext {
+        double setup_score = 0.0;
+        double trigger_score = 0.0;
+        double signal_strength = 0.0;
+        double trend_bias = 0.0;
+        double flow_bias = 0.0;
+        int archetype = 0;
+        double invalidation_drawdown_pct = 0.0;
+        double progress_floor_10m = 0.0;
+        double progress_floor_20m = 0.0;
+        analytics::MarketRegime regime = analytics::MarketRegime::UNKNOWN;
+        long long accepted_timestamp_ms = 0;
+    };
+    std::map<std::string, EntryDecisionContext> pending_entry_contexts_;
+    std::map<std::string, EntryDecisionContext> active_entry_contexts_;
+    struct ArchetypeAdaptiveStats {
+        int trades = 0;
+        int wins = 0;
+        double pnl_sum = 0.0;
+        double pnl_ema = 0.0;
+    };
+    std::map<int, ArchetypeAdaptiveStats> archetype_adaptive_stats_;
+    static constexpr int ADAPTIVE_ARCHETYPE_MIN_TRADES = 6;
 
     // ===== 업비트 API 호출 제어 =====
     
@@ -221,6 +244,7 @@ private:
     int hourly_trades_count_;
     long long current_day_start_;
     long long current_hour_start_;
+    mutable long long latest_market_timestamp_ms_ = 0;
     
     static constexpr int MAX_DAILY_SCALPING_TRADES = 15;
     static constexpr int MAX_HOURLY_SCALPING_TRADES = 5;
@@ -280,6 +304,15 @@ private:
     void checkCircuitBreaker();
     void activateCircuitBreaker();
     bool isCircuitBreakerActive() const;
+    double getArchetypeQualityBias(int archetype, analytics::MarketRegime regime) const;
+    void recordArchetypeOutcome(
+        int archetype,
+        analytics::MarketRegime regime,
+        bool is_win,
+        double profit_loss
+    );
+    void loadAdaptiveArchetypeStats();
+    void saveAdaptiveArchetypeStats() const;
     
     // ===== 2. Statistical Significance =====
     

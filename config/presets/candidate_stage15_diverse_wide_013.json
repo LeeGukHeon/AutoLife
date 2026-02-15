@@ -1,0 +1,30 @@
+{
+  "preset_name": "candidate_stage15_diverse_wide_013",
+  "description": "Stage 15 realdata tuning winner from diverse_wide scenario 013.",
+  "trading": {
+    "max_new_orders_per_scan": 3,
+    "min_expected_edge_pct": 0.0012,
+    "min_reward_risk": 1.15,
+    "min_rr_weak_signal": 1.6,
+    "min_rr_strong_signal": 1.05,
+    "min_strategy_trades_for_ev": 18,
+    "min_strategy_expectancy_krw": -1.0,
+    "min_strategy_profit_factor": 0.9,
+    "avoid_high_volatility": true,
+    "avoid_trending_down": false
+  },
+  "strategies": {
+    "scalping": {
+      "min_signal_strength": 0.66
+    },
+    "momentum": {
+      "min_signal_strength": 0.72
+    },
+    "breakout": {
+      "min_signal_strength": 0.4
+    },
+    "mean_reversion": {
+      "min_signal_strength": 0.4
+    }
+  }
+}

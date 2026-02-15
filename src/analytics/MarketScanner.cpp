@@ -4,9 +4,22 @@
 #include <algorithm>
 #include <numeric>
 #include <cmath>
+#include <thread>
 
 #undef max
 #undef min
+
+namespace {
+constexpr int kScanMarketLimit = 25;
+constexpr int kTf5mMarketLimit = kScanMarketLimit;
+constexpr int kTf1hMarketLimit = 15;
+constexpr int kTf4hMarketLimit = 8;
+constexpr int kTf1dMarketLimit = 8;
+constexpr int kIncrementalFetchCount = 3;
+constexpr auto kMinCandleApiInterval = std::chrono::milliseconds(120);
+constexpr auto kMinFullSyncInterval = std::chrono::milliseconds(30LL * 60LL * 1000LL);
+constexpr auto kMaxFullSyncInterval = std::chrono::milliseconds(72LL * 60LL * 60LL * 1000LL);
+}
 
 namespace autolife {
 namespace analytics {
@@ -14,6 +27,7 @@ namespace analytics {
 MarketScanner::MarketScanner(std::shared_ptr<network::UpbitHttpClient> client)
     : client_(client)
     , last_scan_time_(std::chrono::steady_clock::now())
+    , last_candle_api_call_time_(std::chrono::steady_clock::now())
 {
     LOG_INFO("MarketScanner 초기화");
 }
@@ -73,8 +87,8 @@ std::vector<CoinMetrics> MarketScanner::scanAllMarkets() {
         LOG_INFO("  #{} {} : {:.0f}억", i+1, volume_ranks[i].first, volume_ranks[i].second / 100000000.0);
     }
 
-    // 3단계: 상위 50개의 OrderBook + Candles 배치 조회
-    int detail_count = std::min(50, (int)volume_ranks.size());
+    // 3단계: 상위 제한 종목만 상세 수집 (실거래 지연/호출량 절감)
+    int detail_count = std::min(kScanMarketLimit, (int)volume_ranks.size());
     LOG_INFO("3단계: 상위 {} 종목 데이터 수집...", detail_count);
     
     std::vector<std::string> top_markets;
@@ -106,12 +120,12 @@ std::vector<CoinMetrics> MarketScanner::scanAllMarkets() {
     }
     LOG_INFO("OrderBook 수집 완료: {} 종목", orderbook_map.size());
     
-    // Candles 조회 (각 종목마다 순차 - 이건 배치 불가능)
-    std::map<std::string, nlohmann::json> candles_map_1m;
-    std::map<std::string, nlohmann::json> candles_map_5m;
-    std::map<std::string, nlohmann::json> candles_map_1h;
-    std::map<std::string, nlohmann::json> candles_map_4h;
-    std::map<std::string, nlohmann::json> candles_map_1d;
+    // Candles 조회 (시계열 캐시 사용)
+    std::map<std::string, std::vector<Candle>> candles_map_1m;
+    std::map<std::string, std::vector<Candle>> candles_map_5m;
+    std::map<std::string, std::vector<Candle>> candles_map_1h;
+    std::map<std::string, std::vector<Candle>> candles_map_4h;
+    std::map<std::string, std::vector<Candle>> candles_map_1d;
 
     const int CANDLES_1M = 200;
     const int CANDLES_5M = 120;
@@ -119,70 +133,49 @@ std::vector<CoinMetrics> MarketScanner::scanAllMarkets() {
     const int CANDLES_4H = 90;
     const int CANDLES_1D = 60;
 
-    int candle_count = 0;
     for (const auto& market : top_markets) {
-        try {
-            std::this_thread::sleep_for(std::chrono::milliseconds(150));
-
-            auto candles = client_->getCandles(market, "1", CANDLES_1M);
-            candles_map_1m[market] = candles;
-            candle_count++;
-
-        } catch (const std::exception& e) {
-            LOG_ERROR("Candles(1m) 조회 실패: {} - {}", market, e.what());
-
-            if (std::string(e.what()).find("429") != std::string::npos ||
-                std::string(e.what()).find("too_many_requests") != std::string::npos) {
-                LOG_WARN("Rate Limit 도달, 1초 대기 후 재시도...");
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-            }
+        auto candles = getCandlesWithRollingCache(market, "1", CANDLES_1M, false);
+        if (!candles.empty()) {
+            candles_map_1m[market] = std::move(candles);
         }
     }
     LOG_INFO("Candles(1m) 수집 완료: {} 종목", candles_map_1m.size());
 
     // 추가 타임프레임은 상위 일부 종목만 수집 (API 제한 고려)
-    int tf5m_limit = std::min(20, (int)top_markets.size());
-    int tf1h_limit = std::min(20, (int)top_markets.size());
-    int tf4h_limit = std::min(10, (int)top_markets.size());
-    int tf1d_limit = std::min(10, (int)top_markets.size());
+    int tf5m_limit = std::min(kTf5mMarketLimit, (int)top_markets.size());
+    int tf1h_limit = std::min(kTf1hMarketLimit, (int)top_markets.size());
+    int tf4h_limit = std::min(kTf4hMarketLimit, (int)top_markets.size());
+    int tf1d_limit = std::min(kTf1dMarketLimit, (int)top_markets.size());
 
     for (int i = 0; i < tf5m_limit; ++i) {
         const auto& market = top_markets[i];
-        try {
-            std::this_thread::sleep_for(std::chrono::milliseconds(150));
-            candles_map_5m[market] = client_->getCandles(market, "5", CANDLES_5M);
-        } catch (const std::exception& e) {
-            LOG_ERROR("Candles(5m) 조회 실패: {} - {}", market, e.what());
+        auto candles = getCandlesWithRollingCache(market, "5", CANDLES_5M, false);
+        if (!candles.empty()) {
+            candles_map_5m[market] = std::move(candles);
         }
     }
 
     for (int i = 0; i < tf1h_limit; ++i) {
         const auto& market = top_markets[i];
-        try {
-            std::this_thread::sleep_for(std::chrono::milliseconds(150));
-            candles_map_1h[market] = client_->getCandles(market, "60", CANDLES_1H);
-        } catch (const std::exception& e) {
-            LOG_ERROR("Candles(1h) 조회 실패: {} - {}", market, e.what());
+        auto candles = getCandlesWithRollingCache(market, "60", CANDLES_1H, false);
+        if (!candles.empty()) {
+            candles_map_1h[market] = std::move(candles);
         }
     }
 
     for (int i = 0; i < tf4h_limit; ++i) {
         const auto& market = top_markets[i];
-        try {
-            std::this_thread::sleep_for(std::chrono::milliseconds(150));
-            candles_map_4h[market] = client_->getCandles(market, "240", CANDLES_4H);
-        } catch (const std::exception& e) {
-            LOG_ERROR("Candles(4h) 조회 실패: {} - {}", market, e.what());
+        auto candles = getCandlesWithRollingCache(market, "240", CANDLES_4H, false);
+        if (!candles.empty()) {
+            candles_map_4h[market] = std::move(candles);
         }
     }
 
     for (int i = 0; i < tf1d_limit; ++i) {
         const auto& market = top_markets[i];
-        try {
-            std::this_thread::sleep_for(std::chrono::milliseconds(150));
-            candles_map_1d[market] = client_->getCandlesDays(market, CANDLES_1D);
-        } catch (const std::exception& e) {
-            LOG_ERROR("Candles(1d) 조회 실패: {} - {}", market, e.what());
+        auto candles = getCandlesWithRollingCache(market, "1", CANDLES_1D, true);
+        if (!candles.empty()) {
+            candles_map_1d[market] = std::move(candles);
         }
     }
 
@@ -233,7 +226,7 @@ if (ticker_map.find(market) != ticker_map.end()) {
 
         if (candles_map_1m.find(market) != candles_map_1m.end()) {
             // [중요] 정렬된 구조체 데이터 생성
-            metrics.candles = TechnicalIndicators::jsonToCandles(candles_map_1m[market]);
+            metrics.candles = candles_map_1m[market];
             metrics.candles_by_tf["1m"] = metrics.candles;
             
             if (!metrics.candles.empty()) {
@@ -244,19 +237,19 @@ if (ticker_map.find(market) != ticker_map.end()) {
         }
 
         if (candles_map_5m.find(market) != candles_map_5m.end()) {
-            metrics.candles_by_tf["5m"] = TechnicalIndicators::jsonToCandles(candles_map_5m[market]);
+            metrics.candles_by_tf["5m"] = candles_map_5m[market];
         }
 
         if (candles_map_1h.find(market) != candles_map_1h.end()) {
-            metrics.candles_by_tf["1h"] = TechnicalIndicators::jsonToCandles(candles_map_1h[market]);
+            metrics.candles_by_tf["1h"] = candles_map_1h[market];
         }
 
         if (candles_map_4h.find(market) != candles_map_4h.end()) {
-            metrics.candles_by_tf["4h"] = TechnicalIndicators::jsonToCandles(candles_map_4h[market]);
+            metrics.candles_by_tf["4h"] = candles_map_4h[market];
         }
 
         if (candles_map_1d.find(market) != candles_map_1d.end()) {
-            metrics.candles_by_tf["1d"] = TechnicalIndicators::jsonToCandles(candles_map_1d[market]);
+            metrics.candles_by_tf["1d"] = candles_map_1d[market];
         }
 
         // [수정] 유동성 점수 기준 현실화 (예: 1,000억 기준 100점)
@@ -684,23 +677,154 @@ std::vector<Candle> MarketScanner::getRecentCandles(
     const std::string& market,
     const std::string& unit,
     int count) {
-    try {
-        auto json = client_->getCandles(market, unit, count);
-        return TechnicalIndicators::jsonToCandles(json);
-    } catch (const std::exception&) {
-        return {};
-    }
+    return getCandlesWithRollingCache(market, unit, count, false);
 }
 
 std::vector<Candle> MarketScanner::getRecentDayCandles(
     const std::string& market,
     int count) {
-    try {
-        auto json = client_->getCandlesDays(market, count);
-        return TechnicalIndicators::jsonToCandles(json);
-    } catch (const std::exception&) {
+    return getCandlesWithRollingCache(market, "1", count, true);
+}
+
+std::vector<Candle> MarketScanner::getCandlesWithRollingCache(
+    const std::string& market,
+    const std::string& unit,
+    int count,
+    bool day_candle) {
+    if (count <= 0) {
         return {};
     }
+
+    const auto now = std::chrono::steady_clock::now();
+    const auto frame_ms = std::chrono::milliseconds(getCandleFrameMs(unit, day_candle));
+    const auto update_interval = std::max(
+        std::chrono::milliseconds(5000),
+        frame_ms - std::chrono::milliseconds(day_candle ? 600000 : 5000));
+    const auto full_sync_interval = std::clamp(frame_ms * 12, kMinFullSyncInterval, kMaxFullSyncInterval);
+    const auto key = getCandleCacheKey(market, unit, day_candle);
+    auto& entry = candle_cache_[key];
+
+    const bool cache_empty = entry.candles.empty();
+    const bool need_more_history = static_cast<int>(entry.candles.size()) < count;
+    const bool update_due = cache_empty || need_more_history || (now - entry.last_update_time) >= update_interval;
+    const bool full_sync_due =
+        cache_empty ||
+        need_more_history ||
+        entry.last_full_sync_time.time_since_epoch().count() == 0 ||
+        (now - entry.last_full_sync_time) >= full_sync_interval;
+
+    if (update_due) {
+        try {
+            throttleCandleApiCall();
+            nlohmann::json json;
+
+            if (full_sync_due) {
+                json = day_candle
+                    ? client_->getCandlesDays(market, count)
+                    : client_->getCandles(market, unit, count);
+
+                entry.candles = keepRecentCandles(TechnicalIndicators::jsonToCandles(json), count);
+                entry.last_full_sync_time = now;
+            } else {
+                const int incremental_count = std::min(count, kIncrementalFetchCount);
+                json = day_candle
+                    ? client_->getCandlesDays(market, incremental_count)
+                    : client_->getCandles(market, unit, incremental_count);
+
+                auto incoming = TechnicalIndicators::jsonToCandles(json);
+                mergeCandles(entry.candles, incoming, count);
+            }
+
+            entry.last_update_time = now;
+        } catch (const std::exception& e) {
+            LOG_WARN("Candle cache update failed: {} {} {}", market, (day_candle ? "1d" : unit), e.what());
+        }
+    }
+
+    return keepRecentCandles(entry.candles, count);
+}
+
+long long MarketScanner::getCandleFrameMs(const std::string& unit, bool day_candle) {
+    if (day_candle) {
+        return 24LL * 60LL * 60LL * 1000LL;
+    }
+
+    int minutes = 1;
+    try {
+        minutes = std::max(1, std::stoi(unit));
+    } catch (...) {
+        minutes = 1;
+    }
+    return static_cast<long long>(minutes) * 60LL * 1000LL;
+}
+
+std::string MarketScanner::getCandleCacheKey(
+    const std::string& market,
+    const std::string& unit,
+    bool day_candle) {
+    return market + "|" + (day_candle ? std::string("1d") : unit);
+}
+
+std::vector<Candle> MarketScanner::keepRecentCandles(const std::vector<Candle>& candles, int count) {
+    if (count <= 0 || candles.empty()) {
+        return {};
+    }
+    if (static_cast<int>(candles.size()) <= count) {
+        return candles;
+    }
+    return std::vector<Candle>(candles.end() - count, candles.end());
+}
+
+void MarketScanner::mergeCandles(std::vector<Candle>& base, const std::vector<Candle>& incoming, int max_count) {
+    if (incoming.empty()) {
+        return;
+    }
+    if (base.empty()) {
+        base = keepRecentCandles(incoming, max_count);
+        return;
+    }
+
+    bool need_resort = false;
+    for (const auto& candle : incoming) {
+        if (candle.timestamp == 0) {
+            base.push_back(candle);
+            need_resort = true;
+            continue;
+        }
+
+        auto it = std::lower_bound(
+            base.begin(),
+            base.end(),
+            candle.timestamp,
+            [](const Candle& existing, long long ts) {
+                return existing.timestamp < ts;
+            });
+
+        if (it != base.end() && it->timestamp == candle.timestamp) {
+            *it = candle;
+        } else {
+            base.insert(it, candle);
+        }
+    }
+
+    if (need_resort) {
+        std::stable_sort(base.begin(), base.end(), [](const Candle& a, const Candle& b) {
+            return a.timestamp < b.timestamp;
+        });
+    }
+
+    if (max_count > 0 && static_cast<int>(base.size()) > max_count) {
+        base.erase(base.begin(), base.end() - max_count);
+    }
+}
+
+void MarketScanner::throttleCandleApiCall() {
+    const auto now = std::chrono::steady_clock::now();
+    const auto elapsed = now - last_candle_api_call_time_;
+    if (elapsed < kMinCandleApiInterval) {
+        std::this_thread::sleep_for(kMinCandleApiInterval - elapsed);
+    }
+    last_candle_api_call_time_ = std::chrono::steady_clock::now();
 }
 
 // 1. 호가 불균형 분석 (수량 중심 + 가중치 부여)
@@ -849,3 +973,4 @@ double MarketScanner::analyzeMomentum(const std::vector<Candle>& candles) {
 
 } // namespace analytics
 } // namespace autolife
+

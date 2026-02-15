@@ -44,28 +44,28 @@ Preset files:
 
 Apply a preset:
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\apply_trading_preset.ps1 -Preset safe
+python scripts\apply_trading_preset.py --preset safe
 ```
 
 ## Operational Validation
 PR-style gate:
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_ci_operational_gate.ps1 -IncludeBacktest
+python scripts\run_ci_operational_gate.py -IncludeBacktest
 ```
 
 Strict live gate:
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_ci_operational_gate.ps1 -IncludeBacktest -RunLiveProbe -StrictExecutionParity
+python scripts\run_ci_operational_gate.py -IncludeBacktest -RunLiveProbe -StrictExecutionParity
 ```
 
 Strict live trend/alert/tuning/action:
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\generate_strict_live_gate_trend_alert.ps1 -GateProfile strict_live -ApplyTunedThresholds -ActionExecutionPolicy safe-auto-execute -EnableActionFeedbackLoop
+python scripts\generate_strict_live_gate_trend_alert.py -GateProfile strict_live -ApplyTunedThresholds -ActionExecutionPolicy safe-auto-execute -EnableActionFeedbackLoop
 ```
 
 ## Profitability Report (Exploratory, Non-blocking)
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_profitability_exploratory.ps1
+python scripts\run_profitability_exploratory.py
 ```
 
 Outputs:

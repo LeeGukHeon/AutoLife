@@ -6,6 +6,7 @@
 #include <mutex>
 #include <deque>
 #include <array>
+#include <map>
 #include <set>
 #include "engine/TradingEngine.h"
 
@@ -237,6 +238,29 @@ private:
     
     // [신규 추가] 중복 매수 방지용
     std::set<std::string> active_positions_;
+    struct EntryDecisionContext {
+        double setup_score = 0.0;
+        double trigger_score = 0.0;
+        double signal_strength = 0.0;
+        double mtf_alignment = 0.0;
+        double flow_bias = 0.0;
+        int archetype = 0;
+        double invalidation_drawdown_pct = 0.0;
+        double progress_floor_30m = 0.0;
+        double progress_floor_60m = 0.0;
+        analytics::MarketRegime regime = analytics::MarketRegime::UNKNOWN;
+        long long accepted_timestamp_ms = 0;
+    };
+    std::map<std::string, EntryDecisionContext> pending_entry_contexts_;
+    std::map<std::string, EntryDecisionContext> active_entry_contexts_;
+    struct ArchetypeAdaptiveStats {
+        int trades = 0;
+        int wins = 0;
+        double pnl_sum = 0.0;
+        double pnl_ema = 0.0;
+    };
+    std::map<int, ArchetypeAdaptiveStats> archetype_adaptive_stats_;
+    static constexpr int ADAPTIVE_ARCHETYPE_MIN_TRADES = 6;
     
     // 이력 데이터 (1000개)
     std::deque<double> recent_returns_;
@@ -304,6 +328,7 @@ private:
     // ===== 3. Multi-Timeframe Analysis =====
     
     MultiTimeframeSignal analyzeMultiTimeframe(
+        const analytics::CoinMetrics& metrics,
         const std::vector<Candle>& candles_1m
     ) const;
     
@@ -462,6 +487,16 @@ private:
     void resetHourlyCounters();
     void checkCircuitBreaker();
     bool isCircuitBreakerActive() const;
+    double getArchetypeQualityBias(int archetype, analytics::MarketRegime regime) const;
+    bool shouldBlockArchetypeByAdaptiveStats(int archetype, analytics::MarketRegime regime) const;
+    void recordArchetypeOutcome(
+        int archetype,
+        analytics::MarketRegime regime,
+        bool is_win,
+        double profit_loss
+    );
+    void loadAdaptiveArchetypeStats();
+    void saveAdaptiveArchetypeStats() const;
     engine::EngineConfig engine_config_;
     bool shouldGenerateSignal(
         double expected_return,
@@ -475,6 +510,7 @@ private:
     long long circuit_breaker_until_ = 0;
     long long current_day_start_ = 0;
     long long current_hour_start_ = 0;
+    mutable long long latest_market_timestamp_ms_ = 0;
     static constexpr long long CIRCUIT_BREAKER_COOLDOWN_MS = 3600000; // 1h
 };
 

@@ -411,29 +411,31 @@ void RiskManager::partialExit(const std::string& market, double exit_price) {
     auto& pos = it->second;
     
     if (pos.half_closed) return; // ???? 1癲????????ш끽維??
+    if (pos.quantity <= 0.0 || exit_price <= 0.0) return;
     
-    // 50% 癲?雅?
-    double exit_quantity = pos.quantity * 0.5;
-    double exit_value = exit_price * exit_quantity;
-    double fee = calculateFee(exit_value);
-    double net_value = exit_value - fee;
-    
-    // ???亦?????녿ぅ??熬곣뫀肄?
-    current_capital_ += net_value;
-    total_fees_paid_ += fee;
-    
-    // ?????????녿ぅ??熬곣뫀肄?
-    pos.quantity -= exit_quantity;
-    pos.invested_amount *= 0.5;
-    pos.half_closed = true;
-    
-    // ???????モ섋キ??怨뚮옖筌????⑥???????
-    pos.stop_loss = pos.entry_price;
-    
-    double profit = net_value - (pos.invested_amount);
-    
-    LOG_INFO("First TP hit (50%): {} - exit price: {:.0f}, profit: {:.0f}, stop moved to breakeven",
-             market, exit_price, profit);
+    // 50% 癲?雅? is accounted via the common partial-fill path so trade history / metrics stay aligned.
+    const double exit_quantity = pos.quantity * 0.5;
+    if (!applyPartialSellFill(market, exit_price, exit_quantity, "TakeProfit1")) {
+        LOG_WARN("First TP accounting failed: {} qty {:.8f} @ {:.0f}",
+                 market, exit_quantity, exit_price);
+        return;
+    }
+
+    auto updated = positions_.find(market);
+    if (updated != positions_.end()) {
+        updated->second.half_closed = true;
+        updated->second.stop_loss = updated->second.entry_price;
+    }
+
+    double realized_pnl = 0.0;
+    if (!trade_history_.empty()) {
+        const auto& last_trade = trade_history_.back();
+        if (last_trade.market == market && last_trade.exit_reason == "TakeProfit1") {
+            realized_pnl = last_trade.profit_loss;
+        }
+    }
+    LOG_INFO("First TP hit (50%): {} - exit price: {:.0f}, pnl: {:.0f}, stop moved to breakeven",
+             market, exit_price, realized_pnl);
 }
 
 // [Fix] ???筌???????쒓낮?????딅텑?????????癲ル슢履뉑쾮????濡ろ뜑??? ?????μ쐺獄쏅챷援▼＄???좊즴甕?影?곷퓠???諛몄툏??(???亦??怨뚮뼚??????⑤챶苡?
@@ -514,6 +516,7 @@ bool RiskManager::applyPartialSellFill(
     trade.signal_filter = pos.signal_filter;
     trade.signal_strength = pos.signal_strength;
     trade.market_regime = pos.market_regime;
+    trade.entry_archetype = pos.entry_archetype;
     trade.liquidity_score = pos.liquidity_score;
     trade.volatility = pos.volatility;
     trade.expected_value = pos.expected_value;
@@ -921,7 +924,8 @@ void RiskManager::setPositionSignalInfo(
     double liquidity_score,
     double volatility,
     double expected_value,
-    double reward_risk_ratio
+    double reward_risk_ratio,
+    const std::string& entry_archetype
 ) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);;
     
@@ -938,8 +942,18 @@ void RiskManager::setPositionSignalInfo(
     it->second.volatility = volatility;
     it->second.expected_value = expected_value;
     it->second.reward_risk_ratio = reward_risk_ratio;
-    LOG_INFO("Signal metadata saved: {} (filter {:.3f}, strength {:.3f}, liq {:.1f}, vol {:.2f}, ev {:.5f}, rr {:.2f})",
-             market, signal_filter, signal_strength, liquidity_score, volatility, expected_value, reward_risk_ratio);
+    it->second.entry_archetype = entry_archetype.empty() ? "UNSPECIFIED" : entry_archetype;
+    LOG_INFO(
+        "Signal metadata saved: {} (filter {:.3f}, strength {:.3f}, liq {:.1f}, vol {:.2f}, ev {:.5f}, rr {:.2f}, archetype={})",
+        market,
+        signal_filter,
+        signal_strength,
+        liquidity_score,
+        volatility,
+        expected_value,
+        reward_risk_ratio,
+        it->second.entry_archetype
+    );
 }
 
 bool RiskManager::reserveGridCapital(
@@ -1111,6 +1125,7 @@ bool RiskManager::applyGridFill(
     trade.exit_time = getCurrentTimestamp();
     trade.strategy_name = "Grid Trading Strategy";
     trade.exit_reason = "grid_cycle";
+    trade.entry_archetype = "GRID_CYCLE";
     trade_history_.push_back(trade);
 
     inv.quantity -= quantity;
@@ -1182,6 +1197,7 @@ void RiskManager::recordTrade(
     trade.signal_filter = pos.signal_filter;
     trade.signal_strength = pos.signal_strength;
     trade.market_regime = pos.market_regime;
+    trade.entry_archetype = pos.entry_archetype;
     trade.liquidity_score = pos.liquidity_score;
     trade.volatility = pos.volatility;
     trade.expected_value = pos.expected_value;

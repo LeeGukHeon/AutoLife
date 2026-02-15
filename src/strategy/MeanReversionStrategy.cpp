@@ -1,10 +1,14 @@
 #include "strategy/MeanReversionStrategy.h"
 #include "analytics/TechnicalIndicators.h"
 #include "common/Config.h"
+#include "common/PathUtils.h"
 #include <algorithm>
 #include <cmath>
 #include <numeric>
 #include <chrono>
+#include <fstream>
+#include <filesystem>
+#include <cstdlib>
 #include <spdlog/spdlog.h>
 
 namespace autolife {
@@ -17,14 +21,67 @@ double clamp01(double v) {
     return std::clamp(v, 0.0, 1.0);
 }
 
+std::filesystem::path getMeanReversionAdaptiveStatsPath() {
+    return utils::PathUtils::resolveRelativePath("state/mean_reversion_entry_stats.json");
+}
+
+bool disableAdaptiveEntryStateIo() {
+    std::string value;
+#ifdef _WIN32
+    char* raw = nullptr;
+    size_t len = 0;
+    if (_dupenv_s(&raw, &len, "AUTOLIFE_DISABLE_ADAPTIVE_STATE_IO") != 0 || raw == nullptr) {
+        return false;
+    }
+    value.assign(raw);
+    free(raw);
+#else
+    const char* raw = std::getenv("AUTOLIFE_DISABLE_ADAPTIVE_STATE_IO");
+    if (raw == nullptr) {
+        return false;
+    }
+    value.assign(raw);
+#endif
+    return !(value.empty() || value == "0" || value == "false" || value == "FALSE");
+}
+
+long long currentWallClockMs() {
+    using namespace std::chrono;
+    return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+}
+
+const char* meanReversionTypeToLabel(MeanReversionType t) {
+    switch (t) {
+        case MeanReversionType::BOLLINGER_OVERSOLD: return "BOLLINGER_OVERSOLD";
+        case MeanReversionType::RSI_OVERSOLD: return "RSI_OVERSOLD";
+        case MeanReversionType::Z_SCORE_EXTREME: return "Z_SCORE_EXTREME";
+        case MeanReversionType::KALMAN_DEVIATION: return "KALMAN_DEVIATION";
+        case MeanReversionType::VWAP_DEVIATION: return "VWAP_DEVIATION";
+        default: return "UNSPECIFIED";
+    }
+}
+
+int makeMeanReversionEntryKey(MeanReversionType t, analytics::MarketRegime regime) {
+    return (static_cast<int>(t) * 100) + static_cast<int>(regime);
+}
+
+long long normalizeTimestampMs(long long ts) {
+    if (ts > 0 && ts < 1000000000000LL) {
+        return ts * 1000LL;
+    }
+    return ts;
+}
+
 bool isMeanReversionRegimeTradable(
     const analytics::CoinMetrics& metrics,
     const analytics::RegimeAnalysis& regime
 ) {
     if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
-        return (metrics.liquidity_score >= 75.0 &&
-                metrics.volume_surge_ratio >= 1.5 &&
-                metrics.price_change_rate >= -0.7);
+        return false;
+    }
+    if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY &&
+        metrics.liquidity_score < 45.0) {
+        return false;
     }
     return true;
 }
@@ -123,6 +180,7 @@ MeanReversionStrategy::MeanReversionStrategy(std::shared_ptr<network::UpbitHttpC
     rolling_stats_.avg_reversion_accuracy = 0.0;
     
     spdlog::info("[MeanReversionStrategy] Initialized - Statistical Mean Reversion + Kalman Filter");
+    loadAdaptiveEntryStats();
 }
 
 // ===== Strategy Info =====
@@ -156,14 +214,33 @@ Signal MeanReversionStrategy::generateSignal(
     signal.type = SignalType::NONE;
     signal.market = market;
     signal.strategy_name = "Mean Reversion Strategy";
+    signal.timestamp = getCurrentTimestamp();
+    pending_entry_keys_.erase(market);
+    if (!candles.empty()) {
+        latest_market_timestamp_ms_ = normalizeTimestampMs(candles.back().timestamp);
+        signal.timestamp = latest_market_timestamp_ms_;
+    }
     
     // ===== Hard Gates =====
     if (active_positions_.find(market) != active_positions_.end()) return signal;
     if (available_capital <= 0) return signal;
     if (!isMeanReversionRegimeTradable(metrics, regime)) return signal;
     
-    std::vector<Candle> candles_5m = resampleTo5m(candles);
-    if (candles_5m.size() < 80) return signal;
+    std::vector<Candle> candles_5m;
+    auto tf_5m_it = metrics.candles_by_tf.find("5m");
+    const bool used_preloaded_5m = (tf_5m_it != metrics.candles_by_tf.end() && tf_5m_it->second.size() >= 80);
+    signal.used_preloaded_tf_5m = used_preloaded_5m;
+    signal.used_preloaded_tf_1h =
+        metrics.candles_by_tf.find("1h") != metrics.candles_by_tf.end() &&
+        metrics.candles_by_tf.at("1h").size() >= 26;
+    signal.used_resampled_tf_fallback = !used_preloaded_5m;
+    if (used_preloaded_5m) {
+        candles_5m = tf_5m_it->second;
+    } else {
+        candles_5m = resampleTo5m(candles);
+    }
+    if (candles_5m.size() < 40) return signal;
+    const bool degraded_5m_mode = candles_5m.size() < 80;
     if (!canTradeNow()) return signal;
     
     checkCircuitBreaker();
@@ -177,6 +254,33 @@ Signal MeanReversionStrategy::generateSignal(
     
     // --- (1) ?됯퇏 ?뚭? 遺꾩꽍 (理쒕? 0.40) ---
     MeanReversionSignalMetrics reversion = analyzeMeanReversion(market, metrics, candles_5m, current_price);
+    const int entry_key = makeMeanReversionEntryKey(reversion.type, regime.regime);
+    const double adaptive_bias = getAdaptiveEntryBias(entry_key);
+    double min_reversion_prob = 0.70;
+    double min_confidence = 0.56;
+    double min_expected_reversion = 0.005;
+    if (adaptive_bias <= -0.18 && regime.regime != analytics::MarketRegime::RANGING) {
+        return signal;
+    }
+    if (adaptive_bias < 0.0) {
+        const double penalty = std::min(0.10, -adaptive_bias * 0.30);
+        min_reversion_prob += penalty;
+        min_confidence += (penalty * 0.80);
+        min_expected_reversion += (penalty * 0.004);
+    } else if (adaptive_bias > 0.0) {
+        const double bonus = std::min(0.05, adaptive_bias * 0.20);
+        min_reversion_prob = std::max(0.58, min_reversion_prob - bonus);
+        min_confidence = std::max(0.48, min_confidence - (bonus * 0.80));
+        min_expected_reversion = std::max(0.003, min_expected_reversion - (bonus * 0.002));
+    }
+    const bool reversion_quality_ok =
+        reversion.is_valid &&
+        reversion.reversion_probability >= min_reversion_prob &&
+        reversion.confidence >= min_confidence &&
+        reversion.expected_reversion_pct >= min_expected_reversion;
+    if (!reversion_quality_ok) {
+        return signal;
+    }
     total_score += reversion.strength * 0.40;
     
     // --- (2) ?좊룞??(理쒕? 0.10) ---
@@ -223,30 +327,53 @@ Signal MeanReversionStrategy::generateSignal(
     }
     
     // ===== 理쒖쥌 ?먯젙 =====
+    if (degraded_5m_mode) {
+        total_score *= 0.92;
+    }
     signal.strength = std::clamp(total_score, 0.0, 1.0);
 
     const double effective_strength_floor = computeMeanReversionAdaptiveStrengthFloor(
-        metrics, regime, strategy_cfg.min_signal_strength);
+        metrics, regime, strategy_cfg.min_signal_strength) + (degraded_5m_mode ? 0.04 : 0.0);
+    double adaptive_strength_floor = effective_strength_floor;
+    if (adaptive_bias < 0.0) {
+        adaptive_strength_floor = std::min(0.90, adaptive_strength_floor + std::min(0.10, -adaptive_bias * 0.35));
+    } else if (adaptive_bias > 0.0) {
+        adaptive_strength_floor = std::max(0.28, adaptive_strength_floor - std::min(0.05, adaptive_bias * 0.25));
+    }
     const bool fallback_entry_ok =
         (regime.regime == analytics::MarketRegime::RANGING) &&
         (metrics.liquidity_score >= adaptive_liq_floor * 0.88) &&
         (metrics.volume_surge_ratio >= 0.80) &&
         (rsi >= 28.0 && rsi <= 50.0) &&
         (metrics.price_change_rate <= 0.8 && metrics.price_change_rate >= -1.5);
-    if (signal.strength < effective_strength_floor) {
+    if (signal.strength < adaptive_strength_floor) {
         if (!fallback_entry_ok) {
             return signal;
         }
-        signal.strength = effective_strength_floor;
+        signal.strength = adaptive_strength_floor;
     }
     
     // ===== ?좏샇 ?앹꽦 =====
     signal.type = SignalType::BUY;
     signal.entry_price = current_price;
     signal.stop_loss = calculateStopLoss(current_price, candles_5m);
-    double risk_mr = current_price - signal.stop_loss;
-    signal.take_profit_1 = current_price + (risk_mr * 2.5 * 0.5);
-    signal.take_profit_2 = calculateTakeProfit(current_price, candles_5m);
+    const double risk_mr = std::max(0.0, current_price - signal.stop_loss);
+    const double stop_risk = std::max(1e-9, risk_mr / current_price);
+    const double rr_floor = computeMeanReversionAdaptiveRRFloor(metrics, regime);
+    const double tp2_from_rr_pct = stop_risk * std::max(1.25, rr_floor + 0.05);
+    const double tp2_from_reversion_pct = std::max(0.0, reversion.expected_reversion_pct * 0.85);
+    const double target_tp2_pct = std::clamp(
+        std::max({BASE_TAKE_PROFIT_2, tp2_from_rr_pct, tp2_from_reversion_pct}),
+        BASE_TAKE_PROFIT_1,
+        0.08
+    );
+    const double target_tp1_pct = std::clamp(
+        std::max(BASE_TAKE_PROFIT_1, stop_risk * 0.90),
+        BASE_TAKE_PROFIT_1,
+        target_tp2_pct * 0.75
+    );
+    signal.take_profit_1 = current_price * (1.0 + target_tp1_pct);
+    signal.take_profit_2 = current_price * (1.0 + target_tp2_pct);
     signal.buy_order_type = strategy::OrderTypePolicy::LIMIT_WITH_FALLBACK;
     signal.sell_order_type = strategy::OrderTypePolicy::LIMIT_WITH_FALLBACK;
     signal.max_retries = 3;
@@ -263,9 +390,7 @@ Signal MeanReversionStrategy::generateSignal(
     signal.position_size = std::clamp(signal.position_size, 0.0, 1.0);
 
     const double expected_return = (signal.take_profit_2 - signal.entry_price) / signal.entry_price;
-    const double stop_risk = std::max(1e-9, (signal.entry_price - signal.stop_loss) / signal.entry_price);
     const double reward_risk = expected_return / stop_risk;
-    const double rr_floor = computeMeanReversionAdaptiveRRFloor(metrics, regime);
     if (reward_risk < rr_floor) {
         signal.type = SignalType::NONE;
         return signal;
@@ -280,6 +405,8 @@ Signal MeanReversionStrategy::generateSignal(
     if (signal.strength >= 0.70) {
         signal.type = SignalType::STRONG_BUY;
     }
+    signal.entry_archetype = meanReversionTypeToLabel(reversion.type);
+    pending_entry_keys_[market] = entry_key;
     
     spdlog::info("[MeanReversion] ?렞 BUY Signal - {} | Strength: {:.3f} | RSI: {:.1f}",
                  market, signal.strength, rsi);
@@ -301,14 +428,23 @@ bool MeanReversionStrategy::shouldEnter(
 {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     const auto strategy_cfg = Config::getInstance().getMeanReversionConfig();
+    if (!candles.empty()) {
+        latest_market_timestamp_ms_ = normalizeTimestampMs(candles.back().timestamp);
+    }
 
     if (active_positions_.find(market) != active_positions_.end()) {
         return false;
     }
 
-    std::vector<Candle> candles_5m = resampleTo5m(candles);
+    std::vector<Candle> candles_5m;
+    auto tf_5m_it = metrics.candles_by_tf.find("5m");
+    if (tf_5m_it != metrics.candles_by_tf.end() && tf_5m_it->second.size() >= 80) {
+        candles_5m = tf_5m_it->second;
+    } else {
+        candles_5m = resampleTo5m(candles);
+    }
 
-    if (candles_5m.size() < 80) {
+    if (candles_5m.size() < 40) {
         return false;
     }
 
@@ -378,6 +514,15 @@ bool MeanReversionStrategy::onSignalAccepted(const Signal& signal, double alloca
 
     active_positions_.insert(signal.market);
     position_data_[signal.market] = pos_data;
+    {
+        int entry_key = 0;
+        auto pending_it = pending_entry_keys_.find(signal.market);
+        if (pending_it != pending_entry_keys_.end()) {
+            entry_key = pending_it->second;
+            pending_entry_keys_.erase(pending_it);
+        }
+        active_entry_keys_[signal.market] = entry_key;
+    }
     recordTrade();
 
     spdlog::info("[MeanReversion] Position Registered - {} | Entry: {:.2f} | Target: {:.2f}",
@@ -498,7 +643,7 @@ double MeanReversionStrategy::calculateTakeProfit(
 {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     (void)candles;  // candles ?뚮씪誘명꽣 誘몄궗??
-    return entry_price * (1.0 + BASE_TAKE_PROFIT_1);
+    return entry_price * (1.0 + BASE_TAKE_PROFIT_2);
 }
 
 // ===== Calculate Position Size =====
@@ -565,6 +710,13 @@ IStrategy::Statistics MeanReversionStrategy::getStatistics() const
 void MeanReversionStrategy::updateStatistics(const std::string& market, bool is_win, double profit_loss)
 {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
+    int closed_entry_key = 0;
+    auto key_it = active_entry_keys_.find(market);
+    if (key_it != active_entry_keys_.end()) {
+        closed_entry_key = key_it->second;
+        active_entry_keys_.erase(key_it);
+    }
+    pending_entry_keys_.erase(market);
     
     // [以묒슂] ?ъ???紐⑸줉?먯꽌 ?쒓굅 (?ъ쭊???덉슜)
     if (active_positions_.erase(market)) {
@@ -617,6 +769,9 @@ void MeanReversionStrategy::updateStatistics(const std::string& market, bool is_
     
     updateRollingStatistics();
     checkCircuitBreaker();
+    if (closed_entry_key != 0) {
+        recordAdaptiveEntryOutcome(closed_entry_key, is_win, profit_loss);
+    }
 }
 
 void MeanReversionStrategy::setStatistics(const Statistics& stats)
@@ -660,6 +815,123 @@ MeanReversionRollingStatistics MeanReversionStrategy::getRollingStatistics() con
 {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     return rolling_stats_;
+}
+
+double MeanReversionStrategy::getAdaptiveEntryBias(int entry_key) const
+{
+    const auto it = adaptive_entry_stats_.find(entry_key);
+    if (it == adaptive_entry_stats_.end()) {
+        return 0.0;
+    }
+    const auto& st = it->second;
+    if (st.trades < ADAPTIVE_ENTRY_MIN_TRADES) {
+        return 0.0;
+    }
+    const double win_rate = static_cast<double>(st.wins) / std::max(1, st.trades);
+    const double expectancy = st.pnl_sum / std::max(1, st.trades);
+    const double win_component = std::clamp((win_rate - 0.50) * 0.60, -0.18, 0.18);
+    const double expectancy_component = std::clamp(expectancy / 30.0, -0.12, 0.12);
+    const double ema_component = std::clamp(st.pnl_ema / 25.0, -0.10, 0.10);
+    return std::clamp(win_component + expectancy_component + ema_component, -0.22, 0.16);
+}
+
+void MeanReversionStrategy::recordAdaptiveEntryOutcome(int entry_key, bool is_win, double profit_loss)
+{
+    auto& st = adaptive_entry_stats_[entry_key];
+    st.trades += 1;
+    if (is_win) {
+        st.wins += 1;
+    }
+    st.pnl_sum += profit_loss;
+    if (st.trades == 1) {
+        st.pnl_ema = profit_loss;
+    } else {
+        st.pnl_ema = (st.pnl_ema * 0.82) + (profit_loss * 0.18);
+    }
+    saveAdaptiveEntryStats();
+}
+
+void MeanReversionStrategy::loadAdaptiveEntryStats()
+{
+    if (disableAdaptiveEntryStateIo()) {
+        spdlog::info("[MeanReversion] Adaptive entry stats I/O disabled by environment.");
+        return;
+    }
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    try {
+        const auto path = getMeanReversionAdaptiveStatsPath();
+        if (!std::filesystem::exists(path)) {
+            return;
+        }
+        std::ifstream in(path.string(), std::ios::binary);
+        if (!in.is_open()) {
+            spdlog::warn("[MeanReversion] Failed to open adaptive stats file: {}", path.string());
+            return;
+        }
+        nlohmann::json payload;
+        in >> payload;
+        if (!payload.contains("stats") || !payload["stats"].is_array()) {
+            return;
+        }
+        std::map<int, AdaptiveEntryStats> loaded;
+        for (const auto& row : payload["stats"]) {
+            if (!row.is_object()) {
+                continue;
+            }
+            const int key = row.value("key", 0);
+            if (key == 0) {
+                continue;
+            }
+            AdaptiveEntryStats s;
+            s.trades = std::max(0, row.value("trades", 0));
+            s.wins = std::max(0, row.value("wins", 0));
+            s.pnl_sum = row.value("pnl_sum", 0.0);
+            s.pnl_ema = row.value("pnl_ema", 0.0);
+            loaded[key] = s;
+        }
+        adaptive_entry_stats_ = std::move(loaded);
+        spdlog::info(
+            "[MeanReversion] Adaptive entry stats loaded: path={} entries={}",
+            path.string(),
+            adaptive_entry_stats_.size()
+        );
+    } catch (const std::exception& e) {
+        spdlog::warn("[MeanReversion] Failed to load adaptive entry stats: {}", e.what());
+    }
+}
+
+void MeanReversionStrategy::saveAdaptiveEntryStats() const
+{
+    if (disableAdaptiveEntryStateIo()) {
+        return;
+    }
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    try {
+        const auto path = getMeanReversionAdaptiveStatsPath();
+        std::filesystem::create_directories(path.parent_path());
+        nlohmann::json payload;
+        payload["schema_version"] = 1;
+        payload["saved_at_ms"] = currentWallClockMs();
+        payload["stats"] = nlohmann::json::array();
+        for (const auto& kv : adaptive_entry_stats_) {
+            const auto& s = kv.second;
+            nlohmann::json row;
+            row["key"] = kv.first;
+            row["trades"] = s.trades;
+            row["wins"] = s.wins;
+            row["pnl_sum"] = s.pnl_sum;
+            row["pnl_ema"] = s.pnl_ema;
+            payload["stats"].push_back(std::move(row));
+        }
+        std::ofstream out(path.string(), std::ios::binary | std::ios::trunc);
+        if (!out.is_open()) {
+            spdlog::warn("[MeanReversion] Failed to open adaptive stats for write: {}", path.string());
+            return;
+        }
+        out << payload.dump(2);
+    } catch (const std::exception& e) {
+        spdlog::warn("[MeanReversion] Failed to save adaptive entry stats: {}", e.what());
+    }
 }
 
 void MeanReversionStrategy::updateRollingStatistics()
@@ -1346,7 +1618,7 @@ MeanReversionSignalMetrics MeanReversionStrategy::analyzeMeanReversion(
     signal.regime = detectMarketRegime(stats);
     
     // Mean Reverting ?곹깭媛 ?꾨땲硫?嫄곕옒 ?덊븿
-    if (signal.regime == MRMarketRegime::TRENDING || signal.regime == MRMarketRegime::UNKNOWN) {
+    if (signal.regime == MRMarketRegime::UNKNOWN) {
         return signal;
     }
     
@@ -1377,8 +1649,12 @@ MeanReversionSignalMetrics MeanReversionStrategy::analyzeMeanReversion(
                           (is_kalman_oversold ? 1 : 0);
     
     // 理쒖냼 3媛??댁긽??怨쇰ℓ???좏샇 ?꾩슂
-    const int min_oversold_signals =
-        (signal.regime == MRMarketRegime::MEAN_REVERTING) ? 2 : 1;
+    int min_oversold_signals = 2;
+    if (signal.regime == MRMarketRegime::TRENDING) {
+        min_oversold_signals = 3;
+    } else if (signal.regime == MRMarketRegime::RANDOM_WALK) {
+        min_oversold_signals = 2;
+    }
     if (oversold_signals < min_oversold_signals) {
         return signal;
     }
@@ -1399,8 +1675,12 @@ MeanReversionSignalMetrics MeanReversionStrategy::analyzeMeanReversion(
     // 9. Reversion Probability 怨꾩궛
     signal.reversion_probability = calculateReversionProbability(stats, bb, rsi, vwap);
     
-    const double prob_floor =
-        (signal.regime == MRMarketRegime::MEAN_REVERTING) ? kRelaxedMinReversionProb : 0.52;
+    double prob_floor = kRelaxedMinReversionProb;
+    if (signal.regime == MRMarketRegime::RANDOM_WALK) {
+        prob_floor = 0.55;
+    } else if (signal.regime == MRMarketRegime::TRENDING) {
+        prob_floor = 0.64;
+    }
     if (signal.reversion_probability < prob_floor) {
         return signal;
     }
@@ -1419,6 +1699,10 @@ MeanReversionSignalMetrics MeanReversionStrategy::analyzeMeanReversion(
     signal.confidence += (stats.half_life > 0 && stats.half_life < 50 ? 0.2 : 0.0);
     signal.confidence += (std::abs(stats.autocorrelation) > 0.3 ? 0.2 : 0.0);
     signal.confidence += (oversold_signals >= 4 ? 0.2 : 0.1);
+    if (signal.regime == MRMarketRegime::TRENDING) {
+        signal.confidence -= 0.05;
+    }
+    signal.confidence = std::clamp(signal.confidence, 0.0, 1.0);
     
     // 13. Signal Strength 怨꾩궛
     signal.strength = calculateSignalStrength(signal, stats, metrics);
@@ -1426,11 +1710,21 @@ MeanReversionSignalMetrics MeanReversionStrategy::analyzeMeanReversion(
     // 14. Validation
     const auto strategy_cfg = Config::getInstance().getMeanReversionConfig();
     const double base_strength_floor = std::max(0.30, strategy_cfg.min_signal_strength);
-    const double valid_strength_floor =
-        (signal.regime == MRMarketRegime::MEAN_REVERTING) ? base_strength_floor : std::max(0.28, base_strength_floor - 0.10);
+    double valid_strength_floor = base_strength_floor;
+    if (signal.regime == MRMarketRegime::RANDOM_WALK) {
+        valid_strength_floor = std::max(0.30, base_strength_floor - 0.06);
+    } else if (signal.regime == MRMarketRegime::TRENDING) {
+        valid_strength_floor = std::max(0.36, base_strength_floor + 0.04);
+    }
+    const bool trending_reversion_quality =
+        signal.regime != MRMarketRegime::TRENDING ||
+        (oversold_signals >= 4 &&
+         signal.expected_reversion_pct >= 0.004 &&
+         stats.hurst_exponent <= 0.62);
     signal.is_valid = (signal.strength >= valid_strength_floor &&
                       signal.reversion_probability >= prob_floor &&
-                      signal.confidence >= kRelaxedMinConfidence);
+                      signal.confidence >= kRelaxedMinConfidence &&
+                      trending_reversion_quality);
     
     return signal;
 }
@@ -1648,8 +1942,10 @@ bool MeanReversionStrategy::shouldGenerateMeanReversionSignal(
     }
 
     double required_strength = std::max(0.30, strategy_cfg.min_signal_strength);
-    if (metrics.regime != MRMarketRegime::MEAN_REVERTING) {
-        required_strength = std::max(0.28, required_strength - 0.10);
+    if (metrics.regime == MRMarketRegime::RANDOM_WALK) {
+        required_strength = std::max(0.30, required_strength - 0.06);
+    } else if (metrics.regime == MRMarketRegime::TRENDING) {
+        required_strength = std::max(0.36, required_strength + 0.02);
     }
     if (metrics.strength < required_strength) {
         return false;
@@ -1665,7 +1961,11 @@ bool MeanReversionStrategy::shouldGenerateMeanReversionSignal(
     
     const bool regime_ok =
         (metrics.regime == MRMarketRegime::MEAN_REVERTING) ||
-        (metrics.regime == MRMarketRegime::RANDOM_WALK && metrics.confidence >= 0.58);
+        (metrics.regime == MRMarketRegime::RANDOM_WALK && metrics.confidence >= 0.58) ||
+        (metrics.regime == MRMarketRegime::TRENDING &&
+         metrics.confidence >= 0.66 &&
+         metrics.reversion_probability >= 0.66 &&
+         metrics.expected_reversion_pct >= 0.004);
     if (!regime_ok) {
         return false;
     }
@@ -1734,6 +2034,9 @@ std::vector<double> MeanReversionStrategy::extractPrices(
 
 long long MeanReversionStrategy::getCurrentTimestamp() const
 {
+    if (latest_market_timestamp_ms_ > 0) {
+        return latest_market_timestamp_ms_;
+    }
     return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()
     ).count();

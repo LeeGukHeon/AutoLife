@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "common/Types.h"
 #include "analytics/TechnicalIndicators.h"
@@ -13,7 +13,7 @@
 namespace autolife {
 namespace risk {
 
-// 포지션 정보
+// ?ъ????뺣낫
 struct Position {
     std::string market;
     double entry_price;
@@ -22,38 +22,39 @@ struct Position {
     double invested_amount;
     long long entry_time;
     
-    // 손익
-    double unrealized_pnl;      // 미실현 손익
-    double unrealized_pnl_pct;  // 미실현 손익률
+    // ?먯씡
+    double unrealized_pnl;      // 誘몄떎???먯씡
+    double unrealized_pnl_pct;  // 誘몄떎???먯씡瑜?
     
-    // 손절/익절가
+    // ?먯젅/?듭젅媛
     double stop_loss;
-    double take_profit_1;       // 1차 익절 (50%)
-    double take_profit_2;       // 2차 익절 (100%)
-    bool half_closed;           // 1차 익절 완료 여부
+    double take_profit_1;       // 1李??듭젅 (50%)
+    double take_profit_2;       // 2李??듭젅 (100%)
+    bool half_closed;           // 1李??듭젅 ?꾨즺 ?щ?
     
-    // [추가] Trailing Stop Loss용
-    double highest_price;       // 포지션 진입 후 최고가 기록 (손절선 상승용)
-    double breakeven_trigger;   // 본전 이동 트리거 가격
-    double trailing_start;      // 트레일링 시작 가격
+    // [異붽?] Trailing Stop Loss??
+    double highest_price;       // ?ъ???吏꾩엯 ??理쒓퀬媛 湲곕줉 (?먯젅???곸듅??
+    double breakeven_trigger;   // 蹂몄쟾 ?대룞 ?몃━嫄?媛寃?
+    double trailing_start;      // ?몃젅?쇰쭅 ?쒖옉 媛寃?
     
-    // 전략 정보
+    // ?꾨왂 ?뺣낫
     std::string strategy_name;
     
-    // [NEW] ML 학습용 신호 정보
-    double signal_filter;       // 진입 시 적용된 동적 필터값
-    double signal_strength;     // 진입 신호의 강도
-    analytics::MarketRegime market_regime; // 진입 시 시장 레짐
-    double liquidity_score;     // 진입 시 유동성 점수
-    double volatility;          // 진입 시 변동성
-    double expected_value;      // 진입 시 기대값
-    double reward_risk_ratio;   // 진입 시 RR
+    // [NEW] ML ?숈뒿???좏샇 ?뺣낫
+    double signal_filter;       // entry-time adaptive filter value
+    double signal_strength;     // entry signal strength (0.0~1.0)
+    analytics::MarketRegime market_regime; // entry-time market regime
+    std::string entry_archetype;
+    double liquidity_score;     // 吏꾩엯 ???좊룞???먯닔
+    double volatility;          // 吏꾩엯 ??蹂?숈꽦
+    double expected_value;      // 吏꾩엯 ??湲곕?媛?
+    double reward_risk_ratio;   // 吏꾩엯 ??RR
     
-        // [NEW] 펜딩 주문 추적 (Limit Order → Market 폴백 위해)
-        std::string pending_order_uuid;     // 펜딩 중인 주문 UUID
-        long long pending_order_time;       // 펜딩 주문 시간 (ms, epoch)
+        // [NEW] ?쒕뵫 二쇰Ц 異붿쟻 (Limit Order ??Market ?대갚 ?꾪빐)
+        std::string pending_order_uuid;     // ?쒕뵫 以묒씤 二쇰Ц UUID
+        long long pending_order_time;       // ?쒕뵫 二쇰Ц ?쒓컙 (ms, epoch)
         std::string pending_order_type;     // "sell" or "partial_sell"
-        double pending_order_price;         // 펜딩 중인 주문가격
+        double pending_order_price;         // ?쒕뵫 以묒씤 二쇰Ц媛寃?
     
     Position()
         : entry_price(0), current_price(0), quantity(0)
@@ -65,12 +66,13 @@ struct Position {
         , pending_order_time(0), pending_order_price(0)
         , signal_filter(0.5), signal_strength(0.0)
         , market_regime(analytics::MarketRegime::UNKNOWN)
+        , entry_archetype("UNSPECIFIED")
         , liquidity_score(0.0), volatility(0.0)
         , expected_value(0.0), reward_risk_ratio(0.0)
     {}
 };
 
-// 거래 이력
+// 嫄곕옒 ?대젰
 struct TradeHistory {
     std::string market;
     double entry_price;
@@ -84,14 +86,15 @@ struct TradeHistory {
     std::string strategy_name;
     std::string exit_reason;    // "take_profit", "stop_loss", "time_stop"
     
-    // [NEW] ML 학습용 필터 정보
-    double signal_filter;       // 거래 진입 시 적용된 신호 필터값 (0.45~0.55)
-    double signal_strength;     // 거래 진입 신호의 강도 (0.0~1.0)
-    analytics::MarketRegime market_regime; // 거래 진입 시 시장 레짐
-    double liquidity_score;     // 거래 진입 시 유동성 점수
-    double volatility;          // 거래 진입 시 변동성
-    double expected_value;      // 거래 진입 시 기대값
-    double reward_risk_ratio;   // 거래 진입 시 RR
+    // [NEW] ML ?숈뒿???꾪꽣 ?뺣낫
+    double signal_filter;       // 嫄곕옒 吏꾩엯 ???곸슜???좏샇 ?꾪꽣媛?(0.45~0.55)
+    double signal_strength;     // 嫄곕옒 吏꾩엯 ?좏샇??媛뺣룄 (0.0~1.0)
+    analytics::MarketRegime market_regime; // 嫄곕옒 吏꾩엯 ???쒖옣 ?덉쭚
+    std::string entry_archetype;
+    double liquidity_score;     // 嫄곕옒 吏꾩엯 ???좊룞???먯닔
+    double volatility;          // 嫄곕옒 吏꾩엯 ??蹂?숈꽦
+    double expected_value;      // 嫄곕옒 吏꾩엯 ??湲곕?媛?
+    double reward_risk_ratio;   // 嫄곕옒 吏꾩엯 ??RR
     
     TradeHistory()
         : entry_price(0), exit_price(0), quantity(0)
@@ -99,19 +102,20 @@ struct TradeHistory {
         , entry_time(0), exit_time(0)
         , signal_filter(0.5), signal_strength(0.0)
         , market_regime(analytics::MarketRegime::UNKNOWN)
+        , entry_archetype("UNSPECIFIED")
         , liquidity_score(0.0), volatility(0.0)
         , expected_value(0.0), reward_risk_ratio(0.0)
     {}
 };
 
-// Risk Manager - 리스크 관리 및 포지션 관리
+// Risk Manager - 由ъ뒪??愿由?諛??ъ???愿由?
 class RiskManager {
 public:
     RiskManager(double initial_capital);
     
-    // ===== 포지션 관리 =====
+    // ===== ?ъ???愿由?=====
     
-    // 포지션 진입 가능 여부 체크
+    // ?ъ???吏꾩엯 媛???щ? 泥댄겕
     bool canEnterPosition(
         const std::string& market,
         double entry_price,
@@ -119,7 +123,7 @@ public:
         const std::string& strategy_name
     );
     
-    // 포지션 진입
+    // ?ъ???吏꾩엯
     void enterPosition(
         const std::string& market,
         double entry_price,
@@ -132,26 +136,26 @@ public:
         double trailing_start = 0.0
     );
     
-    // 포지션 업데이트 (현재가 갱신)
+    // ?ъ????낅뜲?댄듃 (?꾩옱媛 媛깆떊)
     void updatePosition(const std::string& market, double current_price);
     
-    // 포지션 청산 체크 (손절/익절 여부 판단)
+    // ?ъ???泥?궛 泥댄겕 (?먯젅/?듭젅 ?щ? ?먮떒)
     bool shouldExitPosition(const std::string& market);
     
-    // 포지션 청산
+    // ?ъ???泥?궛
     void exitPosition(
         const std::string& market,
         double exit_price,
         const std::string& exit_reason
     );
     
-    // 1차 익절 (50% 청산)
+    // 1李??듭젅 (50% 泥?궛)
     void partialExit(const std::string& market, double exit_price);
     
-    // [Fix] 소액 포지션이라 부분 익절을 못한 경우, 플래그만 강제로 켜기 (자본 변동 없음)
+    // [Fix] ?뚯븸 ?ъ??섏씠??遺遺??듭젅??紐삵븳 寃쎌슦, ?뚮옒洹몃쭔 媛뺤젣濡?耳쒓린 (?먮낯 蹂???놁쓬)
     void setHalfClosed(const std::string& market, bool half_closed);
     
-    // [Phase 3] 부분 체결 시 수량만 업데이트 (포지션 유지)
+    // [Phase 3] 遺遺?泥닿껐 ???섎웾留??낅뜲?댄듃 (?ъ????좎?)
     void updatePositionQuantity(const std::string& market, double new_quantity);
     bool applyPartialSellFill(
         const std::string& market,
@@ -160,65 +164,65 @@ public:
         const std::string& exit_reason
     );
     
-    // 현재 포지션 조회
+    // ?꾩옱 ?ъ???議고쉶
     Position* getPosition(const std::string& market);
     std::vector<Position> getAllPositions() const;
     
-    // ===== 손절 계산 =====
+    // ===== ?먯젅 怨꾩궛 =====
     
-    // Dynamic Stop Loss (ATR + Support 조합)
+    // Dynamic Stop Loss (ATR + Support 議고빀)
     double calculateDynamicStopLoss(
         double entry_price,
         const std::vector<Candle>& candles
     );
     
-    // ATR 기반 손절
+    // ATR 湲곕컲 ?먯젅
     double calculateATRStopLoss(
         double entry_price,
         const std::vector<Candle>& candles,
         double multiplier = 2.0
     );
     
-    // Support 기반 손절
+    // Support 湲곕컲 ?먯젅
     double calculateSupportStopLoss(
         double entry_price,
         const std::vector<Candle>& candles
     );
     
-    // Break-even Stop (본전 이동)
+    // Break-even Stop (蹂몄쟾 ?대룞)
     void moveStopToBreakeven(const std::string& market);
 
-    // Stop Loss 상향 갱신 (트레일링용)
+    // Stop Loss ?곹뼢 媛깆떊 (?몃젅?쇰쭅??
     void updateStopLoss(const std::string& market, double new_stop_loss, const std::string& reason);
 
-    // 트레일링/브레이크이븐 파라미터 설정
+    // ?몃젅?쇰쭅/釉뚮젅?댄겕?대툙 ?뚮씪誘명꽣 ?ㅼ젙
     void setPositionTrailingParams(
         const std::string& market,
         double breakeven_trigger,
         double trailing_start
     );
     
-    // ===== 주문 대기 자본 관리 =====
-    // 제출됐지만 아직 체결 안 된 주문 금액을 추적하여 중복 주문 방지
+    // ===== 二쇰Ц ?湲??먮낯 愿由?=====
+    // ?쒖텧?먯?留??꾩쭅 泥닿껐 ????二쇰Ц 湲덉븸??異붿쟻?섏뿬 以묐났 二쇰Ц 諛⑹?
     void reservePendingCapital(double amount) {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
         pending_order_capital_ += amount;
-        LOG_INFO("💰 펜딩 자본 예약: +{:.0f} (총 펜딩: {:.0f})", amount, pending_order_capital_);
+        LOG_INFO("?뮥 ?쒕뵫 ?먮낯 ?덉빟: +{:.0f} (珥??쒕뵫: {:.0f})", amount, pending_order_capital_);
     }
     void releasePendingCapital(double amount) {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
         pending_order_capital_ -= amount;
         if (pending_order_capital_ < 0) pending_order_capital_ = 0.0;
-        LOG_INFO("💰 펜딩 자본 해제: -{:.0f} (총 펜딩: {:.0f})", amount, pending_order_capital_);
+        LOG_INFO("?뮥 ?쒕뵫 ?먮낯 ?댁젣: -{:.0f} (珥??쒕뵫: {:.0f})", amount, pending_order_capital_);
     }
     void clearPendingCapital() {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
         pending_order_capital_ = 0.0;
     }
 
-    // ===== 포지션 사이징 =====
+    // ===== ?ъ????ъ씠吏?=====
     
-    // Kelly Criterion 기반 포지션 사이징
+    // Kelly Criterion 湲곕컲 ?ъ????ъ씠吏?
     double calculateKellyPositionSize(
         double capital,
         double win_rate,
@@ -226,30 +230,30 @@ public:
         double avg_loss
     );
     
-    // Fee를 고려한 최적 포지션 크기
+    // Fee瑜?怨좊젮??理쒖쟻 ?ъ????ш린
     double calculateFeeAwarePositionSize(
         double capital,
         double entry_price,
         double stop_loss,
         double take_profit,
-        double fee_rate = 0.0005  // [Phase 3] 0.05% (업비트 KRW 실제 수수료와 일치)
+        double fee_rate = 0.0005  // [Phase 3] 0.05% (?낅퉬??KRW ?ㅼ젣 ?섏닔猷뚯? ?쇱튂)
     );
     
-    // ===== 리스크 관리 =====
+    // ===== 由ъ뒪??愿由?=====
     
-    // 거래 빈도 제한 체크
+    // 嫄곕옒 鍮덈룄 ?쒗븳 泥댄겕
     bool canTradeMarket(const std::string& market);
     
-    // 일일 최대 거래 횟수 체크
+    // ?쇱씪 理쒕? 嫄곕옒 ?잛닔 泥댄겕
     bool hasReachedDailyTradeLimit();
     
-    // Drawdown 체크 (연속 손실 시 거래 중단)
+    // Drawdown 泥댄겕 (?곗냽 ?먯떎 ??嫄곕옒 以묐떒)
     bool isDrawdownExceeded();
     
-    // 최대 포지션 개수 체크
+    // 理쒕? ?ъ???媛쒖닔 泥댄겕
     bool hasReachedMaxPositions();
     
-    // ===== 통계 및 모니터링 =====
+    // ===== ?듦퀎 諛?紐⑤땲?곕쭅 =====
     
     struct RiskMetrics {
         double total_capital;
@@ -291,7 +295,7 @@ public:
     void replaceTradeHistory(const std::vector<TradeHistory>& history);
     void appendTradeHistory(const TradeHistory& trade);
     
-    // [NEW] 포지션의 신호 정보 설정 (ML 학습용)
+    // [NEW] ?ъ??섏쓽 ?좏샇 ?뺣낫 ?ㅼ젙 (ML ?숈뒿??
     void setPositionSignalInfo(
         const std::string& market,
         double signal_filter,
@@ -300,10 +304,11 @@ public:
         double liquidity_score = 0.0,
         double volatility = 0.0,
         double expected_value = 0.0,
-        double reward_risk_ratio = 0.0
+        double reward_risk_ratio = 0.0,
+        const std::string& entry_archetype = ""
     );
 
-    // ===== 그리드 자본/체결 처리 =====
+    // ===== 洹몃━???먮낯/泥닿껐 泥섎━ =====
     bool reserveGridCapital(
         const std::string& market,
         double amount,
@@ -318,17 +323,17 @@ public:
         double quantity
     );
     
-    // [✅ 추가] 실전 매매 시, 실제 잔고로 자본금을 덮어쓰기 위한 함수
+    // [??異붽?] ?ㅼ쟾 留ㅻℓ ?? ?ㅼ젣 ?붽퀬濡??먮낯湲덉쓣 ??뼱?곌린 ?꾪븳 ?⑥닔
     void resetCapital(double actual_balance) {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
-        current_capital_ = actual_balance; // 현재 자본금 교체
-        pending_order_capital_ = 0.0;       // 동기 후 펜딩 초기화
-        initial_capital_ = actual_balance; // 기준점(원금)도 교체 (MDD 계산용)
+        current_capital_ = actual_balance; // ?꾩옱 ?먮낯湲?援먯껜
+        pending_order_capital_ = 0.0;       // ?숆린 ???쒕뵫 珥덇린??
+        initial_capital_ = actual_balance; // 湲곗????먭툑)??援먯껜 (MDD 怨꾩궛??
         max_capital_ = actual_balance;
-        LOG_INFO("자산 동기화 완료: RiskManager 자본금 재설정 -> {:.0f} KRW", actual_balance);
+        LOG_INFO("?먯궛 ?숆린???꾨즺: RiskManager ?먮낯湲??ъ꽕??-> {:.0f} KRW", actual_balance);
     }
 
-    // 설정
+    // ?ㅼ젙
     void setMaxPositions(int max_positions);
     void setMaxDailyTrades(int max_trades);
     void setMaxDrawdown(double max_drawdown_pct);
@@ -355,13 +360,13 @@ private:
 
     double initial_capital_;
     double current_capital_;
-    double pending_order_capital_ = 0.0;    // 제출됐지만 아직 체결 안 된 주문 금액
+    double pending_order_capital_ = 0.0;    // ?쒖텧?먯?留??꾩쭅 泥닿껐 ????二쇰Ц 湲덉븸
     
     std::map<std::string, Position> positions_;
     std::vector<TradeHistory> trade_history_;
     
-    // 거래 제한
-    std::map<std::string, long long> last_trade_time_;  // 마켓별 마지막 거래 시간
+    // 嫄곕옒 ?쒗븳
+    std::map<std::string, long long> last_trade_time_;  // 留덉폆蹂?留덉?留?嫄곕옒 ?쒓컙
     int daily_trade_count_;
     long long daily_reset_time_;
     double daily_start_capital_;
@@ -372,23 +377,23 @@ private:
     double min_order_krw_;
     double recommended_min_enter_krw_;
     
-    // 설정
+    // ?ㅼ젙
     int max_positions_;
     int max_daily_trades_;
     double max_drawdown_pct_;
-    double max_exposure_pct_; // 총 자본 대비 허용 투자 비율 (예: 0.7 = 70%)
-    int min_reentry_interval_;  // 초
+    double max_exposure_pct_; // 珥??먮낯 ?鍮??덉슜 ?ъ옄 鍮꾩쑉 (?? 0.7 = 70%)
+    int min_reentry_interval_;  // 珥?
     
-    // 통계
-    mutable double max_capital_;      // <- mutable 추가
-    mutable double total_fees_paid_;  // <- mutable 추가
+    // ?듦퀎
+    mutable double max_capital_;      // <- mutable 異붽?
+    mutable double total_fees_paid_;  // <- mutable 異붽?
 
     std::map<std::string, double> reserved_grid_capital_;
     std::map<std::string, GridInventory> grid_inventory_;
     
     mutable std::recursive_mutex mutex_;
     
-    // 헬퍼 함수
+    // ?ы띁 ?⑥닔
     double calculateFee(double amount) const;
     void updateCapital();
     void recordTrade(const Position& pos, double exit_price, const std::string& exit_reason);
@@ -400,3 +405,4 @@ private:
 
 } // namespace risk
 } // namespace autolife
+

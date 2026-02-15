@@ -125,6 +125,35 @@ PolicyOutput AdaptivePolicyController::selectCandidates(const PolicyInput& input
     PolicyOutput out;
     std::vector<std::tuple<double, strategy::Signal, int, double, double>> ranked;
     ranked.reserve(input.candidates.size());
+    auto makeDecisionRecord = [](
+        const strategy::Signal& s,
+        bool selected,
+        const std::string& reason,
+        double base_score,
+        double policy_score,
+        int hist_trades,
+        double hist_wr,
+        double hist_pf
+    ) {
+        PolicyDecisionRecord rec;
+        rec.market = s.market;
+        rec.strategy_name = s.strategy_name;
+        rec.selected = selected;
+        rec.reason = reason;
+        rec.base_score = base_score;
+        rec.policy_score = policy_score;
+        rec.strength = s.strength;
+        rec.expected_value = s.expected_value;
+        rec.liquidity_score = s.liquidity_score;
+        rec.volatility = s.volatility;
+        rec.strategy_trades = hist_trades;
+        rec.strategy_win_rate = hist_wr;
+        rec.strategy_profit_factor = hist_pf;
+        rec.used_preloaded_tf_5m = s.used_preloaded_tf_5m;
+        rec.used_preloaded_tf_1h = s.used_preloaded_tf_1h;
+        rec.used_resampled_tf_fallback = s.used_resampled_tf_fallback;
+        return rec;
+    };
 
     for (const auto& s : input.candidates) {
         int hist_trades = 0;
@@ -136,12 +165,15 @@ PolicyOutput AdaptivePolicyController::selectCandidates(const PolicyInput& input
         const double min_strength_under_stress = 0.36 + (0.10 * stress);
         if (s.strength < min_strength_under_stress) {
             out.dropped_by_policy++;
-            out.decisions.push_back(PolicyDecisionRecord{
-                s.market, s.strategy_name, false, "dropped_low_strength",
-                (s.score > 0.0 ? s.score : s.strength), 0.0,
-                s.strength, s.expected_value, s.liquidity_score, s.volatility,
-                hist_trades, hist_wr, hist_pf
-            });
+            out.decisions.push_back(makeDecisionRecord(
+                s,
+                false,
+                "dropped_low_strength",
+                (s.score > 0.0 ? s.score : s.strength),
+                0.0,
+                hist_trades,
+                hist_wr,
+                hist_pf));
             continue;
         }
 
@@ -149,12 +181,15 @@ PolicyOutput AdaptivePolicyController::selectCandidates(const PolicyInput& input
             hist_trades >= 10 &&
             (hist_wr < 0.50 || hist_pf < 0.90)) {
             out.dropped_by_policy++;
-            out.decisions.push_back(PolicyDecisionRecord{
-                s.market, s.strategy_name, false, "dropped_small_seed_quality",
-                (s.score > 0.0 ? s.score : s.strength), 0.0,
-                s.strength, s.expected_value, s.liquidity_score, s.volatility,
-                hist_trades, hist_wr, hist_pf
-            });
+            out.decisions.push_back(makeDecisionRecord(
+                s,
+                false,
+                "dropped_small_seed_quality",
+                (s.score > 0.0 ? s.score : s.strength),
+                0.0,
+                hist_trades,
+                hist_wr,
+                hist_pf));
             continue;
         }
 
@@ -187,12 +222,15 @@ PolicyOutput AdaptivePolicyController::selectCandidates(const PolicyInput& input
         if (input.small_seed_mode) {
             if (s.liquidity_score < 45.0 || s.volatility > 8.0) {
                 out.dropped_by_policy++;
-                out.decisions.push_back(PolicyDecisionRecord{
-                    s.market, s.strategy_name, false, "dropped_small_seed_liqvol",
-                    (s.score > 0.0 ? s.score : s.strength), std::get<0>(item),
-                    s.strength, s.expected_value, s.liquidity_score, s.volatility,
-                    hist_trades, hist_wr, hist_pf
-                });
+                out.decisions.push_back(makeDecisionRecord(
+                    s,
+                    false,
+                    "dropped_small_seed_liqvol",
+                    (s.score > 0.0 ? s.score : s.strength),
+                    std::get<0>(item),
+                    hist_trades,
+                    hist_wr,
+                    hist_pf));
                 continue;
             }
         }
@@ -209,12 +247,15 @@ PolicyOutput AdaptivePolicyController::selectCandidates(const PolicyInput& input
         const double hist_wr = std::get<3>(item);
         const double hist_pf = std::get<4>(item);
         const bool selected = static_cast<int>(i) < cap;
-        out.decisions.push_back(PolicyDecisionRecord{
-            s.market, s.strategy_name, selected, selected ? "selected" : "dropped_capacity",
-            (s.score > 0.0 ? s.score : s.strength), policy_score,
-            s.strength, s.expected_value, s.liquidity_score, s.volatility,
-            hist_trades, hist_wr, hist_pf
-        });
+        out.decisions.push_back(makeDecisionRecord(
+            s,
+            selected,
+            selected ? "selected" : "dropped_capacity",
+            (s.score > 0.0 ? s.score : s.strength),
+            policy_score,
+            hist_trades,
+            hist_wr,
+            hist_pf));
         if (selected) {
             out.selected_candidates.push_back(std::move(s));
         } else {
