@@ -1,0 +1,10 @@
+{
+  "preset_name": "legacy_fallback",
+  "description": "Emergency rollback preset. Disables core planes and falls back to legacy path.",
+  "trading": {
+    "enable_core_plane_bridge": false,
+    "enable_core_policy_plane": false,
+    "enable_core_risk_plane": false,
+    "enable_core_execution_plane": false
+  }
+}

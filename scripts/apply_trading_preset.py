@@ -36,7 +36,7 @@ def merge_json_object(target: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--preset", "-Preset", choices=["safe", "active"], default="safe")
+    parser.add_argument("--preset", "-Preset", choices=["safe", "active", "legacy_fallback"], default="safe")
     parser.add_argument("--preset-path", "-PresetPath", default="")
     parser.add_argument("--config-path", "-ConfigPath", default=r".\build\Release\config\config.json")
     parser.add_argument("--source-config-path", "-SourceConfigPath", default=r".\config\config.json")

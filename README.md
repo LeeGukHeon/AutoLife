@@ -41,10 +41,12 @@ Get-Content .env | Where-Object { $_ -match '^[A-Za-z_][A-Za-z0-9_]*=' } | ForEa
 Preset files:
 - `config/presets/safe.json`
 - `config/presets/active.json`
+- `config/presets/legacy_fallback.json` (emergency rollback)
 
 Apply a preset:
 ```powershell
 python scripts\apply_trading_preset.py --preset safe
+python scripts\apply_trading_preset.py --preset legacy_fallback
 ```
 
 ## Operational Validation
