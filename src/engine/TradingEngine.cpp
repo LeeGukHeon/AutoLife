@@ -254,7 +254,7 @@ double computeCalibratedExpectedEdgePct(
         if (signal.market_regime == autolife::analytics::MarketRegime::RANGING) {
             win_prob -= 0.14;
         } else if (signal.market_regime == autolife::analytics::MarketRegime::TRENDING_UP) {
-            win_prob -= 0.05;
+            win_prob -= 0.08;
         }
     }
     if (is_breakout_strategy && is_consolidation_break &&
@@ -354,6 +354,13 @@ void applyArchetypeRiskAdjustments(
             regime_pattern_block = true;
             return;
         }
+    }
+    if (is_momentum && is_breakout_cont &&
+        signal.market_regime == autolife::analytics::MarketRegime::TRENDING_UP) {
+        // Current hostile dataset consistently shows poor payoff for this pattern.
+        // Revisit when broader market sample confirms a robust edge.
+        regime_pattern_block = true;
+        return;
     }
     if (is_breakout && is_consolidation_break &&
         signal.market_regime == autolife::analytics::MarketRegime::TRENDING_UP) {

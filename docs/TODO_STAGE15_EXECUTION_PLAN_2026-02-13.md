@@ -1513,3 +1513,25 @@
 - Totals shifted to positive expectancy:
   - `avg_expectancy_krw=0.1665`
   - `total_profit_krw=11.9874`
+
+## Stage 15 Step 3 Update (2026-02-15, Momentum BreakoutContinuation@TrendingUp)
+
+### Targeted change
+- Remaining loss-cluster outlier `Advanced Momentum / BREAKOUT_CONTINUATION / TRENDING_UP` was explicitly blocked in both runtime and backtest gate paths.
+- Files:
+  - `src/engine/TradingEngine.cpp`
+  - `src/backtest/BacktestEngine.cpp`
+
+### Verification
+- Build PASS:
+  - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release`
+- Loop PASS:
+  - `python scripts/run_realdata_candidate_loop.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --run-both-hostility-modes --gate-min-avg-trades 8 --matrix-max-workers 1 --matrix-backtest-retry-count 2`
+
+### Snapshot delta (core_full)
+- before: PF `12.0938`, trades `8.0`, expectancy `3.7766`, profitable_ratio `0.5556`
+- after:  PF `12.2370`, trades `7.7778`, expectancy `5.1564`, profitable_ratio `0.5556`
+- strict/adaptive: both `overall_gate_pass=true`
+
+### Root-cause impact
+- `BREAKOUT_CONTINUATION,TRENDING_UP` dropped out from top-loss pattern list in latest diagnostics.
