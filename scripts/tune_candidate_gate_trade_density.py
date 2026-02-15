@@ -748,7 +748,12 @@ def main(argv=None) -> int:
     parser.add_argument("--output-dir", "-OutputDir", default=r".\build\Release\logs")
     parser.add_argument("--summary-csv", "-SummaryCsv", default=r".\build\Release\logs\candidate_trade_density_tuning_summary.csv")
     parser.add_argument("--summary-json", "-SummaryJson", default=r".\build\Release\logs\candidate_trade_density_tuning_summary.json")
-    parser.add_argument("--scenario-mode", "-ScenarioMode", choices=["legacy_only", "diverse_light", "diverse_wide", "quality_focus"], default="legacy_only")
+    parser.add_argument(
+        "--scenario-mode",
+        "-ScenarioMode",
+        choices=["legacy_only", "diverse_light", "diverse_wide", "quality_focus"],
+        default="quality_focus",
+    )
     parser.add_argument("--max-scenarios", "-MaxScenarios", type=int, default=0)
     parser.add_argument("--include-legacy-scenarios", "-IncludeLegacyScenarios", action="store_true")
     parser.add_argument("--real-data-only", "-RealDataOnly", action="store_true")
@@ -850,6 +855,8 @@ def main(argv=None) -> int:
     )
 
     combo_specs = build_combo_specs(args.scenario_mode, args.include_legacy_scenarios, args.max_scenarios)
+    if args.scenario_mode == "legacy_only":
+        print("[TuneCandidate] scenario_mode=legacy_only (rollback/comparison mode)")
     print(f"[TuneCandidate] scenario_mode={args.scenario_mode}, combo_count={len(combo_specs)}")
 
     original_build_raw = build_config.read_text(encoding="utf-8-sig")

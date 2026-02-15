@@ -47,7 +47,7 @@ def parse_args(argv=None):
     parser.add_argument("--min-avg-win-rate-pct", "-MinAvgWinRatePct", type=float, default=48.0)
     parser.add_argument("--min-avg-trades", "-MinAvgTrades", type=float, default=8.0)
     parser.add_argument("--improvement-epsilon", "-ImprovementEpsilon", type=float, default=0.05)
-    parser.add_argument("--tune-scenario-mode", "-TuneScenarioMode", default="diverse_light")
+    parser.add_argument("--tune-scenario-mode", "-TuneScenarioMode", default="quality_focus")
     parser.add_argument("--tune-max-scenarios", "-TuneMaxScenarios", type=int, default=16)
     parser.add_argument("--tune-include-legacy-scenarios", "-TuneIncludeLegacyScenarios", action="store_true")
     parser.add_argument("--tune-screen-dataset-limit", "-TuneScreenDatasetLimit", type=int, default=8)
