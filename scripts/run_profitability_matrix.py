@@ -462,6 +462,11 @@ def main() -> int:
     parser.add_argument("--core-vs-legacy-min-profit-factor-delta", type=float, default=-0.05)
     parser.add_argument("--core-vs-legacy-min-expectancy-delta-krw", type=float, default=-5.0)
     parser.add_argument("--core-vs-legacy-min-total-profit-delta-krw", type=float, default=-10000.0)
+    parser.add_argument(
+        "--skip-core-vs-legacy-gate",
+        action="store_true",
+        help="Skip legacy comparison gate and evaluate only profile-level gates (migration mode).",
+    )
     parser.add_argument("--max-workers", type=int, default=1)
     parser.add_argument("--backtest-retry-count", type=int, default=2)
     parser.add_argument(
@@ -709,6 +714,7 @@ def main() -> int:
         "comparison_available": legacy_summary is not None and core_full_summary is not None,
         "baseline_profile": "legacy_default",
         "candidate_profile": "core_full",
+        "gate_skipped": bool(args.skip_core_vs_legacy_gate),
     }
     if core_vs_legacy["comparison_available"]:
         delta_pf = round(float(core_full_summary["avg_profit_factor"]) - float(legacy_summary["avg_profit_factor"]), 4)
@@ -735,6 +741,10 @@ def main() -> int:
         )
     else:
         core_vs_legacy["gate_pass"] = False
+
+    if args.skip_core_vs_legacy_gate:
+        core_vs_legacy["gate_skip_reason"] = "disabled_by_flag"
+        core_vs_legacy["gate_pass"] = True
 
     walk_forward = None
     if args.include_walk_forward:
@@ -801,6 +811,7 @@ def main() -> int:
             "core_vs_legacy_min_profit_factor_delta": args.core_vs_legacy_min_profit_factor_delta,
             "core_vs_legacy_min_expectancy_delta_krw": args.core_vs_legacy_min_expectancy_delta_krw,
             "core_vs_legacy_min_total_profit_delta_krw": args.core_vs_legacy_min_total_profit_delta_krw,
+            "skip_core_vs_legacy_gate": bool(args.skip_core_vs_legacy_gate),
             "hostility_adaptive": threshold_bundle,
         },
         "profile_gate_pass": profile_gate_pass,

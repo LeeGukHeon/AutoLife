@@ -75,6 +75,19 @@ Outputs:
 - `build/Release/logs/profitability_profile_summary_exploratory.csv`
 - `build/Release/logs/profitability_matrix_exploratory.csv`
 
+## Core Migration Mode (Optional)
+Use this when you want to evaluate core profile quality without blocking on legacy delta comparison.
+
+Realdata loop (strict/adaptive pair):
+```powershell
+python scripts\run_realdata_candidate_loop.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --run-both-hostility-modes --gate-min-avg-trades 8 --skip-core-vs-legacy-gate
+```
+
+Auto improvement loop:
+```powershell
+python scripts\run_candidate_auto_improvement_loop.py --max-iterations 3 --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate
+```
+
 ## Personal Use Notice
 This project is for personal use and experimentation.  
 Read `docs/PERSONAL_USE_NOTICE.md` before real-money trading or paid distribution.

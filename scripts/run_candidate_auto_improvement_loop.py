@@ -88,6 +88,12 @@ def parse_args(argv=None):
     parser.add_argument("--sync-source-config", "-SyncSourceConfig", action="store_true")
     parser.add_argument("--matrix-max-workers", "-MatrixMaxWorkers", type=int, default=1)
     parser.add_argument("--matrix-backtest-retry-count", "-MatrixBacktestRetryCount", type=int, default=2)
+    parser.add_argument(
+        "--skip-core-vs-legacy-gate",
+        "-SkipCoreVsLegacyGate",
+        action="store_true",
+        help="Skip legacy comparison gate in matrix/tuning runs (migration mode).",
+    )
     parser.add_argument("--verification-lock-path", "-VerificationLockPath", default="./build/Release/logs/verification_run.lock")
     parser.add_argument("--verification-lock-timeout-sec", "-VerificationLockTimeoutSec", type=int, default=1800)
     parser.add_argument("--verification-lock-stale-sec", "-VerificationLockStaleSec", type=int, default=14400)
@@ -453,6 +459,8 @@ def main(argv=None) -> int:
                 real_loop_argv.append("--run-both-hostility-modes")
             if args.enable_adaptive_state_io:
                 real_loop_argv.append("--enable-adaptive-state-io")
+            if args.skip_core_vs_legacy_gate:
+                real_loop_argv.append("--skip-core-vs-legacy-gate")
             rc = run_realdata_candidate_loop.main(real_loop_argv)
             if rc != 0:
                 raise RuntimeError(f"Realdata candidate loop (baseline) failed (exit={rc})")
@@ -593,6 +601,8 @@ def main(argv=None) -> int:
             else:
                 tune_argv.append("--disable-hostility-adaptive-thresholds")
                 tune_argv.append("--disable-effective-thresholds-for-objective")
+            if args.skip_core_vs_legacy_gate:
+                tune_argv.append("--skip-core-vs-legacy-gate")
             rc = tune_candidate_gate_trade_density.main(tune_argv)
             if rc != 0:
                 raise RuntimeError(f"Candidate tuning failed (exit={rc})")
@@ -751,6 +761,7 @@ def main(argv=None) -> int:
             "min_avg_win_rate_pct": float(args.min_avg_win_rate_pct),
             "min_avg_trades": float(args.min_avg_trades),
             "enable_hostility_adaptive_targets": bool(args.enable_hostility_adaptive_targets),
+            "skip_core_vs_legacy_gate": bool(args.skip_core_vs_legacy_gate),
         },
         "best_objective_score": float(best_objective),
         "best_combo_id": best_combo_id,
