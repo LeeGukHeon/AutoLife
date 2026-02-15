@@ -48,10 +48,10 @@ struct EngineConfig {
     double min_strategy_profit_factor = 1.00;
     bool avoid_high_volatility = true;
     bool avoid_trending_down = true;
-    bool enable_core_plane_bridge = false;
-    bool enable_core_policy_plane = false;
-    bool enable_core_risk_plane = false;
-    bool enable_core_execution_plane = false;
+    bool enable_core_plane_bridge = true;
+    bool enable_core_policy_plane = true;
+    bool enable_core_risk_plane = true;
+    bool enable_core_execution_plane = true;
     double hostility_ewma_alpha = 0.14;
     double hostility_hostile_threshold = 0.62;
     double hostility_severe_threshold = 0.82;

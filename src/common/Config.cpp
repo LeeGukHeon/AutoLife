@@ -138,10 +138,10 @@ void Config::load(const std::string& path) {
             engine_config_.min_strategy_profit_factor = t.value("min_strategy_profit_factor", 1.00);
             engine_config_.avoid_high_volatility = t.value("avoid_high_volatility", true);
             engine_config_.avoid_trending_down = t.value("avoid_trending_down", true);
-            engine_config_.enable_core_plane_bridge = t.value("enable_core_plane_bridge", false);
-            engine_config_.enable_core_policy_plane = t.value("enable_core_policy_plane", false);
-            engine_config_.enable_core_risk_plane = t.value("enable_core_risk_plane", false);
-            engine_config_.enable_core_execution_plane = t.value("enable_core_execution_plane", false);
+            engine_config_.enable_core_plane_bridge = t.value("enable_core_plane_bridge", true);
+            engine_config_.enable_core_policy_plane = t.value("enable_core_policy_plane", true);
+            engine_config_.enable_core_risk_plane = t.value("enable_core_risk_plane", true);
+            engine_config_.enable_core_execution_plane = t.value("enable_core_execution_plane", true);
             engine_config_.hostility_ewma_alpha = t.value("hostility_ewma_alpha", 0.14);
             engine_config_.hostility_hostile_threshold = t.value("hostility_hostile_threshold", 0.62);
             engine_config_.hostility_severe_threshold = t.value("hostility_severe_threshold", 0.82);
