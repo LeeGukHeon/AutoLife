@@ -587,11 +587,20 @@ def get_effective_objective_thresholds(row: Dict[str, Any], args) -> Dict[str, f
     }
     if not bool(args.use_effective_thresholds_for_objective):
         return base
-    return {
+    effective = {
         "min_avg_trades": float(row.get("effective_min_avg_trades", base["min_avg_trades"])),
         "min_profitable_ratio": float(row.get("effective_min_profitable_ratio", base["min_profitable_ratio"])),
         "min_avg_win_rate_pct": float(row.get("effective_min_avg_win_rate_pct", base["min_avg_win_rate_pct"])),
         "min_expectancy_krw": float(row.get("effective_min_expectancy_krw", base["min_expectancy_krw"])),
+    }
+    # Keep user-requested objective floors as a hard lower bound even when
+    # hostility-adaptive effective thresholds are enabled.
+    return {
+        # Trade-count floor may be relaxed in hostile regimes.
+        "min_avg_trades": min(base["min_avg_trades"], effective["min_avg_trades"]),
+        "min_profitable_ratio": max(base["min_profitable_ratio"], effective["min_profitable_ratio"]),
+        "min_avg_win_rate_pct": max(base["min_avg_win_rate_pct"], effective["min_avg_win_rate_pct"]),
+        "min_expectancy_krw": max(base["min_expectancy_krw"], effective["min_expectancy_krw"]),
     }
 
 

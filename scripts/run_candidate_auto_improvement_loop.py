@@ -170,11 +170,29 @@ def resolve_active_thresholds(
     effective = hostility_bundle.get("effective") or {}
     active = dict(requested)
     if use_effective and effective:
-        active["min_profit_factor"] = float(effective.get("min_profit_factor", active["min_profit_factor"]))
-        active["min_expectancy_krw"] = float(effective.get("min_expectancy_krw", active["min_expectancy_krw"]))
-        active["min_profitable_ratio"] = float(effective.get("min_profitable_ratio", active["min_profitable_ratio"]))
-        active["min_avg_win_rate_pct"] = float(effective.get("min_avg_win_rate_pct", active["min_avg_win_rate_pct"]))
-        active["min_avg_trades"] = float(effective.get("min_avg_trades", active["min_avg_trades"]))
+        # Effective thresholds may relax in hostile datasets. Keep requested
+        # targets as hard floors for acceptance/objective checks.
+        active["min_profit_factor"] = max(
+            float(active["min_profit_factor"]),
+            float(effective.get("min_profit_factor", active["min_profit_factor"])),
+        )
+        active["min_expectancy_krw"] = max(
+            float(active["min_expectancy_krw"]),
+            float(effective.get("min_expectancy_krw", active["min_expectancy_krw"])),
+        )
+        active["min_profitable_ratio"] = max(
+            float(active["min_profitable_ratio"]),
+            float(effective.get("min_profitable_ratio", active["min_profitable_ratio"])),
+        )
+        active["min_avg_win_rate_pct"] = max(
+            float(active["min_avg_win_rate_pct"]),
+            float(effective.get("min_avg_win_rate_pct", active["min_avg_win_rate_pct"])),
+        )
+        # In hostile regimes, allow lower trade-count requirement.
+        active["min_avg_trades"] = min(
+            float(active["min_avg_trades"]),
+            float(effective.get("min_avg_trades", active["min_avg_trades"])),
+        )
     return {
         "requested": requested,
         "active": active,
@@ -467,19 +485,21 @@ def main(argv=None) -> int:
             gate_min_avg_trades_iter = int(round(float(args.min_avg_trades)))
             if args.enable_hostility_adaptive_targets:
                 tune_min_avg_trades_iter = min(tune_min_avg_trades_iter, float(active_thresholds["min_avg_trades"]))
-                tune_min_profitable_ratio_iter = min(
+                tune_min_profitable_ratio_iter = max(
                     tune_min_profitable_ratio_iter,
                     float(active_thresholds["min_profitable_ratio"]),
                 )
-                tune_min_avg_win_rate_iter = min(
+                tune_min_avg_win_rate_iter = max(
                     tune_min_avg_win_rate_iter,
                     float(active_thresholds["min_avg_win_rate_pct"]),
                 )
-                tune_min_expectancy_iter = min(
+                tune_min_expectancy_iter = max(
                     tune_min_expectancy_iter,
                     float(active_thresholds["min_expectancy_krw"]),
                 )
-                gate_min_avg_trades_iter = int(round(min(float(args.min_avg_trades), float(active_thresholds["min_avg_trades"]))))
+                gate_min_avg_trades_iter = int(
+                    round(min(float(args.min_avg_trades), float(active_thresholds["min_avg_trades"])))
+                )
             gate_min_avg_trades_iter = max(1, gate_min_avg_trades_iter)
             rows.append(
                 {
