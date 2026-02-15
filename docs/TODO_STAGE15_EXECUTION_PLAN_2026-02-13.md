@@ -1618,3 +1618,34 @@
   - `PULLBACK_RECLAIM/TRENDING_UP/ev_positive`: `3 trades`, `avg_profit_krw=-3.0858`
 - Primary remaining bottleneck is still:
   - `Advanced Momentum / TREND_REACCELERATION / TRENDING_UP`
+
+## Stage 15 Step 5 Update (2026-02-15, Momentum Reacc Tail-Risk Trim)
+
+### Targeted change
+- Reduced tail-risk impact for `Momentum / TREND_REACCELERATION` without adding broad hard blocks:
+  - tighter invalidation/progress floors at archetype classification
+  - smaller position-size scale for reacc entries (quality-split)
+  - stricter RR floor and min-net-edge for reacc
+  - tighter weak-quality reacc exit timing and flat-floor requirement
+- File:
+  - `src/strategy/MomentumStrategy.cpp`
+
+### Verification
+- Build PASS:
+  - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release`
+- Loop PASS:
+  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions`
+- Root-cause PASS:
+  - `python scripts/analyze_root_cause_diagnostics.py --profile-id core_full --max-workers 1`
+
+### Snapshot delta (core_full)
+- before step5: PF `12.5628`, trades `6.6667`, expectancy `6.8766`, profitable_ratio `0.5556`
+- after step5:  PF `12.5658`, trades `6.6667`, expectancy `6.8953`, profitable_ratio `0.5556`
+- strict/adaptive: `overall_gate_pass=true`
+
+### Root-cause impact
+- `TREND_REACCELERATION/TRENDING_UP` remained the top loss pattern, but improved:
+  - avg loss per trade: `-4.2437 -> -4.1751`
+  - total loss: `-114.5808 -> -112.7276`
+- aggregate strategy expectancy also improved:
+  - `Advanced Momentum avg_profit_krw: 0.5859 -> 0.6190`

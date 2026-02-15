@@ -463,9 +463,9 @@ MomentumArchetypeState classifyMomentumEntryArchetype(
             close_location >= 0.60 &&
             body_ratio >= 0.35;
         state.archetype = MomentumEntryArchetype::TREND_REACCELERATION;
-        state.invalidation_drawdown_pct = strong_trend_reacceleration ? 0.0048 : 0.0042;
-        state.progress_floor_30m = strong_trend_reacceleration ? 0.0020 : 0.0024;
-        state.progress_floor_60m = strong_trend_reacceleration ? 0.0034 : 0.0040;
+        state.invalidation_drawdown_pct = strong_trend_reacceleration ? 0.0046 : 0.0038;
+        state.progress_floor_30m = strong_trend_reacceleration ? 0.0022 : 0.0028;
+        state.progress_floor_60m = strong_trend_reacceleration ? 0.0036 : 0.0048;
         return state;
     }
     return state;
@@ -902,7 +902,7 @@ Signal MomentumStrategy::generateSignal(
         } else if (archetype_state.archetype == MomentumEntryArchetype::PULLBACK_RECLAIM) {
             archetype_size_scale = 0.62;
         } else if (archetype_state.archetype == MomentumEntryArchetype::TREND_REACCELERATION) {
-            archetype_size_scale = reacc_quality_strong ? 0.62 : 0.52;
+            archetype_size_scale = reacc_quality_strong ? 0.58 : 0.46;
         }
         if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY ||
             regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
@@ -933,7 +933,7 @@ Signal MomentumStrategy::generateSignal(
             rr_floor = std::max(rr_floor, breakout_quality_medium_tier ? 1.55 : 1.45);
         }
     } else if (archetype_state.archetype == MomentumEntryArchetype::TREND_REACCELERATION) {
-        rr_floor = std::max(rr_floor, reacc_quality_strong ? 1.36 : 1.48);
+        rr_floor = std::max(rr_floor, reacc_quality_strong ? 1.38 : 1.52);
     }
     if (reward_risk < rr_floor) {
         return signal;
@@ -949,7 +949,7 @@ Signal MomentumStrategy::generateSignal(
                 min_net_edge = (regime.regime == analytics::MarketRegime::RANGING) ? 0.0036 : 0.0032;
             }
         } else if (archetype_state.archetype == MomentumEntryArchetype::TREND_REACCELERATION) {
-            min_net_edge = reacc_quality_strong ? 0.0029 : 0.0033;
+            min_net_edge = reacc_quality_strong ? 0.0030 : 0.0036;
         }
         if ((expected_return - dynamic_cost) < min_net_edge) {
             return signal;
@@ -1259,12 +1259,12 @@ bool MomentumStrategy::shouldExit(
             late_cut_minutes = std::min(late_cut_minutes, 30.0);
             late_flat_floor = std::max(late_flat_floor, 0.0018);
             if (quality < 0.68 || ctx.mtf_alignment < 0.70 || ctx.flow_bias < 0.04) {
-                early_cut_minutes = std::min(early_cut_minutes, 8.0);
-                early_cut_loss = std::max(early_cut_loss, -0.0015);
-                mid_cut_minutes = std::min(mid_cut_minutes, 16.0);
+                early_cut_minutes = std::min(early_cut_minutes, 7.0);
+                early_cut_loss = std::max(early_cut_loss, -0.0013);
+                mid_cut_minutes = std::min(mid_cut_minutes, 14.0);
                 mid_cut_loss = std::max(mid_cut_loss, -0.0001);
-                late_cut_minutes = std::min(late_cut_minutes, 24.0);
-                late_flat_floor = std::max(late_flat_floor, 0.0022);
+                late_cut_minutes = std::min(late_cut_minutes, 22.0);
+                late_flat_floor = std::max(late_flat_floor, 0.0024);
             } else if (quality >= 0.78 && ctx.mtf_alignment >= 0.74 && ctx.flow_bias >= 0.06) {
                 early_cut_minutes = std::min(early_cut_minutes, 12.0);
                 early_cut_loss = std::max(early_cut_loss, -0.0023);
