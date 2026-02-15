@@ -1,5 +1,6 @@
 ﻿#include "strategy/StrategyManager.h"
 #include "common/Logger.h"
+#include "common/Config.h"
 #include "risk/RiskManager.h"
 #include <algorithm>
 #include <cctype>
@@ -49,6 +50,56 @@ struct StrategyEdgeStats {
         return (trades > 0) ? (static_cast<double>(wins) / static_cast<double>(trades)) : 0.0;
     }
 };
+
+double estimateSignalRoundTripCostPctForManager(const Signal& signal) {
+    const double fee_rate_per_side = autolife::Config::getInstance().getFeeRate();
+    double slippage_per_side = std::clamp(
+        autolife::Config::getInstance().getMaxSlippagePct() * 0.35,
+        0.00045,
+        0.00120
+    );
+
+    if (signal.liquidity_score >= 70.0 && signal.volatility <= 3.5) {
+        slippage_per_side *= 0.85;
+    } else if (signal.liquidity_score > 0.0 && signal.liquidity_score < 50.0) {
+        slippage_per_side *= 1.10;
+    }
+
+    if (signal.market_regime == analytics::MarketRegime::HIGH_VOLATILITY ||
+        signal.market_regime == analytics::MarketRegime::TRENDING_DOWN) {
+        slippage_per_side *= 1.08;
+    }
+    slippage_per_side = std::clamp(slippage_per_side, 0.00035, 0.00140);
+
+    double spread_buffer = 0.00015;
+    if (signal.liquidity_score >= 75.0) {
+        spread_buffer = 0.00008;
+    } else if (signal.liquidity_score > 0.0 && signal.liquidity_score < 50.0) {
+        spread_buffer = 0.00022;
+    }
+
+    return (fee_rate_per_side * 2.0) + (slippage_per_side * 2.0) + spread_buffer;
+}
+
+double computeImpliedWinProbForManager(const Signal& signal) {
+    double implied_win = std::clamp(signal.strength, 0.35, 0.75);
+
+    if (signal.strategy_trade_count >= 8) {
+        const double sample_weight = std::clamp(
+            (static_cast<double>(signal.strategy_trade_count) - 8.0) / 40.0,
+            0.0,
+            1.0
+        );
+        const double history_win = std::clamp(signal.strategy_win_rate, 0.20, 0.82);
+        implied_win = ((1.0 - sample_weight) * implied_win) + (sample_weight * history_win);
+
+        if (signal.strategy_profit_factor > 0.0) {
+            implied_win += std::clamp((signal.strategy_profit_factor - 1.0) * 0.03, -0.04, 0.04);
+        }
+    }
+
+    return std::clamp(implied_win, 0.18, 0.85);
+}
 }
 
 StrategyManager::StrategyManager(std::shared_ptr<network::UpbitHttpClient> client)
@@ -109,13 +160,17 @@ Signal StrategyManager::processStrategySignal(
                 signal.expected_risk_pct = (signal.entry_price - signal.stop_loss) / signal.entry_price;
             }
 
-            double implied_win = signal.strategy_trade_count >= 30
-                ? signal.strategy_win_rate
-                : std::clamp(signal.strength, 0.35, 0.75);
-
-            signal.expected_value = (signal.expected_return_pct > 0.0 && signal.expected_risk_pct > 0.0)
-                ? (implied_win * signal.expected_return_pct - (1.0 - implied_win) * signal.expected_risk_pct)
-                : 0.0;
+            const double implied_win = computeImpliedWinProbForManager(signal);
+            if (signal.expected_return_pct > 0.0 && signal.expected_risk_pct > 0.0) {
+                const double expected_gross_pct =
+                    (implied_win * signal.expected_return_pct) -
+                    ((1.0 - implied_win) * signal.expected_risk_pct);
+                // Pre-filter stage stays slightly permissive; final gate uses full cost in engine.
+                const double prefilter_cost_pct = estimateSignalRoundTripCostPctForManager(signal) * 0.55;
+                signal.expected_value = expected_gross_pct - prefilter_cost_pct;
+            } else {
+                signal.expected_value = 0.0;
+            }
 
             signal.score = calculateSignalScore(signal);
 

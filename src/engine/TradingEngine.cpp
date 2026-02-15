@@ -158,6 +158,34 @@ double computeEffectiveRoundTripCostPct(
     return (fee_rate_per_side * 2.0) + (slippage_per_side * 2.0) + spread_buffer;
 }
 
+double computeStrategyHistoryWinProbPrior(
+    const autolife::strategy::Signal& signal,
+    const autolife::engine::EngineConfig& cfg
+) {
+    const int min_sample = std::max(8, cfg.min_strategy_trades_for_ev / 2);
+    if (signal.strategy_trade_count < min_sample || !std::isfinite(signal.strategy_win_rate)) {
+        return 0.0;
+    }
+
+    const double history_win = std::clamp(signal.strategy_win_rate, 0.20, 0.82);
+    const double history_pf = (signal.strategy_profit_factor > 0.0)
+        ? std::clamp(signal.strategy_profit_factor, 0.50, 2.20)
+        : 1.0;
+
+    double prior = ((history_win - 0.50) * 0.22) + ((history_pf - 1.0) * 0.05);
+    if (signal.strategy_win_rate < 0.42) {
+        prior -= 0.02;
+    }
+    if (signal.strategy_profit_factor > 0.0 && signal.strategy_profit_factor < cfg.min_strategy_profit_factor) {
+        prior -= 0.02;
+    }
+    if (signal.strategy_win_rate > 0.56 && signal.strategy_profit_factor >= 1.20) {
+        prior += 0.01;
+    }
+
+    return std::clamp(prior, -0.10, 0.07);
+}
+
 double computeCalibratedExpectedEdgePct(
     const autolife::strategy::Signal& signal,
     const autolife::engine::EngineConfig& cfg
@@ -234,6 +262,7 @@ double computeCalibratedExpectedEdgePct(
         win_prob -= 0.08;
     }
 
+    win_prob += computeStrategyHistoryWinProbPrior(signal, cfg);
     win_prob = std::clamp(win_prob, 0.12, 0.88);
 
     const double round_trip_cost_pct = computeEffectiveRoundTripCostPct(signal, cfg);

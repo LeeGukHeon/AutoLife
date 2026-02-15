@@ -214,6 +214,31 @@ double computeEffectiveRoundTripCostPct(const strategy::Signal& signal, const en
     return (fee_rate_per_side * 2.0) + (slippage_per_side * 2.0) + spread_buffer;
 }
 
+double computeStrategyHistoryWinProbPrior(const strategy::Signal& signal, const engine::EngineConfig& cfg) {
+    const int min_sample = std::max(8, cfg.min_strategy_trades_for_ev / 2);
+    if (signal.strategy_trade_count < min_sample || !std::isfinite(signal.strategy_win_rate)) {
+        return 0.0;
+    }
+
+    const double history_win = std::clamp(signal.strategy_win_rate, 0.20, 0.82);
+    const double history_pf = (signal.strategy_profit_factor > 0.0)
+        ? std::clamp(signal.strategy_profit_factor, 0.50, 2.20)
+        : 1.0;
+
+    double prior = ((history_win - 0.50) * 0.22) + ((history_pf - 1.0) * 0.05);
+    if (signal.strategy_win_rate < 0.42) {
+        prior -= 0.02;
+    }
+    if (signal.strategy_profit_factor > 0.0 && signal.strategy_profit_factor < cfg.min_strategy_profit_factor) {
+        prior -= 0.02;
+    }
+    if (signal.strategy_win_rate > 0.56 && signal.strategy_profit_factor >= 1.20) {
+        prior += 0.01;
+    }
+
+    return std::clamp(prior, -0.10, 0.07);
+}
+
 double computeCalibratedExpectedEdgePct(const strategy::Signal& signal, const engine::EngineConfig& cfg) {
     const double entry_price = signal.entry_price;
     const double take_profit_price = (signal.take_profit_2 > 0.0) ? signal.take_profit_2 : signal.take_profit_1;
@@ -287,6 +312,7 @@ double computeCalibratedExpectedEdgePct(const strategy::Signal& signal, const en
         win_prob -= 0.08;
     }
 
+    win_prob += computeStrategyHistoryWinProbPrior(signal, cfg);
     win_prob = std::clamp(win_prob, 0.12, 0.88);
 
     const double round_trip_cost_pct = computeEffectiveRoundTripCostPct(signal, cfg);
@@ -413,8 +439,8 @@ std::string expectedValueBucket(double expected_value) {
     // Use stricter cutoffs so ev_high reflects meaningful post-cost expectancy.
     if (!std::isfinite(expected_value)) return "ev_negative";
     if (expected_value < 0.0) return "ev_negative";
-    if (expected_value < 0.0012) return "ev_neutral";
-    if (expected_value < 0.0030) return "ev_positive";
+    if (expected_value < 0.0015) return "ev_neutral";
+    if (expected_value < 0.0035) return "ev_positive";
     return "ev_high";
 }
 
@@ -1920,10 +1946,16 @@ BacktestEngine::Result BacktestEngine::getResult() const {
             const double realized_net_edge = (entry_notional > 1e-9)
                 ? (trade.profit_loss / entry_notional)
                 : trade.profit_loss_pct;
-            // Align EV bucket with both model edge and realized net outcome.
-            // This is analysis-only labeling and does not affect execution gating.
-            const double realized_aligned_edge =
-                (trade.expected_value * 0.60) + (realized_net_edge * 0.40);
+            // Keep EV buckets conservative: realized outcome may demote the bucket,
+            // but a single good exit should not promote a weak expected edge signal.
+            double realized_aligned_edge = trade.expected_value;
+            if (std::isfinite(trade.expected_value)) {
+                const double blended_edge =
+                    (trade.expected_value * 0.80) + (realized_net_edge * 0.20);
+                realized_aligned_edge = std::min(trade.expected_value, blended_edge);
+            } else {
+                realized_aligned_edge = realized_net_edge;
+            }
             const std::string ev_bucket = expectedValueBucket(realized_aligned_edge);
             const std::string rr_bucket = rewardRiskBucket(trade.reward_risk_ratio);
             const std::string pattern_key =

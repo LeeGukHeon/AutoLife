@@ -455,9 +455,9 @@ MomentumArchetypeState classifyMomentumEntryArchetype(
     }
     if (trend_reacceleration) {
         state.archetype = MomentumEntryArchetype::TREND_REACCELERATION;
-        state.invalidation_drawdown_pct = 0.0075;
-        state.progress_floor_30m = 0.0010;
-        state.progress_floor_60m = 0.0022;
+        state.invalidation_drawdown_pct = 0.0052;
+        state.progress_floor_30m = 0.0018;
+        state.progress_floor_60m = 0.0030;
         return state;
     }
     return state;
@@ -1228,12 +1228,17 @@ bool MomentumStrategy::shouldExit(
             late_cut_minutes = std::min(late_cut_minutes, 30.0);
             late_flat_floor = std::max(late_flat_floor, 0.0016);
         } else if (is_trend_reacceleration) {
-            early_cut_minutes = std::min(early_cut_minutes, 14.0);
-            early_cut_loss = std::max(early_cut_loss, -0.0030);
-            mid_cut_minutes = std::min(mid_cut_minutes, 28.0);
-            mid_cut_loss = std::max(mid_cut_loss, -0.0008);
-            late_cut_minutes = std::min(late_cut_minutes, 40.0);
-            late_flat_floor = std::max(late_flat_floor, 0.0012);
+            early_cut_minutes = std::min(early_cut_minutes, 10.0);
+            early_cut_loss = std::max(early_cut_loss, -0.0020);
+            mid_cut_minutes = std::min(mid_cut_minutes, 20.0);
+            mid_cut_loss = std::max(mid_cut_loss, -0.0002);
+            late_cut_minutes = std::min(late_cut_minutes, 30.0);
+            late_flat_floor = std::max(late_flat_floor, 0.0018);
+            if (ctx.flow_bias < 0.03) {
+                early_cut_minutes = std::min(early_cut_minutes, 8.0);
+                early_cut_loss = std::max(early_cut_loss, -0.0016);
+                late_flat_floor = std::max(late_flat_floor, 0.0020);
+            }
         }
 
         if (ctx.regime == analytics::MarketRegime::HIGH_VOLATILITY ||
