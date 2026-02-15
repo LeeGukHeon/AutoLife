@@ -619,12 +619,13 @@ def evaluate_combo(
     enable_hostility_adaptive_trades_only: bool,
     matrix_max_workers: int,
     matrix_backtest_retry_count: int,
+    skip_core_vs_legacy_gate: bool,
     eval_cache: Dict[str, Any],
     cache_enabled: bool,
     base_config_hash: str,
     datasets_sig_hash: str,
 ) -> Dict[str, Any]:
-    cache_schema_version = 2
+    cache_schema_version = 3
     cache_material = {
         "cache_schema_version": cache_schema_version,
         "base_config_hash": base_config_hash,
@@ -635,6 +636,7 @@ def evaluate_combo(
         "require_higher_tf_companions": bool(require_higher_tf_companions),
         "enable_hostility_adaptive_thresholds": bool(enable_hostility_adaptive_thresholds),
         "enable_hostility_adaptive_trades_only": bool(enable_hostility_adaptive_trades_only),
+        "skip_core_vs_legacy_gate": bool(skip_core_vs_legacy_gate),
         "matrix_max_workers": int(matrix_max_workers),
         "matrix_backtest_retry_count": int(matrix_backtest_retry_count),
         "datasets_sig_hash": datasets_sig_hash,
@@ -685,6 +687,8 @@ def evaluate_combo(
         cmd.append("--enable-hostility-adaptive-thresholds")
     if enable_hostility_adaptive_trades_only:
         cmd.append("--enable-hostility-adaptive-trades-only")
+    if skip_core_vs_legacy_gate:
+        cmd.append("--skip-core-vs-legacy-gate")
     cmd.extend(["--max-workers", str(max(1, int(matrix_max_workers)))])
     cmd.extend(["--backtest-retry-count", str(max(1, int(matrix_backtest_retry_count)))])
     proc = subprocess.run(cmd)
@@ -833,6 +837,12 @@ def main(argv=None) -> int:
     parser.add_argument("--disable-eval-cache", "-DisableEvalCache", action="store_true")
     parser.add_argument("--matrix-max-workers", "-MatrixMaxWorkers", type=int, default=1)
     parser.add_argument("--matrix-backtest-retry-count", "-MatrixBacktestRetryCount", type=int, default=2)
+    parser.add_argument(
+        "--skip-core-vs-legacy-gate",
+        "-SkipCoreVsLegacyGate",
+        action="store_true",
+        help="Skip legacy comparison gate while tuning (migration mode).",
+    )
     parser.add_argument("--verification-lock-path", "-VerificationLockPath", default=r".\build\Release\logs\verification_run.lock")
     parser.add_argument("--verification-lock-timeout-sec", "-VerificationLockTimeoutSec", type=int, default=1800)
     parser.add_argument("--verification-lock-stale-sec", "-VerificationLockStaleSec", type=int, default=14400)
@@ -913,6 +923,7 @@ def main(argv=None) -> int:
                     enable_hostility_adaptive_trades_only=bool(args.enable_hostility_adaptive_trades_only),
                     matrix_max_workers=int(args.matrix_max_workers),
                     matrix_backtest_retry_count=int(args.matrix_backtest_retry_count),
+                    skip_core_vs_legacy_gate=bool(args.skip_core_vs_legacy_gate),
                     eval_cache=eval_cache,
                     cache_enabled=cache_enabled,
                     base_config_hash=base_config_hash,
@@ -980,6 +991,7 @@ def main(argv=None) -> int:
                     enable_hostility_adaptive_trades_only=bool(args.enable_hostility_adaptive_trades_only),
                     matrix_max_workers=int(args.matrix_max_workers),
                     matrix_backtest_retry_count=int(args.matrix_backtest_retry_count),
+                    skip_core_vs_legacy_gate=bool(args.skip_core_vs_legacy_gate),
                     eval_cache=eval_cache,
                     cache_enabled=cache_enabled,
                     base_config_hash=base_config_hash,
@@ -1056,6 +1068,7 @@ def main(argv=None) -> int:
             "objective_mode": str(args.objective_mode),
             "enable_hostility_adaptive_thresholds": bool(args.enable_hostility_adaptive_thresholds),
             "enable_hostility_adaptive_trades_only": bool(args.enable_hostility_adaptive_trades_only),
+            "skip_core_vs_legacy_gate": bool(args.skip_core_vs_legacy_gate),
             "use_effective_thresholds_for_objective": bool(args.use_effective_thresholds_for_objective),
         },
         "combos": combo_specs,

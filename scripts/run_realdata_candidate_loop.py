@@ -101,6 +101,7 @@ def run_profitability_matrix(
     enable_hostility_adaptive_trades_only: bool,
     require_higher_tf_companions: bool,
     enable_adaptive_state_io: bool,
+    skip_core_vs_legacy_gate: bool,
 ) -> Dict[str, Any]:
     ensure_directory(output_matrix_csv.parent)
     ensure_directory(output_profile_csv.parent)
@@ -135,6 +136,8 @@ def run_profitability_matrix(
         matrix_cmd.append("--require-higher-tf-companions")
     if enable_adaptive_state_io:
         matrix_cmd.append("--enable-adaptive-state-io")
+    if skip_core_vs_legacy_gate:
+        matrix_cmd.append("--skip-core-vs-legacy-gate")
 
     proc = subprocess.run(matrix_cmd)
     if proc.returncode != 0:
@@ -166,6 +169,13 @@ def print_report_snapshot(prefix: str, report: Dict[str, Any]) -> None:
             f"[RealDataLoop] {prefix}.hostility="
             f"{hostility.get('hostility_level')} "
             f"(score={hostility.get('avg_adversarial_score')})"
+        )
+    core_vs_legacy = report.get("core_vs_legacy") or {}
+    if core_vs_legacy:
+        print(
+            f"[RealDataLoop] {prefix}.core_vs_legacy="
+            f"gate_pass={core_vs_legacy.get('gate_pass')}, "
+            f"skipped={core_vs_legacy.get('gate_skipped', False)}"
         )
     print(f"[RealDataLoop] {prefix}.overall_gate_pass={report.get('overall_gate_pass')}")
 
@@ -242,6 +252,12 @@ def main(argv=None) -> int:
     )
     parser.add_argument("--run-both-hostility-modes", "-RunBothHostilityModes", action="store_true")
     parser.add_argument(
+        "--skip-core-vs-legacy-gate",
+        "-SkipCoreVsLegacyGate",
+        action="store_true",
+        help="Skip legacy comparison gate and evaluate core profile gates only (migration mode).",
+    )
+    parser.add_argument(
         "--enable-adaptive-state-io",
         "-EnableAdaptiveStateIo",
         action="store_true",
@@ -314,6 +330,7 @@ def main(argv=None) -> int:
             enable_hostility_adaptive_trades_only=bool(args.enable_hostility_adaptive_trades_only),
             require_higher_tf_companions=args.require_higher_tf_companions,
             enable_adaptive_state_io=bool(args.enable_adaptive_state_io),
+            skip_core_vs_legacy_gate=bool(args.skip_core_vs_legacy_gate),
         )
         print_report_snapshot("strict", strict_report)
 
@@ -330,6 +347,7 @@ def main(argv=None) -> int:
             enable_hostility_adaptive_trades_only=False,
             require_higher_tf_companions=args.require_higher_tf_companions,
             enable_adaptive_state_io=bool(args.enable_adaptive_state_io),
+            skip_core_vs_legacy_gate=bool(args.skip_core_vs_legacy_gate),
         )
         print_report_snapshot("adaptive", adaptive_report)
 
@@ -365,6 +383,7 @@ def main(argv=None) -> int:
             enable_hostility_adaptive_trades_only=selected_trades_only,
             require_higher_tf_companions=bool(args.require_higher_tf_companions),
             enable_adaptive_state_io=bool(args.enable_adaptive_state_io),
+            skip_core_vs_legacy_gate=bool(args.skip_core_vs_legacy_gate),
         )
         print_report_snapshot("selected", report)
 
@@ -398,6 +417,8 @@ def main(argv=None) -> int:
             tune_cmd.append("--enable-hostility-adaptive-trades-only")
         else:
             tune_cmd.append("--disable-hostility-adaptive-trades-only")
+        if args.skip_core_vs_legacy_gate:
+            tune_cmd.append("--skip-core-vs-legacy-gate")
         tune_proc = subprocess.run(tune_cmd)
         if tune_proc.returncode != 0:
             raise RuntimeError(f"tune_candidate_gate_trade_density.py failed (exit={tune_proc.returncode})")
