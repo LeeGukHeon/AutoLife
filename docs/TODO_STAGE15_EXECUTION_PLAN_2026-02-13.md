@@ -1582,3 +1582,39 @@
 
 ### Root-cause impact
 - `BREAKOUT_CONTINUATION,TRENDING_UP` dropped out from top-loss pattern list in latest diagnostics.
+
+## Stage 15 Step 4 Update (2026-02-15, Scalping PullbackReclaim Quality Gate)
+
+### Targeted change
+- Bottleneck focus: `Advanced Scalping / PULLBACK_RECLAIM / TRENDING_UP`.
+- Applied quality-tiered filtering and risk control for pullback reclaim:
+  - stronger baseline archetype classification thresholds
+  - explicit pullback quality tier (`LOW/MEDIUM/HIGH`) and low-tier block
+  - stricter setup/trigger floors for non-high-quality pullbacks
+  - reduced strength-floor relaxation in pullback path
+  - higher edge/RR requirements for non-high-quality pullbacks
+  - reduced position size for non-high-quality pullbacks
+  - tighter weak-quality pullback exits in `shouldExit`
+- File:
+  - `src/strategy/ScalpingStrategy.cpp`
+
+### Verification
+- Build PASS:
+  - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release`
+- Loop PASS:
+  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions`
+- Root-cause PASS:
+  - `python scripts/analyze_root_cause_diagnostics.py --profile-id core_full --max-workers 1`
+
+### Snapshot delta (core_full)
+- before step4: PF `12.3473`, trades `7.2222`, expectancy `5.6638`, profitable_ratio `0.5556`
+- after step4:  PF `12.5628`, trades `6.6667`, expectancy `6.8766`, profitable_ratio `0.5556`
+- strict/adaptive: `overall_gate_pass=true`
+
+### Root-cause impact
+- `Advanced Scalping` aggregate shifted positive in latest diagnostics:
+  - `total_trades=5`, `win_rate=0.8`, `avg_profit_krw=4.1354`
+- Remaining scalping loss pocket:
+  - `PULLBACK_RECLAIM/TRENDING_UP/ev_positive`: `3 trades`, `avg_profit_krw=-3.0858`
+- Primary remaining bottleneck is still:
+  - `Advanced Momentum / TREND_REACCELERATION / TRENDING_UP`

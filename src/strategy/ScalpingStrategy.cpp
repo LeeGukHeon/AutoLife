@@ -287,6 +287,50 @@ bool passesScalpingUnknownQualityGate(
            buy_pressure_bias >= 0.05;
 }
 
+enum class PullbackReclaimQualityTier : int {
+    LOW = 0,
+    MEDIUM = 1,
+    HIGH = 2,
+};
+
+PullbackReclaimQualityTier classifyPullbackReclaimQuality(
+    const analytics::CoinMetrics& metrics,
+    double higher_tf_trend_bias,
+    double mtf_alignment,
+    double flow_score,
+    double buy_pressure_bias
+) {
+    const bool high_quality =
+        higher_tf_trend_bias >= 0.24 &&
+        mtf_alignment >= 0.72 &&
+        flow_score >= 0.20 &&
+        buy_pressure_bias >= 0.05 &&
+        metrics.volume_surge_ratio >= 1.55 &&
+        metrics.liquidity_score >= 68.0 &&
+        metrics.order_book_imbalance >= 0.00 &&
+        metrics.price_change_rate >= 0.12 &&
+        metrics.price_change_rate <= 1.35;
+    if (high_quality) {
+        return PullbackReclaimQualityTier::HIGH;
+    }
+
+    const bool medium_quality =
+        higher_tf_trend_bias >= 0.18 &&
+        mtf_alignment >= 0.64 &&
+        flow_score >= 0.13 &&
+        buy_pressure_bias >= 0.02 &&
+        metrics.volume_surge_ratio >= 1.25 &&
+        metrics.liquidity_score >= 64.0 &&
+        metrics.order_book_imbalance >= -0.02 &&
+        metrics.price_change_rate >= 0.08 &&
+        metrics.price_change_rate <= 1.60;
+    if (medium_quality) {
+        return PullbackReclaimQualityTier::MEDIUM;
+    }
+
+    return PullbackReclaimQualityTier::LOW;
+}
+
 enum class ScalpingEntryArchetype : int {
     NONE = 0,
     PULLBACK_RECLAIM = 1,
@@ -380,14 +424,14 @@ ScalpingArchetypeState classifyScalpingEntryArchetype(
         consolidation_span_pct <= 0.032;
 
     const bool pullback_reclaim =
-        higher_tf_trend_bias >= 0.14 &&
+        higher_tf_trend_bias >= 0.16 &&
         bullish_impulse &&
-        mtf_alignment >= 0.52 &&
-        metrics.liquidity_score >= 62.0 &&
-        metrics.volume_surge_ratio >= 1.12 &&
-        flow_score >= 0.08 &&
-        buy_pressure_bias >= -0.01 &&
-        ema8 >= ema21 * 0.998 &&
+        mtf_alignment >= 0.54 &&
+        metrics.liquidity_score >= 63.0 &&
+        metrics.volume_surge_ratio >= 1.15 &&
+        flow_score >= 0.10 &&
+        buy_pressure_bias >= 0.00 &&
+        ema8 >= ema21 * 0.999 &&
         recent_low_5 <= ema8 * 0.998 &&
         reclaim_structure_ok &&
         last_close >= ema8 * 1.0002;
@@ -955,6 +999,21 @@ Signal ScalpingStrategy::generateSignal(
     }
     const int archetype_id = static_cast<int>(archetype_state.archetype);
     const double archetype_bias = getArchetypeQualityBias(archetype_id, regime.regime);
+    PullbackReclaimQualityTier pullback_quality_tier = PullbackReclaimQualityTier::LOW;
+    bool pullback_high_quality = false;
+    if (archetype_state.archetype == ScalpingEntryArchetype::PULLBACK_RECLAIM) {
+        pullback_quality_tier = classifyPullbackReclaimQuality(
+            metrics,
+            higher_tf_trend_bias,
+            mtf_signal.alignment_score,
+            order_flow.microstructure_score,
+            buy_pressure_bias
+        );
+        if (pullback_quality_tier == PullbackReclaimQualityTier::LOW) {
+            return signal;
+        }
+        pullback_high_quality = (pullback_quality_tier == PullbackReclaimQualityTier::HIGH);
+    }
 
     double setup_floor = 0.60;
     double trigger_floor = 0.56;
@@ -991,8 +1050,13 @@ Signal ScalpingStrategy::generateSignal(
         setup_floor = std::max(setup_floor, 0.64);
         trigger_floor = std::max(trigger_floor, 0.58);
     } else if (archetype_state.archetype == ScalpingEntryArchetype::PULLBACK_RECLAIM) {
-        setup_floor = std::max(setup_floor, 0.58);
-        trigger_floor = std::max(trigger_floor, 0.52);
+        if (pullback_high_quality) {
+            setup_floor = std::max(setup_floor, 0.60);
+            trigger_floor = std::max(trigger_floor, 0.54);
+        } else {
+            setup_floor = std::max(setup_floor, 0.62);
+            trigger_floor = std::max(trigger_floor, 0.56);
+        }
     }
     const bool severe_archetype_bias = archetype_bias <= -0.18;
     const bool severe_bias_quality_shortfall =
@@ -1074,10 +1138,14 @@ Signal ScalpingStrategy::generateSignal(
         order_flow.microstructure_score >= 0.16 &&
         buy_pressure_bias_gate >= 0.03 &&
         metrics.liquidity_score >= 68.0) {
-        effective_strength_floor = std::max(0.50, effective_strength_floor - 0.05);
+        const double relax = pullback_high_quality ? 0.03 : 0.01;
+        effective_strength_floor = std::max(pullback_high_quality ? 0.50 : 0.56, effective_strength_floor - relax);
     }
     if (higher_tf_trend_bias < -0.12) {
         effective_strength_floor = std::min(0.80, effective_strength_floor + 0.03);
+    }
+    if (archetype_state.archetype == ScalpingEntryArchetype::PULLBACK_RECLAIM && !pullback_high_quality) {
+        effective_strength_floor = std::max(effective_strength_floor, 0.58);
     }
     if (signal.strength < effective_strength_floor) {
         LOG_INFO("{} - [Scalping] dynamic strength gate: {:.3f} < {:.3f} (dynamic {:.3f}, cfg {:.3f})",
@@ -1152,6 +1220,10 @@ Signal ScalpingStrategy::generateSignal(
     } else if (higher_tf_trend_bias > 0.30) {
         edge_multiplier = std::max(0.96, edge_multiplier - 0.05);
     }
+    if (regime.regime == analytics::MarketRegime::TRENDING_UP &&
+        archetype_state.archetype == ScalpingEntryArchetype::PULLBACK_RECLAIM) {
+        edge_multiplier = std::max(edge_multiplier, pullback_high_quality ? 1.05 : 1.11);
+    }
     if (regime.regime == analytics::MarketRegime::RANGING) {
         edge_multiplier = std::max(edge_multiplier, ranging_quality_ok ? 1.10 : 1.18);
     } else if (regime.regime == analytics::MarketRegime::UNKNOWN) {
@@ -1194,6 +1266,10 @@ Signal ScalpingStrategy::generateSignal(
     } else if (regime.regime == analytics::MarketRegime::UNKNOWN) {
         rr_floor = std::max(rr_floor, unknown_quality_ok ? 1.48 : 1.62);
     }
+    if (regime.regime == analytics::MarketRegime::TRENDING_UP &&
+        archetype_state.archetype == ScalpingEntryArchetype::PULLBACK_RECLAIM) {
+        rr_floor = std::max(rr_floor, pullback_high_quality ? 1.30 : 1.40);
+    }
     if (reward_risk < rr_floor) {
         return signal;
     }
@@ -1227,7 +1303,7 @@ Signal ScalpingStrategy::generateSignal(
             if (archetype_state.archetype == ScalpingEntryArchetype::BREAKOUT_CONTINUATION) {
                 archetype_size_scale = 0.55;
             } else if (archetype_state.archetype == ScalpingEntryArchetype::PULLBACK_RECLAIM) {
-                archetype_size_scale = 0.70;
+                archetype_size_scale = pullback_high_quality ? 0.68 : 0.58;
             }
         } else if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY ||
                    regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
@@ -1496,6 +1572,21 @@ bool ScalpingStrategy::shouldEnter(
     }
     const int archetype_id = static_cast<int>(archetype_state.archetype);
     const double archetype_bias = getArchetypeQualityBias(archetype_id, regime.regime);
+    PullbackReclaimQualityTier pullback_quality_tier = PullbackReclaimQualityTier::LOW;
+    bool pullback_high_quality = false;
+    if (archetype_state.archetype == ScalpingEntryArchetype::PULLBACK_RECLAIM) {
+        pullback_quality_tier = classifyPullbackReclaimQuality(
+            metrics,
+            higher_tf_trend_bias,
+            mtf_signal.alignment_score,
+            order_flow.microstructure_score,
+            buy_pressure_bias_gate
+        );
+        if (pullback_quality_tier == PullbackReclaimQualityTier::LOW) {
+            return false;
+        }
+        pullback_high_quality = (pullback_quality_tier == PullbackReclaimQualityTier::HIGH);
+    }
     double setup_floor = 0.60;
     double trigger_floor = 0.56;
     if (regime.regime == analytics::MarketRegime::TRENDING_UP) {
@@ -1516,8 +1607,13 @@ bool ScalpingStrategy::shouldEnter(
         setup_floor = std::max(setup_floor, 0.64);
         trigger_floor = std::max(trigger_floor, 0.58);
     } else if (archetype_state.archetype == ScalpingEntryArchetype::PULLBACK_RECLAIM) {
-        setup_floor = std::max(setup_floor, 0.58);
-        trigger_floor = std::max(trigger_floor, 0.52);
+        if (pullback_high_quality) {
+            setup_floor = std::max(setup_floor, 0.60);
+            trigger_floor = std::max(trigger_floor, 0.54);
+        } else {
+            setup_floor = std::max(setup_floor, 0.62);
+            trigger_floor = std::max(trigger_floor, 0.56);
+        }
     }
     const bool severe_archetype_bias = archetype_bias <= -0.18;
     const bool severe_bias_quality_shortfall =
@@ -1609,6 +1705,22 @@ bool ScalpingStrategy::shouldExit(
             late_cut_minutes = 24.0;
             late_flat_floor = 0.0004;
         }
+        if (is_pullback_reclaim) {
+            if (quality < 0.66 || ctx.trend_bias < 0.20 || ctx.flow_bias < 0.02) {
+                early_cut_minutes = std::min(early_cut_minutes, 6.0);
+                early_cut_loss = std::max(early_cut_loss, -0.0025);
+                mid_cut_minutes = std::min(mid_cut_minutes, 12.0);
+                mid_cut_loss = std::max(mid_cut_loss, -0.0003);
+                late_cut_minutes = std::min(late_cut_minutes, 17.0);
+                late_flat_floor = std::max(late_flat_floor, 0.0011);
+            } else if (quality >= 0.78 && ctx.trend_bias >= 0.28 && ctx.flow_bias >= 0.06) {
+                early_cut_minutes = std::max(early_cut_minutes, 8.0);
+                early_cut_loss = std::min(early_cut_loss, -0.0034);
+                mid_cut_minutes = std::max(mid_cut_minutes, 16.0);
+                mid_cut_loss = std::min(mid_cut_loss, -0.0010);
+                late_flat_floor = std::min(late_flat_floor, 0.0006);
+            }
+        }
 
         if (ctx.regime == analytics::MarketRegime::HIGH_VOLATILITY ||
             ctx.regime == analytics::MarketRegime::TRENDING_DOWN) {
@@ -1634,7 +1746,7 @@ bool ScalpingStrategy::shouldExit(
                 return true;
             }
         } else if (is_pullback_reclaim) {
-            if (holding_time_seconds >= 9.0 * 60.0 && pnl_pct <= -0.0013) {
+            if (holding_time_seconds >= 8.0 * 60.0 && pnl_pct <= -0.0010) {
                 return true;
             }
             if (holding_time_seconds >= 15.0 * 60.0 && pnl_pct < 0.0001) {
