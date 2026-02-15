@@ -428,15 +428,15 @@ MomentumArchetypeState classifyMomentumEntryArchetype(
     const bool trend_reacceleration =
         trend_backbone &&
         regime.regime == analytics::MarketRegime::TRENDING_UP &&
-        mtf_alignment >= 0.62 &&
-        flow_score >= 0.13 &&
-        buy_pressure_bias >= 0.01 &&
+        mtf_alignment >= 0.64 &&
+        flow_score >= 0.15 &&
+        buy_pressure_bias >= 0.015 &&
         bullish_count >= 2 &&
-        metrics.volume_surge_ratio >= 1.05 &&
+        metrics.volume_surge_ratio >= 1.08 &&
         metrics.price_change_rate >= 0.35 &&
         metrics.price_change_rate <= 2.15 &&
-        close_location >= 0.50 &&
-        body_ratio >= 0.28 &&
+        close_location >= 0.53 &&
+        body_ratio >= 0.30 &&
         last_close > prev_close;
 
     if (breakout_continuation) {
@@ -454,10 +454,18 @@ MomentumArchetypeState classifyMomentumEntryArchetype(
         return state;
     }
     if (trend_reacceleration) {
+        const bool strong_trend_reacceleration =
+            mtf_alignment >= 0.72 &&
+            flow_score >= 0.20 &&
+            buy_pressure_bias >= 0.05 &&
+            bullish_count >= 3 &&
+            metrics.volume_surge_ratio >= 1.24 &&
+            close_location >= 0.60 &&
+            body_ratio >= 0.35;
         state.archetype = MomentumEntryArchetype::TREND_REACCELERATION;
-        state.invalidation_drawdown_pct = 0.0052;
-        state.progress_floor_30m = 0.0018;
-        state.progress_floor_60m = 0.0030;
+        state.invalidation_drawdown_pct = strong_trend_reacceleration ? 0.0048 : 0.0042;
+        state.progress_floor_30m = strong_trend_reacceleration ? 0.0020 : 0.0024;
+        state.progress_floor_60m = strong_trend_reacceleration ? 0.0034 : 0.0040;
         return state;
     }
     return state;
@@ -746,8 +754,8 @@ Signal MomentumStrategy::generateSignal(
         setup_floor = std::max(setup_floor, 0.57);
         trigger_floor = std::max(trigger_floor, 0.52);
     } else if (archetype_state.archetype == MomentumEntryArchetype::TREND_REACCELERATION) {
-        setup_floor = std::max(setup_floor, 0.57);
-        trigger_floor = std::max(trigger_floor, 0.52);
+        setup_floor = std::max(setup_floor, 0.60);
+        trigger_floor = std::max(trigger_floor, 0.55);
     }
     const bool severe_archetype_bias = archetype_bias <= -0.18;
     const bool severe_bias_quality_shortfall =
@@ -769,6 +777,7 @@ Signal MomentumStrategy::generateSignal(
         return signal;
     }
     bool breakout_quality_medium_tier = false;
+    bool reacc_quality_strong = false;
     if (archetype_state.archetype == MomentumEntryArchetype::BREAKOUT_CONTINUATION) {
         const auto quality_tier = classifyBreakoutContinuationQuality(
             metrics,
@@ -785,10 +794,15 @@ Signal MomentumStrategy::generateSignal(
         breakout_quality_medium_tier = (quality_tier == BreakoutQualityTier::MEDIUM);
     } else if (archetype_state.archetype == MomentumEntryArchetype::TREND_REACCELERATION) {
         const bool reacc_quality =
-            mtf_signal.alignment_score >= 0.66 &&
-            order_flow.microstructure_score >= 0.14 &&
-            buy_pressure_bias >= 0.02 &&
-            metrics.volume_surge_ratio >= 1.10;
+            mtf_signal.alignment_score >= 0.67 &&
+            order_flow.microstructure_score >= 0.15 &&
+            buy_pressure_bias >= 0.025 &&
+            metrics.volume_surge_ratio >= 1.12;
+        reacc_quality_strong =
+            mtf_signal.alignment_score >= 0.72 &&
+            order_flow.microstructure_score >= 0.20 &&
+            buy_pressure_bias >= 0.05 &&
+            metrics.volume_surge_ratio >= 1.24;
         if (!reacc_quality) {
             return signal;
         }
@@ -814,14 +828,24 @@ Signal MomentumStrategy::generateSignal(
         metrics.liquidity_score >= 62.0 &&
         metrics.volume_surge_ratio >= 1.20 &&
         buy_pressure_bias >= 0.05) {
-        const double relax = (archetype_state.archetype == MomentumEntryArchetype::BREAKOUT_CONTINUATION) ? 0.04 : 0.12;
+        double relax = 0.12;
+        if (archetype_state.archetype == MomentumEntryArchetype::BREAKOUT_CONTINUATION) {
+            relax = 0.04;
+        } else if (archetype_state.archetype == MomentumEntryArchetype::TREND_REACCELERATION) {
+            relax = reacc_quality_strong ? 0.07 : 0.03;
+        }
         effective_strength_floor = std::max(0.52, effective_strength_floor - relax);
     }
     if ((regime.regime == analytics::MarketRegime::TRENDING_UP ||
          regime.regime == analytics::MarketRegime::RANGING) &&
         metrics.liquidity_score >= 62.0 &&
         metrics.volume_surge_ratio >= 1.05) {
-        const double relax = (archetype_state.archetype == MomentumEntryArchetype::BREAKOUT_CONTINUATION) ? 0.02 : 0.07;
+        double relax = 0.07;
+        if (archetype_state.archetype == MomentumEntryArchetype::BREAKOUT_CONTINUATION) {
+            relax = 0.02;
+        } else if (archetype_state.archetype == MomentumEntryArchetype::TREND_REACCELERATION) {
+            relax = reacc_quality_strong ? 0.04 : 0.02;
+        }
         effective_strength_floor = std::max(0.27, effective_strength_floor - relax);
     }
     if (regime.regime == analytics::MarketRegime::RANGING) {
@@ -878,7 +902,7 @@ Signal MomentumStrategy::generateSignal(
         } else if (archetype_state.archetype == MomentumEntryArchetype::PULLBACK_RECLAIM) {
             archetype_size_scale = 0.62;
         } else if (archetype_state.archetype == MomentumEntryArchetype::TREND_REACCELERATION) {
-            archetype_size_scale = 0.60;
+            archetype_size_scale = reacc_quality_strong ? 0.62 : 0.52;
         }
         if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY ||
             regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
@@ -909,7 +933,7 @@ Signal MomentumStrategy::generateSignal(
             rr_floor = std::max(rr_floor, breakout_quality_medium_tier ? 1.55 : 1.45);
         }
     } else if (archetype_state.archetype == MomentumEntryArchetype::TREND_REACCELERATION) {
-        rr_floor = std::max(rr_floor, 1.40);
+        rr_floor = std::max(rr_floor, reacc_quality_strong ? 1.36 : 1.48);
     }
     if (reward_risk < rr_floor) {
         return signal;
@@ -925,7 +949,7 @@ Signal MomentumStrategy::generateSignal(
                 min_net_edge = (regime.regime == analytics::MarketRegime::RANGING) ? 0.0036 : 0.0032;
             }
         } else if (archetype_state.archetype == MomentumEntryArchetype::TREND_REACCELERATION) {
-            min_net_edge = 0.0026;
+            min_net_edge = reacc_quality_strong ? 0.0029 : 0.0033;
         }
         if ((expected_return - dynamic_cost) < min_net_edge) {
             return signal;
@@ -1118,8 +1142,8 @@ bool MomentumStrategy::shouldEnter(
         setup_floor = std::max(setup_floor, 0.60);
         trigger_floor = std::max(trigger_floor, 0.54);
     } else if (archetype_state.archetype == MomentumEntryArchetype::TREND_REACCELERATION) {
-        setup_floor = std::max(setup_floor, 0.58);
-        trigger_floor = std::max(trigger_floor, 0.53);
+        setup_floor = std::max(setup_floor, 0.60);
+        trigger_floor = std::max(trigger_floor, 0.55);
     }
     const bool severe_archetype_bias = archetype_bias <= -0.18;
     const bool severe_bias_quality_shortfall =
@@ -1155,10 +1179,10 @@ bool MomentumStrategy::shouldEnter(
         }
     } else if (archetype_state.archetype == MomentumEntryArchetype::TREND_REACCELERATION) {
         const bool reacc_quality =
-            mtf_signal.alignment_score >= 0.66 &&
-            order_flow.microstructure_score >= 0.14 &&
-            buy_pressure_bias >= 0.02 &&
-            metrics.volume_surge_ratio >= 1.10;
+            mtf_signal.alignment_score >= 0.67 &&
+            order_flow.microstructure_score >= 0.15 &&
+            buy_pressure_bias >= 0.025 &&
+            metrics.volume_surge_ratio >= 1.12;
         if (!reacc_quality) {
             return false;
         }
@@ -1234,10 +1258,20 @@ bool MomentumStrategy::shouldExit(
             mid_cut_loss = std::max(mid_cut_loss, -0.0002);
             late_cut_minutes = std::min(late_cut_minutes, 30.0);
             late_flat_floor = std::max(late_flat_floor, 0.0018);
-            if (ctx.flow_bias < 0.03) {
+            if (quality < 0.68 || ctx.mtf_alignment < 0.70 || ctx.flow_bias < 0.04) {
                 early_cut_minutes = std::min(early_cut_minutes, 8.0);
-                early_cut_loss = std::max(early_cut_loss, -0.0016);
-                late_flat_floor = std::max(late_flat_floor, 0.0020);
+                early_cut_loss = std::max(early_cut_loss, -0.0015);
+                mid_cut_minutes = std::min(mid_cut_minutes, 16.0);
+                mid_cut_loss = std::max(mid_cut_loss, -0.0001);
+                late_cut_minutes = std::min(late_cut_minutes, 24.0);
+                late_flat_floor = std::max(late_flat_floor, 0.0022);
+            } else if (quality >= 0.78 && ctx.mtf_alignment >= 0.74 && ctx.flow_bias >= 0.06) {
+                early_cut_minutes = std::min(early_cut_minutes, 12.0);
+                early_cut_loss = std::max(early_cut_loss, -0.0023);
+                mid_cut_minutes = std::min(mid_cut_minutes, 24.0);
+                mid_cut_loss = std::max(mid_cut_loss, -0.0004);
+                late_cut_minutes = std::min(late_cut_minutes, 36.0);
+                late_flat_floor = std::max(late_flat_floor, 0.0015);
             }
         }
 
@@ -1499,8 +1533,8 @@ bool MomentumStrategy::shouldBlockArchetypeByAdaptiveStats(
     constexpr int kTrendReaccelerationArchetype = 3;
     if (archetype == kTrendReaccelerationArchetype &&
         regime == analytics::MarketRegime::TRENDING_UP) {
-        const bool persistent_underperformance = (win_rate < 0.38) && (expectancy < -7.0);
-        const bool severe_recent_cluster = (st.trades >= 12) && (st.pnl_ema < -14.0);
+        const bool persistent_underperformance = (win_rate < 0.42) && (expectancy < -3.0);
+        const bool severe_recent_cluster = (st.trades >= 8) && (st.pnl_ema < -6.0);
         return persistent_underperformance || severe_recent_cluster;
     }
     return false;

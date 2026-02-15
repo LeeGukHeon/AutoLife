@@ -288,6 +288,7 @@ double computeCalibratedExpectedEdgePct(const strategy::Signal& signal, const en
     // Archetype-level priors from loss-cluster diagnostics.
     // Keep it market-agnostic: apply only by strategy/archetype/regime.
     const bool is_breakout_cont = (signal.entry_archetype == "BREAKOUT_CONTINUATION");
+    const bool is_trend_reacc = (signal.entry_archetype == "TREND_REACCELERATION");
     const bool is_scalping = (signal.strategy_name == "Advanced Scalping");
     const bool is_momentum = (signal.strategy_name == "Advanced Momentum");
     const bool is_breakout_strategy = (signal.strategy_name == "Breakout Strategy");
@@ -306,6 +307,10 @@ double computeCalibratedExpectedEdgePct(const strategy::Signal& signal, const en
         } else if (signal.market_regime == analytics::MarketRegime::TRENDING_UP) {
             win_prob -= 0.08;
         }
+    }
+    if (is_momentum && is_trend_reacc &&
+        signal.market_regime == analytics::MarketRegime::TRENDING_UP) {
+        win_prob -= 0.09;
     }
     if (is_breakout_strategy && is_consolidation_break &&
         signal.market_regime == analytics::MarketRegime::TRENDING_UP) {
@@ -571,6 +576,7 @@ void applyArchetypeRiskAdjustments(
     const bool is_momentum = (signal.strategy_name == "Advanced Momentum");
     const bool is_breakout = (signal.strategy_name == "Breakout Strategy");
     const bool is_breakout_cont = (signal.entry_archetype == "BREAKOUT_CONTINUATION");
+    const bool is_trend_reacc = (signal.entry_archetype == "TREND_REACCELERATION");
     const bool is_consolidation_break = (signal.entry_archetype == "CONSOLIDATION_BREAK");
 
     if (is_scalping && is_breakout_cont) {
@@ -601,6 +607,20 @@ void applyArchetypeRiskAdjustments(
         // Revisit when broader market sample confirms a robust edge.
         regime_pattern_block = true;
         return;
+    }
+    if (is_momentum && is_trend_reacc &&
+        signal.market_regime == analytics::MarketRegime::TRENDING_UP) {
+        required_signal_strength = std::max(required_signal_strength, 0.72);
+        regime_rr_add += 0.12;
+        regime_edge_add += 0.00018;
+        const bool high_quality =
+            signal.strength >= 0.74 &&
+            signal.liquidity_score >= 60.0 &&
+            signal.expected_value >= 0.0007;
+        if (!high_quality) {
+            regime_pattern_block = true;
+            return;
+        }
     }
     if (is_breakout && is_consolidation_break &&
         signal.market_regime == analytics::MarketRegime::TRENDING_UP) {
