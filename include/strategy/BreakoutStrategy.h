@@ -227,6 +227,16 @@ private:
 
     // 포지션 추적 (이건 내부 로직용이고, 중복 방지는 active_positions_가 담당)
     std::map<std::string, BreakoutPositionData> position_data_; // active_positions_와 이름 겹치지 않게 주의
+    struct AdaptiveEntryStats {
+        int trades = 0;
+        int wins = 0;
+        double pnl_sum = 0.0;
+        double pnl_ema = 0.0;
+    };
+    std::map<int, AdaptiveEntryStats> adaptive_entry_stats_;
+    std::map<std::string, int> pending_entry_keys_;
+    std::map<std::string, int> active_entry_keys_;
+    static constexpr int ADAPTIVE_ENTRY_MIN_TRADES = 6;
     
     // ===== API 호출 제어 =====
     
@@ -248,6 +258,7 @@ private:
     int hourly_trades_count_;
     long long current_day_start_;
     long long current_hour_start_;
+    mutable long long latest_market_timestamp_ms_ = 0;
     
     static constexpr int MAX_DAILY_BREAKOUT_TRADES = 10;
     static constexpr int MAX_HOURLY_BREAKOUT_TRADES = 3;
@@ -308,6 +319,10 @@ private:
     void checkCircuitBreaker();
     void activateCircuitBreaker();
     bool isCircuitBreakerActive() const;
+    double getAdaptiveEntryBias(int entry_key) const;
+    void recordAdaptiveEntryOutcome(int entry_key, bool is_win, double profit_loss);
+    void loadAdaptiveEntryStats();
+    void saveAdaptiveEntryStats() const;
     
     // ===== 1. Donchian Channel =====
     

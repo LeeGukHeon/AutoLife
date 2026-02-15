@@ -516,6 +516,7 @@ bool RiskManager::applyPartialSellFill(
     trade.signal_filter = pos.signal_filter;
     trade.signal_strength = pos.signal_strength;
     trade.market_regime = pos.market_regime;
+    trade.entry_archetype = pos.entry_archetype;
     trade.liquidity_score = pos.liquidity_score;
     trade.volatility = pos.volatility;
     trade.expected_value = pos.expected_value;
@@ -923,7 +924,8 @@ void RiskManager::setPositionSignalInfo(
     double liquidity_score,
     double volatility,
     double expected_value,
-    double reward_risk_ratio
+    double reward_risk_ratio,
+    const std::string& entry_archetype
 ) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);;
     
@@ -940,8 +942,18 @@ void RiskManager::setPositionSignalInfo(
     it->second.volatility = volatility;
     it->second.expected_value = expected_value;
     it->second.reward_risk_ratio = reward_risk_ratio;
-    LOG_INFO("Signal metadata saved: {} (filter {:.3f}, strength {:.3f}, liq {:.1f}, vol {:.2f}, ev {:.5f}, rr {:.2f})",
-             market, signal_filter, signal_strength, liquidity_score, volatility, expected_value, reward_risk_ratio);
+    it->second.entry_archetype = entry_archetype.empty() ? "UNSPECIFIED" : entry_archetype;
+    LOG_INFO(
+        "Signal metadata saved: {} (filter {:.3f}, strength {:.3f}, liq {:.1f}, vol {:.2f}, ev {:.5f}, rr {:.2f}, archetype={})",
+        market,
+        signal_filter,
+        signal_strength,
+        liquidity_score,
+        volatility,
+        expected_value,
+        reward_risk_ratio,
+        it->second.entry_archetype
+    );
 }
 
 bool RiskManager::reserveGridCapital(
@@ -1113,6 +1125,7 @@ bool RiskManager::applyGridFill(
     trade.exit_time = getCurrentTimestamp();
     trade.strategy_name = "Grid Trading Strategy";
     trade.exit_reason = "grid_cycle";
+    trade.entry_archetype = "GRID_CYCLE";
     trade_history_.push_back(trade);
 
     inv.quantity -= quantity;
@@ -1184,6 +1197,7 @@ void RiskManager::recordTrade(
     trade.signal_filter = pos.signal_filter;
     trade.signal_strength = pos.signal_strength;
     trade.market_regime = pos.market_regime;
+    trade.entry_archetype = pos.entry_archetype;
     trade.liquidity_score = pos.liquidity_score;
     trade.volatility = pos.volatility;
     trade.expected_value = pos.expected_value;

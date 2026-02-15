@@ -16,6 +16,11 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--run-live-probe", "-RunLiveProbe", action="store_true")
     parser.add_argument("--strict-execution-parity", "-StrictExecutionParity", action="store_true")
     parser.add_argument("--backtest-prime-csv", "-BacktestPrimeCsv", default="data/backtest/simulation_large.csv")
+    parser.add_argument(
+        "--backtest-prime-fallback-csv",
+        "-BacktestPrimeFallbackCsv",
+        default="data/backtest/auto_sim_500.csv",
+    )
     parser.add_argument("--fixture-log-dir", "-FixtureLogDir", default="build/Release/logs/ci_fixture")
     parser.add_argument("--probe-market", "-ProbeMarket", default="KRW-BTC")
     parser.add_argument("--probe-notional-krw", "-ProbeNotionalKrw", type=float, default=5100.0)
@@ -28,6 +33,7 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     exe_path = resolve_repo_path(args.exe_path)
     backtest_prime_csv = resolve_repo_path(args.backtest_prime_csv)
+    backtest_prime_fallback_csv = resolve_repo_path(args.backtest_prime_fallback_csv)
     fixture_log_dir = resolve_repo_path(args.fixture_log_dir)
     fixture_log_path = fixture_log_dir / "autolife_ci_fixture.log"
 
@@ -35,6 +41,8 @@ def main(argv=None) -> int:
         raise FileNotFoundError(f"Executable not found: {exe_path}")
     if not backtest_prime_csv.exists():
         raise FileNotFoundError(f"Backtest prime dataset not found: {backtest_prime_csv}")
+    if not backtest_prime_fallback_csv.exists():
+        raise FileNotFoundError(f"Backtest prime fallback dataset not found: {backtest_prime_fallback_csv}")
 
     fixture_exit = prepare_operational_readiness_fixture.main(
         ["-LogPath", str(fixture_log_path)]
@@ -49,19 +57,26 @@ def main(argv=None) -> int:
         if prewarm_exit != 0:
             raise RuntimeError(f"Backtest prewarm failed with exit code {prewarm_exit}")
 
-    prime_proc = subprocess.run(
-        [str(exe_path), "--backtest", str(backtest_prime_csv), "--json"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    if prime_proc.returncode != 0:
-        raise RuntimeError(f"Backtest execution artifact prime run failed with exit code {prime_proc.returncode}")
-
     backtest_artifact_path = resolve_repo_path("build/Release/logs/execution_updates_backtest.jsonl")
-    if not backtest_artifact_path.exists():
-        raise FileNotFoundError(f"Backtest execution artifact not found: {backtest_artifact_path}")
-    if len(read_nonempty_lines(backtest_artifact_path)) <= 0:
-        raise RuntimeError(f"Backtest execution artifact is empty after prime run: {backtest_artifact_path}")
+    prime_candidates = [backtest_prime_csv]
+    if backtest_prime_fallback_csv != backtest_prime_csv:
+        prime_candidates.append(backtest_prime_fallback_csv)
+    artifact_populated = False
+    for prime_csv in prime_candidates:
+        prime_proc = subprocess.run(
+            [str(exe_path), "--backtest", str(prime_csv), "--json"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if prime_proc.returncode != 0:
+            raise RuntimeError(f"Backtest execution artifact prime run failed with exit code {prime_proc.returncode}")
+        if backtest_artifact_path.exists() and len(read_nonempty_lines(backtest_artifact_path)) > 0:
+            artifact_populated = True
+            break
+    if not artifact_populated:
+        if not backtest_artifact_path.exists():
+            raise FileNotFoundError(f"Backtest execution artifact not found: {backtest_artifact_path}")
+        raise RuntimeError(f"Backtest execution artifact is empty after prime runs: {backtest_artifact_path}")
 
     if args.run_live_probe:
         probe_exit = generate_live_execution_probe.main(

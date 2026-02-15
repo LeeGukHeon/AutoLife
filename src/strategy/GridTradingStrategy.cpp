@@ -1,10 +1,13 @@
 #include "strategy/GridTradingStrategy.h"
 #include "common/Logger.h"
 #include "common/Config.h"
+#include "common/PathUtils.h"
 #include "analytics/TechnicalIndicators.h"
 #include <cmath>
 #include <algorithm>
 #include <numeric>
+#include <fstream>
+#include <filesystem>
 
 // Prevent Windows macros from interfering with std::min/max
 #undef max
@@ -14,6 +17,39 @@
 
 namespace autolife {
 namespace strategy {
+namespace {
+std::filesystem::path getGridAdaptiveStatsPath() {
+    return utils::PathUtils::resolveRelativePath("state/grid_entry_stats.json");
+}
+
+long long currentWallClockMs() {
+    using namespace std::chrono;
+    return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+}
+
+long long normalizeTimestampMs(long long ts) {
+    if (ts > 0 && ts < 1000000000000LL) {
+        return ts * 1000LL;
+    }
+    return ts;
+}
+
+const char* gridTypeToLabel(GridType t) {
+    switch (t) {
+        case GridType::ARITHMETIC: return "ARITHMETIC";
+        case GridType::GEOMETRIC: return "GEOMETRIC";
+        case GridType::FIBONACCI: return "FIBONACCI";
+        case GridType::DYNAMIC: return "DYNAMIC";
+        case GridType::VOLUME_WEIGHTED: return "VOLUME_WEIGHTED";
+        case GridType::SUPPORT_RESISTANCE: return "SUPPORT_RESISTANCE";
+        default: return "UNSPECIFIED";
+    }
+}
+
+int makeGridEntryKey(GridType t, analytics::MarketRegime regime) {
+    return (static_cast<int>(t) * 100) + static_cast<int>(regime);
+}
+}
 
 // ===== Constructor =====
 
@@ -55,6 +91,7 @@ GridTradingStrategy::GridTradingStrategy(std::shared_ptr<network::UpbitHttpClien
     rolling_stats_.sharpe_ratio = 0.0;
     
     spdlog::info("[GridTradingStrategy] Initialized - Adaptive Grid with ADX Range Detection");
+    loadAdaptiveEntryStats();
 }
 
 // ===== Strategy Info =====
@@ -92,6 +129,12 @@ Signal GridTradingStrategy::generateSignal(
     signal.type = SignalType::NONE;
     signal.market = market;
     signal.strategy_name = "Grid Trading Strategy";
+    signal.timestamp = getCurrentTimestamp();
+    pending_entry_keys_.erase(market);
+    if (!candles.empty()) {
+        latest_market_timestamp_ms_ = normalizeTimestampMs(candles.back().timestamp);
+        signal.timestamp = latest_market_timestamp_ms_;
+    }
     
     // ===== Hard Gates =====
     if (active_positions_.find(market) != active_positions_.end()) return signal;
@@ -106,18 +149,20 @@ Signal GridTradingStrategy::generateSignal(
     // ===== Score-Based Evaluation =====
     double total_score = 0.0;
     
-    // --- (1) 그리드 분석 (최대 0.40) ---
+    // --- (1) 洹몃━??遺꾩꽍 (理쒕? 0.40) ---
     GridSignalMetrics grid_signal = analyzeGridOpportunity(market, metrics, candles, current_price);
+    const int entry_key = makeGridEntryKey(grid_signal.recommended_type, regime.regime);
+    const double adaptive_bias = getAdaptiveEntryBias(entry_key);
     total_score += grid_signal.strength * 0.40;
     
-    // --- (2) 유동성 (최대 0.10) ---
+    // --- (2) ?좊룞??(理쒕? 0.10) ---
     if (metrics.liquidity_score >= strategy_cfg.min_liquidity_score) total_score += 0.10;
     else if (metrics.liquidity_score >= strategy_cfg.min_liquidity_score * 0.5) total_score += 0.05;
     
-    // --- (3) 레짐 (최대 0.20) ---
+    // --- (3) ?덉쭚 (理쒕? 0.20) ---
     double regime_score = 0.0;
     switch (regime.regime) {
-        case analytics::MarketRegime::RANGING: regime_score = 0.20; break;     // 그리드에 최적
+        case analytics::MarketRegime::RANGING: regime_score = 0.20; break;     // 洹몃━?쒖뿉 理쒖쟻
         case analytics::MarketRegime::HIGH_VOLATILITY: regime_score = 0.10; break;
         case analytics::MarketRegime::TRENDING_UP: regime_score = 0.05; break;
         case analytics::MarketRegime::TRENDING_DOWN: regime_score = 0.02; break;
@@ -125,25 +170,29 @@ Signal GridTradingStrategy::generateSignal(
     }
     total_score += regime_score;
     
-    // --- (4) 변동성 적합도 (최대 0.15) ---
+    // --- (4) 蹂?숈꽦 ?곹빀??(理쒕? 0.15) ---
     auto prices = analytics::TechnicalIndicators::extractClosePrices(candles);
     double rsi = analytics::TechnicalIndicators::calculateRSI(prices, 14);
-    // 그리드는 RSI 40~60 (횡보) 구간이 최적
+    // 洹몃━?쒕뒗 RSI 40~60 (?〓낫) 援ш컙??理쒖쟻
     if (rsi >= 40 && rsi <= 60) total_score += 0.15;
     else if (rsi >= 30 && rsi <= 70) total_score += 0.08;
     else total_score += 0.02;
     
-    // --- (5) 거래량 (최대 0.15) ---
+    // --- (5) 嫄곕옒??(理쒕? 0.15) ---
     if (metrics.volume_surge_ratio >= 1.5) total_score += 0.15;
     else if (metrics.volume_surge_ratio >= 1.0) total_score += 0.10;
     else total_score += 0.03;
     
-    // ===== 최종 판정 =====
+    // ===== 理쒖쥌 ?먯젙 =====
     signal.strength = std::clamp(total_score, 0.0, 1.0);
+    const double adaptive_signal_floor = std::clamp(
+        strategy_cfg.min_signal_strength - (adaptive_bias * 0.35),
+        strategy_cfg.min_signal_strength - 0.07,
+        strategy_cfg.min_signal_strength + 0.10
+    );
+    if (signal.strength < adaptive_signal_floor) return signal;
     
-    if (signal.strength < strategy_cfg.min_signal_strength) return signal;
-    
-    // ===== 신호 생성 =====
+    // ===== ?좏샇 ?앹꽦 =====
     signal.type = SignalType::BUY;
     signal.entry_price = current_price;
     signal.stop_loss = calculateStopLoss(current_price, candles);
@@ -155,7 +204,7 @@ Signal GridTradingStrategy::generateSignal(
     signal.max_retries = 2;
     signal.retry_wait_ms = 300;
     
-    // 포지션 사이징
+    // ?ъ????ъ씠吏?
     signal.position_size = calculatePositionSize(available_capital, current_price, signal.stop_loss, metrics);
     
     double order_amount = available_capital * signal.position_size;
@@ -165,10 +214,15 @@ Signal GridTradingStrategy::generateSignal(
     }
     
     if (signal.strength >= 0.70) {
-        signal.type = SignalType::STRONG_BUY;
+        const double strong_buy_floor = std::clamp(0.70 - (adaptive_bias * 0.10), 0.64, 0.74);
+        if (signal.strength >= strong_buy_floor) {
+            signal.type = SignalType::STRONG_BUY;
+        }
     }
+    signal.entry_archetype = gridTypeToLabel(grid_signal.recommended_type);
+    pending_entry_keys_[market] = entry_key;
     
-    spdlog::info("[GridTrading] 🎯 GRID Signal - {} | Strength: {:.3f} | Grids: {} | Spacing: {:.2f}%",
+    spdlog::info("[GridTrading] ?렞 GRID Signal - {} | Strength: {:.3f} | Grids: {} | Spacing: {:.2f}%",
                  market, signal.strength,
                  grid_signal.optimal_grid_count,
                  grid_signal.optimal_spacing_pct * 100);
@@ -190,6 +244,9 @@ bool GridTradingStrategy::shouldEnter(
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     const auto strategy_cfg = Config::getInstance().getGridTradingConfig();
     (void)regime; // Used for future enhancements
+    if (!candles.empty()) {
+        latest_market_timestamp_ms_ = normalizeTimestampMs(candles.back().timestamp);
+    }
 
     if (active_positions_.find(market) != active_positions_.end()) {
         return false;
@@ -225,7 +282,7 @@ bool GridTradingStrategy::shouldExit(
     double holding_time_seconds)
 {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    (void)entry_price;  // entry_price 파라미터 미사용
+    (void)entry_price;  // entry_price ?뚮씪誘명꽣 誘몄궗??
     
     if (active_grids_.find(market) == active_grids_.end()) {
         return false;
@@ -234,20 +291,20 @@ bool GridTradingStrategy::shouldExit(
     auto& grid = active_grids_[market];
     double holding_hours = holding_time_seconds / 3600.0;
     
-    // ===== 1. Emergency Exit 체크 (급락, 급등) =====
+    // ===== 1. Emergency Exit 泥댄겕 (湲됰씫, 湲됰벑) =====
     if (shouldEmergencyExit(market, current_price)) {
-        // shouldEmergencyExit 내부에서 emergencyLiquidateGrid -> exitGrid 호출됨.
-        // exitGrid는 updateStatistics를 호출하여 정리함.
-        // 여기서 true를 반환하면 엔진도 매도를 시도하므로 중복 처리될 수 있음.
-        // 하지만 안전을 위해 true 반환 (엔진은 잔고가 없으면 실패 처리될 것임)
+        // shouldEmergencyExit ?대??먯꽌 emergencyLiquidateGrid -> exitGrid ?몄텧??
+        // exitGrid??updateStatistics瑜??몄텧?섏뿬 ?뺣━??
+        // ?ш린??true瑜?諛섑솚?섎㈃ ?붿쭊??留ㅻ룄瑜??쒕룄?섎?濡?以묐났 泥섎━?????덉쓬.
+        // ?섏?留??덉쟾???꾪빐 true 諛섑솚 (?붿쭊? ?붽퀬媛 ?놁쑝硫??ㅽ뙣 泥섎━??寃껋엫)
         return false; 
     }
     
-    // ===== 2. Stop Loss 체크 (전체 손익 기준) =====
+    // ===== 2. Stop Loss 泥댄겕 (?꾩껜 ?먯씡 湲곗?) =====
     if (checkStopLoss(grid, current_price)) {
         spdlog::warn("[GridTrading] Stop Loss Hit - {} | Drawdown: {:.2f}%",
                      market, grid.current_drawdown * 100);
-        // exitGrid 호출 (통계 업데이트 및 목록 제거)
+        // exitGrid ?몄텧 (?듦퀎 ?낅뜲?댄듃 諛?紐⑸줉 ?쒓굅)
         exitGrid(market, ExitReason::STOP_LOSS, current_price);
         return false;
     }
@@ -259,17 +316,17 @@ bool GridTradingStrategy::shouldExit(
         return false;
     }
     
-    // ===== 4. Rebalancing / Breakout 체크 =====
+    // ===== 4. Rebalancing / Breakout 泥댄겕 =====
     if (shouldRebalanceGrid(market, current_price)) {
         std::vector<Candle> candles = getCachedCandles(market, 100);
         RangeDetectionMetrics new_range = detectRange(candles, current_price);
         
         if (new_range.is_ranging) {
-            // 횡보장이면 그리드 재설정 (청산 아님)
+            // ?〓낫?μ씠硫?洹몃━???ъ꽕??(泥?궛 ?꾨떂)
             rebalanceGrid(market, current_price, new_range);
-            return false; // 그리드 유지
+            return false; // 洹몃━???좎?
         } else {
-            // 추세장이면 그리드 종료 (청산)
+            // 異붿꽭?μ씠硫?洹몃━??醫낅즺 (泥?궛)
             spdlog::info("[GridTrading] Range Lost (Trend) - {} | Exiting", market);
             exitGrid(market, ExitReason::BREAKOUT, current_price);
             return false;
@@ -291,7 +348,7 @@ double GridTradingStrategy::calculateStopLoss(
     double atr_pct = atr / entry_price;
     
     double stop_pct = std::max(GRID_STOP_LOSS_PCT, atr_pct * 2.0);
-    stop_pct = std::min(stop_pct, 0.15);  // 최대 15%
+    stop_pct = std::min(stop_pct, 0.15);  // 理쒕? 15%
     
     return entry_price * (1.0 - stop_pct);
 }
@@ -304,8 +361,8 @@ double GridTradingStrategy::calculateTakeProfit(
 {
     //std::lock_guard<std::recursive_mutex> lock(mutex_);
     
-    // Grid는 Take Profit이 명확하지 않음 (계속 순환)
-    // Upper Bound를 반환
+    // Grid??Take Profit??紐낇솗?섏? ?딆쓬 (怨꾩냽 ?쒗솚)
+    // Upper Bound瑜?諛섑솚
     RangeDetectionMetrics range = detectRange(candles, entry_price);
     return range.range_high;
 }
@@ -319,15 +376,15 @@ double GridTradingStrategy::calculatePositionSize(
     const analytics::CoinMetrics& metrics)
 {
     //std::lock_guard<std::recursive_mutex> lock(mutex_);
-    (void)capital;      // capital 파라미터 미사용
-    (void)entry_price;  // entry_price 파라미터 미사용
-    (void)stop_loss;    // stop_loss 파라미터 미사용
+    (void)capital;      // capital ?뚮씪誘명꽣 誘몄궗??
+    (void)entry_price;  // entry_price ?뚮씪誘명꽣 誘몄궗??
+    (void)stop_loss;    // stop_loss ?뚮씪誘명꽣 誘몄궗??
     
-    // Grid는 자본의 30%까지만 할당
+    // Grid???먮낯??30%源뚯?留??좊떦
     const auto strategy_cfg = Config::getInstance().getGridTradingConfig();
     double position_size = strategy_cfg.max_grid_capital_pct;
     
-    // 유동성에 따라 조정
+    // ?좊룞?깆뿉 ?곕씪 議곗젙
     double liquidity_factor = std::min(metrics.liquidity_score / 100.0, 1.0);
     position_size *= liquidity_factor;
     
@@ -363,30 +420,37 @@ void GridTradingStrategy::setStatistics(const Statistics& stats)
     stats_ = stats;
 }
 
-// [수정] market 인자 추가 및 포지션 목록 삭제 로직
+// [?섏젙] market ?몄옄 異붽? 諛??ъ???紐⑸줉 ??젣 濡쒖쭅
 void GridTradingStrategy::updateStatistics(const std::string& market, bool is_win, double profit_loss)
 {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
+    int closed_entry_key = 0;
+    auto active_entry_it = active_entry_keys_.find(market);
+    if (active_entry_it != active_entry_keys_.end()) {
+        closed_entry_key = active_entry_it->second;
+        active_entry_keys_.erase(active_entry_it);
+    }
+    pending_entry_keys_.erase(market);
     
-    // [중요] 포지션 목록에서 제거 (재진입 허용)
+    // [以묒슂] ?ъ???紐⑸줉?먯꽌 ?쒓굅 (?ъ쭊???덉슜)
     if (active_positions_.erase(market)) {
-        // active_grids_는 exitGrid 등에서 이미 처리되었을 수 있음
+        // active_grids_??exitGrid ?깆뿉???대? 泥섎━?섏뿀?????덉쓬
         if (active_grids_.count(market)) {
             active_grids_.erase(market);
         }
         spdlog::info("[GridTrading] Position Cleared - {} (Ready for next trade)", market);
     } else {
-        active_grids_.erase(market); // 혹시 모르니
+        active_grids_.erase(market); // ?뱀떆 紐⑤Ⅴ??
     }
     
-    // --- 통계 업데이트 ---
+    // --- ?듦퀎 ?낅뜲?댄듃 ---
     stats_.total_signals++;
     
     if (is_win) {
         stats_.winning_trades++;
         stats_.total_profit += profit_loss;
         consecutive_losses_ = 0;
-        rolling_stats_.successful_grids++; // 그리드 성공 횟수 증가
+        rolling_stats_.successful_grids++; // 洹몃━???깃났 ?잛닔 利앷?
     } else {
         stats_.losing_trades++;
         stats_.total_loss += std::abs(profit_loss);
@@ -422,6 +486,9 @@ void GridTradingStrategy::updateStatistics(const std::string& market, bool is_wi
     
     updateRollingStatistics();
     checkCircuitBreaker();
+    if (closed_entry_key != 0) {
+        recordAdaptiveEntryOutcome(closed_entry_key, is_win, profit_loss);
+    }
 }
 
 bool GridTradingStrategy::onSignalAccepted(const Signal& signal, double allocated_capital)
@@ -497,6 +564,11 @@ bool GridTradingStrategy::onSignalAccepted(const Signal& signal, double allocate
 
     active_positions_.insert(signal.market);
     active_grids_[signal.market] = grid;
+    auto pending_entry_it = pending_entry_keys_.find(signal.market);
+    if (pending_entry_it != pending_entry_keys_.end()) {
+        active_entry_keys_[signal.market] = pending_entry_it->second;
+        pending_entry_keys_.erase(pending_entry_it);
+    }
 
     recordTrade();
     rolling_stats_.total_grids_created++;
@@ -686,24 +758,24 @@ void GridTradingStrategy::updateGridLevels(
     
     double target_spacing = std::max(grid.config.grid_spacing_pct, MIN_GRID_SPACING_PCT);
 
-    // 각 레벨 체크
+    // 媛??덈꺼 泥댄겕
     for (auto& [level_id, level] : grid.levels) {
         if (level.quantity <= 0.0 && grid.config.capital_per_grid > 0.0 && level.price > 0.0) {
             level.quantity = grid.config.capital_per_grid / level.price;
         }
 
-        // Buy 주문 체크
+        // Buy 二쇰Ц 泥댄겕
         if (shouldPlaceBuyOrder(level, current_price) && !level.buy_order_placed) {
             executeGridBuy(market, level, current_price);
         }
         
-        // Sell 주문 체크
+        // Sell 二쇰Ц 泥댄겕
         if (shouldPlaceSellOrder(level, current_price, target_spacing) && !level.sell_order_placed) {
             executeGridSell(market, level, current_price);
         }
     }
     
-    // P&L 업데이트
+    // P&L ?낅뜲?댄듃
     grid.unrealized_pnl = calculateGridUnrealizedPnL(grid, current_price);
     if (grid.total_invested > 0.0) {
         grid.current_drawdown = (grid.unrealized_pnl < 0)
@@ -730,7 +802,7 @@ bool GridTradingStrategy::shouldEmergencyExit(
     
     auto& grid = active_grids_[market];
     
-    // Max Drawdown 초과
+    // Max Drawdown 珥덇낵
     if (isMaxDrawdownExceeded(grid)) {
         spdlog::error("[GridTrading] Max Drawdown Exceeded - {} | {:.2f}%",
                      market, grid.current_drawdown * 100);
@@ -738,7 +810,7 @@ bool GridTradingStrategy::shouldEmergencyExit(
         return true;
     }
     
-    // Flash Crash 감지
+    // Flash Crash 媛먯?
     std::vector<Candle> candles = getCachedCandles(market, 20);
     FlashCrashMetrics flash = detectFlashCrash(market, candles, current_price);
     
@@ -749,7 +821,7 @@ bool GridTradingStrategy::shouldEmergencyExit(
         return true;
     }
     
-    // Breakout 감지
+    // Breakout 媛먯?
     RangeDetectionMetrics range = detectRange(candles, current_price);
     if (detectBreakout(grid, range, current_price)) {
         spdlog::warn("[GridTrading] Breakout Detected - {} | State: {}",
@@ -805,7 +877,7 @@ void GridTradingStrategy::updateRollingStatistics()
         rolling_stats_.avg_range_accuracy = success_rate;
     }
     
-    // Grid Efficiency 계산
+    // Grid Efficiency 怨꾩궛
     double total_efficiency = 0.0;
     int active_count = 0;
     for (const auto& [market, grid] : active_grids_) {
@@ -816,14 +888,14 @@ void GridTradingStrategy::updateRollingStatistics()
         rolling_stats_.grid_efficiency = total_efficiency / active_count;
     }
     
-    // Sharpe Ratio 계산
+    // Sharpe Ratio 怨꾩궛
     if (recent_returns_.size() >= 30) {
         std::vector<double> returns_vec(recent_returns_.begin(), recent_returns_.end());
         double mean = calculateMean(returns_vec);
         double std_dev = calculateStdDev(returns_vec, mean);
         
         if (std_dev > 0) {
-            double annual_mean = mean * 8760;  // 시간 단위
+            double annual_mean = mean * 8760;  // ?쒓컙 ?⑥쐞
             double annual_std = std_dev * std::sqrt(8760);
             rolling_stats_.sharpe_ratio = annual_mean / annual_std;
             stats_.sharpe_ratio = rolling_stats_.sharpe_ratio;
@@ -1018,6 +1090,116 @@ bool GridTradingStrategy::isCircuitBreakerActive() const
     return circuit_breaker_active_;
 }
 
+double GridTradingStrategy::getAdaptiveEntryBias(int entry_key) const
+{
+    const auto it = adaptive_entry_stats_.find(entry_key);
+    if (it == adaptive_entry_stats_.end()) {
+        return 0.0;
+    }
+    const auto& st = it->second;
+    if (st.trades < ADAPTIVE_ENTRY_MIN_TRADES) {
+        return 0.0;
+    }
+    const double win_rate = static_cast<double>(st.wins) / std::max(1, st.trades);
+    const double expectancy = st.pnl_sum / std::max(1, st.trades);
+    const double win_component = std::clamp((win_rate - 0.50) * 0.60, -0.18, 0.18);
+    const double expectancy_component = std::clamp(expectancy / 30.0, -0.12, 0.12);
+    const double ema_component = std::clamp(st.pnl_ema / 25.0, -0.10, 0.10);
+    return std::clamp(win_component + expectancy_component + ema_component, -0.22, 0.16);
+}
+
+void GridTradingStrategy::recordAdaptiveEntryOutcome(int entry_key, bool is_win, double profit_loss)
+{
+    auto& st = adaptive_entry_stats_[entry_key];
+    st.trades += 1;
+    if (is_win) {
+        st.wins += 1;
+    }
+    st.pnl_sum += profit_loss;
+    if (st.trades == 1) {
+        st.pnl_ema = profit_loss;
+    } else {
+        st.pnl_ema = (st.pnl_ema * 0.82) + (profit_loss * 0.18);
+    }
+    saveAdaptiveEntryStats();
+}
+
+void GridTradingStrategy::loadAdaptiveEntryStats()
+{
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    try {
+        const auto path = getGridAdaptiveStatsPath();
+        if (!std::filesystem::exists(path)) {
+            return;
+        }
+        std::ifstream in(path.string(), std::ios::binary);
+        if (!in.is_open()) {
+            spdlog::warn("[GridTrading] Failed to open adaptive stats file: {}", path.string());
+            return;
+        }
+        nlohmann::json payload;
+        in >> payload;
+        if (!payload.contains("stats") || !payload["stats"].is_array()) {
+            return;
+        }
+        std::map<int, AdaptiveEntryStats> loaded;
+        for (const auto& row : payload["stats"]) {
+            if (!row.is_object()) {
+                continue;
+            }
+            const int key = row.value("key", 0);
+            if (key == 0) {
+                continue;
+            }
+            AdaptiveEntryStats s;
+            s.trades = std::max(0, row.value("trades", 0));
+            s.wins = std::max(0, row.value("wins", 0));
+            s.pnl_sum = row.value("pnl_sum", 0.0);
+            s.pnl_ema = row.value("pnl_ema", 0.0);
+            loaded[key] = s;
+        }
+        adaptive_entry_stats_ = std::move(loaded);
+        spdlog::info(
+            "[GridTrading] Adaptive entry stats loaded: path={} entries={}",
+            path.string(),
+            adaptive_entry_stats_.size()
+        );
+    } catch (const std::exception& e) {
+        spdlog::warn("[GridTrading] Failed to load adaptive entry stats: {}", e.what());
+    }
+}
+
+void GridTradingStrategy::saveAdaptiveEntryStats() const
+{
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    try {
+        const auto path = getGridAdaptiveStatsPath();
+        std::filesystem::create_directories(path.parent_path());
+        nlohmann::json payload;
+        payload["schema_version"] = 1;
+        payload["saved_at_ms"] = currentWallClockMs();
+        payload["stats"] = nlohmann::json::array();
+        for (const auto& kv : adaptive_entry_stats_) {
+            const auto& s = kv.second;
+            nlohmann::json row;
+            row["key"] = kv.first;
+            row["trades"] = s.trades;
+            row["wins"] = s.wins;
+            row["pnl_sum"] = s.pnl_sum;
+            row["pnl_ema"] = s.pnl_ema;
+            payload["stats"].push_back(std::move(row));
+        }
+        std::ofstream out(path.string(), std::ios::binary | std::ios::trunc);
+        if (!out.is_open()) {
+            spdlog::warn("[GridTrading] Failed to open adaptive stats for write: {}", path.string());
+            return;
+        }
+        out << payload.dump(2);
+    } catch (const std::exception& e) {
+        spdlog::warn("[GridTrading] Failed to save adaptive entry stats: {}", e.what());
+    }
+}
+
 // ===== Range Detection =====
 
 RangeDetectionMetrics GridTradingStrategy::detectRange(
@@ -1030,11 +1212,11 @@ RangeDetectionMetrics GridTradingStrategy::detectRange(
         return metrics;
     }
     
-    // 1. Donchian Channel (Range 경계)
+    // 1. Donchian Channel (Range 寃쎄퀎)
     int lookback = std::min(static_cast<int>(candles.size()), 50);
     size_t start_idx = candles.size() - lookback;
     
-    // [수정] 최근 데이터(맨 뒤) 기준으로 High/Low 탐색
+    // [?섏젙] 理쒓렐 ?곗씠??留??? 湲곗??쇰줈 High/Low ?먯깋
     metrics.range_high = candles.back().high;
     metrics.range_low = candles.back().low;
     
@@ -1046,7 +1228,7 @@ RangeDetectionMetrics GridTradingStrategy::detectRange(
     metrics.range_center = (metrics.range_high + metrics.range_low) / 2.0;
     metrics.range_width_pct = (metrics.range_high - metrics.range_low) / metrics.range_center;
     
-    // 2. ADX 계산
+    // 2. ADX 怨꾩궛
     metrics.adx = calculateADX(candles, 14);
     calculateDMI(candles, 14, metrics.plus_di, metrics.minus_di);
     
@@ -1065,7 +1247,7 @@ RangeDetectionMetrics GridTradingStrategy::detectRange(
     // 5. Donchian Width
     metrics.donchian_width = metrics.range_width_pct;
     
-    // 6. Consolidation 판정
+    // 6. Consolidation ?먯젙
     metrics.consolidation_bars = 0;
     double consolidation_threshold = metrics.range_width_pct * 0.3;
     
@@ -1078,7 +1260,7 @@ RangeDetectionMetrics GridTradingStrategy::detectRange(
         }
     }
     
-    // 7. Range State 판정
+    // 7. Range State ?먯젙
     if (metrics.adx < ADX_RANGING_THRESHOLD && 
         metrics.range_width_pct >= MIN_RANGE_WIDTH_PCT &&
         metrics.range_width_pct <= MAX_RANGE_WIDTH_PCT &&
@@ -1094,7 +1276,7 @@ RangeDetectionMetrics GridTradingStrategy::detectRange(
             metrics.state = RangeState::TRENDING_DOWN;
         }
     } else {
-        // Breakout 체크
+        // Breakout 泥댄겕
         if (current_price > metrics.range_high * 1.02) {
             metrics.state = RangeState::BREAKOUT_UP;
         } else if (current_price < metrics.range_low * 0.98) {
@@ -1104,7 +1286,7 @@ RangeDetectionMetrics GridTradingStrategy::detectRange(
         }
     }
     
-    // 8. Confidence 계산
+    // 8. Confidence 怨꾩궛
     metrics.confidence = 0.0;
     if (metrics.adx < ADX_RANGING_THRESHOLD) metrics.confidence += 0.3;
     if (metrics.consolidation_bars >= MIN_CONSOLIDATION_BARS) metrics.confidence += 0.3;
@@ -1214,7 +1396,7 @@ bool GridTradingStrategy::isConsolidating(
     
     double range_pct = (high - low) / ((high + low) / 2.0);
     
-    return range_pct < 0.1;  // 10% 이내
+    return range_pct < 0.1;  // 10% ?대궡
 }
 
 // ===== Grid Configuration =====
@@ -1227,21 +1409,21 @@ GridConfiguration GridTradingStrategy::createGridConfiguration(
     double available_capital)
 {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    (void)market;  // market 파라미터 미사용
-    // available_capital은 grid sizing에 사용
+    (void)market;  // market ?뚮씪誘명꽣 誘몄궗??
+    // available_capital? grid sizing???ъ슜
     
     GridConfiguration config;
     
-    // 1. Grid Type 선택
+    // 1. Grid Type ?좏깮
     double volatility = calculateVolatility(metrics.candles);
     config.type = selectGridType(range, volatility, current_price);
     
-    // 2. Range 설정
+    // 2. Range ?ㅼ젙
     config.center_price = range.range_center;
     config.upper_bound = range.range_high;
     config.lower_bound = range.range_low;
     
-    // 3. Optimal Grid Count 계산
+    // 3. Optimal Grid Count 怨꾩궛
     config.num_grids = calculateOptimalGridCount(range.range_width_pct, volatility, available_capital);
     if (config.num_grids <= 0 || available_capital < MIN_CAPITAL_PER_GRID) {
         config.num_grids = 0;
@@ -1249,14 +1431,14 @@ GridConfiguration GridTradingStrategy::createGridConfiguration(
         return config;
     }
     
-    // 4. Optimal Spacing 계산
+    // 4. Optimal Spacing 怨꾩궛
     config.grid_spacing_pct = calculateOptimalSpacing(range.range_width_pct, volatility, config.num_grids);
     
     // 5. Capital Allocation
     config.total_capital_allocated = available_capital;
     config.capital_per_grid = available_capital / config.num_grids;
     
-    // 최소 자본 확인
+    // 理쒖냼 ?먮낯 ?뺤씤
     if (config.capital_per_grid < MIN_CAPITAL_PER_GRID) {
         config.num_grids = static_cast<int>(available_capital / MIN_CAPITAL_PER_GRID);
         if (config.num_grids <= 0) {
@@ -1266,11 +1448,11 @@ GridConfiguration GridTradingStrategy::createGridConfiguration(
         config.capital_per_grid = available_capital / config.num_grids;
     }
     
-    // 6. Auto Rebalance 설정
+    // 6. Auto Rebalance ?ㅼ젙
     config.auto_rebalance = true;
     config.rebalance_threshold_pct = REBALANCE_THRESHOLD_PCT;
     
-    // 7. Risk Limits 설정
+    // 7. Risk Limits ?ㅼ젙
     config.risk_limits.stop_loss_pct = GRID_STOP_LOSS_PCT;
     config.risk_limits.max_drawdown_pct = 0.15;
     config.risk_limits.flash_crash_threshold = FLASH_CRASH_THRESHOLD_PCT;
@@ -1286,19 +1468,19 @@ int GridTradingStrategy::calculateOptimalGridCount(
     double volatility,
     double capital) const
 {
-    // 1. 자본 제약
+    // 1. ?먮낯 ?쒖빟
     int max_by_capital = static_cast<int>(capital / MIN_CAPITAL_PER_GRID);
     
-    // 2. Range Width 기반
+    // 2. Range Width 湲곕컲
     double atr_ratio = range_width_pct / (volatility * 2.0);
     int optimal_by_range = static_cast<int>(atr_ratio * 10);
     
-    // 3. 수수료 고려
-    // 최소 간격 = 수수료의 3배
+    // 3. ?섏닔猷?怨좊젮
+    // 理쒖냼 媛꾧꺽 = ?섏닔猷뚯쓽 3諛?
     double min_spacing = (UPBIT_FEE_RATE * 2) * 3;
     int max_by_fee = static_cast<int>(range_width_pct / min_spacing);
     
-    // 4. 최종 결정
+    // 4. 理쒖쥌 寃곗젙
     int optimal = std::min({max_by_capital, optimal_by_range, max_by_fee});
     optimal = std::clamp(optimal, MIN_GRID_COUNT, MAX_GRID_COUNT);
     
@@ -1310,20 +1492,20 @@ double GridTradingStrategy::calculateOptimalSpacing(
     double volatility,
     int grid_count) const
 {
-    // 1. 균등 분할 기준
+    // 1. 洹좊벑 遺꾪븷 湲곗?
     double equal_spacing = range_width_pct / grid_count;
     
-    // 2. 변동성 기반 조정
+    // 2. 蹂?숈꽦 湲곕컲 議곗젙
     double volatility_adjusted = volatility * 1.5;
     
-    // 3. 최종 간격
+    // 3. 理쒖쥌 媛꾧꺽
     double spacing = std::max(equal_spacing, volatility_adjusted);
     
-    // 4. 수수료 검증
+    // 4. ?섏닔猷?寃利?
     double min_profitable_spacing = (UPBIT_FEE_RATE * 2 + EXPECTED_SLIPPAGE) * 3;
     spacing = std::max(spacing, min_profitable_spacing);
     
-    // 5. 범위 제한
+    // 5. 踰붿쐞 ?쒗븳
     spacing = std::clamp(spacing, MIN_GRID_SPACING_PCT, MAX_GRID_SPACING_PCT);
     
     return spacing;
@@ -1334,12 +1516,12 @@ GridType GridTradingStrategy::selectGridType(
     double volatility,
     double price_level) const
 {
-    // 1. 고가 코인 (10만원 이상) = Geometric
+    // 1. 怨좉? 肄붿씤 (10留뚯썝 ?댁긽) = Geometric
     if (price_level > 100000.0) {
         return GridType::GEOMETRIC;
     }
     
-    // 2. 변동성 높음 = Dynamic
+    // 2. 蹂?숈꽦 ?믪쓬 = Dynamic
     if (volatility > 0.03) {
         return GridType::DYNAMIC;
     }
@@ -1349,7 +1531,7 @@ GridType GridTradingStrategy::selectGridType(
         return GridType::FIBONACCI;
     }
     
-    // 4. 기본 = Arithmetic
+    // 4. 湲곕낯 = Arithmetic
     return GridType::ARITHMETIC;
 }
 
@@ -1425,7 +1607,7 @@ std::map<int, GridLevel> GridTradingStrategy::generateArithmeticGrid(
     center_level.price = center;
     levels[0] = center_level;
     
-    // Upper levels (매도 레벨)
+    // Upper levels (留ㅻ룄 ?덈꺼)
     for (int i = 1; i <= half_count; i++) {
         GridLevel level;
         level.level_id = i;
@@ -1433,7 +1615,7 @@ std::map<int, GridLevel> GridTradingStrategy::generateArithmeticGrid(
         levels[i] = level;
     }
     
-    // Lower levels (매수 레벨)
+    // Lower levels (留ㅼ닔 ?덈꺼)
     for (int i = 1; i <= half_count; i++) {
         GridLevel level;
         level.level_id = -i;
@@ -1459,7 +1641,7 @@ std::map<int, GridLevel> GridTradingStrategy::generateGeometricGrid(
     center_level.price = center;
     levels[0] = center_level;
     
-    // Upper levels (복리 증가)
+    // Upper levels (蹂듬━ 利앷?)
     double price = center;
     for (int i = 1; i <= half_count; i++) {
         price = price * (1.0 + spacing_pct);
@@ -1469,7 +1651,7 @@ std::map<int, GridLevel> GridTradingStrategy::generateGeometricGrid(
         levels[i] = level;
     }
     
-    // Lower levels (복리 감소)
+    // Lower levels (蹂듬━ 媛먯냼)
     price = center;
     for (int i = 1; i <= half_count; i++) {
         price = price * (1.0 - spacing_pct);
@@ -1489,7 +1671,7 @@ std::map<int, GridLevel> GridTradingStrategy::generateFibonacciGrid(
 {
     std::map<int, GridLevel> levels;
     
-    // Fibonacci 비율
+    // Fibonacci 鍮꾩쑉
     std::vector<double> fib_ratios = {0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0};
     
     // Center level
@@ -1531,7 +1713,7 @@ std::map<int, GridLevel> GridTradingStrategy::generateDynamicGrid(
     const GridConfiguration& config,
     const std::vector<Candle>& candles)
 {
-    // Dynamic은 ATR 기반으로 간격 조정
+    // Dynamic? ATR 湲곕컲?쇰줈 媛꾧꺽 議곗젙
     double atr = calculateATR(candles, 14);
     double dynamic_spacing = atr * 1.5;
     
@@ -1547,7 +1729,7 @@ GridSignalMetrics GridTradingStrategy::analyzeGridOpportunity(
     double current_price)
 {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    (void)market;  // market 파라미터 미사용
+    (void)market;  // market ?뚮씪誘명꽣 誘몄궗??
     GridSignalMetrics signal;
     
     // 1. Range Detection
@@ -1557,7 +1739,7 @@ GridSignalMetrics GridTradingStrategy::analyzeGridOpportunity(
         return signal;
     }
     
-    // 2. Volatility 계산
+    // 2. Volatility 怨꾩궛
     double volatility = calculateVolatility(candles);
     
     // 3. Optimal Grid Count
@@ -1575,7 +1757,7 @@ GridSignalMetrics GridTradingStrategy::analyzeGridOpportunity(
         signal.optimal_grid_count
     );
     
-    // 5. Grid Type 추천
+    // 5. Grid Type 異붿쿇
     signal.recommended_type = selectGridType(range, volatility, current_price);
     
     // 6. Expected Profit Per Cycle
@@ -1625,7 +1807,7 @@ double GridTradingStrategy::calculateExpectedProfitPerCycle(
     double fee_rate,
     double slippage) const
 {
-    // Buy → Sell 한 사이클
+    // Buy ??Sell ???ъ씠??
     double gross_profit = grid_spacing_pct;
     double total_fee = fee_rate * 2;  // Buy + Sell
     double total_slippage = slippage * 2;
@@ -1639,7 +1821,7 @@ bool GridTradingStrategy::validateProfitabilityAfterFees(
     double grid_spacing_pct) const
 {
     double total_cost = (UPBIT_FEE_RATE * 2) + (EXPECTED_SLIPPAGE * 2);
-    double min_spacing = total_cost * 3;  // 최소 3배 마진
+    double min_spacing = total_cost * 3;  // 理쒖냼 3諛?留덉쭊
     
     return grid_spacing_pct >= min_spacing;
 }
@@ -1650,18 +1832,18 @@ double GridTradingStrategy::calculateGridRiskScore(
 {
     double risk = 0.0;
     
-    // 1. ADX (높을수록 위험)
+    // 1. ADX (?믪쓣?섎줉 ?꾪뿕)
     risk += (range.adx / 100.0) * 0.3;
     
-    // 2. Range Width (너무 좁거나 넓으면 위험)
+    // 2. Range Width (?덈Т 醫곴굅???볦쑝硫??꾪뿕)
     double ideal_width = 0.08;  // 8%
     double width_deviation = std::abs(range.range_width_pct - ideal_width) / ideal_width;
     risk += std::min(width_deviation, 1.0) * 0.3;
     
-    // 3. Volatility (높을수록 위험)
+    // 3. Volatility (?믪쓣?섎줉 ?꾪뿕)
     risk += std::min(volatility / 0.05, 1.0) * 0.2;
     
-    // 4. Consolidation (짧을수록 위험)
+    // 4. Consolidation (吏㏃쓣?섎줉 ?꾪뿕)
     if (range.consolidation_bars < MIN_CONSOLIDATION_BARS) {
         risk += 0.2;
     }
@@ -1676,7 +1858,7 @@ void GridTradingStrategy::executeGridBuy(
     GridLevel& level,
     double current_price)
 {
-    (void)current_price;  // current_price 파라미터 미사용
+    (void)current_price;  // current_price ?뚮씪誘명꽣 誘몄궗??
     if (level.buy_order_filled) {
         return;
     }
@@ -1754,8 +1936,8 @@ bool GridTradingStrategy::shouldPlaceBuyOrder(
         return false;
     }
     
-    // 현재가가 레벨 이하로 내려왔을 때
-    return current_price <= level.price * 1.001;  // 0.1% 허용
+    // ?꾩옱媛媛 ?덈꺼 ?댄븯濡??대젮?붿쓣 ??
+    return current_price <= level.price * 1.001;  // 0.1% ?덉슜
 }
 
 bool GridTradingStrategy::shouldPlaceSellOrder(
@@ -1764,8 +1946,8 @@ bool GridTradingStrategy::shouldPlaceSellOrder(
     double spacing_pct) const {
     if (!level.buy_order_filled || level.sell_order_placed) return false;
     
-    // [수정] 내가 산 가격보다 한 칸(level_spacing) 위에 도달하면 매도
-    // 혹은 설정된 최소 수익(spacing)만큼 올랐을 때 매도
+    // [?섏젙] ?닿? ??媛寃⑸낫????移?level_spacing) ?꾩뿉 ?꾨떖?섎㈃ 留ㅻ룄
+    // ?뱀? ?ㅼ젙??理쒖냼 ?섏씡(spacing)留뚰겮 ?щ옄????留ㅻ룄
     double target_spacing = std::max(spacing_pct, MIN_GRID_SPACING_PCT);
     double min_profit_price = level.price * (1.0 + target_spacing);
     return current_price >= min_profit_price;
@@ -1800,7 +1982,7 @@ bool GridTradingStrategy::detectBreakout(
         return true;
     }
     
-    // Range State 변화
+    // Range State 蹂??
     if (range.state == RangeState::BREAKOUT_UP || 
         range.state == RangeState::BREAKOUT_DOWN ||
         range.state == RangeState::TRENDING_UP ||
@@ -1823,18 +2005,18 @@ FlashCrashMetrics GridTradingStrategy::detectFlashCrash(
         return flash;
     }
     
-    // 최근 5분 하락폭 체크
+    // 理쒓렐 5遺??섎씫??泥댄겕
     double price_5min_ago = candles[candles.size() - 5].close;
     flash.price_drop_pct = (price_5min_ago - current_price) / price_5min_ago;
     
     if (flash.price_drop_pct >= FLASH_CRASH_THRESHOLD_PCT) {
-        flash.drop_speed = flash.price_drop_pct / 5.0;  // %/분
+        flash.drop_speed = flash.price_drop_pct / 5.0;  // %/遺?
         
         if (flash.drop_speed >= FLASH_CRASH_SPEED) {
             flash.detected = true;
             flash.detection_time = getCurrentTimestamp();
             
-            // 연속 하락 캔들 카운트
+            // ?곗냽 ?섎씫 罹붾뱾 移댁슫??
             for (size_t i = candles.size() - 1; i > 0; --i) {
                 if (candles[i].close < candles[i - 1].close) {
                     flash.consecutive_drops++;
@@ -1888,19 +2070,19 @@ void GridTradingStrategy::rebalanceGrid(
     
     grid.status = GridStatus::REBALANCING;
     
-    // 기존 포지션 정리
+    // 湲곗〈 ?ъ????뺣━
     liquidateAllLevels(grid, current_price);
     
-    // 새 Configuration 생성
-    analytics::CoinMetrics metrics;  // 임시
+    // ??Configuration ?앹꽦
+    analytics::CoinMetrics metrics;  // ?꾩떆
     GridConfiguration new_config = createGridConfiguration(
         market, new_range, metrics, current_price, grid.config.total_capital_allocated
     );
     
-    // 새 Grid Levels 생성
+    // ??Grid Levels ?앹꽦
     auto new_levels = generateGridLevels(new_config);
     
-    // 업데이트
+    // ?낅뜲?댄듃
     grid.config = new_config;
     grid.levels = new_levels;
     grid.status = GridStatus::ACTIVE;
@@ -1930,7 +2112,7 @@ void GridTradingStrategy::exitGrid(
     grid.exit_reason = reason;
     grid.status = GridStatus::EMERGENCY_EXIT;
 
-    // 모든 레벨 청산 요청
+    // 紐⑤뱺 ?덈꺼 泥?궛 ?붿껌
     liquidateAllLevels(grid, current_price);
 
     bool all_closed = true;
@@ -2018,11 +2200,11 @@ double GridTradingStrategy::calculateGridUnrealizedPnL(
 
 void GridTradingStrategy::compoundProfits(GridPositionData& grid)
 {
-    // 수익 재투자
+    // ?섏씡 ?ы닾??
     double realized_pct = (grid.total_invested > 0.0)
         ? (grid.realized_pnl / grid.total_invested)
         : 0.0;
-    if (realized_pct > 0.05) {  // 5% 이상 수익시
+    if (realized_pct > 0.05) {  // 5% ?댁긽 ?섏씡??
         double additional_capital = grid.realized_pnl;
         
         grid.config.total_capital_allocated += additional_capital;
@@ -2090,7 +2272,7 @@ double GridTradingStrategy::calculateVolatility(const std::vector<Candle>& candl
     if (candles.size() < 21) return 0.02;
     
     std::vector<double> returns;
-    // [수정] 데이터의 맨 뒤(현재) 30개 구간의 수익률 계산
+    // [?섏젙] ?곗씠?곗쓽 留????꾩옱) 30媛?援ш컙???섏씡瑜?怨꾩궛
     size_t count = std::min(candles.size(), size_t(31));
     for (size_t i = candles.size() - count + 1; i < candles.size(); ++i) {
         double ret = (candles[i].close - candles[i-1].close) / candles[i-1].close;
@@ -2110,8 +2292,8 @@ double GridTradingStrategy::calculateATR(
     
     std::vector<double> true_ranges;
     
-    // [수정] 가장 최근 'period' 개수의 캔들만 순회
-    // candles.size() - period 부터 끝까지
+    // [?섏젙] 媛??理쒓렐 'period' 媛쒖닔??罹붾뱾留??쒗쉶
+    // candles.size() - period 遺???앷퉴吏
     size_t start_idx = candles.size() - period;
     
     for (size_t i = start_idx; i < candles.size(); i++) {
@@ -2150,6 +2332,9 @@ std::vector<double> GridTradingStrategy::extractPrices(
 
 long long GridTradingStrategy::getCurrentTimestamp() const
 {
+    if (latest_market_timestamp_ms_ > 0) {
+        return latest_market_timestamp_ms_;
+    }
     return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()
     ).count();
@@ -2185,7 +2370,7 @@ std::vector<Candle> GridTradingStrategy::parseCandlesFromJson(
 }
 
 void GridTradingStrategy::updateState(const std::string& market, double current_price) {
-    // 내부 로직인 updateGridLevels를 호출하여 그물망 감시/주문 수행
+    // ?대? 濡쒖쭅??updateGridLevels瑜??몄텧?섏뿬 洹몃Ъ留?媛먯떆/二쇰Ц ?섑뻾
     updateGridLevels(market, current_price);
 }
 

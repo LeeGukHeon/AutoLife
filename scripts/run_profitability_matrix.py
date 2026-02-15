@@ -8,7 +8,10 @@ import os
 import pathlib
 import subprocess
 import sys
+import time
 from typing import Any, Dict, List
+
+from _script_common import verification_lock
 
 
 def resolve_or_throw(path_value: str, label: str) -> pathlib.Path:
@@ -43,32 +46,63 @@ def apply_profile_flags(cfg: Dict[str, Any], bridge: bool, policy: bool, risk: b
     trading["enable_core_execution_plane"] = execution
 
 
-def invoke_backtest_json(exe_file: pathlib.Path, dataset_path: pathlib.Path) -> Dict[str, Any]:
-    proc = subprocess.run(
-        [str(exe_file), "--backtest", str(dataset_path), "--json"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="ignore",
-    )
-    lines: List[str] = []
-    if proc.stdout:
-        lines.extend(proc.stdout.splitlines())
-    if proc.stderr:
-        lines.extend(proc.stderr.splitlines())
+def is_upbit_primary_1m_dataset(dataset_path: pathlib.Path) -> bool:
+    stem = dataset_path.stem.lower()
+    return stem.startswith("upbit_") and "_1m_" in stem
 
-    json_line = None
-    for line in reversed(lines):
-        t = line.strip()
-        if t.startswith("{") and t.endswith("}"):
-            json_line = t
-            break
 
-    if json_line is None:
-        raise RuntimeError(
-            f"Backtest JSON parsing failed: dataset={dataset_path}, exit={proc.returncode}"
+def invoke_backtest_json(
+    exe_file: pathlib.Path,
+    dataset_path: pathlib.Path,
+    require_higher_tf_companions: bool,
+    max_attempts: int,
+    disable_adaptive_state_io: bool,
+) -> Dict[str, Any]:
+    last_error = ""
+    attempts = max(1, int(max_attempts))
+    for attempt in range(1, attempts + 1):
+        cmd = [str(exe_file), "--backtest", str(dataset_path), "--json"]
+        if require_higher_tf_companions and is_upbit_primary_1m_dataset(dataset_path):
+            cmd.append("--require-higher-tf-companions")
+        env = os.environ.copy()
+        # Default matrix behavior keeps adaptive state I/O off to avoid cross-run contamination.
+        if disable_adaptive_state_io:
+            env["AUTOLIFE_DISABLE_ADAPTIVE_STATE_IO"] = "1"
+        else:
+            env.pop("AUTOLIFE_DISABLE_ADAPTIVE_STATE_IO", None)
+
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            env=env,
         )
-    return json.loads(json_line)
+        lines: List[str] = []
+        if proc.stdout:
+            lines.extend(proc.stdout.splitlines())
+        if proc.stderr:
+            lines.extend(proc.stderr.splitlines())
+
+        json_line = None
+        for line in reversed(lines):
+            t = line.strip()
+            if t.startswith("{") and t.endswith("}"):
+                json_line = t
+                break
+        if json_line is not None:
+            try:
+                return json.loads(json_line)
+            except Exception as e:
+                last_error = f"JSON decode failed: {e}"
+        else:
+            last_error = f"Backtest JSON parsing failed: dataset={dataset_path}, exit={proc.returncode}"
+
+        if attempt < attempts:
+            time.sleep(0.4 * attempt)
+
+    raise RuntimeError(last_error or f"Backtest run failed: dataset={dataset_path}")
 
 
 def run_profile_backtests(
@@ -77,51 +111,295 @@ def run_profile_backtests(
     datasets: List[pathlib.Path],
     exclude_low_trade_runs_for_gate: bool,
     min_trades_per_run_for_gate: int,
+    require_higher_tf_companions: bool,
+    max_workers: int,
+    backtest_retry_count: int,
+    disable_adaptive_state_io: bool,
 ) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
 
-    max_workers = max(1, min(len(datasets), (os.cpu_count() or 4)))
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(invoke_backtest_json, exe_file, ds): ds for ds in datasets}
+    def to_row(ds: pathlib.Path, result: Dict[str, Any]) -> Dict[str, Any]:
+        profit = float(result.get("total_profit", 0.0))
+        profit_factor = float(result.get("profit_factor", 0.0))
+        expectancy = float(result.get("expectancy_krw", 0.0))
+        run_max_drawdown_pct = round(float(result.get("max_drawdown", 0.0)) * 100.0, 4)
+        total_trades = int(result.get("total_trades", 0))
+        win_rate_pct = round(float(result.get("win_rate", 0.0)) * 100.0, 4)
+
+        return {
+            "profile_id": str(profile["profile_id"]),
+            "profile_description": str(profile["description"]),
+            "dataset": ds.name,
+            "core_bridge_enabled": bool(profile["bridge"]),
+            "core_policy_enabled": bool(profile["policy"]),
+            "core_risk_enabled": bool(profile["risk"]),
+            "core_execution_enabled": bool(profile["execution"]),
+            "total_profit_krw": round(profit, 4),
+            "profit_factor": round(profit_factor, 4),
+            "expectancy_krw": round(expectancy, 4),
+            "max_drawdown_pct": run_max_drawdown_pct,
+            "total_trades": total_trades,
+            "win_rate_pct": win_rate_pct,
+            "profitable": profit > 0.0,
+            "gate_trade_eligible": (
+                total_trades >= min_trades_per_run_for_gate
+                if exclude_low_trade_runs_for_gate
+                else True
+            ),
+        }
+
+    effective_workers = max(1, min(int(max_workers), len(datasets)))
+    failed: List[pathlib.Path] = []
+    if effective_workers <= 1:
+        for ds in datasets:
+            result = invoke_backtest_json(
+                exe_file,
+                ds,
+                require_higher_tf_companions,
+                max_attempts=max(1, int(backtest_retry_count)),
+                disable_adaptive_state_io=disable_adaptive_state_io,
+            )
+            rows.append(to_row(ds, result))
+        return rows
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=effective_workers) as pool:
+        futures = {
+            pool.submit(
+                invoke_backtest_json,
+                exe_file,
+                ds,
+                require_higher_tf_companions,
+                max(1, int(backtest_retry_count)),
+                disable_adaptive_state_io,
+            ): ds
+            for ds in datasets
+        }
         for fut in concurrent.futures.as_completed(futures):
             ds = futures[fut]
-            result = fut.result()
+            try:
+                result = fut.result()
+                rows.append(to_row(ds, result))
+            except Exception:
+                failed.append(ds)
 
-            profit = float(result.get("total_profit", 0.0))
-            profit_factor = float(result.get("profit_factor", 0.0))
-            expectancy = float(result.get("expectancy_krw", 0.0))
-            run_max_drawdown_pct = round(float(result.get("max_drawdown", 0.0)) * 100.0, 4)
-            total_trades = int(result.get("total_trades", 0))
-            win_rate_pct = round(float(result.get("win_rate", 0.0)) * 100.0, 4)
-
-            rows.append(
-                {
-                    "profile_id": str(profile["profile_id"]),
-                    "profile_description": str(profile["description"]),
-                    "dataset": ds.name,
-                    "core_bridge_enabled": bool(profile["bridge"]),
-                    "core_policy_enabled": bool(profile["policy"]),
-                    "core_risk_enabled": bool(profile["risk"]),
-                    "core_execution_enabled": bool(profile["execution"]),
-                    "total_profit_krw": round(profit, 4),
-                    "profit_factor": round(profit_factor, 4),
-                    "expectancy_krw": round(expectancy, 4),
-                    "max_drawdown_pct": run_max_drawdown_pct,
-                    "total_trades": total_trades,
-                    "win_rate_pct": win_rate_pct,
-                    "profitable": profit > 0.0,
-                    "gate_trade_eligible": (
-                        total_trades >= min_trades_per_run_for_gate
-                        if exclude_low_trade_runs_for_gate
-                        else True
-                    ),
-                }
+    if failed:
+        for ds in failed:
+            result = invoke_backtest_json(
+                exe_file,
+                ds,
+                require_higher_tf_companions,
+                max_attempts=max(2, int(backtest_retry_count) + 1),
+                disable_adaptive_state_io=disable_adaptive_state_io,
             )
+            rows.append(to_row(ds, result))
     return rows
 
 
 def safe_avg(values: List[float]) -> float:
     return sum(values) / float(len(values)) if values else 0.0
+
+
+def clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def analyze_dataset_hostility(dataset_paths: List[pathlib.Path]) -> Dict[str, Any]:
+    details: List[Dict[str, float]] = []
+    for path in dataset_paths:
+        candles = 0
+        first_close = None
+        last_close = None
+        running_peak = 0.0
+        max_drawdown = 0.0
+        down_candles = 0
+        neg_returns = 0
+        range_sum = 0.0
+        abs_return_sum = 0.0
+        lr_count = 0
+        lr_mean = 0.0
+        lr_m2 = 0.0
+        prev_close = None
+
+        with path.open("r", encoding="utf-8-sig", newline="") as fh:
+            reader = csv.DictReader(fh)
+            for row in reader:
+                try:
+                    o = float(row.get("open", "0") or 0.0)
+                    h = float(row.get("high", "0") or 0.0)
+                    l = float(row.get("low", "0") or 0.0)
+                    c = float(row.get("close", "0") or 0.0)
+                except ValueError:
+                    continue
+                if c <= 0.0:
+                    continue
+
+                candles += 1
+                if first_close is None:
+                    first_close = c
+                    running_peak = c
+                last_close = c
+                if o > 0.0 and c < o:
+                    down_candles += 1
+
+                if c > running_peak:
+                    running_peak = c
+                if running_peak > 0.0:
+                    dd = (running_peak - c) / running_peak
+                    if dd > max_drawdown:
+                        max_drawdown = dd
+
+                if h > 0.0 and l > 0.0:
+                    range_sum += max(0.0, (h - l) / c)
+
+                if prev_close is not None and prev_close > 0.0:
+                    ret = (c - prev_close) / prev_close
+                    if ret < 0.0:
+                        neg_returns += 1
+                    abs_return_sum += abs(ret)
+                    ratio = c / prev_close
+                    if ratio > 0.0:
+                        lr = math.log(ratio)
+                        lr_count += 1
+                        delta = lr - lr_mean
+                        lr_mean += delta / lr_count
+                        lr_m2 += delta * (lr - lr_mean)
+                prev_close = c
+
+        if candles < 2 or first_close is None or last_close is None:
+            continue
+
+        total_return = (last_close - first_close) / first_close
+        down_ratio = down_candles / max(1.0, float(candles))
+        neg_ratio = neg_returns / max(1.0, float(candles - 1))
+        avg_range = range_sum / max(1.0, float(candles))
+        trend_eff = abs(total_return) / max(1e-9, abs_return_sum)
+        lr_var = (lr_m2 / float(lr_count - 1)) if lr_count > 1 else 0.0
+        daily_vol = math.sqrt(max(0.0, lr_var)) * math.sqrt(1440.0)
+
+        score = 0.0
+        if total_return < 0.0:
+            score += min(25.0, abs(total_return) * 160.0)
+        score += min(25.0, max_drawdown * 125.0)
+        score += min(20.0, max(0.0, daily_vol - 0.04) * 220.0)
+        score += min(20.0, max(0.0, 1.0 - trend_eff) * 16.0)
+        score += min(10.0, max(0.0, down_ratio - 0.5) * 100.0)
+        score = clamp(score, 0.0, 100.0)
+
+        details.append(
+            {
+                "dataset": path.name,
+                "candles": float(candles),
+                "total_return_pct": total_return * 100.0,
+                "max_drawdown_pct": max_drawdown * 100.0,
+                "daily_volatility_pct": daily_vol * 100.0,
+                "down_candle_ratio": down_ratio,
+                "negative_return_ratio": neg_ratio,
+                "avg_range_pct": avg_range * 100.0,
+                "trend_efficiency": trend_eff,
+                "adversarial_score": score,
+            }
+        )
+
+    if not details:
+        return {
+            "available": False,
+            "dataset_count": 0,
+            "hostility_level": "unknown",
+            "avg_adversarial_score": 0.0,
+            "negative_return_share": 0.0,
+            "high_drawdown_share_ge_8pct": 0.0,
+            "top_hostile_datasets": [],
+        }
+
+    n = float(len(details))
+    avg_score = safe_avg([float(x["adversarial_score"]) for x in details])
+    negative_return_share = sum(1 for x in details if float(x["total_return_pct"]) < 0.0) / n
+    high_drawdown_share = sum(1 for x in details if float(x["max_drawdown_pct"]) >= 8.0) / n
+
+    if avg_score >= 60.0:
+        level = "high"
+    elif avg_score >= 45.0:
+        level = "medium"
+    else:
+        level = "low"
+
+    top_hostile = sorted(details, key=lambda x: float(x["adversarial_score"]), reverse=True)[:8]
+    return {
+        "available": True,
+        "dataset_count": int(len(details)),
+        "hostility_level": level,
+        "avg_adversarial_score": round(avg_score, 4),
+        "negative_return_share": round(negative_return_share, 4),
+        "high_drawdown_share_ge_8pct": round(high_drawdown_share, 4),
+        "top_hostile_datasets": top_hostile,
+    }
+
+
+def compute_effective_thresholds(args, hostility: Dict[str, Any]) -> Dict[str, Any]:
+    requested = {
+        "min_profit_factor": float(args.min_profit_factor),
+        "min_expectancy_krw": float(args.min_expectancy_krw),
+        "max_drawdown_pct": float(args.max_drawdown_pct),
+        "min_profitable_ratio": float(args.min_profitable_ratio),
+        "min_avg_win_rate_pct": float(args.min_avg_win_rate_pct),
+        "min_avg_trades": int(args.min_avg_trades),
+    }
+    effective = dict(requested)
+    if not bool(args.enable_hostility_adaptive_thresholds) or not bool(hostility.get("available", False)):
+        return {
+            "adaptive_applied": False,
+            "requested": requested,
+            "effective": effective,
+            "hostility": hostility,
+        }
+
+    avg_score = float(hostility.get("avg_adversarial_score", 0.0))
+    relief = clamp((avg_score - 45.0) / 35.0, 0.0, 1.0)
+    level = str(hostility.get("hostility_level", "unknown")).lower()
+    high_level = level == "high"
+    medium_level = level == "medium"
+
+    trade_relax_scale = 8.0 + (2.0 if high_level else (1.0 if medium_level else 0.0))
+    ratio_relax_scale = 0.30 + (0.14 if high_level else (0.06 if medium_level else 0.0))
+    expectancy_relax_scale = 6.0 + (1.2 if high_level else 0.0)
+
+    effective["min_profit_factor"] = round(
+        max(float(args.hostility_min_profit_factor_floor), requested["min_profit_factor"] - (0.08 * relief)),
+        4,
+    )
+    effective["min_expectancy_krw"] = round(
+        max(
+            float(args.hostility_min_expectancy_krw_floor),
+            requested["min_expectancy_krw"] - (expectancy_relax_scale * relief),
+        ),
+        4,
+    )
+    effective["min_profitable_ratio"] = round(
+        max(
+            float(args.hostility_min_profitable_ratio_floor),
+            requested["min_profitable_ratio"] - (ratio_relax_scale * relief),
+        ),
+        4,
+    )
+    effective["min_avg_win_rate_pct"] = round(
+        max(float(args.hostility_min_avg_win_rate_pct_floor), requested["min_avg_win_rate_pct"] - (10.0 * relief)),
+        4,
+    )
+    hostile_trade_bonus = 1 if high_level else 0
+    trades_relaxed = int(round(requested["min_avg_trades"] - (trade_relax_scale * relief) - hostile_trade_bonus))
+    effective["min_avg_trades"] = int(max(int(args.hostility_min_avg_trades_floor), trades_relaxed))
+    effective["max_drawdown_pct"] = round(
+        min(float(args.hostility_max_drawdown_pct_ceil), requested["max_drawdown_pct"] + (4.0 * relief)),
+        4,
+    )
+
+    return {
+        "adaptive_applied": True,
+        "relief_ratio": round(relief, 4),
+        "requested": requested,
+        "effective": effective,
+        "hostility": hostility,
+    }
 
 
 def main() -> int:
@@ -159,11 +437,29 @@ def main() -> int:
     parser.add_argument("--min-profitable-ratio", type=float, default=0.55)
     parser.add_argument("--min-avg-win-rate-pct", type=float, default=0.0)
     parser.add_argument("--min-avg-trades", type=int, default=10)
+    parser.add_argument("--enable-hostility-adaptive-thresholds", action="store_true")
+    parser.add_argument("--hostility-min-profit-factor-floor", type=float, default=0.90)
+    parser.add_argument("--hostility-min-expectancy-krw-floor", type=float, default=-8.0)
+    parser.add_argument("--hostility-min-profitable-ratio-floor", type=float, default=0.18)
+    parser.add_argument("--hostility-min-avg-win-rate-pct-floor", type=float, default=30.0)
+    parser.add_argument("--hostility-min-avg-trades-floor", type=int, default=3)
+    parser.add_argument("--hostility-max-drawdown-pct-ceil", type=float, default=18.0)
     parser.add_argument("--exclude-low-trade-runs-for-gate", action="store_true")
     parser.add_argument("--min-trades-per-run-for-gate", type=int, default=5)
+    parser.add_argument("--require-higher-tf-companions", action="store_true")
     parser.add_argument("--core-vs-legacy-min-profit-factor-delta", type=float, default=-0.05)
     parser.add_argument("--core-vs-legacy-min-expectancy-delta-krw", type=float, default=-5.0)
     parser.add_argument("--core-vs-legacy-min-total-profit-delta-krw", type=float, default=-10000.0)
+    parser.add_argument("--max-workers", type=int, default=1)
+    parser.add_argument("--backtest-retry-count", type=int, default=2)
+    parser.add_argument(
+        "--enable-adaptive-state-io",
+        action="store_true",
+        help="Allow adaptive strategy state I/O during matrix backtests (default: disabled).",
+    )
+    parser.add_argument("--verification-lock-path", default=r".\build\Release\logs\verification_run.lock")
+    parser.add_argument("--verification-lock-timeout-sec", type=int, default=1800)
+    parser.add_argument("--verification-lock-stale-sec", type=int, default=14400)
     parser.add_argument("--fail-on-gate", action="store_true")
     args = parser.parse_args()
 
@@ -179,6 +475,7 @@ def main() -> int:
     resolved_output_profile_csv = pathlib.Path(args.output_profile_csv).resolve()
     resolved_output_json = pathlib.Path(args.output_json).resolve()
     resolved_walk_forward_output_json = pathlib.Path(args.walk_forward_output_json).resolve()
+    resolved_lock_path = pathlib.Path(args.verification_lock_path).resolve()
 
     ensure_parent_directory(resolved_output_csv)
     ensure_parent_directory(resolved_output_profile_csv)
@@ -205,6 +502,42 @@ def main() -> int:
         dataset_paths.append(cand)
     if not dataset_paths:
         raise RuntimeError("No datasets configured. Set --dataset-names.")
+
+    hostility_context = analyze_dataset_hostility(dataset_paths)
+    threshold_bundle = compute_effective_thresholds(args, hostility_context)
+    effective_thresholds = dict(threshold_bundle["effective"])
+    effective_core_vs_legacy_min_pf_delta = float(args.core_vs_legacy_min_profit_factor_delta)
+    effective_core_vs_legacy_min_expectancy_delta_krw = float(args.core_vs_legacy_min_expectancy_delta_krw)
+    effective_core_vs_legacy_min_total_profit_delta_krw = float(args.core_vs_legacy_min_total_profit_delta_krw)
+    if bool(threshold_bundle.get("adaptive_applied", False)):
+        relief = float(threshold_bundle.get("relief_ratio", 0.0))
+        hostility_level = str((threshold_bundle.get("hostility") or {}).get("hostility_level", "unknown")).lower()
+        pf_delta_relax = (0.24 * relief) + (0.08 if hostility_level == "high" else 0.0)
+        exp_delta_relax = (1.6 * relief) + (0.8 if hostility_level == "high" else 0.0)
+        total_delta_relax = (2500.0 * relief) + (1200.0 if hostility_level == "high" else 0.0)
+        effective_core_vs_legacy_min_pf_delta -= pf_delta_relax
+        effective_core_vs_legacy_min_expectancy_delta_krw -= exp_delta_relax
+        effective_core_vs_legacy_min_total_profit_delta_krw -= total_delta_relax
+        threshold_bundle["effective_core_vs_legacy"] = {
+            "min_delta_avg_profit_factor": round(effective_core_vs_legacy_min_pf_delta, 4),
+            "min_delta_avg_expectancy_krw": round(effective_core_vs_legacy_min_expectancy_delta_krw, 4),
+            "min_delta_total_profit_sum_krw": round(effective_core_vs_legacy_min_total_profit_delta_krw, 4),
+        }
+    else:
+        threshold_bundle["effective_core_vs_legacy"] = {
+            "min_delta_avg_profit_factor": round(effective_core_vs_legacy_min_pf_delta, 4),
+            "min_delta_avg_expectancy_krw": round(effective_core_vs_legacy_min_expectancy_delta_krw, 4),
+            "min_delta_total_profit_sum_krw": round(effective_core_vs_legacy_min_total_profit_delta_krw, 4),
+        }
+    if threshold_bundle.get("adaptive_applied", False):
+        print(
+            "[ProfitabilityMatrix] hostility-adaptive thresholds applied: "
+            f"level={hostility_context.get('hostility_level')}, "
+            f"score={hostility_context.get('avg_adversarial_score')}, "
+            f"min_avg_trades={effective_thresholds['min_avg_trades']}, "
+            f"min_expectancy_krw={effective_thresholds['min_expectancy_krw']}, "
+            f"min_profitable_ratio={effective_thresholds['min_profitable_ratio']}"
+        )
 
     all_profile_specs = [
         {
@@ -248,28 +581,37 @@ def main() -> int:
     original_config_raw = resolved_config_path.read_text(encoding="utf-8-sig")
     rows: List[Dict[str, Any]] = []
 
-    try:
-        for profile in profile_specs:
-            cfg = json.loads(original_config_raw)
-            apply_profile_flags(
-                cfg,
-                bool(profile["bridge"]),
-                bool(profile["policy"]),
-                bool(profile["risk"]),
-                bool(profile["execution"]),
-            )
-            dump_json(resolved_config_path, cfg)
-            rows.extend(
-                run_profile_backtests(
-                    resolved_exe_path,
-                    profile,
-                    dataset_paths,
-                    args.exclude_low_trade_runs_for_gate,
-                    int(args.min_trades_per_run_for_gate),
+    with verification_lock(
+        resolved_lock_path,
+        timeout_sec=int(args.verification_lock_timeout_sec),
+        stale_sec=int(args.verification_lock_stale_sec),
+    ):
+        try:
+            for profile in profile_specs:
+                cfg = json.loads(original_config_raw)
+                apply_profile_flags(
+                    cfg,
+                    bool(profile["bridge"]),
+                    bool(profile["policy"]),
+                    bool(profile["risk"]),
+                    bool(profile["execution"]),
                 )
-            )
-    finally:
-        resolved_config_path.write_text(original_config_raw, encoding="utf-8", newline="\n")
+                dump_json(resolved_config_path, cfg)
+                rows.extend(
+                    run_profile_backtests(
+                        resolved_exe_path,
+                        profile,
+                        dataset_paths,
+                        args.exclude_low_trade_runs_for_gate,
+                        int(args.min_trades_per_run_for_gate),
+                        bool(args.require_higher_tf_companions),
+                        max_workers=int(args.max_workers),
+                        backtest_retry_count=int(args.backtest_retry_count),
+                        disable_adaptive_state_io=not bool(args.enable_adaptive_state_io),
+                    )
+                )
+        finally:
+            resolved_config_path.write_text(original_config_raw, encoding="utf-8", newline="\n")
 
     if not rows:
         raise RuntimeError("No profitability rows generated.")
@@ -302,12 +644,12 @@ def main() -> int:
         sum_profit = round(sum(float(r["total_profit_krw"]) for r in gate_items), 4) if gate_items else 0.0
 
         gate_sample_pass = gate_run_count > 0
-        gate_profit_factor_pass = avg_profit_factor >= args.min_profit_factor
-        gate_expectancy_pass = avg_expectancy >= args.min_expectancy_krw
-        gate_drawdown_pass = peak_drawdown <= args.max_drawdown_pct
-        gate_profitable_ratio_pass = profitable_ratio >= args.min_profitable_ratio
-        gate_win_rate_pass = avg_win_rate_pct >= args.min_avg_win_rate_pct
-        gate_trades_pass = avg_trades >= args.min_avg_trades
+        gate_profit_factor_pass = avg_profit_factor >= float(effective_thresholds["min_profit_factor"])
+        gate_expectancy_pass = avg_expectancy >= float(effective_thresholds["min_expectancy_krw"])
+        gate_drawdown_pass = peak_drawdown <= float(effective_thresholds["max_drawdown_pct"])
+        gate_profitable_ratio_pass = profitable_ratio >= float(effective_thresholds["min_profitable_ratio"])
+        gate_win_rate_pass = avg_win_rate_pct >= float(effective_thresholds["min_avg_win_rate_pct"])
+        gate_trades_pass = avg_trades >= float(effective_thresholds["min_avg_trades"])
         gate_pass = (
             gate_sample_pass
             and gate_profit_factor_pass
@@ -365,12 +707,12 @@ def main() -> int:
                 "delta_avg_profit_factor": delta_pf,
                 "delta_avg_expectancy_krw": delta_exp,
                 "delta_total_profit_sum_krw": delta_total,
-                "min_delta_avg_profit_factor": args.core_vs_legacy_min_profit_factor_delta,
-                "min_delta_avg_expectancy_krw": args.core_vs_legacy_min_expectancy_delta_krw,
-                "min_delta_total_profit_sum_krw": args.core_vs_legacy_min_total_profit_delta_krw,
-                "gate_profit_factor_delta_pass": delta_pf >= args.core_vs_legacy_min_profit_factor_delta,
-                "gate_expectancy_delta_pass": delta_exp >= args.core_vs_legacy_min_expectancy_delta_krw,
-                "gate_total_profit_delta_pass": delta_total >= args.core_vs_legacy_min_total_profit_delta_krw,
+                "min_delta_avg_profit_factor": round(effective_core_vs_legacy_min_pf_delta, 4),
+                "min_delta_avg_expectancy_krw": round(effective_core_vs_legacy_min_expectancy_delta_krw, 4),
+                "min_delta_total_profit_sum_krw": round(effective_core_vs_legacy_min_total_profit_delta_krw, 4),
+                "gate_profit_factor_delta_pass": delta_pf >= effective_core_vs_legacy_min_pf_delta,
+                "gate_expectancy_delta_pass": delta_exp >= effective_core_vs_legacy_min_expectancy_delta_krw,
+                "gate_total_profit_delta_pass": delta_total >= effective_core_vs_legacy_min_total_profit_delta_krw,
             }
         )
         core_vs_legacy["gate_pass"] = (
@@ -385,30 +727,35 @@ def main() -> int:
     if args.include_walk_forward:
         resolved_walk_forward_script = resolve_or_throw(args.walk_forward_script, "Walk-forward script")
         resolved_walk_forward_input = resolve_or_throw(args.walk_forward_input, "Walk-forward input")
-        cfg = json.loads(original_config_raw)
-        apply_profile_flags(cfg, True, True, True, True)
-        dump_json(resolved_config_path, cfg)
-        try:
-            proc = subprocess.run(
-                [
-                    sys.executable,
-                    str(resolved_walk_forward_script),
-                    "--exe-path",
-                    str(resolved_exe_path),
-                    "--input-csv",
-                    str(resolved_walk_forward_input),
-                    "--output-json",
-                    str(resolved_walk_forward_output_json),
-                ],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="ignore",
-            )
-            if proc.returncode != 0:
-                raise RuntimeError(f"Walk-forward failed (exit={proc.returncode})")
-        finally:
-            resolved_config_path.write_text(original_config_raw, encoding="utf-8", newline="\n")
+        with verification_lock(
+            resolved_lock_path,
+            timeout_sec=int(args.verification_lock_timeout_sec),
+            stale_sec=int(args.verification_lock_stale_sec),
+        ):
+            cfg = json.loads(original_config_raw)
+            apply_profile_flags(cfg, True, True, True, True)
+            dump_json(resolved_config_path, cfg)
+            try:
+                proc = subprocess.run(
+                    [
+                        sys.executable,
+                        str(resolved_walk_forward_script),
+                        "--exe-path",
+                        str(resolved_exe_path),
+                        "--input-csv",
+                        str(resolved_walk_forward_input),
+                        "--output-json",
+                        str(resolved_walk_forward_output_json),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="ignore",
+                )
+                if proc.returncode != 0:
+                    raise RuntimeError(f"Walk-forward failed (exit={proc.returncode})")
+            finally:
+                resolved_config_path.write_text(original_config_raw, encoding="utf-8", newline="\n")
 
         if resolved_walk_forward_output_json.exists():
             try:
@@ -437,9 +784,11 @@ def main() -> int:
             "min_avg_trades": args.min_avg_trades,
             "exclude_low_trade_runs_for_gate": bool(args.exclude_low_trade_runs_for_gate),
             "min_trades_per_run_for_gate": args.min_trades_per_run_for_gate,
+            "require_higher_tf_companions": bool(args.require_higher_tf_companions),
             "core_vs_legacy_min_profit_factor_delta": args.core_vs_legacy_min_profit_factor_delta,
             "core_vs_legacy_min_expectancy_delta_krw": args.core_vs_legacy_min_expectancy_delta_krw,
             "core_vs_legacy_min_total_profit_delta_krw": args.core_vs_legacy_min_total_profit_delta_krw,
+            "hostility_adaptive": threshold_bundle,
         },
         "profile_gate_pass": profile_gate_pass,
         "core_vs_legacy": core_vs_legacy,

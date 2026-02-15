@@ -265,6 +265,8 @@ private:
     // key: ?꾪꽣媛? value: ?대떦 ?꾪꽣媛믪뿉?쒖쓽 ?밸쪧
     std::map<double, double> filter_performance_history_;
     int scans_without_new_entry_ = 0;
+    double market_hostility_ewma_ = 0.0;
+    int hostile_pause_scans_remaining_ = 0;
     
     // Prometheus 硫뷀듃由??꾩쟻??(硫붾え由??⑥쑉)
     struct PrometheusMetrics {

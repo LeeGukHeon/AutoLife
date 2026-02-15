@@ -1,10 +1,14 @@
 #include "strategy/BreakoutStrategy.h"
 #include "analytics/TechnicalIndicators.h"
 #include "common/Config.h"
+#include "common/PathUtils.h"
 #include <algorithm>
 #include <cmath>
 #include <numeric>
 #include <chrono>
+#include <fstream>
+#include <filesystem>
+#include <cstdlib>
 #include <spdlog/spdlog.h>
 
 namespace autolife {
@@ -12,6 +16,56 @@ namespace strategy {
 namespace {
 double clamp01(double v) {
     return std::clamp(v, 0.0, 1.0);
+}
+
+std::filesystem::path getBreakoutAdaptiveStatsPath() {
+    return utils::PathUtils::resolveRelativePath("state/breakout_entry_stats.json");
+}
+
+bool disableAdaptiveEntryStateIo() {
+    std::string value;
+#ifdef _WIN32
+    char* raw = nullptr;
+    size_t len = 0;
+    if (_dupenv_s(&raw, &len, "AUTOLIFE_DISABLE_ADAPTIVE_STATE_IO") != 0 || raw == nullptr) {
+        return false;
+    }
+    value.assign(raw);
+    free(raw);
+#else
+    const char* raw = std::getenv("AUTOLIFE_DISABLE_ADAPTIVE_STATE_IO");
+    if (raw == nullptr) {
+        return false;
+    }
+    value.assign(raw);
+#endif
+    return !(value.empty() || value == "0" || value == "false" || value == "FALSE");
+}
+
+long long currentWallClockMs() {
+    using namespace std::chrono;
+    return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+}
+
+const char* breakoutTypeToLabel(BreakoutType t) {
+    switch (t) {
+        case BreakoutType::DONCHIAN_BREAK: return "DONCHIAN_BREAK";
+        case BreakoutType::RESISTANCE_BREAK: return "RESISTANCE_BREAK";
+        case BreakoutType::CONSOLIDATION_BREAK: return "CONSOLIDATION_BREAK";
+        case BreakoutType::VOLUME_BREAKOUT: return "VOLUME_BREAKOUT";
+        default: return "UNSPECIFIED";
+    }
+}
+
+int makeBreakoutEntryKey(BreakoutType t, analytics::MarketRegime regime) {
+    return (static_cast<int>(t) * 100) + static_cast<int>(regime);
+}
+
+long long normalizeTimestampMs(long long ts) {
+    if (ts > 0 && ts < 1000000000000LL) {
+        return ts * 1000LL;
+    }
+    return ts;
 }
 
 bool isLikelyDescendingByTimestamp(const std::vector<Candle>& candles) {
@@ -276,6 +330,7 @@ BreakoutStrategy::BreakoutStrategy(std::shared_ptr<network::UpbitHttpClient> cli
     rolling_stats_.successful_breakouts = 0;
     
     spdlog::info("[BreakoutStrategy] Initialized - Turtle Trading + Volume Profile");
+    loadAdaptiveEntryStats();
 }
 
 // ===== Strategy Info =====
@@ -309,6 +364,12 @@ Signal BreakoutStrategy::generateSignal(
     signal.type = SignalType::NONE;
     signal.market = market;
     signal.strategy_name = "Breakout Strategy";
+    signal.timestamp = getCurrentTimestamp();
+    pending_entry_keys_.erase(market);
+    if (!candles.empty()) {
+        latest_market_timestamp_ms_ = normalizeTimestampMs(candles.back().timestamp);
+        signal.timestamp = latest_market_timestamp_ms_;
+    }
     
     // ===== Hard Gates =====
     if (active_positions_.find(market) != active_positions_.end()) return signal;
@@ -389,8 +450,18 @@ Signal BreakoutStrategy::generateSignal(
     if (!shouldGenerateBreakoutSignal(breakout)) {
         return signal;
     }
-    const double breakout_quality_floor =
+    const int entry_key = makeBreakoutEntryKey(breakout.type, regime.regime);
+    const double adaptive_bias = getAdaptiveEntryBias(entry_key);
+    double breakout_quality_floor =
         computeBreakoutSignalQualityFloor(metrics, regime, higher_tf_trend_bias);
+    if (adaptive_bias <= -0.18 && higher_tf_trend_bias < 0.30) {
+        return signal;
+    }
+    if (adaptive_bias < 0.0) {
+        breakout_quality_floor = std::min(0.92, breakout_quality_floor + std::min(0.10, -adaptive_bias * 0.35));
+    } else if (adaptive_bias > 0.0) {
+        breakout_quality_floor = std::max(0.28, breakout_quality_floor - std::min(0.05, adaptive_bias * 0.25));
+    }
     if (breakout.strength < breakout_quality_floor) {
         return signal;
     }
@@ -459,6 +530,11 @@ Signal BreakoutStrategy::generateSignal(
         metrics.volume_surge_ratio >= 1.8 &&
         metrics.liquidity_score >= 70.0) {
         adaptive_strength_floor = std::max(0.31, adaptive_strength_floor - 0.04);
+    }
+    if (adaptive_bias < 0.0) {
+        adaptive_strength_floor = std::min(0.90, adaptive_strength_floor + std::min(0.10, -adaptive_bias * 0.35));
+    } else if (adaptive_bias > 0.0) {
+        adaptive_strength_floor = std::max(0.26, adaptive_strength_floor - std::min(0.05, adaptive_bias * 0.25));
     }
     if (signal.strength < adaptive_strength_floor) return signal;
     
@@ -538,6 +614,8 @@ Signal BreakoutStrategy::generateSignal(
     if (signal.strength >= 0.70) {
         signal.type = SignalType::STRONG_BUY;
     }
+    signal.entry_archetype = breakoutTypeToLabel(breakout.type);
+    pending_entry_keys_[market] = entry_key;
     
     spdlog::info("[Breakout] 🎯 BUY Signal - {} | Strength: {:.3f} | Size: {:.2f}%",
                  market, signal.strength, signal.position_size * 100);
@@ -559,6 +637,9 @@ bool BreakoutStrategy::shouldEnter(
 {
     std::lock_guard<std::mutex> lock(mutex_);
     const auto strategy_cfg = Config::getInstance().getBreakoutConfig();
+    if (!candles.empty()) {
+        latest_market_timestamp_ms_ = normalizeTimestampMs(candles.back().timestamp);
+    }
 
     if (active_positions_.find(market) != active_positions_.end()) {
         return false;
@@ -683,6 +764,15 @@ bool BreakoutStrategy::onSignalAccepted(const Signal& signal, double allocated_c
 
     active_positions_.insert(signal.market);
     position_data_[signal.market] = pos_data;
+    {
+        int entry_key = 0;
+        auto pending_it = pending_entry_keys_.find(signal.market);
+        if (pending_it != pending_entry_keys_.end()) {
+            entry_key = pending_it->second;
+            pending_entry_keys_.erase(pending_it);
+        }
+        active_entry_keys_[signal.market] = entry_key;
+    }
     recordTrade();
 
     spdlog::info("[Breakout] Position Registered - {} | Entry: {:.2f}", signal.market, signal.entry_price);
@@ -854,6 +944,13 @@ IStrategy::Statistics BreakoutStrategy::getStatistics() const
 void BreakoutStrategy::updateStatistics(const std::string& market, bool is_win, double profit_loss)
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    int closed_entry_key = 0;
+    auto key_it = active_entry_keys_.find(market);
+    if (key_it != active_entry_keys_.end()) {
+        closed_entry_key = key_it->second;
+        active_entry_keys_.erase(key_it);
+    }
+    pending_entry_keys_.erase(market);
     
     // [핵심] 거래가 완전히 끝났으므로 목록에서 제거 (재진입 허용)
     if (active_positions_.erase(market)) {
@@ -907,6 +1004,9 @@ void BreakoutStrategy::updateStatistics(const std::string& market, bool is_win, 
     
     updateRollingStatistics();
     checkCircuitBreaker();
+    if (closed_entry_key != 0) {
+        recordAdaptiveEntryOutcome(closed_entry_key, is_win, profit_loss);
+    }
 }
 
 void BreakoutStrategy::setStatistics(const Statistics& stats)
@@ -950,6 +1050,121 @@ BreakoutRollingStatistics BreakoutStrategy::getRollingStatistics() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
     return rolling_stats_;
+}
+
+double BreakoutStrategy::getAdaptiveEntryBias(int entry_key) const
+{
+    auto it = adaptive_entry_stats_.find(entry_key);
+    if (it == adaptive_entry_stats_.end()) {
+        return 0.0;
+    }
+    const auto& st = it->second;
+    if (st.trades < ADAPTIVE_ENTRY_MIN_TRADES) {
+        return 0.0;
+    }
+    const double win_rate = static_cast<double>(st.wins) / std::max(1, st.trades);
+    const double expectancy = st.pnl_sum / std::max(1, st.trades);
+    const double win_component = std::clamp((win_rate - 0.50) * 0.60, -0.18, 0.18);
+    const double expectancy_component = std::clamp(expectancy / 30.0, -0.12, 0.12);
+    const double ema_component = std::clamp(st.pnl_ema / 25.0, -0.10, 0.10);
+    return std::clamp(win_component + expectancy_component + ema_component, -0.22, 0.16);
+}
+
+void BreakoutStrategy::recordAdaptiveEntryOutcome(int entry_key, bool is_win, double profit_loss)
+{
+    auto& st = adaptive_entry_stats_[entry_key];
+    st.trades += 1;
+    if (is_win) {
+        st.wins += 1;
+    }
+    st.pnl_sum += profit_loss;
+    if (st.trades == 1) {
+        st.pnl_ema = profit_loss;
+    } else {
+        st.pnl_ema = (st.pnl_ema * 0.82) + (profit_loss * 0.18);
+    }
+    saveAdaptiveEntryStats();
+}
+
+void BreakoutStrategy::loadAdaptiveEntryStats()
+{
+    if (disableAdaptiveEntryStateIo()) {
+        spdlog::info("[Breakout] Adaptive entry stats I/O disabled by environment.");
+        return;
+    }
+    try {
+        const auto path = getBreakoutAdaptiveStatsPath();
+        if (!std::filesystem::exists(path)) {
+            return;
+        }
+        std::ifstream in(path.string(), std::ios::binary);
+        if (!in.is_open()) {
+            spdlog::warn("[Breakout] Failed to open adaptive stats file: {}", path.string());
+            return;
+        }
+        nlohmann::json payload;
+        in >> payload;
+        if (!payload.contains("stats") || !payload["stats"].is_array()) {
+            return;
+        }
+        std::map<int, AdaptiveEntryStats> loaded;
+        for (const auto& row : payload["stats"]) {
+            if (!row.is_object()) {
+                continue;
+            }
+            const int key = row.value("key", 0);
+            if (key == 0) {
+                continue;
+            }
+            AdaptiveEntryStats s;
+            s.trades = std::max(0, row.value("trades", 0));
+            s.wins = std::max(0, row.value("wins", 0));
+            s.pnl_sum = row.value("pnl_sum", 0.0);
+            s.pnl_ema = row.value("pnl_ema", 0.0);
+            loaded[key] = s;
+        }
+        adaptive_entry_stats_ = std::move(loaded);
+        spdlog::info(
+            "[Breakout] Adaptive entry stats loaded: path={} entries={}",
+            path.string(),
+            adaptive_entry_stats_.size()
+        );
+    } catch (const std::exception& e) {
+        spdlog::warn("[Breakout] Failed to load adaptive entry stats: {}", e.what());
+    }
+}
+
+void BreakoutStrategy::saveAdaptiveEntryStats() const
+{
+    if (disableAdaptiveEntryStateIo()) {
+        return;
+    }
+    try {
+        const auto path = getBreakoutAdaptiveStatsPath();
+        std::filesystem::create_directories(path.parent_path());
+        nlohmann::json payload;
+        payload["schema_version"] = 1;
+        payload["saved_at_ms"] = currentWallClockMs();
+        payload["stats"] = nlohmann::json::array();
+        for (const auto& kv : adaptive_entry_stats_) {
+            const auto& s = kv.second;
+            nlohmann::json row;
+            row["key"] = kv.first;
+            row["trades"] = s.trades;
+            row["wins"] = s.wins;
+            row["pnl_sum"] = s.pnl_sum;
+            row["pnl_ema"] = s.pnl_ema;
+            payload["stats"].push_back(std::move(row));
+        }
+        std::ofstream out(path.string(), std::ios::binary | std::ios::trunc);
+        if (!out.is_open()) {
+            spdlog::warn("[Breakout] Failed to open adaptive stats for write: {}", path.string());
+            return;
+        }
+        out << payload.dump(2);
+    } catch (const std::exception& e) {
+        spdlog::warn("[Breakout] Failed to save adaptive entry stats: {}", e.what());
+    }
 }
 
 void BreakoutStrategy::updateRollingStatistics()
@@ -1835,6 +2050,9 @@ double BreakoutStrategy::calculateStdDev(
 
 long long BreakoutStrategy::getCurrentTimestamp() const
 {
+    if (latest_market_timestamp_ms_ > 0) {
+        return latest_market_timestamp_ms_;
+    }
     return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()
     ).count();

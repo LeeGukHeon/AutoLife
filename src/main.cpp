@@ -397,6 +397,36 @@ int main(int argc, char* argv[]) {
                     j["avg_loss_krw"] = result.avg_loss_krw;
                     j["profit_factor"] = result.profit_factor;
                     j["expectancy_krw"] = result.expectancy_krw;
+                    j["avg_holding_minutes"] = result.avg_holding_minutes;
+                    j["avg_fee_krw"] = result.avg_fee_krw;
+                    j["intrabar_stop_tp_collision_count"] = result.intrabar_stop_tp_collision_count;
+                    j["exit_reason_counts"] = result.exit_reason_counts;
+                    j["intrabar_collision_by_strategy"] = result.intrabar_collision_by_strategy;
+                    j["entry_funnel"] = {
+                        {"entry_rounds", result.entry_funnel.entry_rounds},
+                        {"skipped_due_to_open_position", result.entry_funnel.skipped_due_to_open_position},
+                        {"no_signal_generated", result.entry_funnel.no_signal_generated},
+                        {"filtered_out_by_manager", result.entry_funnel.filtered_out_by_manager},
+                        {"filtered_out_by_policy", result.entry_funnel.filtered_out_by_policy},
+                        {"no_best_signal", result.entry_funnel.no_best_signal},
+                        {"blocked_pattern_gate", result.entry_funnel.blocked_pattern_gate},
+                        {"blocked_rr_rebalance", result.entry_funnel.blocked_rr_rebalance},
+                        {"blocked_risk_gate", result.entry_funnel.blocked_risk_gate},
+                        {"blocked_risk_manager", result.entry_funnel.blocked_risk_manager},
+                        {"blocked_min_order_or_capital", result.entry_funnel.blocked_min_order_or_capital},
+                        {"blocked_order_sizing", result.entry_funnel.blocked_order_sizing},
+                        {"entries_executed", result.entry_funnel.entries_executed}
+                    };
+                    j["strategy_signal_funnel"] = nlohmann::json::array();
+                    for (const auto& sf : result.strategy_signal_funnel) {
+                        j["strategy_signal_funnel"].push_back({
+                            {"strategy_name", sf.strategy_name},
+                            {"generated_signals", sf.generated_signals},
+                            {"selected_best", sf.selected_best},
+                            {"blocked_by_risk_manager", sf.blocked_by_risk_manager},
+                            {"entries_executed", sf.entries_executed}
+                        });
+                    }
                     j["strategy_summaries"] = nlohmann::json::array();
                     for (const auto& s : result.strategy_summaries) {
                         j["strategy_summaries"].push_back({
@@ -415,6 +445,7 @@ int main(int argc, char* argv[]) {
                     for (const auto& p : result.pattern_summaries) {
                         j["pattern_summaries"].push_back({
                             {"strategy_name", p.strategy_name},
+                            {"entry_archetype", p.entry_archetype},
                             {"regime", p.regime},
                             {"strength_bucket", p.strength_bucket},
                             {"expected_value_bucket", p.expected_value_bucket},
@@ -445,6 +476,21 @@ int main(int argc, char* argv[]) {
                 std::cout << "평균 손실:   " << static_cast<long long>(result.avg_loss_krw) << " KRW\n";
                 std::cout << "Profit Factor: " << std::setprecision(3) << result.profit_factor << "\n";
                 std::cout << "Expectancy:  " << static_cast<long long>(result.expectancy_krw) << " KRW/trade\n";
+                std::cout << "평균 보유시간: " << std::fixed << std::setprecision(2) << result.avg_holding_minutes << " 분\n";
+                std::cout << "평균 수수료:  " << static_cast<long long>(result.avg_fee_krw) << " KRW/trade\n";
+                std::cout << "봉내 SL/TP 동시터치: " << result.intrabar_stop_tp_collision_count << "\n";
+                std::cout << "Entry funnel: rounds=" << result.entry_funnel.entry_rounds
+                          << ", no_signal=" << result.entry_funnel.no_signal_generated
+                          << ", manager_drop=" << result.entry_funnel.filtered_out_by_manager
+                          << ", policy_drop=" << result.entry_funnel.filtered_out_by_policy
+                          << ", no_best=" << result.entry_funnel.no_best_signal
+                          << ", pattern_drop=" << result.entry_funnel.blocked_pattern_gate
+                          << ", rr_drop=" << result.entry_funnel.blocked_rr_rebalance
+                          << ", risk_drop=" << result.entry_funnel.blocked_risk_gate
+                          << ", risk_manager_drop=" << result.entry_funnel.blocked_risk_manager
+                          << ", capital_drop=" << result.entry_funnel.blocked_min_order_or_capital
+                          << ", sizing_drop=" << result.entry_funnel.blocked_order_sizing
+                          << ", entries=" << result.entry_funnel.entries_executed << "\n";
                 if (!result.strategy_summaries.empty()) {
                     std::cout << "전략별 요약:\n";
                     for (const auto& s : result.strategy_summaries) {
@@ -577,6 +623,18 @@ int main(int argc, char* argv[]) {
             std::cout << "평균 손실:   " << static_cast<long long>(result.avg_loss_krw) << " KRW\n";
             std::cout << "Profit Factor: " << std::setprecision(3) << result.profit_factor << "\n";
             std::cout << "Expectancy:  " << static_cast<long long>(result.expectancy_krw) << " KRW/trade\n";
+            std::cout << "Entry funnel: rounds=" << result.entry_funnel.entry_rounds
+                      << ", no_signal=" << result.entry_funnel.no_signal_generated
+                      << ", manager_drop=" << result.entry_funnel.filtered_out_by_manager
+                      << ", policy_drop=" << result.entry_funnel.filtered_out_by_policy
+                      << ", no_best=" << result.entry_funnel.no_best_signal
+                      << ", pattern_drop=" << result.entry_funnel.blocked_pattern_gate
+                      << ", rr_drop=" << result.entry_funnel.blocked_rr_rebalance
+                      << ", risk_drop=" << result.entry_funnel.blocked_risk_gate
+                      << ", risk_manager_drop=" << result.entry_funnel.blocked_risk_manager
+                      << ", capital_drop=" << result.entry_funnel.blocked_min_order_or_capital
+                      << ", sizing_drop=" << result.entry_funnel.blocked_order_sizing
+                      << ", entries=" << result.entry_funnel.entries_executed << "\n";
             if (!result.strategy_summaries.empty()) {
                 std::cout << "전략별 요약:\n";
                 for (const auto& s : result.strategy_summaries) {

@@ -36,11 +36,14 @@ def parse_args(argv=None):
         "-OutputRecommendationJson",
         default="./build/Release/logs/entry_pattern_recommendations.json",
     )
+    parser.add_argument("--max-workers", "-MaxWorkers", type=int, default=4)
     return parser.parse_args(argv)
 
 
 def invoke_backtest_json(exe_file, dataset_path):
-    result = run_command([str(exe_file), "--backtest", str(dataset_path), "--json"])
+    env = os.environ.copy()
+    env["AUTOLIFE_DISABLE_ADAPTIVE_STATE_IO"] = "1"
+    result = run_command([str(exe_file), "--backtest", str(dataset_path), "--json"], env=env)
     return parse_last_json_line(result.stdout + "\n" + result.stderr)
 
 
@@ -153,7 +156,9 @@ def main(argv=None) -> int:
             pending_runs.append((dataset_file, dataset_path))
 
         if pending_runs:
-            max_workers = max(1, min(len(pending_runs), os.cpu_count() or 4))
+            cpu_bound = os.cpu_count() or 4
+            configured = args.max_workers if args.max_workers > 0 else cpu_bound
+            max_workers = max(1, min(len(pending_runs), cpu_bound, configured))
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
                 futures = {
                     pool.submit(invoke_backtest_json, exe_path, dataset_path): dataset_file
@@ -187,6 +192,7 @@ def main(argv=None) -> int:
                         key = "|".join(
                             [
                                 str(p.get("strategy_name", "")),
+                                str(p.get("entry_archetype", "UNSPECIFIED")),
                                 str(p.get("regime", "")),
                                 str(p.get("strength_bucket", "")),
                                 str(p.get("expected_value_bucket", "")),
@@ -197,6 +203,7 @@ def main(argv=None) -> int:
                             key,
                             {
                                 "strategy_name": str(p.get("strategy_name", "")),
+                                "entry_archetype": str(p.get("entry_archetype", "UNSPECIFIED")),
                                 "regime": str(p.get("regime", "")),
                                 "strength_bucket": str(p.get("strength_bucket", "")),
                                 "expected_value_bucket": str(p.get("expected_value_bucket", "")),
@@ -232,6 +239,7 @@ def main(argv=None) -> int:
         all_pattern_rows.append(
             {
                 "strategy_name": item["strategy_name"],
+                "entry_archetype": item["entry_archetype"],
                 "regime": item["regime"],
                 "strength_bucket": item["strength_bucket"],
                 "expected_value_bucket": item["expected_value_bucket"],
@@ -288,10 +296,10 @@ def main(argv=None) -> int:
     recommendations = []
     grouped: Dict[tuple, List[Dict[str, Any]]] = {}
     for row in all_pattern_rows:
-        key = (str(row["strategy_name"]), str(row["regime"]))
+        key = (str(row["strategy_name"]), str(row["entry_archetype"]), str(row["regime"]))
         grouped.setdefault(key, []).append(row)
 
-    for (strategy_name, regime), rows_in_group in grouped.items():
+    for (strategy_name, entry_archetype, regime), rows_in_group in grouped.items():
         group_trades = int(sum_property(rows_in_group, "total_trades"))
         if group_trades <= 0:
             continue
@@ -347,6 +355,7 @@ def main(argv=None) -> int:
         recommendations.append(
             {
                 "strategy_name": strategy_name,
+                "entry_archetype": entry_archetype,
                 "regime": regime,
                 "trades": group_trades,
                 "avg_profit_krw": round(group_avg_profit, 4),

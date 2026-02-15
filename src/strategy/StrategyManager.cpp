@@ -255,10 +255,12 @@ Signal StrategyManager::selectRobustSignal(
             const bool gate_pass =
                 signal.strategy_win_rate >= gate.min_win_rate &&
                 signal.strategy_profit_factor >= gate.min_profit_factor;
-            if (!gate_pass) {
-                continue;
+            if (gate_pass) {
+                score *= 1.05;
+            } else {
+                // Let the engine layer make the final reject decision with full context.
+                score *= 0.86;
             }
-            score *= 1.05;
         }
 
         const int role_count = role_votes[role];
@@ -285,7 +287,7 @@ Signal StrategyManager::selectRobustSignal(
             }
             if ((signal.strategy_win_rate < 0.42 || signal.strategy_profit_factor < 0.95) &&
                 signal.expected_value < 0.0002) {
-                continue;
+                score *= 0.55;
             }
         }
 
@@ -330,11 +332,15 @@ std::vector<Signal> StrategyManager::filterSignals(
         if (has_sample) {
             if (signal.strategy_win_rate < gate.min_win_rate ||
                 signal.strategy_profit_factor < gate.min_profit_factor) {
-                continue;
+                // Soft-pressure only; final risk/quality rejection is done in engine layer.
+                required_strength = std::min(0.95, required_strength + 0.04);
+                required_expected_value += 0.0001;
             }
         }
 
-        if (signal.strength >= required_strength && signal.expected_value >= required_expected_value) {
+        // Keep pre-filter permissive; engine layer applies final EV/edge gates.
+        const double permissive_ev_floor = std::min(0.0, required_expected_value) - 0.00015;
+        if (signal.strength >= required_strength && signal.expected_value >= permissive_ev_floor) {
             filtered.push_back(signal);
         }
     }

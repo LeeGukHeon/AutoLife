@@ -142,6 +142,17 @@ void Config::load(const std::string& path) {
             engine_config_.enable_core_policy_plane = t.value("enable_core_policy_plane", false);
             engine_config_.enable_core_risk_plane = t.value("enable_core_risk_plane", false);
             engine_config_.enable_core_execution_plane = t.value("enable_core_execution_plane", false);
+            engine_config_.hostility_ewma_alpha = t.value("hostility_ewma_alpha", 0.14);
+            engine_config_.hostility_hostile_threshold = t.value("hostility_hostile_threshold", 0.62);
+            engine_config_.hostility_severe_threshold = t.value("hostility_severe_threshold", 0.82);
+            engine_config_.hostility_extreme_threshold = t.value("hostility_extreme_threshold", 0.88);
+            engine_config_.hostility_pause_scans = t.value("hostility_pause_scans", 4);
+            engine_config_.hostility_pause_scans_extreme = t.value("hostility_pause_scans_extreme", 6);
+            engine_config_.hostility_pause_recent_sample_min = t.value("hostility_pause_recent_sample_min", 10);
+            engine_config_.hostility_pause_recent_expectancy_krw = t.value("hostility_pause_recent_expectancy_krw", 0.0);
+            engine_config_.hostility_pause_recent_win_rate = t.value("hostility_pause_recent_win_rate", 0.40);
+            engine_config_.backtest_hostility_pause_candles = t.value("backtest_hostility_pause_candles", 36);
+            engine_config_.backtest_hostility_pause_candles_extreme = t.value("backtest_hostility_pause_candles_extreme", 60);
 
             if (t.contains("enabled_strategies")) {
                 engine_config_.enabled_strategies = t["enabled_strategies"].get<std::vector<std::string>>();

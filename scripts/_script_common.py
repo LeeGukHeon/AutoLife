@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
+import contextlib
 import json
+import os
 import pathlib
 import subprocess
+import time
 from dataclasses import dataclass
-from typing import Any, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 
 @dataclass
@@ -75,13 +78,74 @@ def find_latest_log(log_dir: pathlib.Path, pattern: str = "autolife*.log") -> Op
     return max(items, key=lambda p: p.stat().st_mtime)
 
 
-def run_command(command: List[str], cwd: Optional[pathlib.Path] = None) -> CommandResult:
+def run_command(
+    command: List[str],
+    cwd: Optional[pathlib.Path] = None,
+    env: Optional[Dict[str, str]] = None,
+) -> CommandResult:
     proc = subprocess.run(
         command,
         cwd=str(cwd) if cwd else None,
+        env=env,
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="ignore",
     )
     return CommandResult(exit_code=int(proc.returncode), stdout=proc.stdout or "", stderr=proc.stderr or "")
+
+
+@contextlib.contextmanager
+def verification_lock(
+    lock_path: pathlib.Path,
+    timeout_sec: int = 1800,
+    stale_sec: int = 4 * 60 * 60,
+    poll_sec: float = 1.0,
+):
+    """
+    Cross-process lock using exclusive lock-file creation.
+    Nested calls in the same process tree are bypassed via env marker.
+    """
+    marker = "AUTOLIFE_VERIFICATION_LOCK_HELD"
+    if os.environ.get(marker) == "1":
+        yield
+        return
+
+    ensure_parent_directory(lock_path)
+    start = time.time()
+    fd = None
+    while True:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            payload = f"pid={os.getpid()} acquired_at={int(time.time())}\n"
+            os.write(fd, payload.encode("utf-8", errors="ignore"))
+            break
+        except FileExistsError:
+            try:
+                st = lock_path.stat()
+                if (time.time() - st.st_mtime) > float(stale_sec):
+                    lock_path.unlink(missing_ok=True)
+                    continue
+            except Exception:
+                pass
+            if (time.time() - start) >= float(timeout_sec):
+                raise TimeoutError(f"Timed out waiting for verification lock: {lock_path}")
+            time.sleep(max(0.1, float(poll_sec)))
+
+    prev = os.environ.get(marker)
+    os.environ[marker] = "1"
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop(marker, None)
+        else:
+            os.environ[marker] = prev
+        try:
+            if fd is not None:
+                os.close(fd)
+        finally:
+            try:
+                lock_path.unlink(missing_ok=True)
+            except Exception:
+                pass

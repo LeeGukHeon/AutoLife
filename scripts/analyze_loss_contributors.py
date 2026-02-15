@@ -30,6 +30,7 @@ def parse_args(argv=None):
         "-OutputStrategyCsv",
         default="./build/Release/logs/loss_contributor_by_strategy.csv",
     )
+    parser.add_argument("--max-workers", "-MaxWorkers", type=int, default=4)
     return parser.parse_args(argv)
 
 
@@ -42,7 +43,9 @@ def market_label_from_dataset(dataset_file_name: str) -> str:
 
 
 def invoke_backtest_json(exe_file, dataset_path):
-    result = run_command([str(exe_file), "--backtest", str(dataset_path), "--json"])
+    env = os.environ.copy()
+    env["AUTOLIFE_DISABLE_ADAPTIVE_STATE_IO"] = "1"
+    result = run_command([str(exe_file), "--backtest", str(dataset_path), "--json"], env=env)
     return parse_last_json_line(result.stdout + "\n" + result.stderr)
 
 
@@ -152,7 +155,9 @@ def main(argv=None) -> int:
             pending_runs.append((dataset_name, dataset_path))
 
         if pending_runs:
-            max_workers = max(1, min(len(pending_runs), os.cpu_count() or 4))
+            cpu_bound = os.cpu_count() or 4
+            configured = args.max_workers if args.max_workers > 0 else cpu_bound
+            max_workers = max(1, min(len(pending_runs), cpu_bound, configured))
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
                 futures = {
                     pool.submit(invoke_backtest_json, exe_path, dataset_path): dataset_name

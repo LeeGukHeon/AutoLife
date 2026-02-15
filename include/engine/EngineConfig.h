@@ -52,6 +52,17 @@ struct EngineConfig {
     bool enable_core_policy_plane = false;
     bool enable_core_risk_plane = false;
     bool enable_core_execution_plane = false;
+    double hostility_ewma_alpha = 0.14;
+    double hostility_hostile_threshold = 0.62;
+    double hostility_severe_threshold = 0.82;
+    double hostility_extreme_threshold = 0.88;
+    int hostility_pause_scans = 4;
+    int hostility_pause_scans_extreme = 6;
+    int hostility_pause_recent_sample_min = 10;
+    double hostility_pause_recent_expectancy_krw = 0.0;
+    double hostility_pause_recent_win_rate = 0.40;
+    int backtest_hostility_pause_candles = 36;
+    int backtest_hostility_pause_candles_extreme = 60;
 
     std::vector<std::string> enabled_strategies;
 
