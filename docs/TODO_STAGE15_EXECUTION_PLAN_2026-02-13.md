@@ -789,6 +789,37 @@ The system must:
   - next:
     - move edge baseline calibration ownership from runtime micro-shifts to candidate config/tuning baseline (`min_expected_edge_pct`) sweep with holdout guardrails.
 
+- Stage-2.22 update (2026-02-17):
+  - tuning ownership shift for edge baseline floor implemented:
+    - `tune_candidate_gate_trade_density.py` now overrides `risk_gate_focus` from holdout recommendation mapping when recommendation is explicit (e.g. `hold_candidate_calibrate_risk_gate_edge_baseline_floor`).
+    - new bottleneck family added:
+      - `risk_gate_edge_baseline_floor_sweep`
+    - family behavior:
+      - lowers `min_expected_edge_pct` in bounded variants
+      - simultaneously raises RR/PF/expectancy guard fields to reduce holdout RR-regression risk
+      - keeps hostile-regime avoidance flags enabled
+    - bottleneck priority scoring updated:
+      - `edge_baseline_floor` now uses a balanced quality/relax mix instead of pure quality-bias ranking.
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 6 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 3 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache` completed
+  - latest readout (`candidate_trade_density_tuning_summary.json`):
+    - bottleneck context:
+      - `top_group=risk_gate` (`source=holdout_recommendation_override`)
+      - `risk_gate_focus=entry_quality_edge_base` (`source=holdout_recommendation_override`)
+    - scenario family counts:
+      - `risk_gate_edge_baseline_floor_sweep:6`
+    - generated sweep examples:
+      - `scenario_quality_focus_004`: `edge=0.0008`, `rr=1.27`
+      - `scenario_quality_focus_000`: `edge=0.0009`, `rr=1.33`
+      - `scenario_quality_focus_002`: `edge=0.0012`, `rr=1.45`
+    - best combo: `scenario_quality_focus_004`
+  - effect:
+    - edge-baseline 개선 책임이 runtime 미세 보정보다 tuning sweep 경로로 명확히 이동됨.
+  - next:
+    - apply best tuned edge-baseline candidate to build config and re-run train/validation/holdout cycle to measure `blocked_risk_gate_entry_quality_edge_base` delta on realdata split.
+
 2. Expectancy-first improvement loop
 - Optimize for:
   - `avg_expectancy_krw`,
