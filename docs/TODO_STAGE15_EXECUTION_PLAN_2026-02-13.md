@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-16 (overfit guard maintained + edge ownership split)
+Last updated: 2026-02-17 (second-stage confirmation consistency calibration)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -849,6 +849,47 @@ The system must:
     - primary bottleneck moved from risk-gate edge baseline ownership to `second_stage_confirmation`.
   - next:
     - calibrate second-stage confirmation margins (`rr_margin`, `edge_margin`) with hostility/quality-aware guardrails, while preserving the improved edge-base counts.
+
+- Stage-2.24 update (2026-02-17):
+  - second-stage confirmation consistency calibration implemented:
+    - runtime ownership updated in:
+      - `src/runtime/BacktestRuntime.cpp`
+      - `src/runtime/LiveTradingRuntime.cpp`
+    - baseline confirmation margins adjusted:
+      - `min_rr_margin: 0.05 -> 0.045`
+      - `min_edge_margin: max(0.00008, cost*0.12) -> max(0.00007, cost*0.11)`
+    - dynamic confirmation calibration added:
+      - hostility/quality pressure model (`hostility_pressure`, `quality_conf`)
+      - bounded tighten/relief scaling with existing regime/history/liquidity context preserved
+      - gate-pressure coupling with pre-tightened `rr_gate` / `edge_gate`
+    - anti-overfit guardrails added to relief path:
+      - expected-value/liquidity hostile clamps
+      - weak strategy evidence clamps (`win_rate`, `profit_factor`, sample guard)
+      - alpha fallback low-EV clamp
+      - final clamps remain bounded (`rr: 0.015~0.24`, `edge: 0.00003~0.00050`)
+  - verification:
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full`):
+    - train: `pf=0.7289`, `trades=132.0`, `exp=-7.94`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1601`
+    - validation: `pf=0.5028`, `trades=172.0`, `exp=-7.6628`, top risk=`blocked_second_stage_confirmation:1180`
+    - holdout: `pf=0.4557`, `trades=149.3333`, `exp=-7.8552`, top risk=`blocked_second_stage_confirmation:1715`
+    - promotion recommendation: `hold_candidate_calibrate_second_stage_confirmation_consistency`
+  - risk-gate breakdown snapshot:
+    - validation: `blocked_second_stage_confirmation=1180`, `edge_base=316`, `rr_adaptive_regime=126`
+    - holdout: `blocked_second_stage_confirmation=1715`, `edge_base=256`, `rr_adaptive_regime=796`
+  - tuning context check:
+    - top group=`signal_generation` (source=`live`)
+    - risk gate focus=`second_stage_confirmation`
+    - scenario family counts=`{"signal_generation_boost":1}`
+  - effect:
+    - second-stage confirmation remains dominant on validation/holdout and is now the primary ownership target.
+    - edge-base and adaptive-rr regime counts remain lower than pre-2.23 baseline, so regression pressure stayed contained.
+  - next:
+    - split second-stage confirmation ownership into explicit reason buckets (RR margin shortfall vs edge margin shortfall vs hostile safety adders) before additional threshold movement.
 
 2. Expectancy-first improvement loop
 - Optimize for:

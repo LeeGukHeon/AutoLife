@@ -1004,8 +1004,8 @@ bool passesSecondStageEntryConfirmation(
     }
 
     const double round_trip_cost_pct = computeEffectiveRoundTripCostPct(signal, cfg);
-    double min_rr_margin = 0.05;
-    double min_edge_margin = std::max(0.00008, round_trip_cost_pct * 0.12);
+    double min_rr_margin = 0.045;
+    double min_edge_margin = std::max(0.00007, round_trip_cost_pct * 0.11);
 
     if (signal.market_regime == analytics::MarketRegime::HIGH_VOLATILITY ||
         signal.market_regime == analytics::MarketRegime::TRENDING_DOWN) {
@@ -1038,8 +1038,90 @@ bool passesSecondStageEntryConfirmation(
         min_edge_margin -= 0.00002;
     }
 
-    min_rr_margin = std::clamp(min_rr_margin, 0.02, 0.22);
-    min_edge_margin = std::clamp(min_edge_margin, 0.00004, 0.00045);
+    const bool hostile_regime =
+        signal.market_regime == analytics::MarketRegime::HIGH_VOLATILITY ||
+        signal.market_regime == analytics::MarketRegime::TRENDING_DOWN;
+    const bool favorable_regime =
+        signal.market_regime == analytics::MarketRegime::TRENDING_UP ||
+        signal.market_regime == analytics::MarketRegime::RANGING;
+
+    double hostility_pressure = 0.0;
+    if (hostile_regime) {
+        hostility_pressure += 0.45;
+    }
+    if (signal.liquidity_score > 0.0 && signal.liquidity_score < 58.0) {
+        hostility_pressure += std::clamp((58.0 - signal.liquidity_score) / 38.0, 0.0, 0.30);
+    }
+    if (signal.strategy_trade_count >= std::max(8, cfg.min_strategy_trades_for_ev / 2)) {
+        if (signal.strategy_win_rate < 0.44) {
+            hostility_pressure += 0.12;
+        }
+        if (signal.strategy_profit_factor > 0.0 && signal.strategy_profit_factor < 0.95) {
+            hostility_pressure += 0.12;
+        }
+    }
+
+    double quality_conf = 0.0;
+    if (favorable_regime) {
+        quality_conf += 0.18;
+    }
+    quality_conf += std::clamp((signal.strength - 0.64) / 0.22, 0.0, 1.0) * 0.30;
+    quality_conf += std::clamp((signal.liquidity_score - 55.0) / 20.0, 0.0, 1.0) * 0.22;
+    quality_conf += std::clamp((signal.expected_value - 0.0004) / 0.0011, 0.0, 1.0) * 0.20;
+    if (signal.strategy_trade_count >= std::max(10, cfg.min_strategy_trades_for_ev / 2) &&
+        signal.strategy_win_rate >= 0.53 &&
+        signal.strategy_profit_factor >= 1.03) {
+        quality_conf += 0.15;
+    }
+    if (signal.strategy_trade_count >= std::max(14, cfg.min_strategy_trades_for_ev / 2) &&
+        signal.strategy_win_rate >= 0.58 &&
+        signal.strategy_profit_factor >= 1.10) {
+        quality_conf += 0.10;
+    }
+
+    hostility_pressure = std::clamp(hostility_pressure, 0.0, 1.0);
+    quality_conf = std::clamp(quality_conf, 0.0, 1.0);
+    double relief_scale = std::clamp(quality_conf - (0.70 * hostility_pressure), 0.0, 1.0);
+    const double tighten_scale = std::clamp(hostility_pressure - (0.55 * quality_conf), 0.0, 1.0);
+    if (signal.expected_value < 0.00075) {
+        relief_scale *= 0.55;
+    }
+    if (signal.liquidity_score > 0.0 && signal.liquidity_score < 58.0) {
+        relief_scale *= 0.70;
+    }
+    if (hostile_regime) {
+        relief_scale *= 0.35;
+    }
+    if (signal.strategy_trade_count >= std::max(10, cfg.min_strategy_trades_for_ev / 2) &&
+        (signal.strategy_win_rate < 0.50 ||
+         (signal.strategy_profit_factor > 0.0 && signal.strategy_profit_factor < 1.00))) {
+        relief_scale *= 0.65;
+    }
+    if (signal.reason == "alpha_head_fallback_candidate" && signal.expected_value < 0.0009) {
+        relief_scale *= 0.75;
+    }
+    relief_scale = std::clamp(relief_scale, 0.0, 1.0);
+
+    min_rr_margin += (0.050 * tighten_scale);
+    min_edge_margin += (0.00010 * tighten_scale);
+    min_rr_margin -= (0.028 * relief_scale);
+    min_edge_margin -= (0.000045 * relief_scale);
+
+    const double rr_gate_pressure = std::clamp(
+        (rr_gate - cfg.min_reward_risk) / 0.40,
+        0.0,
+        1.0
+    );
+    const double edge_gate_pressure = std::clamp(
+        (edge_gate - cfg.min_expected_edge_pct) / 0.0010,
+        0.0,
+        1.0
+    );
+    min_rr_margin -= (0.010 * relief_scale * rr_gate_pressure);
+    min_edge_margin -= (0.000020 * relief_scale * edge_gate_pressure);
+
+    min_rr_margin = std::clamp(min_rr_margin, 0.015, 0.24);
+    min_edge_margin = std::clamp(min_edge_margin, 0.00003, 0.00050);
 
     const double rr_margin = reward_risk_ratio - rr_gate;
     const double edge_margin = calibrated_expected_edge_pct - edge_gate;
