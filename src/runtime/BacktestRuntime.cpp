@@ -1963,6 +1963,12 @@ void BacktestEngine::processCandle(const Candle& candle) {
             const bool alpha_head_fallback_candidate =
                 isAlphaHeadFallbackCandidate(best_signal, alpha_head_mode);
             const double history_penalty_scale = alpha_head_fallback_candidate ? 0.45 : 1.0;
+            const bool favorable_recovery_signal =
+                no_entry_streak_candles_ >= 45 &&
+                (best_signal.market_regime == analytics::MarketRegime::TRENDING_UP ||
+                 best_signal.market_regime == analytics::MarketRegime::RANGING) &&
+                best_signal.strength >= 0.72 &&
+                best_signal.liquidity_score >= 60.0;
             bool strategy_ev_ok = true;
             double adaptive_rr_add_history = 0.0;
             double adaptive_rr_add_regime = 0.0;
@@ -2072,12 +2078,6 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     rr_band_add *= (history_penalty_scale * history_confidence);
                     edge_band_add *= (history_penalty_scale * history_confidence);
 
-                    const bool favorable_recovery_signal =
-                        no_entry_streak_candles_ >= 45 &&
-                        (best_signal.market_regime == analytics::MarketRegime::TRENDING_UP ||
-                         best_signal.market_regime == analytics::MarketRegime::RANGING) &&
-                        best_signal.strength >= 0.72 &&
-                        best_signal.liquidity_score >= 60.0;
                     if (favorable_recovery_signal) {
                         rr_band_add *= 0.88;
                         edge_band_add *= 0.88;
@@ -2102,44 +2102,91 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     if (exp_krw < -20.0 || (wr < 0.30 && pf < 0.78)) {
                         markPatternBlockOrSoften(stat.trades, exp_krw, wr, pf);
                     }
-                    if (stat.trades >= 12 &&
-                        exp_krw < -15.0 &&
-                        (wr < 0.40 || pf < 0.90)) {
-                        required_strength_floor = std::max(required_strength_floor, 0.62);
-                        addAdaptiveRegime(
-                            (0.20 * history_penalty_scale),
-                            (0.0003 * history_penalty_scale)
-                        );
-                    }
                     if (stat.trades >= 18 &&
                         exp_krw < -22.0 &&
                         wr < 0.20) {
                         markPatternBlockOrSoften(stat.trades, exp_krw, wr, pf);
                     }
+                    const double regime_confidence = std::clamp(
+                        (static_cast<double>(stat.trades) - 6.0) / 22.0,
+                        0.30,
+                        1.0
+                    );
+                    const double regime_scale = history_penalty_scale * regime_confidence;
+                    double rr_band_add = 0.0;
+                    double edge_band_add = 0.0;
+
+                    if (wr < 0.34) {
+                        rr_band_add += 0.17;
+                        edge_band_add += 0.00030;
+                    } else if (wr < 0.42) {
+                        rr_band_add += 0.11;
+                        edge_band_add += 0.00020;
+                    } else if (wr < 0.48) {
+                        rr_band_add += 0.06;
+                        edge_band_add += 0.00011;
+                    } else if (wr < 0.52) {
+                        rr_band_add += 0.03;
+                        edge_band_add += 0.00005;
+                    }
+
+                    if (pf < 0.82) {
+                        rr_band_add += 0.15;
+                        edge_band_add += 0.00028;
+                    } else if (pf < 0.92) {
+                        rr_band_add += 0.10;
+                        edge_band_add += 0.00018;
+                    } else if (pf < 1.00) {
+                        rr_band_add += 0.05;
+                        edge_band_add += 0.00009;
+                    } else if (pf < 1.05) {
+                        rr_band_add += 0.02;
+                        edge_band_add += 0.00004;
+                    }
+
+                    if (exp_krw < -25.0) {
+                        rr_band_add += 0.14;
+                        edge_band_add += 0.00024;
+                    } else if (exp_krw < -12.0) {
+                        rr_band_add += 0.09;
+                        edge_band_add += 0.00015;
+                    } else if (exp_krw < 0.0) {
+                        rr_band_add += 0.04;
+                        edge_band_add += 0.00007;
+                    }
+
+                    if (stat.trades >= 12 &&
+                        exp_krw < -15.0 &&
+                        (wr < 0.40 || pf < 0.90)) {
+                        required_strength_floor = std::max(required_strength_floor, 0.62);
+                    }
+
                     if (exp_krw < 0.0) {
-                        required_strength_floor += std::clamp((-exp_krw) / 2500.0, 0.0, 0.08) * history_penalty_scale;
-                        addAdaptiveRegime(
-                            std::clamp((-exp_krw) / 1800.0, 0.0, 0.20) * history_penalty_scale,
-                            std::clamp((-exp_krw) / 200000.0, 0.0, 0.0004) * history_penalty_scale
-                        );
+                        required_strength_floor += std::clamp((-exp_krw) / 3200.0, 0.0, 0.06) * regime_scale;
                     } else if (exp_krw > 8.0 && wr >= 0.58 && pf >= 1.15) {
-                        required_strength_floor -= 0.02;
-                        addAdaptiveRegime(-0.08, -0.00015);
+                        required_strength_floor -= 0.015;
+                        rr_band_add -= 0.05;
+                        edge_band_add -= 0.00009;
                     }
                     if (wr < 0.42) {
-                        required_strength_floor += (0.03 * history_penalty_scale);
-                        addAdaptiveRegime(
-                            (0.10 * history_penalty_scale),
-                            (0.0002 * history_penalty_scale)
-                        );
+                        required_strength_floor += (0.018 * regime_scale);
                     }
                     if (pf < 0.95) {
-                        required_strength_floor += (0.02 * history_penalty_scale);
-                        addAdaptiveRegime(
-                            (0.08 * history_penalty_scale),
-                            (0.0002 * history_penalty_scale)
-                        );
+                        required_strength_floor += (0.014 * regime_scale);
                     }
+
+                    rr_band_add *= regime_scale;
+                    edge_band_add *= regime_scale;
+                    if (favorable_recovery_signal && rr_band_add > 0.0) {
+                        rr_band_add *= 0.92;
+                        edge_band_add *= 0.92;
+                    }
+
+                    const double rr_band_cap = alpha_head_fallback_candidate ? 0.22 : 0.30;
+                    const double edge_band_cap = alpha_head_fallback_candidate ? 0.00040 : 0.00056;
+                    rr_band_add = std::clamp(rr_band_add, -0.08, rr_band_cap);
+                    edge_band_add = std::clamp(edge_band_add, -0.00014, edge_band_cap);
+                    addAdaptiveRegime(rr_band_add, edge_band_add);
                 }
             }
             auto market_regime_it = market_strategy_regime_edge.find(
@@ -2159,22 +2206,63 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     if (exp_krw < -40.0 && wr < 0.25 && pf < 0.75) {
                         markPatternBlockOrSoften(stat.trades, exp_krw, wr, pf);
                     }
-                    if (exp_krw < -20.0 && wr < 0.35 && pf < 0.85) {
-                        required_strength_floor += (0.05 * history_penalty_scale);
-                        addAdaptiveRegime(
-                            (0.15 * history_penalty_scale),
-                            (0.0003 * history_penalty_scale)
-                        );
-                    } else if (exp_krw < -10.0) {
-                        required_strength_floor += (0.02 * history_penalty_scale);
-                        addAdaptiveRegime(
-                            (0.08 * history_penalty_scale),
-                            (0.00015 * history_penalty_scale)
-                        );
-                    } else if (exp_krw > 10.0 && wr >= 0.60 && pf >= 1.20) {
-                        required_strength_floor -= 0.02;
-                        addAdaptiveRegime(-0.06, -0.0001);
+                    const double market_confidence = std::clamp(
+                        (static_cast<double>(stat.trades) - 4.0) / 18.0,
+                        0.30,
+                        1.0
+                    );
+                    const double market_scale = history_penalty_scale * market_confidence;
+                    double rr_band_add = 0.0;
+                    double edge_band_add = 0.0;
+
+                    if (wr < 0.30) {
+                        rr_band_add += 0.10;
+                        edge_band_add += 0.00018;
+                    } else if (wr < 0.38) {
+                        rr_band_add += 0.06;
+                        edge_band_add += 0.00010;
                     }
+
+                    if (pf < 0.80) {
+                        rr_band_add += 0.10;
+                        edge_band_add += 0.00017;
+                    } else if (pf < 0.90) {
+                        rr_band_add += 0.06;
+                        edge_band_add += 0.00010;
+                    }
+
+                    if (exp_krw < -30.0) {
+                        rr_band_add += 0.12;
+                        edge_band_add += 0.00020;
+                    } else if (exp_krw < -15.0) {
+                        rr_band_add += 0.07;
+                        edge_band_add += 0.00012;
+                    } else if (exp_krw < -5.0) {
+                        rr_band_add += 0.03;
+                        edge_band_add += 0.00005;
+                    }
+
+                    if (exp_krw < -20.0 && wr < 0.35 && pf < 0.85) {
+                        required_strength_floor += (0.04 * market_scale);
+                    } else if (exp_krw < -10.0) {
+                        required_strength_floor += (0.015 * market_scale);
+                    } else if (exp_krw > 10.0 && wr >= 0.60 && pf >= 1.20) {
+                        required_strength_floor -= 0.015;
+                        rr_band_add -= 0.04;
+                        edge_band_add -= 0.00007;
+                    }
+
+                    rr_band_add *= market_scale;
+                    edge_band_add *= market_scale;
+                    if (favorable_recovery_signal && rr_band_add > 0.0) {
+                        rr_band_add *= 0.94;
+                        edge_band_add *= 0.94;
+                    }
+                    const double rr_band_cap = alpha_head_fallback_candidate ? 0.14 : 0.18;
+                    const double edge_band_cap = alpha_head_fallback_candidate ? 0.00025 : 0.00034;
+                    rr_band_add = std::clamp(rr_band_add, -0.06, rr_band_cap);
+                    edge_band_add = std::clamp(edge_band_add, -0.00010, edge_band_cap);
+                    addAdaptiveRegime(rr_band_add, edge_band_add);
                 }
             }
             applyArchetypeRiskAdjustments(
@@ -2184,6 +2272,14 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 adaptive_edge_add_regime,
                 regime_pattern_block
             );
+            if (favorable_recovery_signal && adaptive_rr_add_regime > 0.0) {
+                adaptive_rr_add_regime *= 0.94;
+                adaptive_edge_add_regime *= 0.94;
+            }
+            const double regime_rr_global_cap = alpha_head_fallback_candidate ? 0.30 : 0.38;
+            const double regime_edge_global_cap = alpha_head_fallback_candidate ? 0.00055 : 0.00082;
+            adaptive_rr_add_regime = std::clamp(adaptive_rr_add_regime, -0.12, regime_rr_global_cap);
+            adaptive_edge_add_regime = std::clamp(adaptive_edge_add_regime, -0.00020, regime_edge_global_cap);
             if (alpha_head_fallback_candidate) {
                 required_strength_floor = std::max(0.46, required_strength_floor - 0.05);
             }
@@ -2265,12 +2361,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     tuned_cfg.min_expected_edge_pct - edge_relax
                 );
             }
-            if (core_risk_enabled &&
-                no_entry_streak_candles_ >= 45 &&
-                (best_signal.market_regime == analytics::MarketRegime::TRENDING_UP ||
-                 best_signal.market_regime == analytics::MarketRegime::RANGING) &&
-                best_signal.strength >= 0.72 &&
-                best_signal.liquidity_score >= 60.0) {
+            if (core_risk_enabled && favorable_recovery_signal) {
                 // Entry-frequency recovery path: in favorable regimes, ease gates slightly
                 // only after prolonged no-entry streak and only for high-quality signals.
                 tuned_cfg.min_reward_risk = std::max(1.05, tuned_cfg.min_reward_risk - 0.10);

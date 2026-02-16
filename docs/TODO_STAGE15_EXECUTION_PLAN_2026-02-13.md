@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-16 (overfit guard maintained + history adaptive RR band calibration)
+Last updated: 2026-02-16 (overfit guard maintained + regime adaptive RR band calibration)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -645,6 +645,32 @@ The system must:
     - promotion recommendation: `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
   - next:
     - recalibrate regime/archetype adaptive RR adders with the same anti-overfit discipline (banded + evidence-weighted + capped).
+
+- Stage-2.17 update (2026-02-16):
+  - regime adaptive RR calibration implemented:
+    - `strategy_regime_edge`/`market_strategy_regime_edge` penalty logic migrated to:
+      - WR/PF/Expectancy tiered bands
+      - evidence-weighted scaling by trade count
+      - favorable recovery dampener
+      - bounded adders (positive/negative clamp)
+    - added global cap after archetype adjustments:
+      - prevents regime+archetype adaptive RR from dominating total gate lift.
+    - unified favorable-recovery condition reused across:
+      - history/regime adders
+      - final no-entry recovery gate relaxation.
+  - verification:
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full`):
+    - train: `pf=0.5469`, `trades=119.5714`, `exp=-8.5510`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:2052`
+    - validation: `pf=0.5119`, `trades=166.5`, `exp=-7.5572`, top risk=`blocked_risk_gate_entry_quality_edge:859`
+    - holdout: `pf=0.5005`, `trades=135.6667`, `exp=-7.4354`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:3067`
+    - promotion recommendation: `hold_candidate_calibrate_risk_gate_entry_quality_edge`
+  - next:
+    - edge gate(`min_expected_edge_pct`)를 adaptive ownership(history/regime/base)까지 분해해 validation top bottleneck을 직접 타격한다.
 
 2. Expectancy-first improvement loop
 - Optimize for:
