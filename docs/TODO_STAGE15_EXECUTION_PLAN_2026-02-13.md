@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-16 (overfit guard maintained + regime adaptive RR band calibration)
+Last updated: 2026-02-16 (overfit guard maintained + edge ownership split)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -671,6 +671,41 @@ The system must:
     - promotion recommendation: `hold_candidate_calibrate_risk_gate_entry_quality_edge`
   - next:
     - edge gate(`min_expected_edge_pct`)를 adaptive ownership(history/regime/base)까지 분해해 validation top bottleneck을 직접 타격한다.
+
+- Stage-2.18 update (2026-02-16):
+  - edge ownership split implemented:
+    - `entry_quality_edge` now decomposes into:
+      - `blocked_risk_gate_entry_quality_edge_base`
+      - `blocked_risk_gate_entry_quality_edge_adaptive`
+      - `blocked_risk_gate_entry_quality_edge_adaptive_history`
+      - `blocked_risk_gate_entry_quality_edge_adaptive_regime`
+      - `blocked_risk_gate_entry_quality_edge_adaptive_mixed`
+    - runtime keeps aggregate `blocked_risk_gate_entry_quality_edge` counter for backward compatibility.
+  - reporting/routing sync:
+    - `entry_funnel` JSON + console output includes edge base/adaptive/source counters.
+    - matrix top-component selection excludes:
+      - `blocked_risk_gate_entry_quality_edge`
+      - `blocked_risk_gate_entry_quality_edge_adaptive`
+    - recommendation mapping added:
+      - `hold_candidate_calibrate_risk_gate_edge_baseline_floor`
+      - `hold_candidate_calibrate_risk_gate_edge_adaptive_adders`
+      - `hold_candidate_calibrate_risk_gate_edge_adaptive_history_adders`
+      - `hold_candidate_calibrate_risk_gate_edge_adaptive_regime_adders`
+      - `hold_candidate_calibrate_risk_gate_edge_adaptive_mixed_adders`
+  - verification:
+    - `python -m py_compile scripts/generate_strategy_rejection_taxonomy_report.py scripts/run_profitability_matrix.py scripts/run_realdata_candidate_loop.py scripts/run_candidate_train_eval_cycle.py scripts/tune_candidate_gate_trade_density.py` PASS
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full`):
+    - train: `pf=0.5469`, `trades=119.5714`, `exp=-8.5510`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:2052`
+    - validation: `pf=0.5119`, `trades=166.5`, `exp=-7.5572`, top risk=`blocked_risk_gate_entry_quality_edge_base:859`
+    - holdout: `pf=0.5005`, `trades=135.6667`, `exp=-7.4354`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:3067`
+    - promotion recommendation: `hold_candidate_calibrate_risk_gate_edge_baseline_floor`
+  - next:
+    - calibrate edge baseline floor conservatively while monitoring holdout RR/edge tradeoff to avoid validation-only overfit.
 
 2. Expectancy-first improvement loop
 - Optimize for:

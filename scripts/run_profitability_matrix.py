@@ -166,6 +166,21 @@ def run_profile_backtests(
                 entry_funnel.get("blocked_risk_gate_entry_quality_rr_adaptive_mixed", 0) or 0
             ),
             "blocked_risk_gate_entry_quality_edge": int(entry_funnel.get("blocked_risk_gate_entry_quality_edge", 0) or 0),
+            "blocked_risk_gate_entry_quality_edge_base": int(
+                entry_funnel.get("blocked_risk_gate_entry_quality_edge_base", 0) or 0
+            ),
+            "blocked_risk_gate_entry_quality_edge_adaptive": int(
+                entry_funnel.get("blocked_risk_gate_entry_quality_edge_adaptive", 0) or 0
+            ),
+            "blocked_risk_gate_entry_quality_edge_adaptive_history": int(
+                entry_funnel.get("blocked_risk_gate_entry_quality_edge_adaptive_history", 0) or 0
+            ),
+            "blocked_risk_gate_entry_quality_edge_adaptive_regime": int(
+                entry_funnel.get("blocked_risk_gate_entry_quality_edge_adaptive_regime", 0) or 0
+            ),
+            "blocked_risk_gate_entry_quality_edge_adaptive_mixed": int(
+                entry_funnel.get("blocked_risk_gate_entry_quality_edge_adaptive_mixed", 0) or 0
+            ),
             "blocked_risk_gate_entry_quality_rr_edge": int(entry_funnel.get("blocked_risk_gate_entry_quality_rr_edge", 0) or 0),
             "blocked_risk_gate_entry_quality_rr_edge_base": int(
                 entry_funnel.get("blocked_risk_gate_entry_quality_rr_edge_base", 0) or 0
@@ -1016,6 +1031,8 @@ def main() -> int:
                 "blocked_risk_gate_entry_quality",
                 "blocked_risk_gate_entry_quality_rr",
                 "blocked_risk_gate_entry_quality_rr_adaptive",
+                "blocked_risk_gate_entry_quality_edge",
+                "blocked_risk_gate_entry_quality_edge_adaptive",
                 "blocked_risk_gate_entry_quality_rr_edge",
                 "blocked_risk_gate_entry_quality_rr_edge_adaptive",
             }

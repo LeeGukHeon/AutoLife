@@ -228,6 +228,16 @@ def build_effective_bottleneck_context(
         risk_gate_focus = "entry_quality_rr_adaptive"
     elif top_risk_gate_component_reason == "blocked_risk_gate_entry_quality_rr":
         risk_gate_focus = "entry_quality_rr"
+    elif top_risk_gate_component_reason == "blocked_risk_gate_entry_quality_edge_base":
+        risk_gate_focus = "entry_quality_edge_base"
+    elif top_risk_gate_component_reason == "blocked_risk_gate_entry_quality_edge_adaptive_history":
+        risk_gate_focus = "entry_quality_edge_adaptive_history"
+    elif top_risk_gate_component_reason == "blocked_risk_gate_entry_quality_edge_adaptive_regime":
+        risk_gate_focus = "entry_quality_edge_adaptive_regime"
+    elif top_risk_gate_component_reason == "blocked_risk_gate_entry_quality_edge_adaptive_mixed":
+        risk_gate_focus = "entry_quality_edge_adaptive_mixed"
+    elif top_risk_gate_component_reason == "blocked_risk_gate_entry_quality_edge_adaptive":
+        risk_gate_focus = "entry_quality_edge_adaptive"
     elif top_risk_gate_component_reason == "blocked_risk_gate_entry_quality_edge":
         risk_gate_focus = "entry_quality_edge"
     elif top_risk_gate_component_reason == "blocked_risk_gate_entry_quality_rr_edge_base":
@@ -356,14 +366,18 @@ def compute_combo_bottleneck_priority_score(combo: Dict[str, Any], context: Dict
         if risk_gate_focus == "entry_quality_invalid_levels":
             # Price-level inconsistency is structural; keep exploration conservative.
             return round((quality_score * 0.92) + (relax_score * 0.08), 6)
-        if risk_gate_focus in {"entry_quality_rr_base", "entry_quality_rr_edge_base"}:
+        if risk_gate_focus in {"entry_quality_rr_base", "entry_quality_edge_base", "entry_quality_rr_edge_base"}:
             return round((quality_score * 0.90) + (relax_score * 0.10), 6)
         if risk_gate_focus in {
             "entry_quality_rr_adaptive",
+            "entry_quality_edge_adaptive",
             "entry_quality_rr_edge_adaptive",
             "entry_quality_rr_adaptive_history",
             "entry_quality_rr_adaptive_regime",
             "entry_quality_rr_adaptive_mixed",
+            "entry_quality_edge_adaptive_history",
+            "entry_quality_edge_adaptive_regime",
+            "entry_quality_edge_adaptive_mixed",
             "entry_quality_rr_edge_adaptive_history",
             "entry_quality_rr_edge_adaptive_regime",
             "entry_quality_rr_edge_adaptive_mixed",
@@ -704,10 +718,14 @@ def adapt_combo_specs_for_bottleneck(
             family = "risk_gate_structure_guard"
         elif risk_gate_focus in {
             "entry_quality_rr_adaptive",
+            "entry_quality_edge_adaptive",
             "entry_quality_rr_edge_adaptive",
             "entry_quality_rr_adaptive_history",
             "entry_quality_rr_adaptive_regime",
             "entry_quality_rr_adaptive_mixed",
+            "entry_quality_edge_adaptive_history",
+            "entry_quality_edge_adaptive_regime",
+            "entry_quality_edge_adaptive_mixed",
             "entry_quality_rr_edge_adaptive_history",
             "entry_quality_rr_edge_adaptive_regime",
             "entry_quality_rr_edge_adaptive_mixed",

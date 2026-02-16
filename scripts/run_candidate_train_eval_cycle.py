@@ -383,6 +383,8 @@ def read_gate_snapshot(report_path: Path) -> Dict[str, Any]:
             "blocked_risk_gate_entry_quality",
             "blocked_risk_gate_entry_quality_rr",
             "blocked_risk_gate_entry_quality_rr_adaptive",
+            "blocked_risk_gate_entry_quality_edge",
+            "blocked_risk_gate_entry_quality_edge_adaptive",
             "blocked_risk_gate_entry_quality_rr_edge",
             "blocked_risk_gate_entry_quality_rr_edge_adaptive",
         }
@@ -891,6 +893,16 @@ def build_promotion_verdict(
                 recommendation = "hold_candidate_calibrate_risk_gate_rr_adaptive_adders"
             elif risk_component == "blocked_risk_gate_entry_quality_rr":
                 recommendation = "hold_candidate_calibrate_risk_gate_entry_quality_rr"
+            elif risk_component == "blocked_risk_gate_entry_quality_edge_base":
+                recommendation = "hold_candidate_calibrate_risk_gate_edge_baseline_floor"
+            elif risk_component == "blocked_risk_gate_entry_quality_edge_adaptive_history":
+                recommendation = "hold_candidate_calibrate_risk_gate_edge_adaptive_history_adders"
+            elif risk_component == "blocked_risk_gate_entry_quality_edge_adaptive_regime":
+                recommendation = "hold_candidate_calibrate_risk_gate_edge_adaptive_regime_adders"
+            elif risk_component == "blocked_risk_gate_entry_quality_edge_adaptive_mixed":
+                recommendation = "hold_candidate_calibrate_risk_gate_edge_adaptive_mixed_adders"
+            elif risk_component == "blocked_risk_gate_entry_quality_edge_adaptive":
+                recommendation = "hold_candidate_calibrate_risk_gate_edge_adaptive_adders"
             elif risk_component == "blocked_risk_gate_entry_quality_edge":
                 recommendation = "hold_candidate_calibrate_risk_gate_entry_quality_edge"
             elif risk_component == "blocked_risk_gate_entry_quality_rr_edge_base":

@@ -266,6 +266,8 @@ def print_report_snapshot(prefix: str, report: Dict[str, Any]) -> None:
                     "blocked_risk_gate_entry_quality",
                     "blocked_risk_gate_entry_quality_rr",
                     "blocked_risk_gate_entry_quality_rr_adaptive",
+                    "blocked_risk_gate_entry_quality_edge",
+                    "blocked_risk_gate_entry_quality_edge_adaptive",
                     "blocked_risk_gate_entry_quality_rr_edge",
                     "blocked_risk_gate_entry_quality_rr_edge_adaptive",
                 }

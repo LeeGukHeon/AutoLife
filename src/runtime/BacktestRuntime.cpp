@@ -839,7 +839,8 @@ struct EntryQualityGateSnapshot {
         InvalidPriceLevels,
         RewardRiskBase,
         RewardRiskAdaptive,
-        ExpectedEdge,
+        ExpectedEdgeBase,
+        ExpectedEdgeAdaptive,
         RewardRiskAndExpectedEdgeBase,
         RewardRiskAndExpectedEdgeAdaptive,
     };
@@ -853,6 +854,7 @@ struct EntryQualityGateSnapshot {
     bool pass = false;
     FailureKind failure = FailureKind::None;
     AdaptiveSource adaptive_rr_source = AdaptiveSource::Unknown;
+    AdaptiveSource adaptive_edge_source = AdaptiveSource::Unknown;
     double reward_risk_ratio = 0.0;
     double calibrated_expected_edge_pct = std::numeric_limits<double>::lowest();
     double reward_risk_gate_base = 0.0;
@@ -867,7 +869,9 @@ EntryQualityGateSnapshot evaluateEntryQualityGate(
     double rr_gate_base,
     double edge_gate_base,
     double rr_adder_history,
-    double rr_adder_regime
+    double rr_adder_regime,
+    double edge_adder_history,
+    double edge_adder_regime
 ) {
     EntryQualityGateSnapshot snapshot;
     snapshot.reward_risk_gate_base = rr_gate_base;
@@ -893,6 +897,7 @@ EntryQualityGateSnapshot evaluateEntryQualityGate(
     const bool rr_ok = snapshot.reward_risk_ratio >= cfg.min_reward_risk;
     const bool rr_base_ok = snapshot.reward_risk_ratio >= rr_gate_base;
     const bool edge_ok = snapshot.calibrated_expected_edge_pct >= cfg.min_expected_edge_pct;
+    const bool edge_base_ok = snapshot.calibrated_expected_edge_pct >= edge_gate_base;
     snapshot.pass = rr_ok && edge_ok;
     if (snapshot.pass) {
         snapshot.failure = EntryQualityGateSnapshot::FailureKind::None;
@@ -905,21 +910,31 @@ EntryQualityGateSnapshot evaluateEntryQualityGate(
             ? EntryQualityGateSnapshot::FailureKind::RewardRiskAdaptive
             : EntryQualityGateSnapshot::FailureKind::RewardRiskBase;
     } else {
-        snapshot.failure = EntryQualityGateSnapshot::FailureKind::ExpectedEdge;
+        snapshot.failure = edge_base_ok
+            ? EntryQualityGateSnapshot::FailureKind::ExpectedEdgeAdaptive
+            : EntryQualityGateSnapshot::FailureKind::ExpectedEdgeBase;
     }
+    const auto classifyAdaptiveSource = [](double history_add, double regime_add) {
+        const double history_positive = std::max(0.0, history_add);
+        const double regime_positive = std::max(0.0, regime_add);
+        if (history_positive <= 1e-9 && regime_positive <= 1e-9) {
+            return EntryQualityGateSnapshot::AdaptiveSource::Unknown;
+        }
+        if (history_positive >= (regime_positive * 1.2)) {
+            return EntryQualityGateSnapshot::AdaptiveSource::History;
+        }
+        if (regime_positive >= (history_positive * 1.2)) {
+            return EntryQualityGateSnapshot::AdaptiveSource::Regime;
+        }
+        return EntryQualityGateSnapshot::AdaptiveSource::Mixed;
+    };
     if (snapshot.failure == EntryQualityGateSnapshot::FailureKind::RewardRiskAdaptive ||
         snapshot.failure == EntryQualityGateSnapshot::FailureKind::RewardRiskAndExpectedEdgeAdaptive) {
-        const double history_add = std::max(0.0, rr_adder_history);
-        const double regime_add = std::max(0.0, rr_adder_regime);
-        if (history_add <= 1e-9 && regime_add <= 1e-9) {
-            snapshot.adaptive_rr_source = EntryQualityGateSnapshot::AdaptiveSource::Unknown;
-        } else if (history_add >= (regime_add * 1.2)) {
-            snapshot.adaptive_rr_source = EntryQualityGateSnapshot::AdaptiveSource::History;
-        } else if (regime_add >= (history_add * 1.2)) {
-            snapshot.adaptive_rr_source = EntryQualityGateSnapshot::AdaptiveSource::Regime;
-        } else {
-            snapshot.adaptive_rr_source = EntryQualityGateSnapshot::AdaptiveSource::Mixed;
-        }
+        snapshot.adaptive_rr_source = classifyAdaptiveSource(rr_adder_history, rr_adder_regime);
+    }
+    if (snapshot.failure == EntryQualityGateSnapshot::FailureKind::ExpectedEdgeAdaptive ||
+        snapshot.failure == EntryQualityGateSnapshot::FailureKind::RewardRiskAndExpectedEdgeAdaptive) {
+        snapshot.adaptive_edge_source = classifyAdaptiveSource(edge_adder_history, edge_adder_regime);
     }
     return snapshot;
 }
@@ -942,8 +957,20 @@ const char* entryQualityFailureReasonCode(const EntryQualityGateSnapshot& snapsh
                 default:
                     return "blocked_risk_gate_entry_quality_rr_adaptive";
             }
-        case EntryQualityGateSnapshot::FailureKind::ExpectedEdge:
-            return "blocked_risk_gate_entry_quality_edge";
+        case EntryQualityGateSnapshot::FailureKind::ExpectedEdgeBase:
+            return "blocked_risk_gate_entry_quality_edge_base";
+        case EntryQualityGateSnapshot::FailureKind::ExpectedEdgeAdaptive:
+            switch (snapshot.adaptive_edge_source) {
+                case EntryQualityGateSnapshot::AdaptiveSource::History:
+                    return "blocked_risk_gate_entry_quality_edge_adaptive_history";
+                case EntryQualityGateSnapshot::AdaptiveSource::Regime:
+                    return "blocked_risk_gate_entry_quality_edge_adaptive_regime";
+                case EntryQualityGateSnapshot::AdaptiveSource::Mixed:
+                    return "blocked_risk_gate_entry_quality_edge_adaptive_mixed";
+                case EntryQualityGateSnapshot::AdaptiveSource::Unknown:
+                default:
+                    return "blocked_risk_gate_entry_quality_edge_adaptive";
+            }
         case EntryQualityGateSnapshot::FailureKind::RewardRiskAndExpectedEdgeBase:
             return "blocked_risk_gate_entry_quality_rr_edge_base";
         case EntryQualityGateSnapshot::FailureKind::RewardRiskAndExpectedEdgeAdaptive:
@@ -2372,6 +2399,8 @@ void BacktestEngine::processCandle(const Candle& candle) {
             }
             double effective_rr_adder_history = 0.0;
             double effective_rr_adder_regime = 0.0;
+            double effective_edge_adder_history = 0.0;
+            double effective_edge_adder_regime = 0.0;
             if (core_risk_enabled) {
                 const double effective_rr_raise = std::max(0.0, tuned_cfg.min_reward_risk - rr_gate_base);
                 const double history_positive = std::max(0.0, adaptive_rr_add_history);
@@ -2380,6 +2409,14 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 if (effective_rr_raise > 1e-9 && positive_sum > 1e-9) {
                     effective_rr_adder_history = effective_rr_raise * (history_positive / positive_sum);
                     effective_rr_adder_regime = effective_rr_raise * (regime_positive / positive_sum);
+                }
+                const double effective_edge_raise = std::max(0.0, tuned_cfg.min_expected_edge_pct - edge_gate_base);
+                const double history_edge_positive = std::max(0.0, adaptive_edge_add_history);
+                const double regime_edge_positive = std::max(0.0, adaptive_edge_add_regime);
+                const double edge_positive_sum = history_edge_positive + regime_edge_positive;
+                if (effective_edge_raise > 1e-12 && edge_positive_sum > 1e-12) {
+                    effective_edge_adder_history = effective_edge_raise * (history_edge_positive / edge_positive_sum);
+                    effective_edge_adder_regime = effective_edge_raise * (regime_edge_positive / edge_positive_sum);
                 }
             }
 
@@ -2396,7 +2433,9 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     rr_gate_base,
                     edge_gate_base,
                     effective_rr_adder_history,
-                    effective_rr_adder_regime
+                    effective_rr_adder_regime,
+                    effective_edge_adder_history,
+                    effective_edge_adder_regime
                 )
                 : EntryQualityGateSnapshot{};
             const bool entry_quality_gate_ok =
@@ -2467,8 +2506,27 @@ void BacktestEngine::processCandle(const Candle& candle) {
                                         break;
                                 }
                                 break;
-                            case EntryQualityGateSnapshot::FailureKind::ExpectedEdge:
+                            case EntryQualityGateSnapshot::FailureKind::ExpectedEdgeBase:
                                 entry_funnel_.blocked_risk_gate_entry_quality_edge++;
+                                entry_funnel_.blocked_risk_gate_entry_quality_edge_base++;
+                                break;
+                            case EntryQualityGateSnapshot::FailureKind::ExpectedEdgeAdaptive:
+                                entry_funnel_.blocked_risk_gate_entry_quality_edge++;
+                                entry_funnel_.blocked_risk_gate_entry_quality_edge_adaptive++;
+                                switch (entry_quality_eval.adaptive_edge_source) {
+                                    case EntryQualityGateSnapshot::AdaptiveSource::History:
+                                        entry_funnel_.blocked_risk_gate_entry_quality_edge_adaptive_history++;
+                                        break;
+                                    case EntryQualityGateSnapshot::AdaptiveSource::Regime:
+                                        entry_funnel_.blocked_risk_gate_entry_quality_edge_adaptive_regime++;
+                                        break;
+                                    case EntryQualityGateSnapshot::AdaptiveSource::Mixed:
+                                        entry_funnel_.blocked_risk_gate_entry_quality_edge_adaptive_mixed++;
+                                        break;
+                                    case EntryQualityGateSnapshot::AdaptiveSource::Unknown:
+                                    default:
+                                        break;
+                                }
                                 break;
                             case EntryQualityGateSnapshot::FailureKind::RewardRiskAndExpectedEdgeBase:
                                 entry_funnel_.blocked_risk_gate_entry_quality_rr_edge++;
