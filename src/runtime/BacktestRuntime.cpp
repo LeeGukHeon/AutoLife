@@ -2359,6 +2359,67 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 tuned_cfg.min_reward_risk = engine_config_.min_reward_risk + rr_add;
                 tuned_cfg.min_expected_edge_pct = engine_config_.min_expected_edge_pct * edge_mul;
             }
+            if (core_risk_enabled) {
+                // Conservative baseline edge-floor calibration:
+                // adjust only in small bounded ranges using broad quality/context signals.
+                const double edge_floor_nominal = tuned_cfg.min_expected_edge_pct;
+                double edge_base_shift = 0.0;
+
+                if (best_signal.market_regime == analytics::MarketRegime::HIGH_VOLATILITY ||
+                    best_signal.market_regime == analytics::MarketRegime::TRENDING_DOWN) {
+                    edge_base_shift += 0.00006;
+                } else if (best_signal.market_regime == analytics::MarketRegime::TRENDING_UP &&
+                           best_signal.strength >= 0.74 &&
+                           best_signal.liquidity_score >= 62.0) {
+                    edge_base_shift -= 0.00004;
+                }
+
+                if (best_signal.liquidity_score > 0.0 && best_signal.liquidity_score < 50.0) {
+                    edge_base_shift += 0.00005;
+                } else if (best_signal.liquidity_score >= 65.0 &&
+                           best_signal.expected_value >= 0.0009) {
+                    edge_base_shift -= 0.00003;
+                }
+
+                auto edge_base_stat_it = strategy_edge.find(best_signal.strategy_name);
+                if (edge_base_stat_it != strategy_edge.end()) {
+                    const auto& stat = edge_base_stat_it->second;
+                    if (stat.trades >= std::max(8, engine_config_.min_strategy_trades_for_ev / 2)) {
+                        const double stat_conf = std::clamp(
+                            (static_cast<double>(stat.trades) - 8.0) / 24.0,
+                            0.35,
+                            1.0
+                        );
+                        const double wr = stat.winRate();
+                        const double pf = stat.profitFactor();
+                        const double exp_krw = stat.expectancy();
+
+                        if (exp_krw >= 6.0 && pf >= 1.10 && wr >= 0.54) {
+                            edge_base_shift -= (0.00007 * stat_conf);
+                        } else if (exp_krw <= -8.0 || (pf < 0.90 && wr < 0.45)) {
+                            edge_base_shift += (0.00008 * stat_conf);
+                        } else if (exp_krw < 0.0 || pf < 1.00) {
+                            edge_base_shift += (0.00004 * stat_conf);
+                        }
+                    }
+                }
+
+                if (favorable_recovery_signal) {
+                    edge_base_shift -= 0.00005;
+                }
+                if (alpha_head_fallback_candidate) {
+                    edge_base_shift = std::max(edge_base_shift, -0.00003);
+                }
+
+                edge_base_shift = std::clamp(edge_base_shift, -0.00012, 0.00014);
+                const double edge_floor_min = std::max(0.00030, edge_floor_nominal * 0.70);
+                const double edge_floor_max = edge_floor_nominal + 0.00018;
+                tuned_cfg.min_expected_edge_pct = std::clamp(
+                    edge_floor_nominal + edge_base_shift,
+                    edge_floor_min,
+                    edge_floor_max
+                );
+            }
             const double rr_gate_base = tuned_cfg.min_reward_risk;
             const double edge_gate_base = tuned_cfg.min_expected_edge_pct;
             if (core_risk_enabled) {

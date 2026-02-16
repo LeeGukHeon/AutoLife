@@ -707,6 +707,33 @@ The system must:
   - next:
     - calibrate edge baseline floor conservatively while monitoring holdout RR/edge tradeoff to avoid validation-only overfit.
 
+- Stage-2.19 update (2026-02-16):
+  - edge baseline floor conservative calibration implemented:
+    - runtime now calibrates baseline `min_expected_edge_pct` before adaptive edge adders.
+    - calibration inputs:
+      - regime and liquidity context
+      - strategy edge stats (`trades`, `win-rate`, `profit-factor`, `expectancy`) with confidence weighting
+      - favorable no-entry recovery and alpha-head fallback guards
+    - anti-overfit guards:
+      - baseline shift clamp: `[-0.00012, +0.00014]`
+      - floor clamp: `[max(0.00030, nominal*0.70), nominal+0.00018]`
+      - bounded adjustments only (no unbounded multiplier expansion)
+  - verification:
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full`):
+    - train: `pf=0.6182`, `trades=119.5714`, `exp=-8.1679`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:2087`
+    - validation: `pf=0.5206`, `trades=170.5`, `exp=-7.4600`, top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_regime:872`
+    - holdout: `pf=0.5005`, `trades=135.6667`, `exp=-7.4354`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:3063`
+    - promotion recommendation: `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+  - effect:
+    - validation top bottleneck moved from `blocked_risk_gate_entry_quality_edge_base` (Stage-2.18) to `blocked_risk_gate_entry_quality_rr_edge_adaptive_regime`.
+  - next:
+    - calibrate regime adaptive RR/edge adders jointly with the same bounded evidence-weighted policy.
+
 2. Expectancy-first improvement loop
 - Optimize for:
   - `avg_expectancy_krw`,
