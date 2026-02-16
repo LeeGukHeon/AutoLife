@@ -123,6 +123,7 @@ private:
     int no_entry_streak_candles_ = 0;   // Regime-aware minimum activation helper
     double market_hostility_ewma_ = 0.0;
     int hostile_entry_pause_candles_ = 0;
+    bool was_open_position_prev_candle_ = false; // Count open-position skip once per holding episode
     struct PendingBacktestOrder {
         Order order;
         double requested_price = 0.0;

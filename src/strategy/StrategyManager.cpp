@@ -997,14 +997,21 @@ std::vector<Signal> StrategyManager::filterSignalsWithDiagnostics(
         double required_strength = min_strength;
         double required_expected_value = min_expected_value;
 
+        // Core ownership mode keeps manager prefilter permissive and delegates
+        // final edge/risk rejection to engine/core quality gates.
+        if (core_signal_ownership) {
+            required_strength = std::max(0.0, required_strength - 0.02);
+            required_expected_value = std::min(required_expected_value, -0.00005);
+        }
+
         if (policy == RegimePolicy::BLOCK && core_signal_ownership) {
-            required_strength = std::min(0.95, required_strength + 0.09);
-            required_expected_value += 0.00025;
+            required_strength = std::min(0.95, required_strength + 0.07);
+            required_expected_value += 0.00012;
         }
 
         if (effective_policy == RegimePolicy::HOLD) {
             required_strength = std::min(0.95, required_strength + 0.07);
-            required_expected_value += 0.0002;
+            required_expected_value += core_signal_ownership ? 0.00012 : 0.00020;
             if (signal.strategy_trade_count > 0 && signal.strategy_trade_count < 15) {
                 required_strength = std::min(0.95, required_strength + 0.03);
             }
@@ -1012,9 +1019,9 @@ std::vector<Signal> StrategyManager::filterSignalsWithDiagnostics(
 
         if (off_trend_regime) {
             required_strength = std::min(0.95, required_strength + 0.06);
-            required_expected_value += 0.00015;
+            required_expected_value += core_signal_ownership ? 0.00008 : 0.00015;
             if (regime == analytics::MarketRegime::RANGING && signal.liquidity_score < 60.0) {
-                required_expected_value += 0.00008;
+                required_expected_value += core_signal_ownership ? 0.00004 : 0.00008;
             }
         }
 
@@ -1025,19 +1032,27 @@ std::vector<Signal> StrategyManager::filterSignalsWithDiagnostics(
                 signal.strategy_profit_factor < gate.min_profit_factor) {
                 // Soft-pressure only; final risk/quality rejection is done in engine layer.
                 required_strength = std::min(0.95, required_strength + 0.04);
-                required_expected_value += 0.0001;
+                required_expected_value += core_signal_ownership ? 0.00005 : 0.00010;
             }
         }
 
         if (reward_risk_ratio > 0.0 && reward_risk_ratio < 1.15) {
             required_strength = std::min(0.95, required_strength + 0.05);
-            required_expected_value += 0.00008;
+            required_expected_value += core_signal_ownership ? 0.00004 : 0.00008;
         }
 
         // Keep pre-filter permissive; engine layer applies final EV/edge gates.
-        const double permissive_ev_floor = std::min(0.0, required_expected_value) - 0.00015;
-        const double adaptive_ev_floor =
-            permissive_ev_floor + computeExpectedValueTighteningForManager(signal, regime);
+        const double core_ev_relief = core_signal_ownership ? 0.00018 : 0.0;
+        const double permissive_ev_floor =
+            std::min(0.0, required_expected_value) - (0.00015 + core_ev_relief);
+        double ev_tightening = computeExpectedValueTighteningForManager(signal, regime);
+        if (core_signal_ownership) {
+            ev_tightening = std::min(ev_tightening, 0.00022);
+            if (signal.reason == "core_rescue_candidate") {
+                ev_tightening = std::max(0.0, ev_tightening - 0.00005);
+            }
+        }
+        const double adaptive_ev_floor = permissive_ev_floor + ev_tightening;
         if (signal.strength >= required_strength && signal.expected_value >= adaptive_ev_floor) {
             filtered.push_back(signal);
         } else if (signal.strength < required_strength) {

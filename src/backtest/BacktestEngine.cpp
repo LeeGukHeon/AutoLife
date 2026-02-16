@@ -1941,9 +1941,12 @@ void BacktestEngine::processCandle(const Candle& candle) {
             no_entry_streak_candles_++;
         }
     } else {
-        entry_funnel_.skipped_due_to_open_position++;
-        entry_rejection_reason_counts_["skipped_due_to_open_position"]++;
+        if (!was_open_position_prev_candle_) {
+            entry_funnel_.skipped_due_to_open_position++;
+            entry_rejection_reason_counts_["skipped_due_to_open_position"]++;
+        }
     }
+    was_open_position_prev_candle_ = (risk_manager_->getPosition(market_name_) != nullptr);
 
     // Execute pending order lifecycle transitions for this candle.
     checkOrders(candle);
