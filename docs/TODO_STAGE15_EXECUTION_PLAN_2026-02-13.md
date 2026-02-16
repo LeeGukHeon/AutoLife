@@ -1,1651 +1,2259 @@
-# Stage 15 Execution TODO (2026-02-13)
+﻿# Stage 15 Execution TODO (Active)
 
-## Scope
-- 목적: candidate 승격 가능한 수익성(Expectancy/Profitable Ratio) 회복.
-- 기준일: 2026-02-13.
-- 원칙: 최소 침습, legacy 기본 동작 유지, strict 복구/승인 체계 유지.
+Last updated: 2026-02-16 (build/generated outputs + unused warnings cleanup executed)
 
-## Current Snapshot
-- 실데이터 matrix(`build/Release/logs/profitability_gate_report_realdata.json`) 기준:
-  - `core_full.avg_profit_factor = 3.1007` (PASS)
-  - `core_full.avg_total_trades = 11.2667` (PASS)
-  - `core_full.avg_expectancy_krw = -13.1301` (FAIL)
-  - `core_full.profitable_ratio = 0.3333` (FAIL)
-  - `overall_gate_pass = false`
-- backtest MTF/plane parity:
-  - companion TF(5m/60m/240m) 로딩 반영 완료
-  - profile 분리 확인(`profiles_identical_by_dataset=false`) 완료
+## Goal
+Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
+The system must:
+- follow Upbit API/WebSocket call rules,
+- train on high-quality data,
+- persist learning state across restarts,
+- run backtests that match live decision flow.
 
-## P0 (바로 실행)
-1. 손실 기여 상위 마켓 분해
-- 목표: expectancy 음수 주범을 전략/레짐/체결비용 단위로 분해.
-- 산출물:
-  - `build/Release/logs/loss_contributor_by_market.csv`
-  - `build/Release/logs/loss_contributor_by_strategy.csv`
-- 완료 조건:
-  - 상위 5개 마켓과 상위 2개 전략의 손실 기여율(%) 명시.
+## Principles
+- Keep strict safety chain and strict live approval process.
+- Keep legacy fallback until core path is fully proven.
+- Prefer robust logic changes over narrow parameter overfitting.
+- If market data is hostile, do not force trade count.
 
-2. 전략 내부 필터 1차 보정 (Breakout/Scalping 우선)
-- 목표: trade count 유지하면서 expectancy/profitable ratio 개선.
-- 변경 우선순위:
-  - Breakout: 약한 신호 구간 강도/유동성 하한 상향
-  - Scalping: 변동성/유동성 불리 구간 진입 억제 강화
-- 완료 조건:
-  - `core_full.avg_total_trades >= 10` 유지
-  - `core_full.avg_expectancy_krw` 절대값 개선(기존 -13.1301 대비 상승)
+## Execution Discipline (Context Handoff)
+- Every completed subtask must update this TODO immediately with:
+  - what changed (files/functions),
+  - what was verified (build/tests/commands),
+  - next subtask and expected artifact path.
+- Keep one active in-progress item only to avoid context drift.
+- If a run fails, record the exact failing command + first root-cause clue before any new patch.
 
-3. realdata matrix 재실행
-- 명령:
-  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune`
-- 완료 조건:
-  - 최신 `profitability_gate_report_realdata.json` 수치 갱신 및 비교표 작성.
+## Current Progress Snapshot (2026-02-15 run)
+1. Core decision-path migration progress
+- `use_strategy_alpha_head_mode` path expanded:
+  - strategy-manager prefilter bypass stays active in alpha-head mode,
+  - fallback alpha candidates are now treated as first-class candidates in engine/backtest gates,
+  - risk/pattern penalties are softened only in alpha-head fallback path (not globally),
+  - live/backtest expected-edge calibration now has fallback-specific win-prob/cost adjustment.
 
-## P1 (P0 다음)
-1. candidate tuning objective 전환
-- 목표: trade-density 중심에서 edge-quality 중심으로 평가 순서 변경.
-- 작업:
-  - tuning summary 정렬 기준에 `avg_expectancy_krw`, `profitable_ratio` 가중치 상향.
-- 완료 조건:
-  - top combo가 PF/거래수만 높은 조합이 아닌 expectancy 개선 조합으로 선택.
-
-2. profile parity 회귀 체크 자동화
-- 목표: 다시 profile 동일화 회귀 방지.
-- 작업:
-  - CI 또는 스크립트 단계에서 `profiles_identical_by_dataset=false` 검증 추가.
-- 완료 조건:
-  - 회귀 시 hard-fail 또는 명시 warning 발생.
-
-## P2 (후속)
-1. preloaded TF 활용 메트릭 주간 리포트화
-- 작업:
-  - `used_preloaded_tf_5m`, `used_preloaded_tf_1h`, `used_resampled_tf_fallback` 집계.
-- 완료 조건:
-  - 주간 요약에 fallback ratio 포함.
-
-2. 운영 패키지 최종화
-- 작업:
-  - 릴리즈 단위(압축/버전 태그/체크섬/노트) 정리.
-- 완료 조건:
-  - 개인 운영 재현 절차 1회 end-to-end 통과.
-
-## Quick Runbook
-1. 수집 포함 전체 루프
-- `python scripts/run_realdata_candidate_loop.py`
-
-2. 수집 생략 matrix만
-- `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune`
-
-3. exploratory 점검
-- `python scripts/run_profitability_exploratory.py`
-
-4. preset 적용 점검
-- `python scripts/apply_trading_preset.py -Preset safe`
-- `python scripts/apply_trading_preset.py -Preset active`
-
-
-## Stage 15 Progress Update (2026-02-13, late session)
-
-### Completed in this context
-- Added loss-contributor analysis script:
-  - `scripts/analyze_loss_contributors.py`
-  - outputs:
-    - `build/Release/logs/loss_contributor_by_market.csv`
-    - `build/Release/logs/loss_contributor_by_strategy.csv`
-- Re-ran realdata candidate matrix loop without refetch/tune:
-  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune`
-- Implemented first-pass strategy filter tightening (internal logic only):
-  - `src/strategy/BreakoutStrategy.cpp`
-  - `src/strategy/ScalpingStrategy.cpp`
-
-### Latest candidate snapshot (core_full)
-- avg_profit_factor: `1.7709`
-- avg_total_trades: `12.4167`
-- avg_expectancy_krw: `-5.9749`
-- profitable_ratio: `0.4167`
-- gate_pass: `false`
-
-### Delta vs earlier snapshot in this stage
-- avg_expectancy_krw improved from `-13.1301` to `-5.9749`.
-- avg_total_trades stayed above minimum (`>= 10`).
-- Remaining blockers: profitable ratio and expectancy still below gate thresholds.
-
-### Current loss concentration (core_full)
-- Top markets by loss share:
-  - KRW-LINK: `24.4740%`
-  - KRW-DOGE: `22.8084%`
-  - KRW-XRP: `19.0481%`
-  - KRW-ADA: `13.5947%`
-  - KRW-AVAX: `9.0489%`
-- Top strategies by loss share:
-  - Breakout Strategy: `58.6922%`
-  - Advanced Scalping: `36.2952%`
-
-### Next P0/P1 focus
-- P0-2 continuation: convert at least two loss-heavy real markets to non-negative expectancy while keeping avg_total_trades >= 10.
-- P1-1: adjust tuning objective weighting to prioritize expectancy/profitable_ratio over trade density.
-
-### New automation loop (added)
-- Script: `scripts/run_candidate_auto_improvement_loop.py`
-- Loop flow:
-  - realdata matrix run -> tuning combo search -> best combo apply -> re-validation
-  - optional loss-contributor analysis per iteration
-- Temporary pause conditions:
-  - max iteration reached
-  - max runtime minutes reached
-  - no objective improvement for N consecutive iterations
-- Main outputs:
-  - `build/Release/logs/candidate_auto_improvement_iterations.csv`
-  - `build/Release/logs/candidate_auto_improvement_summary.json`
-- Quick run:
-  - `python scripts/run_candidate_auto_improvement_loop.py -MaxIterations 3 -MaxRuntimeMinutes 90 -RunLossAnalysis`
-
-## Stage 15 Strategy Refactor Update (2026-02-13, current)
-
-### Code changes completed
-- `src/strategy/ScalpingStrategy.cpp`
-  - Added higher-timeframe trend alignment gate (`5m/1h` bias) before entry.
-  - Connected trend bias to score/strength-floor/edge gate/RR floor/position scaling.
-  - Added candle-order normalization guard for trend-bias calculations (descending timestamp fallback).
-- `src/strategy/BreakoutStrategy.cpp`
-  - Added candle-order normalization guard for directional-bias calculations.
-  - Normalized `5m` candles before trend-bias and breakout analysis in both `generateSignal` and `shouldEnter`.
-
-### Build and script verification
-- Build PASS:
-  - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release -j 6`
-- Exploratory script PASS (execution):
-  - `python scripts/run_profitability_exploratory.py`
-- Preset script PASS (execution):
-  - `python scripts/apply_trading_preset.py -Preset safe -ConfigPath .\build\Release\logs\verify_preset_safe.json -SourceConfigPath .\config\config.json`
-  - `python scripts/apply_trading_preset.py -Preset active -ConfigPath .\build\Release\logs\verify_preset_active.json -SourceConfigPath .\config\config.json`
-
-### Latest realdata candidate re-check (core_full)
+2. Smoke parity check (single real dataset)
 - Command:
-  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune`
-- Result:
-  - `overall_gate_pass=false`
-  - `avg_profit_factor=1.1106` (PF gate pass)
-  - `avg_total_trades=16.3333` (trade-count gate pass)
-  - `avg_expectancy_krw=-13.5864` (expectancy gate fail)
-  - `profitable_ratio=0.2222` (profitable-ratio gate fail)
-  - `core_vs_legacy.gate_pass=false` (expectancy delta fail: `-5.6087 < -5.0`)
+  - `build/Release/AutoLifeTrading.exe --backtest data/backtest_real/upbit_KRW_BTC_1m_12000.csv --json --require-higher-tf-companions`
+- Result (core_full-like runtime path):
+  - `entries_executed=4`, `total_trades=7`,
+  - `expectancy_krw=+8.08`,
+  - `profit_factor=4.08`,
+  - still high `no_signal_generated=11449` (hostile/no-entry dominant periods remain).
 
-### Immediate next action
-- Keep this strategy refactor baseline and run wider tuning scenarios to recover:
-  - expectancy (`>= 0`)
-  - profitable ratio (`>= 0.55`)
-  - core-vs-legacy expectancy delta (`>= -5.0`)
-
-## Stage 15 Wide-Loop Pass #1 (2026-02-13, diverse_wide)
-
-### Run setup
+3. Real-data candidate loop (12 datasets, gate_min_avg_trades=8)
 - Command:
-  - `python .\scripts\run_candidate_auto_improvement_loop.py -MaxIterations 1 -TuneScenarioMode diverse_wide -TuneMaxScenarios 12 -MaxRuntimeMinutes 180`
-- Notes:
-  - realdata baseline/post-apply validation included (`-SkipFetch` path via loop default).
-  - tune phase evaluated 12 diverse-wide scenarios.
-
-### Result summary
-- Loop status: `paused_max_iterations` (configured 1 iteration complete)
-- Selected combo by loop objective: `scenario_diverse_wide_002`
-- Post-apply core_full:
-  - `avg_profit_factor=1.1054` (pass)
-  - `avg_total_trades=16.5556` (pass)
-  - `avg_expectancy_krw=-13.4633` (fail)
-  - `profitable_ratio=0.2778` (fail)
-  - `overall_gate_pass=false`
-- core-vs-legacy:
-  - `delta_avg_profit_factor=-0.0561` (threshold `>= -0.05`, fail)
-  - `delta_avg_expectancy_krw=-6.2160` (threshold `>= -5.0`, fail)
-
-### Interpretation
-- Trade-density and PF are stable, but expectancy/profitable-ratio remain structural bottlenecks.
-- Candidate improvement from this pass is marginal versus baseline:
-  - expectancy: `-13.5864 -> -13.4633`
-  - profitable ratio: `0.2222 -> 0.2778`
-- Next step should prioritize strategy-level loss suppression on recurring negative regimes/markets rather than further broad gate relaxation.
-
-## Stage 15 Pattern-Driven Entry Refactor (2026-02-14)
-
-### What changed (approach shift)
-- Entry criteria were changed from static threshold-only tuning to pattern-aware gating using realized trade outcomes.
-- Implemented strategy+regime loss-pattern reinforcement in both live/backtest entry paths:
-  - `src/engine/TradingEngine.cpp`
-  - `src/backtest/BacktestEngine.cpp`
-- Added backtest JSON pattern summaries so winning/losing entry patterns are measurable directly from historical runs:
-  - `include/backtest/BacktestEngine.h`
-  - `src/backtest/BacktestEngine.cpp`
-  - `src/main.cpp` (`--backtest --json` payload extended with `pattern_summaries`)
-
-### New analysis tool
-- Added:
-  - `scripts/analyze_entry_pattern_bias.py`
-- Output artifacts:
-  - `build/Release/logs/entry_patterns_winning.csv`
-
-## Stage 15 Adaptive Persistence Update (2026-02-15)
-
-### Completed
-- Archetype self-learning state is now persisted and reloaded across process restarts for both backtest and live runtime paths.
-- Shared persistence files (same executable directory base):
-  - `build/Release/state/scalping_archetype_stats.json`
-  - `build/Release/state/momentum_archetype_stats.json`
-
-### Code scope
-- `include/strategy/ScalpingStrategy.h`
-- `include/strategy/MomentumStrategy.h`
-- `src/strategy/ScalpingStrategy.cpp`
-- `src/strategy/MomentumStrategy.cpp`
-
-### Verification snapshot
-- Build: PASS (`cmake --build build --config Release`)
-- Backtest startup logs now confirm state load:
-  - `Scalping adaptive archetype stats loaded: ...`
-  - `Momentum adaptive archetype stats loaded: ...`
-- Re-run of single-dataset backtest updates persisted counters and EMA in both files.
-  - `build/Release/logs/entry_patterns_losing.csv`
-  - `build/Release/logs/entry_pattern_recommendations.json`
-
-### Pattern snapshot (12 datasets)
-- Losing examples:
-  - `Advanced Scalping / RANGING / strength_high / ev_high / rr_high`:
-    - trades `33`, win_rate `0.1515`, avg_profit `-24.0948`
-  - `Advanced Scalping / TRENDING_UP / strength_high / ev_high / rr_high`:
-    - trades `17`, win_rate `0.1765`, avg_profit `-22.0091`
-  - `Breakout Strategy / RANGING / strength_mid / ev_high / rr_high`:
-    - trades `17`, win_rate `0.1765`, avg_profit `-30.4338`
-- Winning example:
-  - `Breakout Strategy / TRENDING_UP / strength_low / ev_high / rr_high`:
-    - trades `48`, win_rate `0.5833`, avg_profit `37.3067`
-- Recommendation highlights:
-
-## Stage 15 Reacceleration Gate Tuning Update (2026-02-15, current)
-
-### Scope
-- Focused bottleneck after #11: `Advanced Momentum / TREND_REACCELERATION / TRENDING_UP`.
-- Goal: improve expectancy while keeping trade count near practical range (not over-forcing entries in hostile market).
-
-### Code changes
-- `src/strategy/MomentumStrategy.cpp`
-  - Tightened `TREND_REACCELERATION` archetype classification thresholds.
-  - Added strong/weak reacc quality split and applied differentiated:
-    - strength floor relaxation
-    - position size scale
-    - RR floor
-    - net-edge floor
-  - Tightened reacc early/mid/late exit behavior for weak-quality contexts.
-  - Lowered adaptive block activation threshold for underperforming reacc archetype in `TRENDING_UP`.
-- `src/engine/TradingEngine.cpp`
-  - Added calibrated-edge penalty for `Momentum + TREND_REACCELERATION + TRENDING_UP`.
-  - Added second-stage archetype quality gate for same pattern (quality-based block, not unconditional market hard block).
-- `src/backtest/BacktestEngine.cpp`
-  - Mirrored live-path changes to keep live/backtest parity.
-
-### Validation commands
-- Build:
-  - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release`
-- Candidate loop (realdata only):
   - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions`
-- Root-cause diagnostics:
-  - `python scripts/analyze_root_cause_diagnostics.py --profile-id core_full --max-workers 1`
+- Result (`core_full`):
+  - `avg_total_trades=44.4167` (trade floor pass),
+  - `avg_profit_factor=0.7744` (fail),
+  - `avg_expectancy_krw=-8.0054` (fail),
+  - `profitable_ratio=0.0833` (fail),
+  - `overall_gate_pass=false`.
 
-### Latest snapshot (core_full)
-- From `build/Release/logs/profitability_profile_summary_realdata.csv`:
-  - `avg_profit_factor = 12.3473`
-  - `avg_total_trades = 7.2222`
-  - `avg_expectancy_krw = 5.6638`
-  - `profitable_ratio = 0.5556`
-  - `gate_pass = true`
-- From `build/Release/logs/root_cause_loss_patterns.csv`:
-  - Remaining top loss pattern:
-    - `Advanced Momentum / TREND_REACCELERATION / TRENDING_UP / ev_high`
-    - `total_trades=27`, `win_rate=0.4074`, `avg_profit_krw=-4.2437`
+4. Split + walk-forward enforcement run
+- Command:
+  - `python scripts/run_candidate_train_eval_cycle.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --gate-min-avg-trades 8 --max-markets 12 --enforce-walk-forward --walk-forward-max-datasets 6`
+- Result summary:
+  - train(7): `PF=0.9728`, `EXP=-8.0643`, `trades=43.43`, pass=false
+  - validation(2): `PF=0.4903`, `EXP=-9.1096`, `trades=50.0`, pass=false
+  - holdout(3): `PF=0.5009`, `EXP=-7.1320`, `trades=43.0`, pass=false
+  - walk-forward: validation ready `0/2`, holdout ready `0/3`, promotion gate=false.
 
-### Notes
-- `BREAKOUT_CONTINUATION / TRENDING_UP` for Momentum remains blocked via prior #11 path.
-- Trade count is lower than earlier 8+ baseline but still above hostility-adaptive effective threshold and gate-pass.
-- Next pass should target reacceleration loss tail without forcing trade density in hostile datasets.
-  - `Advanced Scalping / RANGING`: `recommended_min_strength=0.62`, `recommend_block=true` (medium confidence)
-  - `Advanced Scalping / TRENDING_UP`: `recommended_min_strength=0.62`, `recommend_block=true` (medium confidence)
-  - `Breakout Strategy / RANGING`: `recommended_min_strength=0.62`, `recommend_block=true` (low confidence)
+5. Immediate bottleneck (unchanged)
+- Candidate still fails mainly on:
+  - `avg_expectancy_krw`,
+  - `avg_profit_factor`,
+  - `profitable_ratio`.
+- Trade-frequency floor is now consistently passing under hostility-adaptive thresholds.
 
-## Stage 15 Momentum Archetype Tightening (2026-02-15)
-
-### Code update (minimal scope)
-- Updated `src/strategy/MomentumStrategy.cpp` only:
-  - Tightened `BREAKOUT_CONTINUATION` classification gates:
-    - stronger MTF/flow/buy-pressure/liquidity requirements
-    - bullish candle count requirement
-    - narrower acceptable price-change window
-  - Added stricter archetype-specific risk-reward floor for breakout continuation.
-  - Added fee/slippage-aware net-edge floor before final signal acceptance.
-  - Added faster early/mid/late cut rules in `shouldExit()` for breakout continuation.
-
-### Verification results
-- Build:
-  - `cmake --build build --config Release` PASS
-- Realdata loop (strict, hostility adaptive OFF):
-  - `python scripts/run_realdata_candidate_loop.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --gate-min-avg-trades 8 --disable-hostility-adaptive-thresholds --matrix-max-workers 1 --matrix-backtest-retry-count 2`
-  - `overall_gate_pass=false`
-  - `core_full.avg_profit_factor=11.8677`
-  - `core_full.avg_total_trades=7.2222`
-  - `core_full.avg_expectancy_krw=-0.8061`
-- Realdata loop (hostility adaptive ON):
-  - `python scripts/run_realdata_candidate_loop.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --gate-min-avg-trades 8 --enable-hostility-adaptive-thresholds --matrix-max-workers 1 --matrix-backtest-retry-count 2`
-  - `overall_gate_pass=true`
-  - effective thresholds in high hostility:
-    - `min_profitable_ratio=0.3264`
-    - `min_avg_trades=3`
-
-### Root-cause delta snapshot (`core_full`)
-- After tightening, momentum concentration reduced but still dominant:
-  - total trades: `124 -> 70`
-  - momentum trades: `116 -> 62`
-  - top remaining loss pattern:
-    - `Advanced Momentum / BREAKOUT_CONTINUATION / TRENDING_UP`
-    - trades `34`, win_rate `0.3824`, avg_profit `-8.2099`
-
-### Next TODO (immediate)
-1. Add archetype-specific EV quality gate for `TREND_REACCELERATION` (now second largest loss source).
-2. Recalibrate `expected_value_bucket` labeling so `ev_high` aligns with realized net expectancy after fee/slippage.
-3. Add a strict-mode parallel report artifact (`strict` vs `adaptive`) in candidate loop output to avoid mixing acceptance criteria.
-
-## Stage 15 Momentum 2nd Patch (2026-02-15, TREND_REACCELERATION tightening)
-
-### Code changes
-- `src/strategy/MomentumStrategy.cpp`
-  - Tightened `TREND_REACCELERATION` classification:
-    - stronger `mtf_alignment/flow/buy_pressure/bullish_count`
-    - volume floor and narrower `price_change_rate` band
-  - Reduced archetype size scale:
-    - `TREND_REACCELERATION: 0.70 -> 0.55`
-  - Added stronger archetype RR floor:
-    - `TREND_REACCELERATION: rr_floor >= 1.42`
-  - Strengthened fee/slippage-aware net edge floor:
-    - `TREND_REACCELERATION: min_net_edge 0.0020 -> 0.0028`
-  - Added faster time-loss exit profile for reacceleration positions.
-
-### Verification snapshot
-- Build PASS:
-  - `cmake --build build --config Release`
-- Strict gate (`hostility adaptive OFF`):
-  - `core_full.avg_profit_factor=11.8427`
-  - `core_full.avg_total_trades=6.6667`
-  - `core_full.avg_expectancy_krw=-0.2125`
-  - `overall_gate_pass=false`
-- Adaptive gate (`hostility adaptive ON`):
-  - same profile metrics, effective thresholds relaxed in high hostility
-  - `overall_gate_pass=true`
-
-### Root-cause delta
-- `TREND_REACCELERATION` pattern dropped out of top loss patterns in current diagnostics.
-- Remaining dominant bottleneck:
-  - `Advanced Momentum / BREAKOUT_CONTINUATION / TRENDING_UP`
-
-### Next immediate focus
-1. `BREAKOUT_CONTINUATION@TRENDING_UP` split into quality tiers and block low-tier entries.
-2. Recompute `ev_high` bucket criteria to net-of-cost expectancy.
-3. Wire strict/adaptive dual-output directly in loop scripts (no manual copy step).
-
-### Experiment note (same session)
-- Tested stronger hard gate for `BREAKOUT_CONTINUATION@TRENDING_UP` at archetype classification stage.
-- Result: over-filtering caused regression (`core_full.avg_total_trades` dropped and adaptive gate failed).
-- Action: rolled back that hard gate; retained only stable improvements from this session.
-
-## Stage 15 Root-Cause Recheck Update (2026-02-15, current)
-
-### Root cause confirmed
-- Parallel matrix backtests were sharing the same adaptive state files:
-  - `build/Release/state/scalping_archetype_stats.json`
-  - `build/Release/state/momentum_archetype_stats.json`
-- This caused cross-dataset/process contamination and unstable gate results.
-
-### Fix applied
-- Added adaptive-state I/O kill switch via env:
-  - `AUTOLIFE_DISABLE_ADAPTIVE_STATE_IO=1`
-- Strategy runtime now skips archetype state load/save when this env is set:
-  - `src/strategy/ScalpingStrategy.cpp`
-  - `src/strategy/MomentumStrategy.cpp`
-- Matrix runner now forces this env for each backtest subprocess:
-  - `scripts/run_profitability_matrix.py`
-- Entry-pattern analyzer also forces this env:
-  - `scripts/analyze_entry_pattern_bias.py`
-- Reduced high-frequency per-candle log spam:
-  - removed repetitive "score-based analysis start" info logs in scalping/momentum.
-
-### Additional gate/logic adjustments
-- Added conservative calibrated edge model to core entry quality gates:
-  - `src/backtest/BacktestEngine.cpp`
+## Latest Worklog (2026-02-16 local run)
+1. P0-2 parity first pass completed
+- Added `15m` companion TF generation/exposure on both paths:
+  - `src/analytics/MarketScanner.cpp`
   - `src/engine/TradingEngine.cpp`
-- Strengthened but then relaxed severe negative archetype-bias handling to avoid hard over-pruning:
-  - `src/strategy/ScalpingStrategy.cpp`
-  - `src/strategy/MomentumStrategy.cpp`
-
-### Latest verification snapshot (realdata, skip fetch/tune)
-- Command:
-  - `python scripts/run_realdata_candidate_loop.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --gate-min-avg-trades 8`
-- `core_full`:
-  - `avg_profit_factor=11.5352`
-  - `avg_total_trades=2.4444` (still fail for trade floor)
-  - `avg_expectancy_krw=-3.9363` (still fail for expectancy gate)
-  - `profitable_ratio=0.3333` (still fail)
-- Status:
-  - contamination issue fixed
-  - remaining bottleneck is low trade density + negative expectancy in selected markets.
-
-### Re-check after applying pattern-aware gate
-- Command:
-  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune`
-- Core result:
-  - `avg_profit_factor=1.1346` (pass)
-  - `avg_total_trades=15.9444` (pass)
-  - `avg_expectancy_krw=-11.0209` (fail)
-  - `profitable_ratio=0.2778` (fail)
-  - `overall_gate_pass=false`
-- vs pre-refactor snapshot in this stage:
-  - expectancy improved: `-13.4633 -> -11.0209`
-  - PF improved: `1.1054 -> 1.1346`
-  - core-vs-legacy gate recovered to pass:
-    - `delta_avg_profit_factor=+0.0031` (pass)
-    - `delta_avg_expectancy_krw=-3.0131` (pass)
-
-## Stage 15 Pattern Loop Follow-up (2026-02-14, current)
-
-### Sequence executed in this context
-1. Root-cause rerun:
-   - `scripts/analyze_loss_contributors.py`
-
-## Stage 15 Strategy Clock Alignment Update (2026-02-14, current)
-
-### Why this patch was needed
-- Backtest execution is time-compressed, but strategy-side throttle logic (`daily/hourly limits`, `min_signal_interval`, `circuit breaker`) was using wall-clock time.
-- Result: strategy throttles were effectively over-triggered in backtest and suppressed most signals.
-
-### Code updates
-- Candle-time based strategy clock alignment:
-  - `include/strategy/ScalpingStrategy.h`
-  - `include/strategy/MomentumStrategy.h`
-  - `src/strategy/ScalpingStrategy.cpp`
-  - `src/strategy/MomentumStrategy.cpp`
-- Scalping regime policy re-tightening:
-  - `Scalping@RANGING` blocked again
-  - `TRENDING_DOWN` only allowed with strict counter-momentum quality
-- Momentum quality gates adjusted to avoid over-pruning while preserving minimum edge checks.
-
-### Validation snapshots
-- Spot-check (8 real datasets) after clock alignment:
-  - trade counts increased materially on multiple markets
-  - signal starvation reduced vs pre-alignment runs
-- Full loop rerun:
-  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune`
-  - core_full:
-    - `avg_profit_factor=13.7064` (pass)
-    - `avg_total_trades=16.4667` (pass)
-    - `avg_expectancy_krw=-8.8745` (fail)
-    - `profitable_ratio=0.1333` (fail)
-  - core-vs-legacy:
-    - `delta_avg_profit_factor=+0.8046` (pass)
-    - `delta_avg_expectancy_krw=-5.1329` (fail by margin, threshold `>= -5.0`)
-
-### Next focus
-- P0: improve expectancy/profitable_ratio without collapsing trade count
-  - prioritize negative markets (`KRW-AVAX`, `KRW-LINK`, `KRW-ADA`) with regime-specific entry suppression
-  - add strategy-level reject telemetry by regime bucket before next tuning loop
-
-## Stage 15 Strategy-by-Strategy Audit Update (2026-02-14, current)
-
-### Scope audited (5 strategies)
-- `Advanced Scalping`
-- `Advanced Momentum`
-- `Breakout Strategy`
-- `Mean Reversion Strategy`
-- `Grid Trading Strategy`
-
-### Cross-strategy consistency patch
-- Backtest time-compression compatibility aligned across all 5 strategies:
-  - strategy internal clocks (`daily/hourly limits`, `min_signal_interval`, `circuit breaker`) now use candle timestamp when available.
-  - files:
-    - `include/strategy/ScalpingStrategy.h`
-    - `include/strategy/MomentumStrategy.h`
-    - `include/strategy/BreakoutStrategy.h`
-    - `include/strategy/MeanReversionStrategy.h`
-    - `include/strategy/GridTradingStrategy.h`
-    - `src/strategy/ScalpingStrategy.cpp`
-    - `src/strategy/MomentumStrategy.cpp`
-    - `src/strategy/BreakoutStrategy.cpp`
-    - `src/strategy/MeanReversionStrategy.cpp`
-    - `src/strategy/GridTradingStrategy.cpp`
-
-### Risk-management timing patch (entry lifecycle)
-- Added early adverse/stagnation exits in:
-  - `ScalpingStrategy::shouldExit`
-  - `MomentumStrategy::shouldExit`
-- Intent:
-  - reduce prolonged low-quality holds where entry trigger momentum does not continue.
-
-### Re-validation (post patch)
-- Command:
-  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune`
-- core_full:
-  - `avg_profit_factor=13.7064` (pass)
-  - `avg_total_trades=16.4667` (pass)
-  - `avg_expectancy_krw=-8.8745` (fail)
-  - `profitable_ratio=0.1333` (fail)
-- core-vs-legacy:
-  - `delta_avg_profit_factor=+0.8046` (pass)
-  - `delta_avg_expectancy_krw=-5.1329` (fail, threshold `>= -5.0`)
-
-### Interpretation
-- Consistency/clock alignment issue is resolved across all strategies.
-- Remaining blocker is not simple trade count starvation anymore; it is quality distribution (win/loss asymmetry) after entry.
-- Next iteration must prioritize `setup-trigger separation` and `post-entry adaptive risk path` over threshold-only tuning.
-
-## Stage 15 Fast Loop Refactor (2026-02-14, current)
-
-### Why this refactor
-- Existing candidate auto-improvement loop was too slow (`scenario_count x dataset_count x profile_count` explosion).
-- Parameter-only tuning kept selecting low-trade/high-PF combinations that did not satisfy practical live targets.
-
-### What changed
-- Added two-stage tuning in `scripts/tune_candidate_gate_trade_density.py`:
-  - Stage 1: screen all combos on a small evenly-spaced dataset subset.
-  - Stage 2: run full evaluation only for screened top-k combos.
-- Added profile selection in `scripts/run_profitability_matrix.py`:
-  - `--profile-ids ...` (used to run fast tuning on `core_full` only).
-- Added win-rate aggregation in profile summary:
-  - `avg_win_rate_pct`, `gate_win_rate_pass`, `min_avg_win_rate_pct`.
-- Reworked objective scoring in `scripts/run_candidate_auto_improvement_loop.py`:
-  - hard penalties for failing minimum `avg_total_trades`, `profitable_ratio`, `avg_win_rate_pct`, `expectancy`.
-  - avoids selecting deceptive high-PF but low-trade/low-win-rate combos.
-- Added loop/tuning control options:
-  - auto-loop: `--real-data-only`, `--require-higher-tf-companions`,
-    `--tune-screen-dataset-limit`, `--tune-screen-top-k`,
-    `--tune-objective-min-*`.
-
-### Validation snapshot
-- Tuning smoke run (realdata-only, 4 combos, screen 4 -> top2 final):
-  - command time: ~40s
-  - output: `build/Release/logs/smoke_tune_summary.json`
-- Auto loop smoke run (realdata-only, 1 iteration, 6 combos, screen 4 -> top2 final):
-  - command time: ~115s
-  - output: `build/Release/logs/candidate_auto_improvement_summary.json`
-
-### Next TODO
-- Move from parameter-only recovery to strategy-logic recovery:
-  - prioritize reducing recurring losing entries by regime/strategy bucket.
-  - keep minimum live constraints fixed (`trades`, `win-rate`, `profitable-ratio`, `expectancy`) while tuning.
-   - `scripts/analyze_entry_pattern_bias.py -MaxDatasets 18 -MinPatternTrades 6`
-2. Strategy filter update:
-   - `src/strategy/BreakoutStrategy.cpp`
-   - `src/strategy/ScalpingStrategy.cpp`
-3. Validation loop:
-   - `scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune`
-   - `scripts/tune_candidate_gate_trade_density.py -ScenarioMode diverse_wide -MaxScenarios 4`
-
-### Key observations
-- Loss concentration after first strict block was:
-  - `Breakout Strategy` loss share `85.7444%`
-  - `Advanced Momentum` loss share `14.2556%`
-  - (`Scalping` loss share effectively removed by over-blocking, but trade count dropped too far)
-- Pattern bias stayed concentrated in:
-  - `Breakout Strategy / TRENDING_UP / strength_mid` (negative)
-  - `Breakout Strategy / TRENDING_UP / strength_low` (positive)
-
-### Latest baseline snapshot (after second filter adjustment)
-- Command:
-  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune`
-- `core_full`:
-  - `avg_profit_factor = 1.1049` (PASS)
-  - `avg_total_trades = 10.7778` (PASS)
-  - `avg_expectancy_krw = -10.9259` (FAIL)
-  - `profitable_ratio = 0.4444` (FAIL)
-  - `overall_gate_pass = false`
-
-### Latest short wide tuning (4 scenarios)
-- Command:
-  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode diverse_wide -MaxScenarios 4`
-- Best-by-gap candidate from summary:
-  - `scenario_diverse_wide_003`
-  - `avg_profit_factor = 1.1049`
-  - `avg_total_trades = 10.7778`
-  - `avg_expectancy_krw = -10.9259`
-  - `profitable_ratio = 0.4444`
-- Current blockers remain:
-  - expectancy gap to gate: `+10.9259 KRW/trade`
-  - profitable ratio gap to gate: `+0.1056`
-
-## Stage 15 Core-Lifecycle Alignment Update (2026-02-14)
-
-### Completed in this pass
-- Integrated strategy lifecycle hooks across live/backtest for core and legacy paths:
-  - `onSignalAccepted` is now called for non-grid live entries (`src/engine/TradingEngine.cpp`).
-  - `onSignalAccepted` is now called for backtest entries (`src/backtest/BacktestEngine.cpp`).
-  - `updateStatistics` is now called on backtest full exits with fee-inclusive net PnL (`src/backtest/BacktestEngine.cpp`).
-- Unified partial-exit accounting to TradeHistory path:
-  - `RiskManager::partialExit` now routes through `applyPartialSellFill` and keeps TP1 breakeven behavior (`src/risk/RiskManager.cpp`).
-  - Live/paper partial sells now apply actual filled quantity accounting (`src/engine/TradingEngine.cpp`).
-- Unified strategy stat PnL basis in live full exits:
-  - `updateStatistics` now receives fee-inclusive net PnL on full close (`src/engine/TradingEngine.cpp`).
-  - Partial-fill close paths no longer trigger premature strategy close-stat updates.
-
-### Verification run
-- Build: PASS
-  - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release --target AutoLifeTrading`
-- Spot backtest smoke: PASS
-  - `build/Release/AutoLifeTrading.exe --backtest .\data\backtest\sample_trend_1m.csv --json`
-  - `build/Release/AutoLifeTrading.exe --backtest .\data\backtest\auto_sim_500.csv --json`
-- Exploratory matrix rerun: PASS (script), gate currently FAIL
-  - `python .\scripts\run_profitability_exploratory.py`
-  - report: `build/Release/logs/profitability_gate_report_exploratory.json`
-
-### Current exploratory note
-- `overall_gate_pass = false`
-- `core_full` in latest exploratory report:
-  - `avg_profit_factor = 0`
-  - `avg_expectancy_krw = 31.6378`
-  - `avg_total_trades = 4.3333`
-  - `profitable_ratio = 0.6667`
-- This indicates metric semantics changed after lifecycle/accounting fixes and gate thresholds should be re-baselined before candidate promotion tuning.
-
-### Post-alignment candidate re-check (realdata, no fetch/tune)
-- Command:
-  - `python .\scripts\run_realdata_candidate_loop.py -SkipFetch -SkipTune`
-- `core_full` snapshot:
-  - `avg_profit_factor = 0.4242` (FAIL)
-  - `avg_total_trades = 4.2778` (FAIL)
-  - `avg_expectancy_krw = -11.8951` (FAIL)
-  - `profitable_ratio = 0.2778` (FAIL)
-  - `runs_used_for_gate = 18`
-  - `excluded_low_trade_runs = 8`
-  - `overall_gate_pass = false`
-- Artifact:
-  - `build/Release/logs/profitability_gate_report_realdata.json`
-
-## Core Migration Readiness TODO (2026-02-14)
-
-### Goal
-- Prove core path is consistently better (or at least not worse) than legacy, then execute staged full migration and legacy cleanup.
-
-### Phase A: Measurement reliability (in progress)
-1. Align metric semantics across live/backtest/core/legacy.
-   - status: in progress
-   - done now: profit-factor no-loss handling aligned to `99.9` semantics in backtest/live edge stats.
-2. Keep strategy lifecycle hooks consistent.
-   - status: done (entry accept + full-exit stats wiring added)
-3. Re-run baseline reports after semantic alignment.
-   - status: pending
-
-### Phase B: Core-vs-legacy proof criteria
-1. Repeatable superiority window.
-   - criteria: `core_full` >= `legacy_default` for at least 5 consecutive comparable runs.
-2. Gate pass criteria.
-   - criteria: pass `profit_factor`, `expectancy`, `profitable_ratio`, `avg_total_trades`.
-3. CI stability criteria.
-   - criteria: `CI PR Gate` and strict chains stable with no regression trend.
-
-### Phase C: Progressive cutover
-1. Set core as default profile/preset.
-2. Keep legacy as rollback-only for a short observation window.
-3. Remove legacy-only branches/flags/scripts after observation.
-4. Finalize docs/runbook to core-only operation.
-
-### Immediate next execution
-1. Re-run exploratory and realdata candidate loops with current fixes.
-2. Refresh deltas (`core_full` vs `legacy_default`) using updated metric semantics.
-3. If core still behind, continue strategy-side loss suppression and re-tune.
-
-### Execution update (2026-02-14, after TODO activation)
-- Completed now:
-  1. PF semantic alignment patch applied (no-loss -> `99.9`) in:
-     - `src/backtest/BacktestEngine.cpp`
-     - `src/engine/TradingEngine.cpp`
-  2. Rebuild and rerun:
-     - `scripts/run_profitability_exploratory.py`
-     - `scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune`
-- Latest checkpoints:
-  - exploratory:
-    - `core_full.avg_profit_factor = 66.6`
-    - `core_full.avg_expectancy_krw = 31.6378`
-    - `core_full.avg_total_trades = 4.3333`
-    - `core_full.profitable_ratio = 0.6667`
-    - `core_vs_legacy.gate_pass = true`
-  - realdata candidate:
-    - `core_full.avg_profit_factor = 22.6242` (PASS)
-    - `core_full.avg_expectancy_krw = -11.8951` (FAIL)
-    - `core_full.avg_total_trades = 4.2778` (FAIL)
-    - `core_full.profitable_ratio = 0.2778` (FAIL)
-    - `core_vs_legacy.gate_pass = true`
-- Immediate blocker remains:
-  - trade density + profitable ratio + expectancy (not PF anymore).
-
-### Tune kick-off result (2026-02-14, diverse_light x4)
-- Command:
-  - `python .\scripts\tune_candidate_gate_trade_density.py -ScenarioMode diverse_light -MaxScenarios 4`
-- Output:
-  - `build/Release/logs/candidate_trade_density_tuning_summary.csv`
-  - `build/Release/logs/candidate_trade_density_tuning_summary.json`
-- Best-by-current-sort:
-  - `scenario_diverse_light_002`
-  - `avg_profit_factor = 18.1398`
-  - `avg_expectancy_krw = -11.3083`
-  - `avg_total_trades = 4.4118`
-  - `profitable_ratio = 0.2941`
-  - `overall_gate_pass = false`
-- Note:
-  - `scenario_diverse_light_001` had better expectancy (`-9.103`) but lower profitable ratio/trade density, so objective/sort weighting still needs adjustment for migration criteria.
-
-### Data parity update (2026-02-14)
-- Validation/tuning scripts now support live-parity dataset mode:
-  - `-RealDataOnly`
-  - `-RequireHigherTfCompanions`
-- Applied scripts:
-  - `scripts/run_realdata_candidate_loop.py`
-  - `scripts/tune_candidate_gate_trade_density.py`
+  - `src/backtest/BacktestEngine.cpp`
 - Behavior:
-  - only `backtest_real` `*_1m_*` primary datasets are used
-  - each primary dataset must have matching `5m/60m/240m` companion CSV in same folder
-- Default mode update (2026-02-14 latest):
-  - `scripts/run_realdata_candidate_loop.py`, `scripts/tune_candidate_gate_trade_density.py`, `scripts/run_candidate_auto_improvement_loop.py`
-    now default to higher-TF companion enforcement ON.
-  - to explicitly disable (legacy/mixed fallback run), pass:
-    - `--allow-missing-higher-tf-companions`
-  - `scripts/run_profitability_matrix.py` now forwards `--require-higher-tf-companions` to backtest execution for `upbit_*_1m_*` datasets.
-- Verified commands:
-  - `python .\scripts\run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions`
-  - `python .\scripts\tune_candidate_gate_trade_density.py -ScenarioMode legacy_only -MaxScenarios 1 -RealDataOnly -RequireHigherTfCompanions`
+  - live scanner: derive `15m` from `1m` (fallback from `5m`) into `candles_by_tf`.
+  - live engine: enforce parity fill for missing `15m` before strategy collection.
+  - backtest: load optional `15m` companion file and provide rolling `15m` series.
 
-### Backtest UX update (2026-02-14)
-- `src/main.cpp` updated for backtest usability and live-parity enforcement.
-- CLI backtest new option:
-  - `--require-higher-tf-companions`
-  - behavior: only allows `upbit_*_1m_*` primary CSV that has matching `5m/60m/240m` companions.
-- Interactive backtest updates:
-  - data source now supports `3=실데이터 목록 선택`
-  - optional live-parity MTF enforcement prompt (default: ON)
-  - companion validation failure shows explicit missing TF guidance.
-- Verified:
-  - pass: `--backtest .\data\backtest_real\upbit_KRW_BTC_1m_12000.csv --require-higher-tf-companions`
-  - fail (expected): non-upbit sample CSV with companion requirement
-
-### Strategy patch + recheck (2026-02-14, latest)
-- Strategy-side updates completed:
-  - `src/strategy/BreakoutStrategy.cpp`
-    - `generateSignal()` now enforces `shouldGenerateBreakoutSignal()` hard gate before score aggregation.
-    - Added breakout quality floor (`computeBreakoutSignalQualityFloor`) to block weak setups.
-    - Aligned `shouldEnter()` with same quality-floor logic.
-  - `src/strategy/ScalpingStrategy.cpp`
-    - Populated `used_preloaded_tf_5m`, `used_preloaded_tf_1h`, `used_resampled_tf_fallback`.
-    - Added TRENDING_UP dual-quality gate (strict path + flow-confirmed alternate path).
-    - Added preloaded `5m` alignment contribution to score.
-    - Added anti-chase guard for overheated weak-flow entries.
-- Build verification:
-  - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release --target AutoLifeTrading` PASS
-- Realdata candidate recheck:
-  - command:
-    - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions`
-  - core_full:
-    - `avg_profit_factor = 11.2958` (PASS)
-    - `avg_total_trades = 4.5556` (FAIL)
-    - `avg_expectancy_krw = -17.2048` (FAIL)
-    - `profitable_ratio = 0.1111` (FAIL)
-    - `overall_gate_pass = false`
-- Loss concentration after patch:
-  - strategy loss share:
-    - `Advanced Scalping = 44.1328%`
-    - `Advanced Momentum = 43.7480%`
-    - `Breakout Strategy = 12.1192%`
-  - entry-pattern hotspots (`MinPatternTrades=4`):
-    - `Advanced Scalping / TRENDING_UP / strength_high`: `25 trades`, `avg_profit_krw=-12.4043`
-    - `Advanced Momentum / TRENDING_UP / strength_mid`: `4 trades`, `avg_profit_krw=-61.4433`
-    - `Advanced Momentum / TRENDING_UP / strength_high`: `4 trades`, `avg_profit_krw=-9.9829`
-  - top markets:
-    - `KRW-ADA`, `KRW-AVAX`, `KRW-XRP`, `KRW-SUI`, `KRW-DOT`
-- Next focus (P0):
-  1. Reduce `Advanced Momentum` losing entries in TRENDING_UP (`strength_mid/high` buckets).
-  2. Add market-level guardrails for repeated loss clusters (`ADA/AVAX/XRP/SUI/DOT`) without globally suppressing trades.
-  3. Re-run realdata loop and check if `avg_total_trades >= 10` can be recovered with non-negative expectancy trend.
-
-### Validation script audit + tuning snapshot (2026-02-14)
-- Python validation/profitability scripts smoke-check:
-  - `py_compile` across `scripts/*.py`: PASS
-  - `--help` checks for `run_*`/`validate_*`: PASS
-- CI gate wrapper fix:
-  - file: `scripts/run_ci_operational_gate.py`
-  - issue: default prime dataset (`simulation_large.csv`) could leave `execution_updates_backtest.jsonl` empty and fail CI gate.
-  - fix: added fallback prime dataset retry (`--backtest-prime-fallback-csv`, default `data/backtest/auto_sim_500.csv`).
-  - verify: `python scripts/run_ci_operational_gate.py -IncludeBacktest` PASS.
-- Candidate tuning run (realdata-only with higher-TF companions):
-  - command:
-    - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode diverse_light -MaxScenarios 8 -RealDataOnly -RequireHigherTfCompanions -ScreenDatasetLimit 6 -ScreenTopK 4 -FinalProfileIds core_full`
-  - best combo: `scenario_diverse_light_005`
-  - best final metrics (`core_full`, 12 datasets):
-    - `avg_profit_factor = 9.6402`
-    - `avg_expectancy_krw = -4.0186`
-    - `avg_total_trades = 22.6364`
-    - `profitable_ratio = 0.1818`
-- Baseline vs tuned on same 12-dataset set:
-  - baseline (`baseline_current`):
-    - `avg_expectancy_krw = -11.5693`
-    - `profitable_ratio = 0.0833`
-    - `avg_total_trades = 18.0`
-  - tuned (`scenario_diverse_light_005`):
-    - `avg_expectancy_krw = -4.0186` (improved)
-    - `profitable_ratio = 0.1818` (improved)
-    - `avg_total_trades = 22.6364` (improved)
-- Temporary full realdata check (mixed 26 datasets, one-off apply then restore):
-  - baseline:
-    - `avg_profit_factor = 13.7064`
-    - `avg_expectancy_krw = -8.8745`
-    - `avg_total_trades = 16.4667`
-  - tuned-combo apply:
-    - `avg_profit_factor = 8.2441`
-    - `avg_expectancy_krw = -5.4770`
-    - `avg_total_trades = 21.6923`
-    - `core_vs_legacy.gate_pass = true`
-  - note: profile gate still fails by `avg_expectancy_krw` and `profitable_ratio`.
-- Added reusable preset from tuning winner:
-  - `config/presets/candidate_stage15_combo005.json`
-  - apply command:
-    - `python scripts/apply_trading_preset.py -PresetPath .\\config\\presets\\candidate_stage15_combo005.json`
-
-### Quality-focus loop + apply (2026-02-14)
-- Added missing `quality_focus` scenario generation in:
-  - `scripts/tune_candidate_gate_trade_density.py`
-- One-shot quality-focus tuning run:
-  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 4 -RealDataOnly -RequireHigherTfCompanions -ScreenDatasetLimit 6 -ScreenTopK 3 -FinalProfileIds core_full`
-  - best combo: `scenario_quality_focus_002`
-  - best (12 datasets, core_full):
-    - `avg_profit_factor = 9.6409`
-    - `avg_expectancy_krw = -3.2451`
-    - `avg_total_trades = 21.0`
-    - `profitable_ratio = 0.1818`
-- Added preset from quality-focus winner:
-  - `config/presets/candidate_stage15_quality_focus_002.json`
-- Applied preset to `build/Release/config/config.json` and rechecked mixed realdata loop (26 datasets):
-  - command:
-    - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune`
-  - core_full:
-    - `avg_profit_factor = 8.2521` (PASS)
-    - `avg_total_trades = 20.0` (PASS)
-    - `avg_expectancy_krw = -4.8036` (FAIL, but improved)
-    - `profitable_ratio = 0.2308` (FAIL)
-    - `core_vs_legacy.gate_pass = true`
-    - `overall_gate_pass = false`
-- Current bottleneck:
-  - `gate_expectancy_pass` and `gate_profitable_ratio_pass` only.
-
-### Strategy logic refactor v1 (2026-02-14, setup/trigger split)
-- Scope:
-  - `src/strategy/ScalpingStrategy.cpp`, `include/strategy/ScalpingStrategy.h`
-  - `src/strategy/MomentumStrategy.cpp`, `include/strategy/MomentumStrategy.h`
-- Structural changes:
-  - Entry logic moved from single-score acceptance toward explicit `setup_score + trigger_score` gating.
-  - Per-market entry context is now stored on signal generation/acceptance and consumed by `shouldExit` for adaptive time-loss cuts.
-  - Context lifecycle wired through `onSignalAccepted` and `updateStatistics` (set/clear).
+2. Verification
 - Build:
-  - `cmake --build build --config Release --target AutoLifeTrading` PASS
-- Validation:
-  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly`
-  - result (`core_full`, 12 datasets):
-    - `avg_profit_factor = 0.8002`
-    - `avg_expectancy_krw = -11.0535`
-    - `avg_total_trades = 20.1667`
-    - `profitable_ratio = 0.0833`
-    - `overall_gate_pass = false`
-- Diagnosis:
-  - Trade frequency target is no longer the primary blocker; trade quality collapsed.
-  - Loss concentration remains mostly in momentum/scalping:
-    - `Advanced Momentum` loss share ~`55.9%`
-    - `Advanced Scalping` loss share ~`38.6%`
-- Next required step (P0):
-  - Move to archetype/state-machine entries (pullback-reclaim / continuation-failure invalidation) instead of score-threshold blending.
+  - `cmake --build build --config Release -j 6` PASS
+- Tests:
+  - `build/Release/AutoLifeEventJournalTest.exe` PASS
+  - `build/Release/AutoLifeExecutionStateTest.exe` PASS
+- Smoke:
+  - `build/Release/AutoLifeTrading.exe --backtest data/backtest/sample_trend_pullback_1m.csv --json` PASS
 
-### Strategy logic refactor v2 (2026-02-14, archetype state machine)
-- Scope:
-  - `src/strategy/ScalpingStrategy.cpp`, `include/strategy/ScalpingStrategy.h`
-  - `src/strategy/MomentumStrategy.cpp`, `include/strategy/MomentumStrategy.h`
-- Structural changes:
-  - Added explicit entry archetype classification:
-    - scalping: `PULLBACK_RECLAIM`, `BREAKOUT_CONTINUATION`
-    - momentum: `PULLBACK_RECLAIM`, `BREAKOUT_CONTINUATION`, `TREND_REACCELERATION`
-  - Entry now requires valid archetype before setup/trigger gate passes.
-  - Per-archetype invalidation/progress thresholds are persisted in entry context and consumed in `shouldExit`.
-    - immediate invalidation cut by drawdown threshold
-    - timed progress-failure exits (`10m/20m` scalping, `30m/60m` momentum)
-- Build:
-  - `cmake --build build --config Release --target AutoLifeTrading` PASS
-- Validation:
-  - command:
-    - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly`
-  - first run after v2 code:
-    - `avg_profit_factor = 9.6072`
-    - `avg_expectancy_krw = -5.4841`
-    - `avg_total_trades = 17.1818`
-    - `profitable_ratio = 0.1818`
-  - tuned preset re-apply (`candidate_stage15_combo005`) and rerun:
-    - `avg_profit_factor = 9.7081`
-    - `avg_expectancy_krw = -3.8303`
-    - `avg_total_trades = 18.3636`
-    - `profitable_ratio = 0.2727`
-    - `core_vs_legacy.gate_pass = true`
-    - `overall_gate_pass = false`
-- Current bottleneck after v2:
-  - still failing:
-    - `gate_expectancy_pass`
-    - `gate_profitable_ratio_pass`
-  - but PF/trade-density are now stably above gate floor in realdata-only parity runs.
+3. Next subtask (already queued)
+- Implement parity invariant report:
+  - per-run TF availability/coverage (`1m/5m/15m/1h/4h`)
+  - ordering monotonicity check
+  - rolling-window equivalence hash for backtest path
+- target artifact:
+  - `build/Release/logs/parity_invariant_report.json`
 
-## Archetype Telemetry Update (2026-02-15)
-
-### Why this pass
-- We need type-level segmentation to tune against hostile-market datasets without overfitting to coarse strategy/regime buckets.
-
-### Implemented
-- End-to-end archetype metadata propagation:
-  - `Signal.entry_archetype` added and defaulted to `UNSPECIFIED`.
-  - `RiskManager::Position.entry_archetype` and `RiskManager::TradeHistory.entry_archetype` added.
-  - `setPositionSignalInfo(...)` extended to accept `entry_archetype`.
-  - live/backtest call sites now pass strategy-generated archetype.
-- Strategy mapping:
-  - `Scalping`: maps classifier result to `PULLBACK_RECLAIM` / `BREAKOUT_CONTINUATION`.
-  - `Momentum`: maps classifier result to `PULLBACK_RECLAIM` / `BREAKOUT_CONTINUATION` / `TREND_REACCELERATION`.
-- Backtest JSON telemetry expanded:
-  - `pattern_summaries[*].entry_archetype` added.
-  - pattern aggregation key now uses `strategy + archetype + regime + buckets`.
-- Pattern analysis script upgraded:
-  - `scripts/analyze_entry_pattern_bias.py` now aggregates/recommends on `(strategy, entry_archetype, regime)`.
-
-### Verification
-- Build PASS:
-  - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release --target AutoLifeTrading`
-- Python script syntax PASS:
-  - `python -m py_compile scripts/analyze_entry_pattern_bias.py`
-- Realdata JSON smoke (hostile sample) PASS:
-  - `build/Release/AutoLifeTrading.exe --backtest .\data\backtest_real\upbit_KRW_ADA_1m_12000.csv --json`
-  - confirmed `pattern_summaries` includes `entry_archetype` values (e.g. `BREAKOUT_CONTINUATION`, `UNSPECIFIED`).
-
-### Next step (P0)
-- Re-run pattern/loss analysis on realdata-only parity set and isolate negative expectancy clusters by `strategy x archetype x regime`.
-- Apply phase-3 fixes on the worst archetype clusters first (entry timing + invalidation path), then re-run candidate gate.
-
-## Stage 15 Momentum/Archetype Iteration Update (2026-02-15)
-
-### This pass (started now)
-- Root-cause check was rerun with archetype telemetry:
-  - `python scripts/analyze_entry_pattern_bias.py --max-datasets 12 --min-pattern-trades 6`
-- Found critical execution-quality bug in strategy signal path:
-  - `ScalpingStrategy::generateSignal` and `MomentumStrategy::generateSignal`
-  - `signal.type` could be set to `BUY` before later gates and return early on failure.
-  - this allowed low-quality entries to leak through.
-
-### Code fix applied
-- `signal.type = BUY` assignment moved to the final accepted path only (after all late gates).
-- Files:
-  - `src/strategy/ScalpingStrategy.cpp`
-  - `src/strategy/MomentumStrategy.cpp`
-
-### Additional archetype/regime patch tested
-- momentum breakout handling updated to avoid broad ranging breakout exposure:
-  - ranging allowed only under strict high-quality sub-condition (`ranging_breakout_quality`)
-  - pullback/reacceleration thresholds tuned for trade continuity.
-- file:
-  - `src/strategy/MomentumStrategy.cpp`
-
-### Verification snapshots (realdata-only, 12 datasets)
-- command:
-  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly`
-- latest:
-  - `avg_profit_factor = 10.3933` (PASS)
-  - `avg_total_trades = 10.3` (PASS)
-  - `avg_expectancy_krw = -9.5054` (FAIL)
-  - `profitable_ratio = 0.2` (FAIL)
-
-### Interpretation
-- Trade-density floor recovered (`>=10`) while preserving strong PF.
-- Remaining bottleneck is still quality distribution (expectancy/profitable-ratio), not raw volume.
-- Loss contributors remain concentrated in `Advanced Scalping` and `Advanced Momentum`.
-
-### Next immediate target
-- Reduce `Scalping TRENDING_UP` loss clusters (`BREAKOUT_CONTINUATION`, `PULLBACK_RECLAIM`) without dropping `avg_total_trades` below 10.
-
-## Pipeline Audit + Phase-1 Parity Patch (2026-02-15)
-
-### Current entry/exit pipeline (as-is)
-- Entry funnel is layered in three places:
-  - `StrategyManager`:
-    - strategy-local signal generation
-    - manager filter (`strength/expected_value`) + robust selector
-  - `BacktestEngine` / `TradingEngine`:
-    - regime + pattern + RR/edge + EV quality gates
-    - dynamic/adaptive thresholding from trade-history stats
-  - `RiskManager`:
-    - final account/risk feasibility gate (`canEnterPosition`)
-- Exit funnel:
-  - strategy `shouldExit`
-  - SL/TP intrabar handling
-  - risk-manager accounting and trade-history writeback
-
-### Gaps found in this audit
-- Live vs Backtest parity gap existed for scalping exit management:
-  - live path already uses breakeven/trailing update loop
-  - backtest path was missing equivalent update before exit checks
-- Hardcoded market list branch (`loss-focus market`) was still affecting adaptive gate tuning:
-  - not data-driven and can overfit specific symbols
-
-### Applied in this pass
-- Backtest/live parity improvement:
-  - `src/backtest/BacktestEngine.cpp`
-    - added scalping breakeven/trailing updates in open-position monitor path
-    - backtest `enterPosition(...)` now forwards
-      - `signal.breakeven_trigger`
-      - `signal.trailing_start`
-- Removed hardcoded market-specific gate branch:
-  - `src/backtest/BacktestEngine.cpp`
-  - `src/engine/TradingEngine.cpp`
-  - adaptive gating now depends on observed `market x strategy x regime` stats only
-
-### Verification
-- Build PASS:
-  - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release --target AutoLifeTrading`
-- Runtime smoke PASS:
-  - `build/Release/AutoLifeTrading.exe --backtest .\data\backtest_real\upbit_KRW_BTC_1m_12000.csv --json`
-- Realdata loop rerun (no-regression check):
+4. Latest real-data revalidation (2026-02-16)
+- Command:
   - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions`
-  - `core_full.avg_profit_factor=10.3933`
-  - `core_full.avg_total_trades=10.3`
-  - `core_full.avg_expectancy_krw=-9.5054`
+- Result (`core_full`):
+  - `avg_profit_factor=0.5277` (fail)
+  - `avg_total_trades=118.8333` (pass)
+  - `avg_expectancy_krw=-7.8330` (fail)
+  - `profitable_ratio=0.0` (fail)
   - `overall_gate_pass=false`
+- Interpretation:
+  - structure migration/parity work is progressing,
+  - profitability objective remains unresolved (PF/expectancy/profitable-ratio bottleneck),
+  - avoid additional threshold overfitting; continue with parity invariant + data quality gate first.
 
-### Next (Phase-2, profitability-focused)
-- Reduce duplicated gate pressure between `StrategyManager` and engine layer (single source for regime-strength floor).
-- Re-run realdata-only loop and compare:
-  - `avg_expectancy_krw`, `profitable_ratio`, and per-archetype loss clusters.
-- If quality still negative:
-  - move more of entry decision to archetype-state invalidation/progress logic, and weaken static threshold stacking.
-
-## Phase-2 Execution Update (2026-02-15, in progress)
-
-### Additional code changes in this pass
-- `src/strategy/StrategyManager.cpp`
-  - hard performance drops in pre-filter/selection softened to score penalties.
-  - pre-filter EV gate made permissive (final EV/edge gate delegated to engine layer).
-- `src/engine/TradingEngine.cpp`
-  - added typed-archetype gate for `Advanced Scalping` / `Advanced Momentum` when core risk plane is active.
-  - allows fallback only for very strong/high-EV signals.
-- `src/backtest/BacktestEngine.cpp`
-  - same typed-archetype gate policy mirrored for backtest parity.
-  - critical parity fix: after backtest entry, `position.entry_time` is now set from candle timestamp (not wall clock).
-- `src/strategy/ScalpingStrategy.cpp`
-  - archetype-specific timed-loss/progress exits tightened then rebalanced (continuation/reclaim paths).
-
-### Root cause found
-- Backtest `holding_time_seconds` could be distorted by clock-source mismatch:
-  - `RiskManager::enterPosition()` used system time
-  - backtest `shouldExit()` compared against candle time
-- This prevented intended time-based exit logic from being evaluated consistently in backtest.
-
-### Verification snapshots (RealDataOnly, 12 datasets)
-- Before clock-source fix:
-  - `core_full.avg_profit_factor = 10.3933`
-  - `core_full.avg_total_trades = 10.3`
-  - `core_full.avg_expectancy_krw = -9.5054`
-- After parity fix + archetype/timed-exit patch:
-  - `core_full.avg_profit_factor = 10.3166`
-  - `core_full.avg_total_trades = 9.9`
-  - `core_full.avg_expectancy_krw = -5.5229`
-
-### Current status
-- `avg_expectancy_krw` improved materially.
-- Remaining gate blockers:
-  - `avg_total_trades` slight miss (`9.9` vs required `10`)
-  - `profitable_ratio` still low.
-
-## Stage 15 Session Update (2026-02-15, current)
-
-### Reliability/consistency fixes kept
-- Expanded adaptive-state I/O isolation for parallel backtests:
-  - `src/strategy/BreakoutStrategy.cpp`
-  - `src/strategy/MeanReversionStrategy.cpp`
-  - env flag: `AUTOLIFE_DISABLE_ADAPTIVE_STATE_IO=1`
-- Analysis scripts now run backtests with adaptive-state I/O disabled:
-  - `scripts/analyze_loss_contributors.py`
-  - `scripts/analyze_entry_pattern_bias.py`
-- Added worker cap option for analysis speed/stability:
-  - `--max-workers` (default `4`) in both analysis scripts.
-
-### Latest validated snapshot (realdata-only, gate min trades = 8)
-- command:
-  - `python scripts/run_realdata_candidate_loop.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --gate-min-avg-trades 8`
-- core_full:
-  - `avg_profit_factor = 10.2885` (pass)
-  - `avg_total_trades = 8.1` (pass)
-  - `avg_expectancy_krw = -6.2280` (fail)
-  - `profitable_ratio = 0.2` (fail)
-  - `overall_gate_pass = false`
-
-### Current bottleneck (pattern/loss basis)
-- top strategy loss share:
-  - `Advanced Scalping = 65.1642%`
-  - `Advanced Momentum = 28.5072%`
-- dominant losing patterns:
-  - `Advanced Scalping | BREAKOUT_CONTINUATION | TRENDING_UP | avg_profit_krw = -15.0006 | trades=40`
-  - `Advanced Momentum | BREAKOUT_CONTINUATION | RANGING | avg_profit_krw = -3.6215 | trades=7`
-
-### Next execution focus
-- P0: reduce loss in the two dominant patterns without dropping below trade floor 8.
-- P1: run short tuning loop only after strategy-side pattern corrections are applied.
-
-## Root-Cause Diagnostics Update (2026-02-15)
-
-### New diagnostic runner
-- Added: `scripts/analyze_root_cause_diagnostics.py`
-- Outputs:
-  - `build/Release/logs/root_cause_diagnostics_summary.json`
-  - `build/Release/logs/root_cause_loss_patterns.csv`
-
-### Core findings (core_full, realdata 12 datasets)
-- total_trades: `86`
-- total_profit_krw: `-623.0801`
-- total_fees_krw: `319.6884`
-- gross_profit_before_fees_krw: `-303.3917`
-- avg_expectancy_krw: `-7.2451`
-- avg_gross_expectancy_krw: `-3.5278`
-- fee_share_of_net_loss_pct: `51.3077%`
-- intrabar_stop_tp_collision_count: `1`
-
-### Interpretation
-- Main loss source is not intrabar stop/TP collision ordering.
-- Loss is dominated by:
-  - fee drag (`~51%` of net loss)
-  - weak post-entry follow-through and strategy exits.
-- Exit reasons:
-  - `StrategyExit=29`, `StopLoss=27`, `TakeProfit1=22`, `TakeProfit2=8`
-
-### Dominant structural loss patterns
-- `Advanced Scalping | BREAKOUT_CONTINUATION | TRENDING_UP | ev_high`
-  - trades=`36`, avg_profit_krw=`-11.7817`
-- `Advanced Momentum | BREAKOUT_CONTINUATION | RANGING | ev_high`
-  - trades=`12`, avg_profit_krw=`-6.5365`
-
-### Next action rule
-- Do not globally relax filters.
-- Apply targeted changes only on the two dominant loss archetypes and re-run this diagnostic script each patch.
-
-## Stage 15 Improvement Update (2026-02-15, diverse_wide_013)
-
-### Applied candidate config (runtime)
-- source: tuning winner `scenario_diverse_wide_013`
-- updated: `config/config.json`
-- added preset: `config/presets/candidate_stage15_diverse_wide_013.json`
-
-### Recheck result (realdata-only, gate min trades=8)
-- command:
-  - `python scripts/run_realdata_candidate_loop.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --gate-min-avg-trades 8`
-- `core_full`:
-  - `avg_profit_factor: 10.2885 -> 10.3365` (improved)
-  - `avg_total_trades: 8.1 -> 8.4` (improved)
-  - `avg_expectancy_krw: -6.2280 -> -5.8690` (improved)
-  - `profitable_ratio: 0.2` (unchanged)
-  - `overall_gate_pass=false` (still fail: expectancy/profitable_ratio)
-
-### Root-cause monitor after apply
-- `python scripts/analyze_root_cause_diagnostics.py --profile-id core_full --max-workers 4`
-- major loss cluster still remains:
-  - `Advanced Scalping | BREAKOUT_CONTINUATION | TRENDING_UP`
-  - `Advanced Momentum | BREAKOUT_CONTINUATION | RANGING`
-
-## Stage 15 Update (2026-02-15, two-step entry + cost-aware TP/SL + data hostility check)
-
-### Code changes applied (backtest/live parity)
-- `src/backtest/BacktestEngine.cpp`
-  - added second-stage entry confirmation gate:
-    - margin-based confirm on top of RR/edge pass (`rr_margin`, `edge_margin`)
-    - regime/liquidity/strategy-quality adaptive margin.
-  - upgraded RR rebalance to cost-aware target:
-    - `target_rr` now floored by effective round-trip cost and regime/liquidity context.
-    - `TP1` minimum RR also includes cost-cover floor.
-- `src/engine/TradingEngine.cpp`
-  - same second-stage confirmation and cost-aware TP/SL rebalance logic mirrored.
-
-### Recheck result (realdata-only, gate min trades=8)
-- command:
-  - `python scripts/run_realdata_candidate_loop.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --gate-min-avg-trades 8`
-- `core_full`:
-  - `avg_profit_factor: 10.3365 -> 10.3448`
-  - `avg_total_trades: 8.4 -> 8.4`
-  - `avg_expectancy_krw: -5.8690 -> -5.2277`
-  - `profitable_ratio: 0.2 -> 0.2`
-  - `overall_gate_pass=false` (remaining fail: expectancy/profitable_ratio)
-
-### Root-cause diagnostics snapshot after patch
-- command:
-  - `python scripts/analyze_root_cause_diagnostics.py --profile-id core_full --max-workers 4`
-- results:
-  - `total_trades=89`
-  - `avg_expectancy_krw=-6.7838`
-  - `avg_gross_expectancy_krw=-3.0794`
-  - `fee_share_of_net_loss_pct=54.6074%`
-  - `intrabar_stop_tp_collision_count=1`
-- interpretation:
-  - collision ordering remains minor;
-  - fee drag + weak follow-through patterns still dominant.
-
-### Dataset hostility validation (new)
-- added script:
-  - `scripts/analyze_dataset_hostility.py`
-- command:
-  - `python scripts/analyze_dataset_hostility.py --gate-report-json build/Release/logs/profitability_gate_report_realdata.json`
-- outputs:
-  - `build/Release/logs/dataset_hostility_summary.json`
-  - `build/Release/logs/dataset_hostility_details.csv`
-- result:
-  - `hostility_level=high`
-  - `avg_adversarial_score=62.7879`
-  - `negative_return_share=1.0`
-  - `high_drawdown_share_ge_8pct=0.9167`
-  - `all_profiles_loss_share=0.8333`
-
-## Stage 15 Update (2026-02-15, live scan-speed adaptive gating)
-
-- `src/engine/TradingEngine.cpp`
-  - added per-scan market hostility scoring from regime mix (TRENDING_DOWN/HIGH_VOLATILITY share weighted).
-  - quick internal adaptation in same scan cycle:
-    - `adaptive_filter_floor` tightens when hostility rises.
-    - `per_scan_buy_limit` automatically shrinks in hostile regime (volume is not forced).
-    - `min_reward_risk_gate`/`min_expected_edge_gate` tighten in hostile regime.
-  - severe hostile + recent negative edge condition:
-    - pause new entries for that scan (`Hostile market entry pause` log).
-  - starvation-relaxation is reduced in hostile regime to avoid over-relaxing just to keep trade count.
-
-## Stage 15 Update (2026-02-15, verification-chain hostility adaptive thresholds)
-
-- updated verification scripts (4):
+5. Gate policy unification in progress (2026-02-16)
+- Testing policy was aligned to dataset hostility, not strict/adaptive split.
+- Script updates:
   - `scripts/run_profitability_matrix.py`
+    - hostility-adaptive thresholds default to enabled,
+    - explicit disable flags added for rollback/debug only.
   - `scripts/run_realdata_candidate_loop.py`
-  - `scripts/tune_candidate_gate_trade_density.py`
-  - `scripts/run_candidate_auto_improvement_loop.py`
-- behavior:
-  - matrix gate now computes dataset hostility score directly from input candles and derives effective gate thresholds.
-  - realdata loop forwards hostility-adaptive mode and prints effective thresholds in run log.
-  - tuning script consumes effective thresholds for objective/constraint scoring (optional toggle).
-  - auto-improvement loop consumes effective thresholds for target checks and tuning objective inputs.
-- smoke checks:
-  - `python scripts/run_realdata_candidate_loop.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --gate-min-avg-trades 8 --enable-hostility-adaptive-thresholds`
-  - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode legacy_only --max-scenarios 1 --real-data-only --require-higher-tf-companions --screen-dataset-limit 4 --screen-top-k 1 --gate-min-avg-trades 8 --enable-hostility-adaptive-thresholds --use-effective-thresholds-for-objective`
-  - `python scripts/run_candidate_auto_improvement_loop.py --max-iterations 1 --skip-tune-phase --real-data-only --require-higher-tf-companions --enable-hostility-adaptive-targets`
-
-### Latest run snapshot (hostility-adaptive enabled)
-- command:
-  - `python scripts/run_realdata_candidate_loop.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --gate-min-avg-trades 8 --enable-hostility-adaptive-thresholds`
-- effective thresholds (auto):
-  - `min_pf=0.9593`, `min_expectancy_krw=-3.6592`, `min_profitable_ratio=0.3264`, `min_avg_win_rate_pct=30.0`, `min_avg_trades=3`
-- `core_full`:
-  - `avg_profit_factor=12.3293`
-  - `avg_total_trades=3.6667`
-  - `avg_expectancy_krw=0.5019`
-  - `profitable_ratio=0.3333`
-- gate:
-  - `overall_gate_pass=true` (hostility-adaptive threshold context)
-
-### Note
-- Current pass is achieved under high-hostility adaptive thresholds with low trade frequency.
-- Next step remains valid: improve absolute profitability quality while recovering trade count in non-hostile regimes.
-
-## Stage 15 Update (2026-02-15, verification stability hardening)
-
-- cause addressed:
-  - intermittent verification failures from concurrent matrix/tune/auto-loop runs touching shared config/artifacts.
-- hardening applied:
-  - added shared lock helper: `scripts/_script_common.py` (`verification_lock`).
-  - gate matrix runner now supports stable execution options:
-    - `--max-workers` (default `1`)
-    - `--backtest-retry-count` (default `2`)
-    - lock options (`--verification-lock-*`).
-  - propagated stable options through chain:
-    - `scripts/run_realdata_candidate_loop.py`
-    - `scripts/tune_candidate_gate_trade_density.py`
-    - `scripts/run_candidate_auto_improvement_loop.py`
-- verification runs (sequential/stable mode):
-  - `run_realdata_candidate_loop.py` (workers=1, retry=2) PASS
-  - `tune_candidate_gate_trade_density.py` smoke (workers=1, retry=2, no cache) PASS
-  - `run_candidate_auto_improvement_loop.py` 1-iteration smoke (workers=1, retry=2) PASS
-
-## Stage 15 Update (2026-02-15, dual-mode loop artifact + EV bucket realigned)
-
-### 1) `run_realdata_candidate_loop.py` dual-mode artifact output
-- Added `--run-both-hostility-modes`:
-  - one command now runs matrix twice:
-    - strict (`hostility adaptive OFF`)
-    - adaptive (`hostility adaptive ON`)
-  - auto-emits separate artifacts:
-    - `..._realdata_strict.json/csv`
-    - `..._realdata_adaptive.json/csv`
-  - still writes canonical `..._realdata.json/csv` from selected mode for compatibility.
-- Added propagation option in auto loop:
-  - `scripts/run_candidate_auto_improvement_loop.py`
-  - new flag: `--emit-strict-adaptive-pair` (forwards to realdata loop).
-
-### 2) `ev_high` bucket realignment
-- Updated in `src/backtest/BacktestEngine.cpp`:
-  - EV bucket thresholds tightened to net-edge semantics:
-    - `ev_neutral < 0.0012`
-    - `ev_positive < 0.0030`
-    - else `ev_high`
-  - Pattern-label EV now uses realized-aligned edge:
-    - `realized_aligned_edge = 0.60 * expected_edge + 0.40 * realized_net_edge`
-    - where `realized_net_edge = profit_loss / (entry_price * quantity)`.
-
-### Validation
-- command:
-  - `python scripts/run_realdata_candidate_loop.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --gate-min-avg-trades 8 --enable-hostility-adaptive-thresholds --run-both-hostility-modes --matrix-max-workers 1 --matrix-backtest-retry-count 2`
-- snapshot:
-  - strict: `overall_gate_pass=false`
-  - adaptive: `overall_gate_pass=true`
-  - selected(core_full): `avg_profit_factor=11.8427`, `avg_total_trades=6.6667`, `avg_expectancy_krw=-0.2125`
-- root-cause pattern bucket now shows mixed labels (not all `ev_high`):
-  - example: `Advanced Scalping / PULLBACK_RECLAIM / TRENDING_UP` split into `ev_high` and `ev_positive`.
-
-### Follow-up experiments (same session)
-- Tried additional hardening for `Momentum/BREAKOUT_CONTINUATION@TRENDING_UP` at:
-  - strategy-side quality tier tightening
-  - engine/backtest archetype risk adjustment
-- Result:
-  - no consistent gain on `core_full` gate metrics, and some variants worsened trade count/expectancy.
-- Action:
-  - regressive variants rolled back.
-  - stable baseline kept:
-    - strict: `avg_pf=11.8427`, `avg_trades=6.6667`, `avg_expectancy_krw=-0.2125`, `overall_gate_pass=false`
-    - adaptive: same profile metrics, `overall_gate_pass=true` under effective hostility thresholds.
-
-## Stage 15 Update (2026-02-15, intra-turn regression check and rollback)
-
-- attempted patch (this turn):
-  - tightened `Momentum` and `Scalping` `BREAKOUT_CONTINUATION` archetype classification gates.
-  - tightened stagnation/early adverse exits for continuation-type positions.
-- immediate verification (realdata dual-mode):
-  - command:
-    - `python scripts/run_realdata_candidate_loop.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --run-both-hostility-modes --gate-min-avg-trades 8`
-  - regressive snapshot (before rollback):
-    - `core_full.avg_total_trades=4.5556`
-    - `core_full.avg_expectancy_krw=-2.7688`
-    - strict/adaptive profile quality worsened vs baseline.
-- action:
-  - rolled back the above strategy-side tightening changes.
-  - rebuilt and reran the same command.
-- post-rollback snapshot (restored baseline):
-  - strict:
-    - `core_full.avg_profit_factor=11.8427`
-    - `core_full.avg_total_trades=6.6667`
-    - `core_full.avg_expectancy_krw=-0.2125`
-    - `overall_gate_pass=false`
-  - adaptive:
-    - same `core_full` profile metrics
-    - `overall_gate_pass=true` (hostility-adaptive thresholds)
-- conclusion:
-  - simple hard-threshold tightening at archetype/exit layer is still regressive.
-  - next patch should target causal features (entry quality decomposition + fee-aware net-edge optimization) before adding stronger hard filters.
-
-## Stage 15 Update (2026-02-15, adaptive-state I/O toggle for matrix chain)
-
-- issue identified:
-  - verification chain forced `AUTOLIFE_DISABLE_ADAPTIVE_STATE_IO=1` in matrix runs, so strategy adaptive learning state was never reflected in gate/tuning loops.
-- updates:
-  - `scripts/run_profitability_matrix.py`
-    - added `--enable-adaptive-state-io` (default remains disabled for legacy-safe behavior).
-  - `scripts/run_realdata_candidate_loop.py`
-    - added pass-through `--enable-adaptive-state-io`.
-  - `scripts/run_candidate_auto_improvement_loop.py`
-    - added pass-through `--enable-adaptive-state-io`.
-- validation:
-  - default mode (adaptive state I/O disabled):
-    - `core_full`: `avg_profit_factor=11.8427`, `avg_total_trades=6.6667`, `avg_expectancy_krw=-0.2125`
-    - `build/Release/state` remains empty after run.
-  - enabled mode (`--enable-adaptive-state-io`):
-    - adaptive state files are created (`momentum_archetype_stats.json`, `scalping_archetype_stats.json`, ...)
-    - current hostile dataset set showed regression snapshot:
-      - `core_full.avg_total_trades=4.5556`
-      - `core_full.avg_expectancy_krw=-2.3804`
-- note:
-  - keep default verification path with adaptive state I/O disabled.
-  - treat adaptive-state-enabled matrix as an explicit experiment mode until state-update policy is stabilized.
-
-## Stage 15 Update (2026-02-15, train/eval split orchestrator)
-
-- added script:
+    - strict/adaptive dual-run path deprecated and removed from active execution,
+    - single hostility-driven run is now the only active path,
+    - stale strict/adaptive variant artifacts are removed before run.
   - `scripts/run_candidate_train_eval_cycle.py`
-- purpose:
-  - split pipeline into:
-    - training stage: adaptive state I/O ON
-    - state snapshot stage
-    - evaluation stage: deterministic chain (adaptive state I/O OFF)
-- default behavior:
-  - clears `build/Release/state` before training
-  - runs N training iterations (`--train-iterations`)
-  - snapshots state to `build/Release/state_snapshots/state_snapshot_<timestamp>`
-  - runs deterministic evaluation
-  - writes summary:
-    - `build/Release/logs/candidate_train_eval_cycle_summary.json`
-- smoke command:
-  - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --run-both-hostility-modes --gate-min-avg-trades 8 --matrix-max-workers 1 --matrix-backtest-retry-count 2`
-- smoke snapshot:
-  - train_1 (adaptive ON): `core_full.avg_total_trades=4.5556`, `avg_expectancy_krw=-2.3804`
-  - eval_deterministic (adaptive OFF): `core_full.avg_total_trades=6.6667`, `avg_expectancy_krw=-0.2125`
-  - state snapshot files: `breakout_entry_stats.json`, `momentum_archetype_stats.json`, `scalping_archetype_stats.json`
+    - strict/adaptive pair consumption disabled (selected snapshot only).
+- Next:
+  - re-run realdata loop and train/eval cycle once to confirm no stale strict/adaptive coupling remains.
+  - verification completed:
+    - `python -m py_compile scripts/run_profitability_matrix.py scripts/run_realdata_candidate_loop.py scripts/run_candidate_train_eval_cycle.py` PASS
+    - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions` PASS (single hostility-driven run, `adaptive_mode=full`, `overall_gate_pass=false`)
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --gate-min-avg-trades 8 --max-markets 4 --disable-walk-forward` PASS (`snapshot.strict/adaptive=null`, selected-only evaluation)
 
-## Stage 15 Update (2026-02-15, strict bottleneck re-check + strategy pass)
+6. P0-2 parity invariant report delivered (2026-02-16)
+- Added new script:
+  - `scripts/generate_parity_invariant_report.py`
+  - output: `build/Release/logs/parity_invariant_report.json`
+- Report content:
+  - TF availability/coverage (`1m/5m/15m/1h/4h`)
+  - ordering monotonicity after normalization
+  - duplicate/gap/stale-tail diagnostics
+  - rolling-window equivalence hash (binary-search vs incremental-cursor) for backtest-style TF windows
+- Integrated into realdata loop artifact chain:
+  - `scripts/run_realdata_candidate_loop.py`
+    - runs parity report before matrix by default,
+    - supports `--skip-parity-invariant`, `--fail-on-parity-invariant`,
+    - prints `parity_invariant_report=...` path in completion output.
+- Loop-speed control for long iterative runners:
+  - `scripts/run_candidate_train_eval_cycle.py`
+    - default skips parity report in nested stages (`--run-parity-invariant` to enable).
+  - `scripts/run_candidate_auto_improvement_loop.py`
+    - default skips parity report in nested iterations (`--run-parity-invariant` to enable).
+- Verification:
+  - `python -m py_compile scripts/generate_parity_invariant_report.py scripts/run_realdata_candidate_loop.py scripts/run_candidate_train_eval_cycle.py scripts/run_candidate_auto_improvement_loop.py` PASS
+  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions` PASS
+    - parity summary: `dataset_count=12`, `invariant_pass_count=8`, `invariant_fail_count=4`
+    - fail datasets: `KRW-AVAX`, `KRW-BCH`, `KRW-DOT`, `KRW-LINK`
+    - fail reason: `gap_ratio_tolerance_pass=false` (timestamp gap ratio above tolerance)
+  - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --gate-min-avg-trades 8 --max-markets 4 --disable-walk-forward` PASS (nested loops keep speed path by default)
+- Next subtask:
+  - wire parity/data-quality summary into tuning objective prefilter so high-gap datasets are weighted down or excluded automatically.
+  - target artifact: `build/Release/logs/dataset_quality_gate_summary.json`
 
-- objective in this pass:
-  - keep strict gate chain deterministic,
-  - recover `avg_total_trades` to gate floor 8,
-  - avoid regressing `avg_expectancy_krw`.
+7. P0-3 data quality gate wired into tuning chain (2026-02-16)
+- `scripts/tune_candidate_gate_trade_density.py`
+  - parity-based dataset quality gate pre-step added,
+  - quality-pass datasets only are used for screen/final tuning evaluation,
+  - fail-open/fail-closed behavior added:
+    - default: fail-open when zero pass,
+    - optional: `--dataset-quality-gate-fail-closed` to hard fail.
+  - quality gate state is persisted into tuning summary JSON under `dataset_quality_gate`.
+- `scripts/run_candidate_auto_improvement_loop.py`
+  - added parity-report pass-through controls for nested loops:
+    - `--run-parity-invariant` (default off for speed),
+    - `--fail-on-parity-invariant`.
+- Verification:
+  - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_realdata_candidate_loop.py scripts/generate_parity_invariant_report.py scripts/run_candidate_auto_improvement_loop.py scripts/run_candidate_train_eval_cycle.py` PASS
+  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 1 -RealDataOnly -RequireHigherTfCompanions -ScreenDatasetLimit 2 -ScreenTopK 1 -FinalProfileIds core_full -MatrixMaxWorkers 1 -MatrixBacktestRetryCount 1` PASS
+    - quality gate summary written: `build/Release/logs/dataset_quality_gate_summary.json`
+    - input 12 datasets -> pass 8 / fail 4 (gap-ratio fail: `AVAX`, `BCH`, `DOT`, `LINK`)
+    - tuning summary now includes `dataset_quality_gate` block and effective `dataset_count=8`.
+- Next subtask:
+  - connect quality-gate severity (`gap/dup/stale`) to hostility score blending so gate floors and tuning objectives are adjusted together.
+  - target artifact: `build/Release/logs/dataset_hostility_quality_blend_report.json`
 
-- completed:
-  - gate sampling sensitivity re-check (`min_trades_per_run_for_gate=1/2/3`) on latest code:
-    - artifact: `build/Release/logs/experiments/post_patch_gate_sampling/summary.csv`
-    - finding: sampling-only changes do not solve strict pass.
-  - `MomentumStrategy` update:
-    - added adaptive archetype block hook:
-      - `shouldBlockArchetypeByAdaptiveStats(...)`
-      - applied in both `generateSignal` and `shouldEnter`.
-    - tightened `BREAKOUT_CONTINUATION` entry quality vs prior relaxed variants.
-    - re-balanced `TREND_REACCELERATION` thresholds from over-relaxed state.
-  - `ScalpingStrategy` update:
-    - selective `TRENDING_UP` quality gate relaxation (strict/flow branch) to recover sample count
-      without reopening `RANGING`.
-  - diagnostic script correction:
-    - `scripts/analyze_root_cause_diagnostics.py` now applies profile flags consistently with matrix
-      chain (`trading.enable_core_*`) before per-dataset backtest analysis.
+8. P0-4 hostility+quality blended thresholding integrated (2026-02-16)
+- `scripts/run_profitability_matrix.py`
+  - added dataset quality analysis (`duplicate/gap/stale`) and quality-risk score per dataset,
+  - added blended adversity context (`hostility + quality`) and switched adaptive threshold relief source to blended score/level,
+  - added blend artifact output:
+    - `build/Release/logs/dataset_hostility_quality_blend_report.json`,
+  - core-vs-legacy adaptive delta relax now uses blended hostility level (not hostility-only).
+- `scripts/run_realdata_candidate_loop.py`
+  - snapshot logging now prints blended hostility + quality summary.
+- `scripts/tune_candidate_gate_trade_density.py`
+  - per-combo summary rows now include:
+    - `quality_level`,
+    - `quality_avg_score`,
+    - `hostility_blended_level`,
+    - `hostility_blended_score`,
+  - eval cache schema bumped to avoid stale row format reuse.
+- Verification:
+  - `python -m py_compile scripts/run_profitability_matrix.py scripts/run_realdata_candidate_loop.py scripts/tune_candidate_gate_trade_density.py` PASS
+  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions` PASS
+    - blended summary: `level=low`, `score=35.0091`, `quality=low`, `q_score=10.492`
+    - artifact emitted: `build/Release/logs/dataset_hostility_quality_blend_report.json`
+  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 1 -RealDataOnly -RequireHigherTfCompanions -ScreenDatasetLimit 2 -ScreenTopK 1 -FinalProfileIds core_full -MatrixMaxWorkers 1 -MatrixBacktestRetryCount 1` PASS
+    - tuning summary row now carries blended/quality fields with non-null values.
+- Next subtask:
+  - use blended hostility/quality context inside candidate auto-improvement loop targeting logic (dynamic objective floors by blended band).
+  - target artifact: `build/Release/logs/candidate_auto_improvement_summary.json` (with blended-band context and per-iteration active floors).
 
-- latest verification snapshot (deterministic strict/adaptive dual run):
-  - command:
-    - `python scripts/run_realdata_candidate_loop.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --run-both-hostility-modes --gate-min-avg-trades 8`
-  - strict `core_full`:
-    - `avg_profit_factor=11.9107`
-    - `avg_total_trades=8.0` (pass)
-    - `avg_expectancy_krw=0.8912` (pass)
-    - `profitable_ratio=0.4444` (fail; threshold `0.55`)
-    - `overall_gate_pass=false`
-  - adaptive:
-    - `overall_gate_pass=true` on hostility-adaptive thresholds.
+9. P0-5 auto-improvement loop dynamic objective floors by blended band (2026-02-16)
+- `scripts/run_candidate_auto_improvement_loop.py`
+  - threshold context now keeps `effective`, `quality`, `blended_context` from matrix report,
+  - iteration-level objective floors are now derived dynamically from blended-effective thresholds:
+    - `objective_min_profitable_ratio_iter`
+    - `objective_min_avg_win_rate_pct_iter`
+    - `objective_min_expectancy_krw_iter`
+    - `objective_min_avg_trades_iter`
+  - per-iteration row now records blended/quality context:
+    - `blended_hostility_level`, `blended_hostility_score`, `quality_level`, `quality_avg_score`.
+- Verification:
+  - `python -m py_compile scripts/run_candidate_auto_improvement_loop.py` PASS
+  - `python scripts/run_candidate_auto_improvement_loop.py -MaxIterations 1 -SkipTunePhase -RealDataOnly -MaxRuntimeMinutes 30` PASS
+    - status: `paused_max_iterations` (expected by test setup),
+    - `candidate_auto_improvement_iterations.csv` includes new objective-floor + blended/quality columns with non-null values.
+- Next subtask:
+  - start P0-1 Upbit compliance hardening execution:
+  - shared request-budget telemetry + deterministic 429/418 degrade/recover event logging across fetch/scan/live.
+  - target artifacts:
+    - `build/Release/logs/upbit_compliance_telemetry.jsonl`
+    - `build/Release/logs/upbit_compliance_summary.json`
 
-- current strict bottleneck:
-  - only `gate_profitable_ratio_pass=false` remains for `core_full`.
-  - same run shows `gate_trades_pass=true` and `gate_expectancy_pass=true`.
+10. P0-1 compliance hardening started (fetch tool path, 2026-02-16)
+- `scripts/fetch_upbit_historical_candles.py`
+  - Added `Remaining-Req` parsing and telemetry logging per request.
+  - Added deterministic 429/418 retry/backoff handling with explicit throttle/recover event capture.
+  - Added compliance artifacts:
+    - telemetry stream: `build/Release/logs/upbit_compliance_telemetry.jsonl`
+    - per-market summary: `build/Release/logs/upbit_compliance_summary_<MARKET>_<TF>.json`
+  - Added CLI flags:
+    - `--compliance-telemetry-jsonl`
+    - `--compliance-summary-json`
+    - `--max-retries-429`
+    - `--max-retries-418`
+    - `--retry-base-ms`
+- Verification:
+  - `python -m py_compile scripts/fetch_upbit_historical_candles.py` PASS
+  - `python scripts/fetch_upbit_historical_candles.py -Market KRW-BTC -Unit 1 -Candles 20 -ChunkSize 20 -SleepMs 0 -OutputPath .\\build\\Release\\logs\\fetch_test_upbit_krw_btc_1m_20.csv` PASS
+  - `python scripts/fetch_upbit_historical_candles.py -Market KRW-ETH -Unit 5 -Candles 5 -ChunkSize 5 -SleepMs 0 -OutputPath .\\build\\Release\\logs\\fetch_test_upbit_krw_eth_5m_5.csv` PASS
+  - Output check:
+    - `upbit_compliance_telemetry.jsonl` contains request-level success event with parsed `Remaining-Req`.
+    - `upbit_compliance_summary_KRW_ETH_5m.json` emitted with retry/throttle/recover counters.
+- Next subtask:
+  - extend same compliance telemetry schema to runtime HTTP client (`UpbitHttpClient/RateLimiter`) so live scanner/engine/backtest share the same degrade/recover event vocabulary.
+  - target artifacts:
+    - `build/Release/logs/upbit_compliance_telemetry.jsonl` (runtime events appended)
+    - `build/Release/logs/upbit_compliance_summary_runtime.json`
 
-- root cause snapshot for current state:
-  - file: `build/Release/logs/root_cause_diagnostics_core_full_latest3.json`
-  - dominant loss clusters:
-    - `Advanced Momentum / TREND_REACCELERATION / TRENDING_UP / ev_high`
-    - `Advanced Momentum / BREAKOUT_CONTINUATION / RANGING / ev_positive`
-    - `Advanced Scalping / PULLBACK_RECLAIM / TRENDING_UP / ev_neutral`
+11. P0-1 compliance hardening extended to runtime HTTP client (2026-02-16)
+- `include/execution/RateLimiter.h`
+  - added runtime compliance telemetry API:
+    - `recordHttpOutcome(group, source_tag, status_code, remaining_req_header)`
+  - added runtime summary counters/state fields for:
+    - request/success/rate-limit/recover/backoff totals.
+- `src/execution/RateLimiter.cpp`
+  - added JSONL telemetry append + runtime summary write:
+    - `logs/upbit_compliance_telemetry.jsonl`
+    - `logs/upbit_compliance_summary_runtime.json`
+  - added structured event vocabulary:
+    - `http_success`
+    - `rate_limit_error` (`429`/`418`, with `backoff_ms`)
+    - `http_error`
+  - summary counters aligned with fetch-tool schema:
+    - `request_count`, `http_success_count`, `rate_limit_429_count`, `rate_limit_418_count`,
+    - `retry_count`, `backoff_sleep_ms_total`, `throttle_event_count`, `recover_event_count`.
+- `src/network/UpbitHttpClient.cpp`
+  - wired GET/POST/DELETE response path to call `recordHttpOutcome(...)` on every HTTP response.
+  - preserved existing limiter behavior (`updateFromHeader`, `handleRateLimitError`) and added telemetry without changing request flow.
+- Verification:
+  - build:
+    - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeTrading` PASS
+  - added runtime telemetry test target:
+    - `AutoLifeRateLimiterComplianceTest`
+    - files:
+      - `tests/TestRateLimiterComplianceTelemetry.cpp`
+      - `CMakeLists.txt` (new test target)
+  - test verification:
+    - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeRateLimiterComplianceTest` PASS
+    - `build\\Release\\AutoLifeRateLimiterComplianceTest.exe` PASS
+    - artifact check PASS:
+      - `build/Release/logs/upbit_compliance_summary_runtime.json`
+      - `build/Release/logs/upbit_compliance_telemetry.jsonl` (runtime events appended)
+- Next subtask:
+  - run one controlled live-HTTP smoke (non-order quotation call only) and confirm:
+    - JSONL event rows appended,
+    - runtime summary counter increments and recover counter behavior after rate-limit simulation/observation.
 
-## Stage 15 Update (2026-02-15, core default-on migration finalized)
-- Completed:
-  - PR #3 merged (`5935368`)
-    - strict hostility trades-only threshold chain integrated
-    - CI operational gate script hardened (missing fallback dataset/artifact-empty no longer hard-fail)
-  - PR #4 merged (`ead34cf`)
-    - core plane defaults switched to ON:
-      - `include/engine/EngineConfig.h`
-      - `src/common/Config.cpp`
-  - CI PR Gate passes confirmed on both PRs:
-    - run `22033385134` (PR #3)
-    - run `22033569111` (PR #4)
+12. P0-1 quotation-only runtime smoke path added (2026-02-16)
+- Added non-order live HTTP probe executable:
+  - `src/tools/LiveQuotationProbe.cpp`
+  - target: `AutoLifeLiveQuotationProbe` in `CMakeLists.txt`
+  - behavior:
+    - quotation-only calls: `getMarkets`, `getTicker`, `getOrderBook`, `getCandles(1m)`
+    - no order placement path
+    - prints runtime compliance artifact paths
+- Cleanup while implementing:
+  - removed build warning by using caught exception message in logger init:
+    - `src/common/Logger.cpp` (`ex` unused warning removed)
+- Verification:
+  - build:
+    - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeLiveQuotationProbe` PASS
+    - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeTrading` PASS
+  - runtime smoke:
+    - `build\\Release\\AutoLifeLiveQuotationProbe.exe --market KRW-BTC --candles 5`
+    - result: FAIL (expected blocker in this shell) due missing API key env/config at runtime context.
+  - regression test:
+    - `build\\Release\\AutoLifeRateLimiterComplianceTest.exe` PASS
+- Next subtask:
+  - rerun `AutoLifeLiveQuotationProbe` in key-available shell/session and confirm runtime telemetry append from real quotation responses.
 
-- Current policy:
-  - runtime default path: core
-  - legacy path: explicit config opt-out only
+13. P0-1 quotation smoke completed with `.env` fallback (2026-02-16)
+- `src/common/Config.cpp`
+  - Added `.env` fallback loading for `UPBIT_ACCESS_KEY` / `UPBIT_SECRET_KEY` when process env vars are not set.
+  - Fixed Windows env-read path so `.env` fallback is reachable when `_dupenv_s` returns empty.
+  - Added explicit fallback candidate based on runtime config path:
+    - `build/Release/config/config.json` -> repo-root `.env`.
+- Verification:
+  - Build:
+    - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeLiveQuotationProbe` PASS
+  - Runtime quotation probe:
+    - `build\\Release\\AutoLifeLiveQuotationProbe.exe --market KRW-BTC --candles 5` PASS
+    - observed:
+      - `.env loaded from: ...\\build\\Release\\../../.env`
+      - `markets_count=689`, `ticker_items=1`, `orderbook_items=1`, `candles_1m_items=5`
+  - Runtime compliance artifacts updated:
+    - `build/Release/logs/upbit_compliance_telemetry.jsonl` appended with quotation events (`market/ticker/orderbook/candle` groups)
+    - `build/Release/logs/upbit_compliance_summary_runtime.json` updated (`request_count=4`, `http_success_count=4`)
 
-- Follow-up:
-  - finalize burn-in/rollback/cleanup sequence in:
-    - `docs/CORE_MIGRATION_FINALIZATION_2026-02-15.md`
+14. Build/output cleanup utility added (2026-02-16)
+- Added:
+  - `scripts/cleanup_generated_artifacts.py`
+  - safe-by-default behavior (`dry-run` unless `--apply`)
+  - optional cleanup scopes:
+    - old generated logs (`--remove-old-logs-days`)
+    - generated project/build files under `build/` (`--remove-project-build-files`)
+- Verification:
+  - `python -m py_compile scripts/cleanup_generated_artifacts.py` PASS
+  - dry-run:
+    - `python scripts/cleanup_generated_artifacts.py --remove-old-logs-days 3` PASS
+  - applied (logs only):
+    - `python scripts/cleanup_generated_artifacts.py --remove-old-logs-days 3 --apply` PASS
+    - removed stale generated logs: `15` files.
+- Next subtask:
+  - start P1 strategy pipeline refactor step-1:
+  - add deterministic strategy/engine rejection reason aggregation artifact for backtest runs,
+  - use it as baseline before entry/exit logic patches to avoid blind threshold tuning.
 
-## Stage 15 EV/Bucket Consistency Patch (2026-02-15)
+15. P1 step-1 started: entry rejection reason artifact added (2026-02-16)
+- `include/backtest/BacktestEngine.h`
+  - added `Result.entry_rejection_reason_counts`
+  - added runtime aggregator storage `entry_rejection_reason_counts_`
+- `src/backtest/BacktestEngine.cpp`
+  - track deterministic entry rejection reasons during backtest funnel:
+    - `no_signal_generated`
+    - `filtered_out_by_manager`
+    - `filtered_out_by_policy`
+    - `no_best_signal`
+    - `blocked_pattern_missing_archetype`
+    - `blocked_pattern_strength_or_regime`
+    - `blocked_rr_rebalance`
+    - `blocked_risk_gate`
+    - `blocked_second_stage_confirmation`
+    - `blocked_min_order_or_capital`
+    - `blocked_risk_manager`
+    - `blocked_order_sizing`
+    - `skipped_due_to_open_position`
+  - expose map in `getResult()`.
+- `src/main.cpp`
+  - JSON output now includes:
+    - `entry_rejection_reason_counts`
+  - removed duplicated console formatting by introducing shared helper:
+    - `printTopEntryRejectionReasons(...)`
+- Verification:
+  - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeTrading` PASS
+  - `build\\Release\\AutoLifeTrading.exe --backtest data/backtest/sample_trend_pullback_1m.csv --json` PASS
+  - sample artifact excerpt confirmed:
+    - `"entry_rejection_reason_counts":{"blocked_risk_gate":3,"no_signal_generated":17,"skipped_due_to_open_position":8}`
 
-### Step 1 completed
-- Goal: align pre-filter EV, calibrated edge, and EV bucket labeling semantics.
-- Code updates:
+16. Dead file cleanup: unused legacy risk adapter removed (2026-02-16)
+- Deleted files:
+  - `include/core/adapters/LegacyRiskCompliancePlaneAdapter.h`
+  - `src/core/adapters/LegacyRiskCompliancePlaneAdapter.cpp`
+- Build wiring cleanup:
+  - removed source from `CMakeLists.txt` (`LIB_SOURCES`)
+- Reason:
+  - adapter is no longer referenced by engine path (replaced by `UpbitComplianceAdapter`), and had zero call-sites outside its own translation unit.
+- Verification:
+  - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeTrading` PASS
+
+17. P1 step-1 artifact chain wired into iterative loops (2026-02-16)
+- `scripts/run_candidate_train_eval_cycle.py`
+  - added stage-scoped entry-rejection artifact outputs under:
+    - `build/Release/logs/train_eval_entry_rejections/*`
+  - each stage summary now records:
+    - `entry_rejection.overall_top_reason/count`
+    - `entry_rejection.profile_top_reason/count` (`core_full`)
+- `scripts/run_candidate_auto_improvement_loop.py`
+  - baseline/post-apply iteration rows now include:
+    - `entry_rejection_top_reason/count` (`core_full`)
+    - `entry_rejection_overall_top_reason/count`
+  - summary JSON now includes:
+    - `best_entry_rejection_snapshot`
+    - output pointer `entry_rejection_summary_json`
+- Verification:
+  - `python -m py_compile scripts/run_candidate_train_eval_cycle.py scripts/run_candidate_auto_improvement_loop.py scripts/run_realdata_candidate_loop.py scripts/analyze_entry_rejections.py` PASS
+  - `python scripts/run_candidate_auto_improvement_loop.py -MaxIterations 1 -SkipTunePhase -RealDataOnly -MaxRuntimeMinutes 20 -MatrixMaxWorkers 1 -MatrixBacktestRetryCount 1 -SkipCoreVsLegacyGate` PASS
+    - iteration CSV confirms rejection columns populated.
+  - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --gate-min-avg-trades 8 --max-markets 4 --disable-walk-forward` PASS
+    - stage summaries include `entry_rejection` snapshots.
+- Next subtask:
+  - start P1 step-2 strategy path cleanup:
+  - unify manager-layer reject code taxonomy with engine/backtest reject reasons and remove duplicate threshold branches in strategy-manager prefilter path.
+  - target artifact:
+    - `build/Release/logs/strategy_rejection_taxonomy_report.json`
+
+18. P1 step-2 started: manager rejection taxonomy + parallel verification safety hardening (2026-02-16)
+- C++ rejection taxonomy plumbing:
+  - `include/strategy/StrategyManager.h`
+    - added diagnostics structs:
+      - `FilterDiagnostics`
+      - `SelectionDiagnostics`
+    - added diagnostic variants:
+      - `filterSignalsWithDiagnostics(...)`
+      - `selectRobustSignalWithDiagnostics(...)`
   - `src/strategy/StrategyManager.cpp`
-    - Added cost-aware pre-filter EV calculation (partial round-trip cost at manager stage).
-    - Added implied-win blending with strategy history (win-rate/profit-factor weighted by sample size).
-  - `src/engine/TradingEngine.cpp`
-    - Added strategy-history prior in `computeCalibratedExpectedEdgePct`.
+    - manager prefilter detailed rejection codes added:
+      - `filtered_out_by_manager_policy_block`
+      - `filtered_out_by_manager_strength`
+      - `filtered_out_by_manager_expected_value`
+    - robust selection detailed rejection codes added:
+      - `no_best_signal_no_directional_candidates`
+      - `no_best_signal_high_stress_single_candidate`
+      - `no_best_signal_policy_block`
+      - `no_best_signal_negative_expected_value`
+      - `no_best_signal_low_win_rate_history`
+      - `no_best_signal_low_profit_factor_history`
+      - `no_best_signal_low_reliability_combo`
+      - `no_best_signal_no_scored_candidates`
   - `src/backtest/BacktestEngine.cpp`
-    - Added same strategy-history prior in `computeCalibratedExpectedEdgePct` (live/backtest parity).
-    - Tightened EV bucket thresholds: neutral `<0.0015`, positive `<0.0035`.
-    - Made EV bucket alignment conservative (realized outcome can demote, not promote).
+    - manager diagnostics are merged into `entry_rejection_reason_counts` when manager/selection stages hard-reject entry.
 
-### Verification
-- Build: PASS
-  - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release`
-- Realdata candidate loop: PASS (script execution)
-  - `python scripts/run_realdata_candidate_loop.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --run-both-hostility-modes --gate-min-avg-trades 8 --matrix-max-workers 1 --matrix-backtest-retry-count 2`
-- Current snapshot (core_full) remained stable on this patch:
-  - `avg_profit_factor=12.0024`
-  - `avg_total_trades=8.0`
-  - `avg_expectancy_krw=2.2395`
-  - strict `overall_gate_pass=false` (profitable_ratio bottleneck)
-  - adaptive `overall_gate_pass=true`
+- New taxonomy artifact:
+  - added script:
+    - `scripts/generate_strategy_rejection_taxonomy_report.py`
+  - output:
+    - `build/Release/logs/strategy_rejection_taxonomy_report.json`
+  - content:
+    - expected vs observed rejection code set,
+    - unknown/missing code diagnostics,
+    - group-level bottleneck aggregation (`signal_generation`, `manager_prefilter`, `best_signal_selection`, `risk_gate`, etc).
 
-## Stage 15 Step 2 Update (2026-02-15, Momentum Post-Entry Control)
+- Loop integration:
+  - `scripts/run_realdata_candidate_loop.py`
+    - taxonomy report now runs after entry-rejection analysis by default.
+    - new flags:
+      - `--strategy-rejection-taxonomy-script`
+      - `--strategy-rejection-taxonomy-output-json`
+      - `--skip-strategy-rejection-taxonomy`
+  - `scripts/run_candidate_train_eval_cycle.py`
+    - per-stage taxonomy report path injected and stage summary now includes `entry_rejection_taxonomy`.
+  - `scripts/run_candidate_auto_improvement_loop.py`
+    - iteration CSV/summary now include taxonomy snapshot fields (top group, coverage ratio, unknown count).
 
-### What was tried
-- Entry hardening attempt on Momentum/Scalping archetype filters was tested first.
-- That direction reduced trade count and worsened expectancy in revalidation, so it was rolled back.
+- Parallel verification safety hardening:
+  - `scripts/run_realdata_candidate_loop.py`
+    - added explicit outer verification lock around parity/matrix/rejection/taxonomy/tune chain.
+    - new args:
+      - `--verification-lock-path`
+      - `--verification-lock-timeout-sec`
+      - `--verification-lock-stale-sec`
+  - `scripts/run_candidate_train_eval_cycle.py`
+    - verification lock args added and propagated to nested realdata loop calls.
+  - `scripts/run_candidate_auto_improvement_loop.py`
+    - verification lock args propagated to nested realdata loop calls.
 
-### What is kept (effective patch)
-- Kept Step 1 EV/bucket consistency changes.
-- Added targeted post-entry risk tightening for `Momentum / TREND_REACCELERATION` only:
-  - file: `src/strategy/MomentumStrategy.cpp`
-  - tighter invalidation/progress floors at entry-context creation
-  - faster early/mid/late weak-hold exits in `shouldExit`
-  - additional stricter early-cut when `flow_bias` is weak.
+- Verification:
+  - `python -m py_compile scripts/run_realdata_candidate_loop.py scripts/run_candidate_train_eval_cycle.py scripts/run_candidate_auto_improvement_loop.py scripts/generate_strategy_rejection_taxonomy_report.py` PASS
+  - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeTrading` PASS
+  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions -MatrixMaxWorkers 1 -MatrixBacktestRetryCount 1 -SkipParityInvariant` PASS
+  - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --gate-min-avg-trades 8 --max-markets 4 --disable-walk-forward` PASS
+  - `python scripts/run_candidate_auto_improvement_loop.py -MaxIterations 1 -SkipTunePhase -RealDataOnly -MaxRuntimeMinutes 20 -MatrixMaxWorkers 1 -MatrixBacktestRetryCount 1 -SkipCoreVsLegacyGate` PASS
 
-### Verification (sequential build -> run)
-- Build PASS:
-  - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release`
-- Loop PASS:
-  - `python scripts/run_realdata_candidate_loop.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --run-both-hostility-modes --gate-min-avg-trades 8 --matrix-max-workers 1 --matrix-backtest-retry-count 2`
+- Next subtask:
+  - apply manager taxonomy diagnostics to live engine-level signal-funnel telemetry and remove duplicated threshold branches (`filter+relax`) into a single policy-evaluated path.
+  - target artifact:
+    - `build/Release/logs/live_signal_funnel_taxonomy_report.json`
 
-### Latest snapshot (core_full)
-- `avg_profit_factor=12.0938` (up from 12.0024)
-- `avg_total_trades=8.0` (maintained)
-- `avg_expectancy_krw=3.7766` (up from 2.2395)
-- `profitable_ratio=0.5556` (up from 0.4444)
-- strict `overall_gate_pass=true`
-- adaptive `overall_gate_pass=true`
+19. P1 step-2 continued: live engine signal-funnel taxonomy artifact delivered (2026-02-16)
+- `include/engine/TradingEngine.h`
+  - added live signal funnel telemetry contract:
+    - `recordLiveSignalReject(...)`
+    - `flushLiveSignalFunnelTaxonomyReport(...)`
+    - `LiveSignalFunnelTelemetry` state struct
+- `src/engine/TradingEngine.cpp`
+  - completed `generateSignals()` taxonomy path:
+    - scan-level rejection accounting (`last_scan_rejection_counts`)
+    - manager diagnostics merge from `filterSignalsWithDiagnostics(...)` and `selectRobustSignalWithDiagnostics(...)`
+    - removed duplicate relax-pass branch; now single effective threshold pass with optional relaxation applied before one manager filtering call
+  - implemented live artifact flush:
+    - `build/Release/logs/live_signal_funnel_taxonomy_report.json`
+    - includes cumulative + last-scan reason/group counts and top bottlenecks
+  - fixed taxonomy group formatting bug:
+    - `top_rejection_groups` now emits true group labels (`signal_generation`, `manager_prefilter`, `position_state`) instead of misclassified `other`.
 
-### Root-cause refresh
-- `python scripts/analyze_root_cause_diagnostics.py --profile-id core_full --max-workers 4`
-- Totals shifted to positive expectancy:
-  - `avg_expectancy_krw=0.1665`
-  - `total_profit_krw=11.9874`
+- Verification:
+  - build:
+    - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeTrading` PASS
+  - regression:
+    - `build\\Release\\AutoLifeTrading.exe --backtest data/backtest/sample_trend_pullback_1m.csv --json` PASS
+  - live engine smoke (dry-run interactive input piped, time-boxed):
+    - `cmd /c "(echo 1&echo y&echo 5&echo 20&echo n&echo 2&echo 5&echo y)|build\\Release\\AutoLifeTrading.exe"` (time-boxed run) PASS for artifact generation
+  - output check:
+    - `build/Release/logs/live_signal_funnel_taxonomy_report.json` exists and updated
+    - sample top groups confirmed:
+      - `signal_generation`
+      - `manager_prefilter`
+      - `position_state`
 
-## Stage 15 Step 3 Update (2026-02-15, Momentum BreakoutContinuation@TrendingUp)
+- Next subtask:
+  - feed `live_signal_funnel_taxonomy_report.json` (group bottlenecks) into auto-improvement loop objective adaptation so hostile/no-signal dominant scans prefer NO_TRADE and avoid forced trade-density tuning.
+  - target artifact:
+    - `build/Release/logs/candidate_auto_improvement_summary.json` (with live-funnel bottleneck context snapshot)
 
-### Targeted change
-- Remaining loss-cluster outlier `Advanced Momentum / BREAKOUT_CONTINUATION / TRENDING_UP` was explicitly blocked in both runtime and backtest gate paths.
-- Files:
+20. P1 step-2 continued: auto-improvement loop now consumes live funnel bottlenecks (2026-02-16)
+- `scripts/run_candidate_auto_improvement_loop.py`
+  - added input:
+    - `--live-signal-funnel-taxonomy-json`
+    - default: `build/Release/logs/live_signal_funnel_taxonomy_report.json`
+  - added snapshot reader:
+    - `read_live_signal_funnel_snapshot(...)`
+    - computes:
+      - group shares (`signal_generation`, `manager_prefilter`, `position_state`)
+      - `no_trade_bias_active`
+      - `recommended_trade_floor_scale` (0.75 when hostile no-signal dominance detected)
+  - objective-floor adaptation:
+    - when `no_trade_bias_active=true`, loop reduces trade-density pressure:
+      - `objective_min_avg_trades_iter` lowered (floor clamp >= 4)
+      - `gate_min_avg_trades_iter` lowered consistently (floor clamp >= 4)
+    - profitability-related floors are preserved (no aggressive relaxation side effect).
+  - iteration/summary observability extended:
+    - iteration CSV columns:
+      - `live_funnel_top_group`
+      - `live_funnel_top_group_count`
+      - `live_funnel_signal_generation_share`
+      - `live_funnel_no_trade_bias_active`
+      - `live_funnel_trade_floor_scale`
+    - summary JSON:
+      - `best_live_signal_funnel_snapshot`
+      - output pointer `live_signal_funnel_taxonomy_json`
+
+- Verification:
+  - `python -m py_compile scripts/run_candidate_auto_improvement_loop.py` PASS
+  - `python scripts/run_candidate_auto_improvement_loop.py -MaxIterations 1 -SkipTunePhase -RealDataOnly -MaxRuntimeMinutes 20 -MatrixMaxWorkers 1 -MatrixBacktestRetryCount 1 -SkipCoreVsLegacyGate` PASS
+  - output checks PASS:
+    - `candidate_auto_improvement_iterations.csv` includes new `live_funnel_*` columns
+    - baseline row shows:
+      - `live_funnel_top_group=signal_generation`
+      - `live_funnel_no_trade_bias_active=True`
+      - `objective_min_avg_trades_iter=6.0` (from base 8.0 with scale 0.75)
+    - `candidate_auto_improvement_summary.json` includes:
+      - `best_live_signal_funnel_snapshot`
+      - `outputs.live_signal_funnel_taxonomy_json`
+
+- Next subtask:
+  - extend the same live-funnel bottleneck context into train/eval cycle summary so promotion decisions can compare dataset hostility context and live no-trade pressure in one report.
+  - target artifact:
+    - `build/Release/logs/train_eval_cycle_summary.json` (with `live_signal_funnel_snapshot` per stage)
+
+21. P1 step-2 continued: train/eval summary now includes stage-wise live-funnel snapshot (2026-02-16)
+- `scripts/run_candidate_train_eval_cycle.py`
+  - added input:
+    - `--live-signal-funnel-taxonomy-json`
+    - default: `build/Release/logs/live_signal_funnel_taxonomy_report.json`
+  - added per-stage capture/snapshot:
+    - copied artifact:
+      - `build/Release/logs/train_eval_entry_rejections/<stage>_live_signal_funnel.json`
+    - stage summary field:
+      - `live_signal_funnel`
+      - includes:
+        - `top_group`, `top_group_count`
+        - `signal_generation_share`, `manager_prefilter_share`, `position_state_share`
+        - `scan_count`, `total_rejections`
+  - top-level summary now records:
+    - `live_signal_funnel_source_json`
+
+- Verification:
+  - `python -m py_compile scripts/run_candidate_train_eval_cycle.py scripts/run_candidate_auto_improvement_loop.py` PASS
+  - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --gate-min-avg-trades 8 --max-markets 4 --disable-walk-forward` PASS
+  - output checks PASS:
+    - `build/Release/logs/candidate_train_eval_cycle_summary.json`:
+      - each stage contains `live_signal_funnel` snapshot
+      - `live_signal_funnel_source_json` present
+    - stage artifact files created:
+      - `build/Release/logs/train_eval_entry_rejections/train_1_live_signal_funnel.json`
+      - `build/Release/logs/train_eval_entry_rejections/eval_validation_deterministic_live_signal_funnel.json`
+      - `build/Release/logs/train_eval_entry_rejections/eval_holdout_deterministic_live_signal_funnel.json`
+
+22. UTF-8 guardrails tightened for logs/comments (2026-02-16)
+- Added repository editor defaults:
+  - `.editorconfig`
+  - `charset=utf-8`, `end_of_line=crlf`, final newline on save.
+- Cleaned garbled comment blocks in:
+  - `CMakeLists.txt`
+  - post-build section/comments are now readable ASCII comments.
+- Note:
+  - MSVC compile option `/utf-8` was already active in `CMakeLists.txt`.
+  - `src/main.cpp` already applies `SetConsoleOutputCP(CP_UTF8)` / `SetConsoleCP(CP_UTF8)` at startup.
+
+- Next subtask:
+  - remove stale/garbled comments from actively touched C++ headers/sources (`TradingEngine.h` first) in small, safe patches so future context handoff is readable without risky behavior changes.
+
+23. P1 step-2 continued: promotion verdict now consumes live-funnel bottleneck context (2026-02-16)
+- `scripts/run_candidate_train_eval_cycle.py`
+  - added live-funnel context builder:
+    - `build_live_signal_funnel_context(...)`
+    - computes no-trade-bias condition from stage snapshot:
+      - `signal_generation_share`, `manager_prefilter_share`, `position_state_share`
+      - `scan_count`, `total_rejections`
+      - `no_trade_bias_active`
+  - extended verdict builder:
+    - `build_promotion_verdict(...)` now receives validation/holdout live-funnel snapshots.
+    - recommendation now reflects bottleneck class when gate fails:
+      - `hold_candidate_improve_signal_generation_or_dataset_quality`
+      - `hold_candidate_improve_prefilter_policy_or_feature_quality`
+      - `hold_candidate_improve_position_turnover_and_exit_management`
+  - promotion verdict observability added:
+    - `validation_live_signal_funnel_context`
+    - `holdout_live_signal_funnel_context`
+    - `live_no_trade_bias_any`
+
+- Verification:
+  - `python -m py_compile scripts/run_candidate_train_eval_cycle.py` PASS
+  - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --gate-min-avg-trades 8 --max-markets 4 --disable-walk-forward` PASS
+  - output check (`build/Release/logs/candidate_train_eval_cycle_summary.json`) PASS:
+    - `promotion_verdict.recommendation=hold_candidate_improve_signal_generation_or_dataset_quality`
+    - `promotion_verdict.live_no_trade_bias_any=true`
+    - validation/holdout live funnel context populated with `top_group=signal_generation`
+
+- Next subtask:
+  - apply the same bottleneck-aware classification to candidate tuning scenario priority (not just verdict), so search order prefers signal-generation fixes when no-trade bias is active.
+  - target artifact:
+    - `build/Release/logs/candidate_trade_density_tuning_summary.json` (with bottleneck-priority metadata)
+
+24. P1 step-2 continued: tuning scenario execution order is now live-funnel bottleneck-prioritized (2026-02-16)
+- `scripts/tune_candidate_gate_trade_density.py`
+  - added live-funnel reader:
+    - `read_live_signal_funnel_snapshot(...)`
+  - added bottleneck-priority scoring:
+    - `compute_combo_bottleneck_priority_score(...)`
+    - `prioritize_combo_specs_for_bottleneck(...)`
+  - new args:
+    - `--live-signal-funnel-taxonomy-json` (default: `build/Release/logs/live_signal_funnel_taxonomy_report.json`)
+    - `--enable-bottleneck-priority` / `--disable-bottleneck-priority`
+  - behavior:
+    - `signal_generation` / `no_trade_bias_active` dominance:
+      - evaluate higher entry-generation affinity combos earlier.
+    - `manager_prefilter` dominance:
+      - evaluate moderate-relaxation combos earlier.
+    - `position_state` dominance:
+      - evaluate quality-preserving combos earlier.
+  - observability:
+    - each screen/final row now includes:
+      - `bottleneck_priority_rank`
+      - `bottleneck_priority_score`
+      - `bottleneck_top_group`
+      - `bottleneck_no_trade_bias_active`
+    - summary JSON now includes:
+      - `bottleneck_priority.context`
+      - `bottleneck_priority.combo_priority_order`
+
+- Verification:
+  - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_candidate_auto_improvement_loop.py scripts/run_candidate_train_eval_cycle.py scripts/run_realdata_candidate_loop.py` PASS
+  - direct tuning smoke:
+    - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 4 -RealDataOnly -RequireHigherTfCompanions -ScreenDatasetLimit 4 -ScreenTopK 2 -FinalProfileIds core_full -MatrixMaxWorkers 1 -MatrixBacktestRetryCount 1 -SkipCoreVsLegacyGate` PASS
+    - observed run order reflects bottleneck-priority (`signal_generation`, `no_trade_bias_active=true`).
+  - auto-improvement integration smoke:
+    - `python scripts/run_candidate_auto_improvement_loop.py -MaxIterations 1 -RealDataOnly -MaxRuntimeMinutes 30 -TuneMaxScenarios 2 -TuneScreenDatasetLimit 2 -TuneScreenTopK 1 -MatrixMaxWorkers 1 -MatrixBacktestRetryCount 1 -SkipCoreVsLegacyGate` PASS
+    - tuning phase logs include:
+      - `bottleneck_priority=on, top_group=signal_generation, no_trade_bias_active=True`
+  - output checks PASS:
+    - `build/Release/logs/candidate_trade_density_tuning_summary.json`
+      - `bottleneck_priority.enabled=true`
+      - `bottleneck_priority.context.top_group=signal_generation`
+      - summary rows include `bottleneck_priority_*` fields
+
+- Next subtask:
+  - feed bottleneck-priority context back into strategy-level patch candidates (feature/filter focus by top bottleneck), so generated combos are not only reordered but also compositionally adapted by bottleneck class.
+  - target artifact:
+    - `build/Release/logs/candidate_trade_density_tuning_summary.json` (with bottleneck-adapted scenario family tag)
+
+25. P1 step-2 continued: bottleneck-adapted scenario families now change combo composition (2026-02-16)
+- `scripts/tune_candidate_gate_trade_density.py`
+  - implemented bottleneck-aware family adapter:
+    - `adapt_combo_specs_for_bottleneck(...)`
+    - family buckets:
+      - `signal_generation_boost`
+      - `manager_prefilter_relax`
+      - `position_turnover_quality`
+      - `neutral_balance`
+      - `legacy_baseline`
+  - behavior:
+    - adapts combo parameters (entry edge/RR/strength/order density/EV gates) by dominant live-funnel bottleneck,
+    - keeps `legacy_only` mode safe (no aggressive adaptation),
+    - preserves baseline rollback anchor (`baseline_current`) as non-adapted where applicable.
+  - new flags:
+    - `--enable-bottleneck-adapted-scenarios` (default on)
+    - `--disable-bottleneck-adapted-scenarios`
+  - observability extended:
+    - summary rows:
+      - `bottleneck_scenario_family`
+      - `bottleneck_scenario_family_adapted`
+    - summary JSON:
+      - `bottleneck_priority.scenario_family_counts`
+      - per-combo order includes:
+        - `scenario_family`
+        - `scenario_family_adapted`
+
+- Verification:
+  - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+  - tuning smoke:
+    - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 4 -RealDataOnly -RequireHigherTfCompanions -ScreenDatasetLimit 4 -ScreenTopK 2 -FinalProfileIds core_full -MatrixMaxWorkers 1 -MatrixBacktestRetryCount 1 -SkipCoreVsLegacyGate` PASS
+    - output shows:
+      - `bottleneck_adapted_scenarios=on`
+      - `scenario_family_counts={'signal_generation_boost': 4}`
+  - auto-improvement integration:
+    - `python scripts/run_candidate_auto_improvement_loop.py -MaxIterations 1 -RealDataOnly -MaxRuntimeMinutes 25 -TuneMaxScenarios 2 -TuneScreenDatasetLimit 2 -TuneScreenTopK 1 -MatrixMaxWorkers 1 -MatrixBacktestRetryCount 1 -SkipCoreVsLegacyGate` PASS
+    - tuning phase logs confirm adapted family usage:
+      - `scenario_family_counts={'signal_generation_boost': 2}`
+    - post-apply snapshot improved vs baseline in this run:
+      - `avg_profit_factor: 0.5403 -> 0.6897`
+      - `avg_expectancy_krw: -7.3353 -> -6.0931`
+      - `avg_win_rate_pct: 46.013 -> 50.2433`
+      - `avg_total_trades: 151.5 -> 217.1667`
+
+- Next subtask:
+  - apply same bottleneck family context into C++ strategy/manager layer candidate generation hints (not only script-level tuning), starting with signal-generation-dominant path for `Advanced Scalping`/`Advanced Momentum`.
+  - target artifact:
+    - `build/Release/logs/strategy_rejection_taxonomy_report.json` + `build/Release/logs/live_signal_funnel_taxonomy_report.json` trend shift after patch
+
+26. P1 step-2 continued: C++ runtime now applies no-trade-bias hint from live funnel context (2026-02-16)
+- `src/engine/TradingEngine.cpp`
+  - `generateSignals()` now derives live bottleneck pressure from cumulative funnel rejections:
+    - `signal_generation_share`
+    - `manager_prefilter_share`
+    - `position_state_share`
+    - `live_no_trade_bias_active`
+  - when `live_no_trade_bias_active=true` (and regime is non-stress), manager prefilter thresholds get an additional modest relaxation:
+    - `min_strength` downshift
+    - `min_expected_value` downshift
+  - added runtime log marker:
+    - `Live no-trade bias active: ...`
+
+  - `flushLiveSignalFunnelTaxonomyReport(...)` now emits derived context fields directly:
+    - `total_rejections`
+    - `signal_generation_share`
+    - `manager_prefilter_share`
+    - `position_state_share`
+    - `no_trade_bias_active`
+    - `recommended_trade_floor_scale`
+
+- Verification:
+  - build:
+    - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeTrading` PASS
+  - live time-box smoke:
+    - `cmd /c "(echo 1&echo y&echo 5&echo 20&echo n&echo 2&echo 5&echo y)|build\\Release\\AutoLifeTrading.exe"` (time-boxed run) PASS for artifact refresh
+  - output check PASS:
+    - `build/Release/logs/live_signal_funnel_taxonomy_report.json` contains derived keys:
+      - `signal_generation_share`
+      - `manager_prefilter_share`
+      - `position_state_share`
+      - `no_trade_bias_active`
+      - `recommended_trade_floor_scale`
+      - `total_rejections`
+
+- Next subtask:
+  - connect the same runtime no-trade-bias signal to per-strategy candidate weighting in `StrategyManager` (Scalping/Momentum first), so relaxation is not only threshold-level but also candidate score-level.
+  - target artifact:
+    - `build/Release/logs/live_signal_funnel_taxonomy_report.json` (drop in `no_signal_generated` share)
+
+27. P1 step-2 continued: StrategyManager candidate scoring now uses live bottleneck hint (2026-02-16)
+- `include/strategy/StrategyManager.h`
+  - added runtime hint contract:
+    - `LiveSignalBottleneckHint`
+    - `setLiveSignalBottleneckHint(...)`
+    - `getLiveSignalBottleneckHint()`
+- `src/strategy/StrategyManager.cpp`
+  - `selectRobustSignalWithDiagnostics(...)` now reads live hint and applies modest score boost in signal-generation bottlenecks:
+    - focus roles: `SCALPING`, `MOMENTUM`
+    - guarded by minimum quality (`strength`, `expected_value`) and bottleneck severity.
+  - keeps change minimal (small multiplicative reweight), preserving legacy safety chain.
+- `src/engine/TradingEngine.cpp`
+  - `generateSignals()` now computes top bottleneck group/share from live funnel and injects manager hint each scan:
+    - `top_group`, `no_trade_bias_active`, share fields.
+
+- Verification:
+  - build:
+    - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeTrading` PASS
+  - loop regression smoke:
+    - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions -DatasetNames data/backtest_real/upbit_KRW_BTC_1m_12000.csv -MatrixMaxWorkers 1 -MatrixBacktestRetryCount 1 -SkipParityInvariant -SkipCoreVsLegacyGate` PASS
+
+- Next subtask:
+  - add explicit strategy-level bottleneck debug counters (per role boost-hit count) into diagnostics artifact chain to verify hint impact without relying only on aggregate gate metrics.
+  - target artifact:
+    - `build/Release/logs/strategy_rejection_taxonomy_report.json` (with role-level hint impact snapshot)
+
+28. P1 step-2 continued: live bottleneck hint impact counters added to funnel artifacts (2026-02-16)
+- `include/strategy/StrategyManager.h`
+  - `SelectionDiagnostics` extended with hint-impact fields:
+    - `live_hint_adjusted_candidate_count`
+    - `live_hint_adjustment_counts`
+- `src/strategy/StrategyManager.cpp`
+  - `selectRobustSignalWithDiagnostics(...)` now records per-candidate hint adjustments when live bottleneck hint modifies score:
+    - `boost_scalping`
+    - `boost_momentum`
+    - `boost_alpha_fallback`
+    - `dampen_grid`
+- `include/engine/TradingEngine.h`
+  - `LiveSignalFunnelTelemetry` extended with selection/hint counters:
+    - `selection_call_count`
+    - `selection_scored_candidate_count`
+    - `selection_hint_adjusted_candidate_count`
+    - `selection_hint_adjustment_counts`
+  - `flushLiveSignalFunnelTaxonomyReport(...)` now accepts last-scan hint-adjustment counts.
+- `src/engine/TradingEngine.cpp`
+  - `generateSignals()` now accumulates manager selection diagnostics into live funnel telemetry and last-scan hint maps.
+  - `flushLiveSignalFunnelTaxonomyReport(...)` now emits new observability fields:
+    - cumulative:
+      - `selection_call_count`
+      - `selection_scored_candidate_count`
+      - `selection_hint_adjusted_candidate_count`
+      - `selection_hint_adjusted_ratio`
+      - `selection_hint_adjustment_counts`
+      - `selection_hint_total_adjustments`
+      - `top_selection_hint_adjustments`
+    - last-scan:
+      - `selection_hint_adjustment_counts`
+      - `top_selection_hint_adjustments`
+
+- Verification:
+  - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeTrading` PASS
+  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions -DatasetNames data/backtest_real/upbit_KRW_BTC_1m_12000.csv -MatrixMaxWorkers 1 -MatrixBacktestRetryCount 1 -SkipParityInvariant -SkipCoreVsLegacyGate` PASS
+  - live funnel refresh (dry-run, time-boxed):
+    - `cmd /c "(echo 1&echo y&echo 1&echo 5&echo n&echo 2&echo 2&echo y)|build\\Release\\AutoLifeTrading.exe"` (timeout after signal-generation stage) PASS for artifact refresh
+    - residual process cleanup: `Stop-Process -Id <AutoLifeTrading_PID> -Force` PASS
+  - output check:
+    - `build/Release/logs/live_signal_funnel_taxonomy_report.json` contains new `selection_hint_*` fields.
+
+- Next subtask:
+  - mirror the same hint-impact snapshot into strategy taxonomy summary script output so tuning loops can consume `role-level boost-hit ratio` directly without parsing raw funnel JSON.
+  - target artifact:
+    - `build/Release/logs/strategy_rejection_taxonomy_report.json` (with hint-impact block)
+
+29. P1 step-2 continued: strategy taxonomy report now carries live hint-impact snapshot (2026-02-16)
+- `scripts/generate_strategy_rejection_taxonomy_report.py`
+  - added optional input:
+    - `--live-signal-funnel-taxonomy-json`
+  - report now includes `live_hint_impact` block:
+    - `selection_call_count`
+    - `selection_scored_candidate_count`
+    - `selection_hint_adjusted_candidate_count`
+    - `selection_hint_adjusted_ratio`
+    - `selection_hint_adjustment_counts`
+    - `top_selection_hint_adjustments`
+    - `no_trade_bias_active`
+    - `signal_generation_share`, `manager_prefilter_share`, `position_state_share`
+    - `dominant_rejection_group`
+  - fail-open behavior preserved when live funnel file is missing/unreadable (`source_exists=false`).
+- `scripts/run_realdata_candidate_loop.py`
+  - added pass-through arg:
+    - `--live-signal-funnel-taxonomy-json`
+  - taxonomy step now forwards live funnel path into taxonomy script.
+
+- Verification:
+  - `python -m py_compile scripts/generate_strategy_rejection_taxonomy_report.py scripts/run_realdata_candidate_loop.py` PASS
+  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions -DatasetNames data/backtest_real/upbit_KRW_BTC_1m_12000.csv -MatrixMaxWorkers 1 -MatrixBacktestRetryCount 1 -SkipParityInvariant -SkipCoreVsLegacyGate` PASS
+  - output check:
+    - `build/Release/logs/strategy_rejection_taxonomy_report.json` includes:
+      - `live_hint_impact.selection_hint_adjusted_ratio`
+      - `live_hint_impact.selection_hint_adjustment_counts`
+      - `live_hint_impact.dominant_rejection_group`
+
+- Next subtask:
+  - feed `live_hint_impact.selection_hint_adjusted_ratio` into tuning objective guardrails (cap relaxation when ratio is too high) to reduce adaptation overshoot risk.
+  - target artifact:
+    - `build/Release/logs/candidate_trade_density_tuning_summary.json` (with hint-impact guardrail metadata)
+
+30. P1 step-2 continued: anti-overfit guardrail added to bottleneck-adapted tuning scenarios (2026-02-16)
+- `scripts/tune_candidate_gate_trade_density.py`
+  - live funnel context now also reads:
+    - `selection_hint_adjusted_ratio`
+    - `selection_hint_adjustment_counts`
+  - added hint-impact guardrail controls:
+    - `--enable-hint-impact-guardrail` / `--disable-hint-impact-guardrail`
+    - `--hint-impact-guardrail-ratio` (default `0.65`)
+    - `--hint-impact-guardrail-tighten-scale` (default `0.55`)
+  - added guardrail behavior:
+    - when `selection_hint_adjusted_ratio >= ratio`, aggressive relax-family combos (`signal_generation_boost`, `manager_prefilter_relax`) are partially pulled back toward baseline.
+    - this prevents tuning from over-leveraging one dataset-period bottleneck pattern.
+  - observability additions:
+    - combo/report fields:
+      - `bottleneck_hint_guardrail_active`
+      - `bottleneck_hint_guardrail_ratio`
+      - `bottleneck_hint_guardrail_threshold`
+      - `bottleneck_hint_guardrail_tighten_scale`
+    - summary JSON includes:
+      - `screening.enable_hint_impact_guardrail`
+      - `bottleneck_priority.hint_impact_guardrail`
+
+- Verification:
+  - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/generate_strategy_rejection_taxonomy_report.py scripts/run_realdata_candidate_loop.py` PASS
+  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 2 -RealDataOnly -RequireHigherTfCompanions -DatasetNames data/backtest_real/upbit_KRW_BTC_1m_12000.csv -ScreenDatasetLimit 1 -ScreenTopK 1 -FinalProfileIds core_full -MatrixMaxWorkers 1 -MatrixBacktestRetryCount 1 -SkipCoreVsLegacyGate` PASS
+    - runtime log:
+      - `hint_impact_guardrail=on, ratio=0.5789, threshold=0.6500`
+  - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --gate-min-avg-trades 8 --max-markets 4 --disable-walk-forward --matrix-max-workers 1 --matrix-backtest-retry-count 1` PASS
+
+- Next subtask:
+  - promote this guardrail signal from tuning-only into auto-improvement loop stop/skip policy:
+  - if hint-adjusted ratio stays high while holdout PF/expectancy remain weak, skip further relax-family exploration and pivot to quality/exit-side scenarios.
+  - target artifact:
+    - `build/Release/logs/candidate_auto_improvement_summary.json` (guardrail-triggered decision trace)
+
+31. P1 step-2 continued: auto-improvement loop now applies hint-overfit pivot policy (2026-02-16)
+- `scripts/run_candidate_auto_improvement_loop.py`
+  - live funnel snapshot now ingests:
+    - `selection_hint_adjusted_ratio`
+    - `selection_hint_adjusted_candidate_count`
+    - `selection_scored_candidate_count`
+  - added loop-level guardrail knobs:
+    - `--tune-enable-hint-impact-guardrail` / `--tune-disable-hint-impact-guardrail`
+    - `--tune-hint-impact-guardrail-ratio`
+    - `--tune-hint-impact-guardrail-tighten-scale`
+    - `--hint-overfit-ratio-threshold`
+    - `--hint-overfit-force-guardrail-tighten-scale`
+    - `--enable-hint-overfit-quality-pivot` / `--disable-hint-overfit-quality-pivot`
+  - new runtime policy:
+    - if `selection_hint_adjusted_ratio` is high and baseline PF/expectancy is still below active gate floors,
+      tune phase is forced to stronger guardrail settings and can pivot scenario-mode to `quality_focus`.
+  - iteration telemetry expanded:
+    - `live_funnel_selection_hint_adjusted_ratio`
+    - `hint_overfit_risk`
+    - `tune_scenario_mode_iter`
+    - `tune_hint_guardrail_enabled_iter`
+    - `tune_hint_guardrail_ratio_iter`
+    - `tune_hint_guardrail_tighten_scale_iter`
+
+- Verification:
+  - `python -m py_compile scripts/run_candidate_auto_improvement_loop.py scripts/tune_candidate_gate_trade_density.py scripts/run_realdata_candidate_loop.py scripts/generate_strategy_rejection_taxonomy_report.py` PASS
+  - `python scripts/run_candidate_auto_improvement_loop.py -MaxIterations 1 -RealDataOnly -MaxRuntimeMinutes 25 -TuneMaxScenarios 2 -TuneScreenDatasetLimit 1 -TuneScreenTopK 1 -MatrixMaxWorkers 1 -MatrixBacktestRetryCount 1 -SkipCoreVsLegacyGate` PASS
+  - output checks:
+    - `build/Release/logs/candidate_auto_improvement_iterations.csv` contains new guardrail/pivot columns.
+    - `build/Release/logs/candidate_auto_improvement_summary.json` contains tuning guardrail config and per-iteration `hint_overfit_risk`.
+
+- Next subtask:
+  - connect holdout-stage failure pattern (`signal_generation` vs `risk_gate`) to scenario family suppression rules in tuning:
+  - suppress relax-family when holdout still fails expectancy/PF under high hint-adjusted ratio.
+  - target artifact:
+  - `build/Release/logs/candidate_train_eval_cycle_summary.json` + `build/Release/logs/candidate_trade_density_tuning_summary.json` (suppression trace)
+
+32. P1 step-2 continued: holdout failure pattern now suppresses relax-family tuning exploration (2026-02-16)
+- `scripts/tune_candidate_gate_trade_density.py`
+  - added holdout context input:
+    - `--train-eval-summary-json` (default `build/Release/logs/candidate_train_eval_cycle_summary.json`)
+  - added suppression controls:
+    - `--enable-holdout-failure-family-suppression` / `--disable-holdout-failure-family-suppression`
+    - `--holdout-suppression-hint-ratio-threshold` (default `0.60`)
+    - `--holdout-suppression-require-both-pf-exp-fail` / `--holdout-suppression-allow-either-pf-or-exp-fail`
+  - new behavior:
+    - if holdout deterministic stage still fails PF/expectancy and live hint-adjusted ratio is high,
+      and holdout top rejection group is `signal_generation` or `risk_gate`,
+      relax-family combos (`signal_generation_boost`, `manager_prefilter_relax`) are suppressed.
+    - safety fail-open:
+      - when suppression would remove all combos, one fallback combo is retained and marked explicitly.
+  - observability additions:
+    - summary rows + combo metadata:
+      - `holdout_failure_suppression_active`
+      - `holdout_failure_suppressed_family`
+      - `holdout_failure_suppression_reason`
+    - summary JSON:
+      - `bottleneck_priority.holdout_failure_suppression` block
+      - screening config now stores holdout-suppression settings.
+
+- Verification:
+  - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 4 -RealDataOnly -RequireHigherTfCompanions -DatasetNames data/backtest_real/upbit_KRW_BTC_1m_12000.csv -ScreenDatasetLimit 1 -ScreenTopK 1 -FinalProfileIds core_full -MatrixMaxWorkers 1 -MatrixBacktestRetryCount 1 -SkipCoreVsLegacyGate -HoldoutSuppressionHintRatioThreshold 0.55` PASS
+  - output checks:
+    - `build/Release/logs/candidate_trade_density_tuning_summary.json` includes:
+      - `bottleneck_priority.holdout_failure_suppression.active=true`
+      - `holdout_failure_suppression_reason=fallback_retain_single_combo_after_suppression`
+      - `suppressed_families=["manager_prefilter_relax","signal_generation_boost"]`
+
+- Next subtask:
+  - feed holdout suppression status into auto-improvement iteration decision trace and pause criteria:
+  - if suppression remains active for N iterations and PF/expectancy still fail, auto-stop relax-family branch and emit explicit recommendation.
+  - target artifact:
+  - `build/Release/logs/candidate_auto_improvement_summary.json` (suppression-persist decision trace)
+
+33. Repository hygiene pass: generated outputs + unused code warnings cleanup (2026-02-16)
+- Deleted generated/non-source artifacts:
+  - `build/` (full)
+  - `logs/` (full)
+  - `src/strategy/data/backtest/adversarial/` (5000 generated CSVs, non-referenced)
+  - `data/backtest/auto_sim_500.csv` (generated simulation sample)
+- Unused warning cleanup in source:
+  - `src/analytics/TechnicalIndicators.cpp`
+    - removed unused local (`tr_sum`)
+    - marked unused stochastic parameter (`d_period`) explicitly
+  - `src/risk/RiskManager.cpp`
+    - marked unused params (`capital`) in sizing helpers
+    - migrated UTC day-reset logic from deprecated `gmtime` to `gmtime_s`
+  - `src/backtest/DataHistory.cpp`
+    - marked unused `filterByDate` placeholder params (`start_date`, `end_date`)
+
+- Verification:
+  - CMake regenerate:
+    - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe -S . -B build -DCMAKE_TOOLCHAIN_FILE=D:/MyApps/vcpkg/scripts/buildsystems/vcpkg.cmake` PASS
+  - build:
+    - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeTrading` PASS
+  - cleanup reapplied after verification:
+    - `build/` and `logs/` re-removed.
+
+- Next subtask:
+  - continue TODO P1 flow with suppression-persist policy in auto-improvement loop, while keeping repository hygiene (remove generated outputs after each verification batch).
+
+34. P1 step-2 continued: auto-improvement loop now enforces holdout-suppression persistence stop policy (2026-02-16)
+- What changed:
+  - `scripts/run_candidate_auto_improvement_loop.py`
+    - added new CLI controls:
+      - `--enable-holdout-suppression-persist-stop` / `--disable-holdout-suppression-persist-stop`
+      - `--holdout-suppression-persist-iterations` (default `2`)
+      - `--holdout-suppression-persist-require-both-pf-exp-fail` / `--holdout-suppression-persist-allow-either-pf-or-exp-fail`
+    - added tune-summary parser for suppression context:
+      - `read_tune_holdout_suppression_snapshot(...)`
+    - added PF/expectancy failure evaluator:
+      - `pf_expectancy_quality_fail(...)`
+    - iteration trace now records:
+      - `holdout_suppression_active`
+      - `holdout_suppression_reason`
+      - `holdout_suppression_suppressed_combo_count`
+      - `holdout_suppression_kept_combo_count`
+      - `holdout_suppression_fail_open_all_suppressed`
+      - `holdout_suppression_persist_streak`
+      - `holdout_suppression_persist_triggered`
+      - `pf_fail_active_threshold`
+      - `expectancy_fail_active_threshold`
+      - `pf_expectancy_quality_fail`
+    - stop criterion added:
+      - when suppression is active and PF/expectancy quality failure persists for configured streak, loop ends with:
+        - `status=paused_holdout_suppression_persist`
+        - explicit pivot reason (`quality/exit-side strategy changes`).
+    - summary JSON now includes:
+      - `holdout_suppression_persist_policy` with threshold, trigger iteration, final streak, and per-iteration events.
+      - tuning config fields for the new persistence policy.
+
+- Verification:
+  - `python -m py_compile scripts/run_candidate_auto_improvement_loop.py scripts/tune_candidate_gate_trade_density.py scripts/run_realdata_candidate_loop.py` PASS
+  - `python scripts/run_candidate_auto_improvement_loop.py -MaxIterations 0 -IterationCsv build/Release/logs/_smoke_auto_iterations.csv -SummaryJson build/Release/logs/_smoke_auto_summary.json` PASS
+  - helper parser smoke:
+    - `python -c "import json, pathlib, sys; sys.path.insert(0,'scripts'); import run_candidate_auto_improvement_loop as m; ..."` PASS
+    - confirmed `read_tune_holdout_suppression_snapshot(...)` returns `active=True`, `suppressed_combo_count=3` on synthetic payload.
+  - temporary smoke outputs cleaned.
+
+- Next subtask:
+  - run a real 1-iteration loop (with actual gate+tune artifacts) to validate `paused_holdout_suppression_persist` trigger behavior and decision trace under live suppression-active conditions.
+
+35. P1 step-2 continued: suppression-persist trigger verified on real artifact chain (2026-02-16)
+- What changed:
+  - `scripts/run_candidate_auto_improvement_loop.py`
+    - added tune holdout-suppression passthrough controls:
+      - `--tune-enable-holdout-failure-family-suppression` / `--tune-disable-holdout-failure-family-suppression`
+      - `--tune-holdout-suppression-hint-ratio-threshold`
+      - `--tune-holdout-suppression-require-both-pf-exp-fail` / `--tune-holdout-suppression-allow-either-pf-or-exp-fail`
+    - auto-loop now forwards these options to `tune_candidate_gate_trade_density.py`.
+    - summary `tuning` block now records the passthrough settings above.
+
+- Verification:
+  - generated holdout context first:
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --max-markets 3 --disable-walk-forward --matrix-max-workers 1 --matrix-backtest-retry-count 1` PASS
+    - produced:
+      - `build/Release/logs/candidate_train_eval_cycle_summary.json`
+      - holdout deterministic context present (`top_rejection_group=signal_generation`, PF/expectancy still failing).
+  - real auto-loop trigger run:
+    - `python scripts/run_candidate_auto_improvement_loop.py --max-iterations 2 --max-runtime-minutes 60 --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate --tune-max-scenarios 2 --tune-screen-dataset-limit 1 --tune-screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --tune-holdout-suppression-hint-ratio-threshold 0.0 --holdout-suppression-persist-iterations 2` PASS
+    - result:
+      - `status=paused_holdout_suppression_persist`
+      - `reason=Holdout-family suppression remained active while PF/expectancy stayed below active thresholds for 2 consecutive iterations...`
+      - `build/Release/logs/candidate_auto_improvement_summary.json`:
+        - `holdout_suppression_persist_policy.triggered=true`
+        - `trigger_iteration=2`
+        - `final_streak=2`
+      - `build/Release/logs/candidate_auto_improvement_iterations.csv`:
+        - last `post_apply` row has:
+          - `holdout_suppression_active=True`
+          - `holdout_suppression_persist_streak=2`
+          - `holdout_suppression_persist_triggered=True`
+          - `pf_expectancy_quality_fail=True`
+
+- Note:
+  - this run triggered on `holdout_failure_suppression.active=true` even when `suppressed_combo_count=0`
+    (scenario family was `neutral_balance`), i.e., policy trace worked as designed but the suppression was advisory rather than actual family removal.
+
+- Next subtask:
+  - tighten persistence policy semantics:
+    - count streak only when actual family suppression happened (`suppressed_combo_count>0`) or `fail_open_all_suppressed=true`,
+    - then re-run the same 2-iteration verification and compare trigger delta.
+
+36. P1 step-2 continued: suppression-persist semantics tightened to actual suppression effect (2026-02-16)
+- What changed:
+  - `scripts/run_candidate_auto_improvement_loop.py`
+    - persistence streak now increments only when:
+      - `holdout_failure_suppression.active=true`, and
+      - actual suppression effect exists:
+        - `suppressed_combo_count>0` OR `fail_open_all_suppressed=true`, and
+      - PF/expectancy quality still fails.
+    - added observability fields:
+      - per-iteration row: `holdout_suppression_effective`
+      - policy event trace: `effective`
+    - preserves existing active/suppressed metadata, but prevents advisory-only activation from triggering stop.
+
+- Verification:
+  - `python -m py_compile scripts/run_candidate_auto_improvement_loop.py` PASS
+  - re-ran same 2-iteration command as step 35:
+    - `python scripts/run_candidate_auto_improvement_loop.py --max-iterations 2 --max-runtime-minutes 60 --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate --tune-max-scenarios 2 --tune-screen-dataset-limit 1 --tune-screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --tune-holdout-suppression-hint-ratio-threshold 0.0 --holdout-suppression-persist-iterations 2` PASS
+  - outcome delta:
+    - previous (step 35): `status=paused_holdout_suppression_persist`
+    - now: `status=paused_no_improvement`
+    - because suppression was active but not effective (`suppressed_combo_count=0`, family=`neutral_balance`).
+  - artifact checks:
+    - `build/Release/logs/candidate_auto_improvement_summary.json`
+      - `holdout_suppression_persist_policy.triggered=false`
+      - events show `active=true`, `effective=false`, `persist_streak=0`
+    - `build/Release/logs/candidate_auto_improvement_iterations.csv`
+      - last row includes `holdout_suppression_effective=False`
+
+- Next subtask:
+  - create/route at least one tuning family that maps into suppressible classes (`signal_generation_boost` / `manager_prefilter_relax`) under current live-funnel context, then re-run 2-iteration loop to validate `effective=true` persistence stop in a non-advisory case.
+
+37. P1 step-2 continued: holdout-fallback bottleneck routing now enables non-advisory suppression path (2026-02-16)
+- What changed:
+  - `scripts/tune_candidate_gate_trade_density.py`
+    - added `build_effective_bottleneck_context(live_context, holdout_context)`:
+      - if live funnel `top_group` is empty, use holdout deterministic taxonomy top-group as fallback (`top_group_source=holdout_fallback`).
+      - fallback applies to known bottleneck groups (`signal_generation`, `manager_prefilter`, `position_state`, `risk_gate`).
+      - for `signal_generation` / `manager_prefilter`, inject conservative synthetic share floor to avoid neutral-only routing.
+    - tuning now uses:
+      - `live_bottleneck_context` (raw) + `bottleneck_context` (effective with fallback) split.
+    - observability extended:
+      - log now prints `top_group` + `source`.
+      - summary JSON `bottleneck_priority` now includes `live_context_raw` in addition to effective `context`.
+
+- Verification:
+  - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_candidate_auto_improvement_loop.py` PASS
+  - re-ran 2-iteration auto-loop (same command as step 36, with `--tune-holdout-suppression-hint-ratio-threshold 0.0`) PASS
+  - observed non-advisory suppression:
+    - tuning logs:
+      - `top_group=signal_generation, source=holdout_fallback`
+      - `scenario_family_counts={'signal_generation_boost': 1}`
+      - `holdout_family_suppression ... suppressed=2, kept=1`
+    - `build/Release/logs/candidate_trade_density_tuning_summary.json`:
+      - `bottleneck_priority.context.top_group=signal_generation`
+      - `bottleneck_priority.context.top_group_source=holdout_fallback`
+      - `bottleneck_priority.live_context_raw.top_group=""`
+      - `holdout_failure_suppression.suppressed_combo_count=2`
+  - persistence stop confirmed with effective suppression:
+    - `build/Release/logs/candidate_auto_improvement_summary.json`:
+      - `status=paused_holdout_suppression_persist`
+      - `holdout_suppression_persist_policy.triggered=true`
+      - `trigger_iteration=2`
+      - events show `effective=true` for both iterations.
+    - `build/Release/logs/candidate_auto_improvement_iterations.csv`:
+      - last row `holdout_suppression_effective=True`
+
+- Next subtask:
+  - integrate this fallback-context signal into scenario count allocation (not only family label), so suppressed families still leave enough distinct quality/exit-side alternatives under low-signal regimes.
+
+38. P1 step-2 continued: post-suppression quality/exit candidate expansion added (2026-02-16)
+- What changed:
+  - `scripts/tune_candidate_gate_trade_density.py`
+    - added new helper:
+      - `expand_post_suppression_quality_exit_candidates(...)`
+      - when holdout family suppression is effective and combo count falls below floor, injects tighter quality/exit variants.
+    - new CLI controls:
+      - `--enable-post-suppression-quality-expansion` / `--disable-post-suppression-quality-expansion`
+      - `--post-suppression-min-combo-count` (default `3`)
+    - injected variants:
+      - stricter edge/RR/EV/PF floors, reduced order density, tighter strategy strengths.
+      - tagged with `bottleneck_scenario_family=quality_exit_rebalance`.
+    - observability:
+      - log line `post_suppression_quality_expansion=...`
+      - summary JSON:
+        - `bottleneck_priority.post_suppression_quality_expansion`
+      - screening config records expansion settings.
+
+- Verification:
+  - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_candidate_auto_improvement_loop.py` PASS
+  - direct tune run:
+    - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 2 --real-data-only --require-higher-tf-companions --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --holdout-suppression-hint-ratio-threshold 0.0` PASS
+    - confirmed:
+      - `scenario_family_counts={'signal_generation_boost': 1, 'quality_exit_rebalance': 2}`
+      - suppression effective (`suppressed_combo_count=2`)
+      - expansion applied (`injected_combo_count=2`, `combo_count=3`)
+  - end-to-end auto-loop run:
+    - `python scripts/run_candidate_auto_improvement_loop.py --max-iterations 2 --max-runtime-minutes 60 --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate --tune-max-scenarios 2 --tune-screen-dataset-limit 1 --tune-screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --tune-holdout-suppression-hint-ratio-threshold 0.0 --holdout-suppression-persist-iterations 2` PASS
+    - selected combo can now come from expansion family (e.g. `scenario_quality_focus_000_quality_exit_02`).
+    - persistence policy still triggers correctly:
+      - `status=paused_holdout_suppression_persist`
+      - `trigger_iteration=2`, `final_streak=2`
+
+- Next subtask:
+  - connect expansion-family outcome into auto-loop pivot recommendation text and next-iteration scenario-mode selection, so repeated persistence stop emits concrete patch direction (`entry timing` vs `exit/risk` emphasis).
+
+39. P1 step-2 continued: directional pivot recommendation + next-iteration scenario override wired (2026-02-16)
+- What changed:
+  - `scripts/run_candidate_auto_improvement_loop.py`
+    - added directional pivot controls:
+      - `--enable-persist-directional-pivot` / `--disable-persist-directional-pivot`
+      - `--persist-entry-timing-scenario-mode` (default `diverse_wide`)
+      - `--persist-exit-risk-scenario-mode` (default `quality_focus`)
+    - added tune expansion passthrough controls:
+      - `--tune-enable-post-suppression-quality-expansion` / `--tune-disable-post-suppression-quality-expansion`
+      - `--tune-post-suppression-min-combo-count` (default `3`)
+    - added tune metadata readers:
+      - `read_tune_post_suppression_expansion_snapshot(...)`
+      - `build_persist_directional_pivot(...)`
+    - behavior update:
+      - when suppression-effective + PF/expectancy fail persists, loop now derives concrete patch direction:
+        - `entry_timing` vs `exit_risk`
+      - stores next-iteration scenario mode override and applies it on following iteration.
+      - final `paused_holdout_suppression_persist` reason now includes:
+        - `patch_direction=...`
+        - `next_scenario_mode=...`
+        - directional recommendation sentence.
+    - observability additions:
+      - iteration csv fields:
+        - `tune_scenario_mode_source`
+        - `post_suppression_expansion_*`
+        - `selected_combo_family`
+        - `persist_pivot_*`
+      - holdout policy events now include:
+        - `pivot_direction`, `pivot_reason_code`, `pivot_recommendation`, `pivot_next_scenario_mode`
+      - summary json adds:
+        - `persist_directional_pivot` block (last direction/recommendation/next mode).
+
+- Verification:
+  - `python -m py_compile scripts/run_candidate_auto_improvement_loop.py scripts/tune_candidate_gate_trade_density.py` PASS
+  - end-to-end 2-iteration run:
+    - `python scripts/run_candidate_auto_improvement_loop.py --max-iterations 2 --max-runtime-minutes 60 --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate --tune-max-scenarios 2 --tune-screen-dataset-limit 1 --tune-screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --tune-holdout-suppression-hint-ratio-threshold 0.0 --holdout-suppression-persist-iterations 2` PASS
+    - observed logs:
+      - `Directional pivot prepared for next iteration: direction=exit_risk, next_scenario_mode=quality_focus`
+      - next iteration applies override:
+        - `Applying scenario-mode override from previous pivot: scenario_mode=quality_focus, reason=quality_exit_family_or_expansion`
+    - final reason includes concrete patch direction:
+      - `patch_direction=exit_risk, next_scenario_mode=quality_focus ...`
+  - artifact checks:
+    - `build/Release/logs/candidate_auto_improvement_summary.json`:
+      - `persist_directional_pivot.last_direction=exit_risk`
+      - `persist_directional_pivot.last_reason_code=quality_exit_family_or_expansion`
+      - `holdout_suppression_persist_policy.events[*].pivot_direction=exit_risk`
+    - `build/Release/logs/candidate_auto_improvement_iterations.csv`:
+      - last row:
+        - `selected_combo_family=quality_exit_rebalance`
+        - `tune_scenario_mode_source=persist_directional_pivot_override`
+        - `persist_pivot_direction=exit_risk`
+
+- Next subtask:
+  - exercise and validate the `entry_timing` pivot branch explicitly (force non-expansion winner path) and confirm scenario override shifts to `diverse_wide` with corresponding recommendation trace.
+
+40. P1 step-2 continued: `entry_timing` pivot branch validated with real loop trace (2026-02-16)
+- What changed:
+  - no additional code change required beyond step 39 wiring.
+  - validation run forced non-expansion path using:
+    - `--tune-disable-post-suppression-quality-expansion`
+    - this keeps suppression effective while allowing `signal_generation_boost` family to remain as selected combo.
+
+- Verification:
+  - run:
+    - `python scripts/run_candidate_auto_improvement_loop.py --max-iterations 2 --max-runtime-minutes 60 --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate --tune-max-scenarios 2 --tune-screen-dataset-limit 1 --tune-screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --tune-holdout-suppression-hint-ratio-threshold 0.0 --holdout-suppression-persist-iterations 2 --tune-disable-post-suppression-quality-expansion` PASS
+  - observed logs:
+    - iteration-1 pivot prepare:
+      - `direction=entry_timing`
+      - `next_scenario_mode=diverse_wide`
+      - `reason=entry_relax_family_selected`
+    - iteration-2 override applied:
+      - `Applying scenario-mode override ... scenario_mode=diverse_wide`
+    - tune stage confirms override:
+      - `scenario_mode=diverse_wide`
+  - final status/reason:
+    - `status=paused_holdout_suppression_persist`
+    - reason now includes:
+      - `patch_direction=entry_timing`
+      - `next_scenario_mode=diverse_wide`
+      - entry-timing recommendation text.
+  - artifact checks:
+    - `build/Release/logs/candidate_auto_improvement_summary.json`
+      - `persist_directional_pivot.last_direction=entry_timing`
+      - `persist_directional_pivot.last_reason_code=entry_relax_family_selected`
+      - `persist_directional_pivot.last_next_scenario_mode=diverse_wide`
+    - `build/Release/logs/candidate_auto_improvement_iterations.csv` (iteration=2, phase=post_apply)
+      - `selected_combo_family=signal_generation_boost`
+      - `tune_scenario_mode_source=persist_directional_pivot_override`
+      - `persist_pivot_direction=entry_timing`
+      - `persist_pivot_next_scenario_mode=diverse_wide`
+
+- Next subtask:
+  - add branch-specific patch templates to the loop summary:
+    - when `entry_timing`: emit concrete entry-filter timing checklist.
+    - when `exit_risk`: emit concrete exit/risk tightening checklist.
+  - ensure template payload is machine-readable for next auto-improvement iteration planning.
+
+41. P1 step-2 continued: branch-specific machine-readable patch templates fully wired (2026-02-16)
+- What changed:
+  - `scripts/run_candidate_auto_improvement_loop.py`
+    - completed patch-template propagation for directional pivot metadata:
+      - holdout persist events now include:
+        - `pivot_patch_template_id`
+        - `pivot_patch_template_action_count`
+        - `pivot_patch_template` (full machine-readable template payload)
+      - post-apply iteration rows now include:
+        - `persist_pivot_template_id`
+        - `persist_pivot_template_action_count`
+      - summary `persist_directional_pivot` now includes:
+        - `last_patch_template`
+    - this finalizes step-40 TODO for machine-readable branch templates and keeps event/row/summary payloads consistent.
+
+- Verification:
+  - `python -m py_compile scripts/run_candidate_auto_improvement_loop.py scripts/tune_candidate_gate_trade_density.py` PASS
+  - real loop validation run:
+    - `python scripts/run_candidate_auto_improvement_loop.py --max-iterations 2 --max-runtime-minutes 60 --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate --tune-max-scenarios 2 --tune-screen-dataset-limit 1 --tune-screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --tune-holdout-suppression-hint-ratio-threshold 0.0 --holdout-suppression-persist-iterations 2` PASS
+  - artifact checks:
+    - `build/Release/logs/candidate_auto_improvement_summary.json`
+      - `persist_directional_pivot.last_patch_template.template_id=exit_risk_v1`
+      - `persist_directional_pivot.last_patch_template.checklist` count `=4`
+      - `holdout_suppression_persist_policy.events[-1].pivot_patch_template_id=exit_risk_v1`
+    - `build/Release/logs/candidate_auto_improvement_iterations.csv`
+      - `persist_pivot_template_id`/`persist_pivot_template_action_count` columns present in header and populated on `phase=post_apply`.
+
+- Next subtask:
+  - promote these template payloads into an executable patch-plan handoff artifact per iteration
+    (e.g. `candidate_auto_improvement_patch_plan.json`) so next loop can consume concrete change intents without re-deriving branch direction.
+
+42. P1 step-2 continued: executable patch-plan handoff artifact added (2026-02-16)
+- What changed:
+  - `scripts/run_candidate_auto_improvement_loop.py`
+    - added CLI/output path:
+      - `--patch-plan-json` (default: `build/Release/logs/candidate_auto_improvement_patch_plan.json`)
+    - added artifact builder:
+      - `build_machine_readable_patch_plan(...)`
+      - includes:
+        - trigger state (`holdout_suppression_persist_*`)
+        - pivot direction/reason/next scenario mode
+        - branch template payload (`patch_template`)
+        - normalized ordered action list (`actions`)
+        - latest iteration context (`phase`, combo family, PF/expectancy/trades/win-rate, taxonomy top groups, blended hostility/quality)
+    - summary outputs now include `patch_plan_json` path and completion log prints it.
+
+- Verification:
+  - `python -m py_compile scripts/run_candidate_auto_improvement_loop.py` PASS
+  - run:
+    - `python scripts/run_candidate_auto_improvement_loop.py --max-iterations 1 --max-runtime-minutes 60 --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate --tune-max-scenarios 2 --tune-screen-dataset-limit 1 --tune-screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --tune-holdout-suppression-hint-ratio-threshold 0.0` PASS
+  - artifact checks:
+    - `build/Release/logs/candidate_auto_improvement_patch_plan.json`
+      - `pivot.direction=exit_risk`
+      - `patch_template.template_id=exit_risk_v1`
+      - `actions` count `=4`
+      - `context.phase=post_apply`
+      - `context.selected_combo_family=quality_exit_rebalance`
+    - `build/Release/logs/candidate_auto_improvement_summary.json`
+      - `outputs.patch_plan_json` present and points to artifact path.
+
+- Next subtask:
+  - consume `candidate_auto_improvement_patch_plan.json` in the next tuning iteration pre-step
+    to automatically pin branch-specific scenario/config knobs (entry-timing vs exit-risk) before candidate combo generation.
+
+43. P1 step-2 continued: patch-plan handoff consumption wired into next tuning pre-step (2026-02-16)
+- What changed:
+  - `scripts/run_candidate_auto_improvement_loop.py`
+    - added handoff controls:
+      - `--consume-patch-plan-handoff` / `--disable-consume-patch-plan-handoff`
+    - added reader:
+      - `read_patch_plan_handoff(...)`
+      - extracts `direction`, `reason_code`, `next_scenario_mode`, `template_id`, action count.
+    - startup behavior:
+      - if handoff file is usable, loop preloads:
+        - `next_tune_scenario_mode_override`
+        - `next_tune_directional_hint`
+      - logs loaded handoff metadata (`direction`, `next_scenario_mode`, `template`).
+    - per-iteration pre-tune behavior:
+      - applies override source `patch_plan_handoff` on baseline iteration when loaded from artifact.
+      - pins one branch-specific knob before combo generation:
+        - `entry_timing` -> disables post-suppression quality expansion for that iteration,
+        - `exit_risk` -> enables post-suppression quality expansion.
+    - observability:
+      - iteration rows now include:
+        - `tune_directional_hint_iter`
+        - `tune_post_suppression_quality_expansion_enabled_iter`
+        - `tune_post_suppression_min_combo_count_iter`
+      - summary now includes:
+        - `tuning.consume_patch_plan_handoff`
+        - `persist_directional_pivot.patch_plan_handoff_snapshot`
+        - `persist_directional_pivot.patch_plan_handoff_applied`
+        - `persist_directional_pivot.next_directional_hint_pending`
+
+- Verification:
+  - `python -m py_compile scripts/run_candidate_auto_improvement_loop.py` PASS
+  - run:
+    - `python scripts/run_candidate_auto_improvement_loop.py --max-iterations 1 --max-runtime-minutes 60 --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate --tune-max-scenarios 2 --tune-screen-dataset-limit 1 --tune-screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --tune-holdout-suppression-hint-ratio-threshold 0.0` PASS
+  - observed runtime trace:
+    - `Loaded patch-plan handoff: direction=exit_risk, next_scenario_mode=quality_focus, template=exit_risk_v1`
+    - `Applying scenario-mode override ... reason=patch_plan_handoff:quality_exit_family_or_expansion`
+  - artifact checks:
+    - `build/Release/logs/candidate_auto_improvement_summary.json`
+      - `tuning.consume_patch_plan_handoff=true`
+      - `persist_directional_pivot.patch_plan_handoff_applied=true`
+      - `persist_directional_pivot.patch_plan_handoff_snapshot.direction=exit_risk`
+    - `build/Release/logs/candidate_auto_improvement_iterations.csv` baseline row
+      - `tune_scenario_mode_source=patch_plan_handoff`
+      - `tune_directional_hint_iter=exit_risk`
+      - `tune_post_suppression_quality_expansion_enabled_iter=True`
+
+- Next subtask:
+  - validate the `entry_timing` handoff branch end-to-end by seeding an `entry_timing` patch plan and confirming:
+    - `tune_scenario_mode_source=patch_plan_handoff`
+    - `tune_directional_hint_iter=entry_timing`
+    - `tune_post_suppression_quality_expansion_enabled_iter=False` on baseline iteration.
+
+44. P1 step-2 continued: `entry_timing` handoff branch end-to-end validation passed (2026-02-16)
+- What changed:
+  - no additional code change; executed forced handoff validation by seeding
+    `build/Release/logs/candidate_auto_improvement_patch_plan.json` with:
+    - `pivot.direction=entry_timing`
+    - `pivot.next_scenario_mode=diverse_wide`
+    - `patch_template.template_id=entry_timing_v1`
+  - then re-ran one-iteration auto-loop to verify pre-tune consumption behavior.
+
+- Verification:
+  - run:
+    - `python scripts/run_candidate_auto_improvement_loop.py --max-iterations 1 --max-runtime-minutes 60 --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate --tune-max-scenarios 2 --tune-screen-dataset-limit 1 --tune-screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --tune-holdout-suppression-hint-ratio-threshold 0.0` PASS
+  - observed runtime trace:
+    - `Loaded patch-plan handoff: direction=entry_timing, next_scenario_mode=diverse_wide, template=entry_timing_v1`
+    - `Applying scenario-mode override ... scenario_mode=diverse_wide, reason=patch_plan_handoff:entry_relax_family_selected`
+    - tuning confirms pinned knob:
+      - `post_suppression_quality_expansion=off`
+  - artifact checks:
+    - `build/Release/logs/candidate_auto_improvement_iterations.csv` baseline row:
+      - `tune_scenario_mode_source=patch_plan_handoff`
+      - `tune_directional_hint_iter=entry_timing`
+      - `tune_post_suppression_quality_expansion_enabled_iter=False`
+    - `build/Release/logs/candidate_auto_improvement_summary.json`:
+      - `persist_directional_pivot.patch_plan_handoff_snapshot.direction=entry_timing`
+      - `persist_directional_pivot.patch_plan_handoff_applied=true`
+      - `persist_directional_pivot.last_direction=entry_timing`
+
+- Next subtask:
+  - implement deterministic mapping layer from patch-plan `actions[]` to concrete tune/config override set
+    (currently only direction-level knobs are auto-pinned; action-level execution is not yet wired).
+
+45. P1 step-2 continued: deterministic `actions[] -> tune/config override` mapping wired + dual-branch validation (2026-02-16)
+- What changed:
+  - `scripts/run_candidate_auto_improvement_loop.py`
+    - added action-override control:
+      - `--enable-patch-plan-action-overrides` / `--disable-patch-plan-action-overrides` (default enabled)
+    - enhanced handoff parser:
+      - `read_patch_plan_handoff(...)` now loads `actions[]` payload (fallback to `patch_template.checklist`), plus template focus.
+    - added deterministic mapping layer:
+      - `build_patch_plan_action_overrides(...)`
+      - maps known action texts to concrete tuning overrides:
+        - objective mode / objective floors (`ratio`, `win-rate`, `expectancy`, `avg-trades`)
+        - gate trade floor scaling
+        - hint guardrail ratio/tighten-scale
+        - holdout suppression hint-ratio threshold
+        - post-suppression expansion enable/min-combo count
+    - wired execution in iteration pre-tune stage:
+      - consumes action list when scenario override is applied from handoff/pivot.
+      - applies resolved override set before building tune argv.
+      - tune argv now uses iteration-resolved:
+        - `--objective-mode`
+        - `--holdout-suppression-hint-ratio-threshold`
+    - pivot-to-next-iteration now carries action template checklist:
+      - `next_tune_patch_plan_template_id`
+      - `next_tune_patch_plan_actions`
+    - observability added:
+      - iteration CSV fields:
+        - `tune_objective_mode_iter`
+        - `tune_holdout_suppression_hint_ratio_threshold_iter`
+        - `patch_plan_action_override_*`
+      - holdout persist events include action-override summary.
+      - summary includes:
+        - `tuning.enable_patch_plan_action_overrides`
+        - `persist_directional_pivot.last_action_override`
+        - pending next patch-template/action counters.
+      - patch-plan context now records action-override usage for handoff traceability.
+
+- Verification:
+  - `python -m py_compile scripts/run_candidate_auto_improvement_loop.py` PASS
+  - `entry_timing` action-override run:
+    - seeded `candidate_auto_improvement_patch_plan.json` to `entry_timing_v1`
+    - run:
+      - `python scripts/run_candidate_auto_improvement_loop.py --max-iterations 1 --max-runtime-minutes 60 --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate --tune-max-scenarios 2 --tune-screen-dataset-limit 1 --tune-screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --tune-holdout-suppression-hint-ratio-threshold 0.60` PASS
+    - observed:
+      - `Applied patch-plan action overrides: template=entry_timing_v1, matched=4 ... expansion=False`
+      - tune stage uses `scenario_mode=diverse_wide`
+      - tune stage shows guardrail threshold tightened (`0.55`) and expansion disabled.
+    - artifact checks (`candidate_auto_improvement_iterations.csv`, baseline):
+      - `patch_plan_action_override_applied=True`
+      - `patch_plan_action_override_template_id=entry_timing_v1`
+      - `patch_plan_action_override_matched_count=4`
+      - `tune_scenario_mode_source=patch_plan_handoff`
+      - `tune_holdout_suppression_hint_ratio_threshold_iter=0.55`
+      - `tune_post_suppression_quality_expansion_enabled_iter=False`
+  - `exit_risk` action-override run:
+    - seeded `candidate_auto_improvement_patch_plan.json` to `exit_risk_v1`
+    - same command PASS
+    - observed:
+      - `Applied patch-plan action overrides: template=exit_risk_v1, matched=4, objective_mode=profitable_ratio_priority, expansion=True`
+      - tune stage uses `scenario_mode=quality_focus`
+      - tune stage reflects tightened ratio/scale and expansion enabled.
+    - artifact checks (baseline row):
+      - `patch_plan_action_override_applied=True`
+      - `patch_plan_action_override_template_id=exit_risk_v1`
+      - `patch_plan_action_override_matched_count=4`
+      - `tune_objective_mode_iter=profitable_ratio_priority`
+      - `tune_holdout_suppression_hint_ratio_threshold_iter=0.55`
+      - `tune_post_suppression_quality_expansion_enabled_iter=True`
+    - summary checks:
+      - `persist_directional_pivot.last_action_override.applied=true`
+      - `persist_directional_pivot.last_action_override.resolved.objective_mode=profitable_ratio_priority`
+
+- Next subtask:
+  - add lightweight A/B harness for action-overrides ON vs OFF under same seeded handoff template
+    and emit delta report artifact:
+    - target: `build/Release/logs/candidate_patch_action_override_ab_summary.json`
+    - metrics: objective score, PF, expectancy, trade count, profitable ratio deltas.
+
+46. Cross-cutting policy: 한글 로그/주석 + UTF-8 통일 규칙 고정 (2026-02-16)
+- What changed:
+  - 실행/튜닝 관련 신규 로그 문구를 한국어 우선 표현으로 정렬:
+    - `scripts/run_candidate_auto_improvement_loop.py` (patch handoff/override 주요 로그)
+    - `scripts/run_patch_action_override_ab.py` (완료/에러 메시지)
+  - 인코딩/컴파일 정책 재확인:
+    - `.editorconfig` 전역 `charset = utf-8`
+    - `CMakeLists.txt` MSVC `/utf-8` 컴파일 옵션 활성화
+
+- Verification:
+  - `.editorconfig` 확인:
+    - `charset = utf-8` (전역 적용)
+  - `CMakeLists.txt` 확인:
+    - `add_compile_options(/W4 /EHsc /utf-8)` 포함
+  - 깨진 한글(대체문자) 스캔:
+    - `rg -n "�" scripts docs include src -S` -> no match
+  - 스크립트 문법:
+    - `python -m py_compile scripts/run_candidate_auto_improvement_loop.py scripts/run_patch_action_override_ab.py` PASS
+
+- Rule going forward:
+  - 신규 로그/주석은 한국어 우선(필요 시 기술 키워드만 영어 병기).
+  - 코드/문서/스크립트 파일은 UTF-8 유지.
+  - 기존 영문 로그는 리팩토링 작업 시점에 점진 치환(대규모 일괄치환은 회귀 위험 때문에 단계 적용).
+
+- Next subtask:
+  - 45에서 추가한 A/B 하네스 결과(JSON)에 handoff 적용 여부와 action-override 적용 여부를 함께 포함해
+    결과 해석 혼동(0 delta but handoff 미적용)을 방지하도록 정리.
+
+47. P1 step-2 continued: patch-action A/B 하네스 해석력 보강 + handoff 재시드 정합성 수정 (2026-02-16)
+- What changed:
+  - `scripts/run_patch_action_override_ab.py`
+    - ON/OFF 런 각각 시작 직전에 동일 템플릿 재시드:
+      - ON 실행 후 loop가 patch-plan을 덮어써도 OFF 실행이 동일 조건으로 시작되도록 보정.
+    - 결과 메트릭 확장:
+      - handoff 적용 여부 / action-override 적용 여부 / 템플릿 / 매칭 액션 수.
+      - iteration CSV 기반 메트릭 추가:
+        - `selected_combo_objective_with_gate_bonus_post_apply`
+        - `objective_score_post_apply`
+        - baseline `tune_objective_mode_iter`
+    - delta 확장:
+      - `selected_combo_objective_with_gate_bonus_post_apply_delta_on_minus_off`
+      - `objective_score_post_apply_delta_on_minus_off`
+    - 필수 검증 옵션:
+      - `--require-handoff-applied`에서 ON/OFF 각각 handoff 적용 여부를 별도로 검사.
+    - 출력 로그 보강:
+      - `selected_combo_objective_with_gate_bonus` delta 출력 추가.
+  - `scripts/run_candidate_auto_improvement_loop.py`
+    - iteration CSV에 `selected_combo_objective_with_gate_bonus` 기록 추가
+      (A/B 하네스가 튜닝 단계 objective 차이를 직접 읽을 수 있도록).
+
+- Verification:
+  - `python -m py_compile scripts/run_candidate_auto_improvement_loop.py scripts/run_patch_action_override_ab.py` PASS
+  - run:
+    - `python scripts/run_patch_action_override_ab.py --seed-patch-template exit_risk_v1 --require-handoff-applied --max-iterations 1 --max-runtime-minutes 60 --tune-max-scenarios 1 --tune-screen-dataset-limit 1 --tune-screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --tune-holdout-suppression-hint-ratio-threshold 0.60 --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate` PASS
+  - artifact checks:
+    - `build/Release/logs/candidate_patch_action_override_ab_summary.json`
+      - `handoff_applied_on=true`, `handoff_applied_off=true`
+      - `action_override_applied_on=true`, `action_override_applied_off=false`
+      - `selected_combo_objective_with_gate_bonus_post_apply_delta_on_minus_off=-504.0`
+      - `objective_score_post_apply_delta_on_minus_off=0.0`
+      - `warnings=[]`
+    - iteration metrics:
+      - ON baseline `tune_objective_mode_baseline=profitable_ratio_priority`
+      - OFF baseline `tune_objective_mode_baseline=balanced`
+
+- Interpretation:
+  - action override가 실제로 적용되어 튜닝 점수 함수 관점의 콤보 objective 차이는 발생했지만,
+    이번 샘플에서는 post-apply 실성능(PF/expectancy/trades) 지표 변화는 없었습니다.
+  - 즉, “오버라이드 적용 여부”와 “실성능 개선 여부”를 분리해서 봐야 합니다.
+
+- Next subtask:
+  - A/B 하네스에 다회 반복(`N`회) + 통계 요약(평균/표준편차) 모드 추가:
+    - 단일 1회 run의 노이즈를 줄이고 action-override 실효성 판단을 안정화.
+    - target artifact:
+      - `build/Release/logs/candidate_patch_action_override_ab_multirun_summary.json`
+
+48. P1 step-2 continued: patch-action A/B 멀티런 통계 모드 추가 + 2회 반복 검증 완료 (2026-02-16)
+- What changed:
+  - `scripts/run_patch_action_override_ab.py`
+    - 멀티런 옵션 추가:
+      - `--repeat-runs` (default 1)
+      - `--multirun-output-json` (default: `build/Release/logs/candidate_patch_action_override_ab_multirun_summary.json`)
+    - 내부 구조 변경:
+      - 라운드별 ON/OFF 실행 결과를 `round_results[]`로 누적.
+      - 델타 지표(객체/기대값/PF/거래수/승률 + combo objective/post-apply objective)의
+        평균/표준편차/최소/최대 집계(`aggregate`) 추가.
+      - single-run과 호환되도록 기존 top-level `runs`, `delta_on_minus_off`, `warnings` 유지
+        (마지막 라운드 기준) + 멀티런 상세 병행 저장.
+    - 정합성 보강:
+      - ON/OFF 각각 실행 직전 동일 템플릿 재시드 유지.
+      - `--require-handoff-applied` 검사 시 전체 라운드 대상 검증.
+
+- Verification:
+  - `python -m py_compile scripts/run_patch_action_override_ab.py` PASS
+  - run:
+    - `python scripts/run_patch_action_override_ab.py --seed-patch-template exit_risk_v1 --require-handoff-applied --repeat-runs 2 --max-iterations 1 --max-runtime-minutes 60 --tune-max-scenarios 1 --tune-screen-dataset-limit 1 --tune-screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --tune-holdout-suppression-hint-ratio-threshold 0.60 --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate` PASS
+  - artifact checks:
+    - `build/Release/logs/candidate_patch_action_override_ab_summary.json`
+    - `build/Release/logs/candidate_patch_action_override_ab_multirun_summary.json`
+    - 핵심 결과:
+      - `repeat_runs=2`
+      - `aggregate.handoff_applied_on_all_rounds=true`
+      - `aggregate.handoff_applied_off_all_rounds=true`
+      - `aggregate.action_override_applied_on_all_rounds=true`
+      - `selected_combo_objective_with_gate_bonus_delta_on_minus_off_mean=-504.0`
+      - post-apply 실성능 delta 평균은 0.0 (PF/expectancy/trades/profitable_ratio)
+
+- Interpretation:
+  - 액션 오버라이드 ON/OFF는 튜닝 콤보 objective 함수 점수에는 일관된 차이를 만들었지만,
+    현재 데이터셋/1-iteration 조건에서는 post-apply 실성능 지표 개선으로는 아직 연결되지 않았습니다.
+  - 즉, action override는 “탐색 압력(탐색 방향)”을 바꾸는 단계까지는 검증되었고,
+    “실성능 우위”는 추가 실험 설계(반복 수/데이터 창/iteration 길이)로 검증해야 합니다.
+
+- Next subtask:
+  - 멀티런 결과 기반 자동 판정 규칙 추가:
+    - 예: `M`회 평균에서 post-apply 실성능 delta가 개선되지 않으면 해당 template override를
+      다음 루프에서 자동 약화/중단.
+    - target artifact:
+      - `build/Release/logs/candidate_patch_action_override_policy_decision.json`
+
+49. P1 step-2 continued: patch-action 정책판정 생성 + auto-loop 소비 연동 완료 (2026-02-16)
+- What changed:
+  - `scripts/run_patch_action_override_ab.py`
+    - 정책 아티팩트 출력 추가:
+      - `--policy-decision-json` (default: `build/Release/logs/candidate_patch_action_override_policy_decision.json`)
+    - 정책 판정 로직 추가:
+      - `_build_policy_decision(...)`
+      - 신호 입력:
+        - 멀티런 평균 delta (PF/expectancy/profitable_ratio/post-apply objective/combo objective)
+        - handoff/override 적용 정합성
+      - 정책 결정:
+        - `keep_override`
+        - `decrease_override_strength`
+        - `disable_override`
+        - `invalid_experiment`
+    - 정책 임계값 옵션:
+      - `--policy-min-expectancy-delta`
+      - `--policy-min-profit-factor-delta`
+      - `--policy-min-profitable-ratio-delta`
+      - `--policy-neutral-band-epsilon`
+
+  - `scripts/run_candidate_auto_improvement_loop.py`
+    - 정책 소비 입력 추가:
+      - `--patch-action-policy-json` (default 위 policy artifact)
+      - `--consume-patch-action-policy` / `--disable-consume-patch-action-policy`
+    - 정책 소비 동작:
+      - policy `disable_override` -> action override 비활성화
+      - policy `decrease_override_strength` -> action override 강도 0.5로 약화
+      - policy `keep_override` -> 강도 1.0 유지
+    - action override 매핑에 강도 스케일 적용:
+      - `build_patch_plan_action_overrides(..., strength_scale=...)`
+      - delta/트레이드 스케일을 strength 기반으로 완화 적용
+    - observability 확장:
+      - summary:
+        - `tuning.consume_patch_action_policy`
+        - `tuning.effective_enable_patch_plan_action_overrides`
+        - `tuning.patch_action_override_strength_scale`
+        - `persist_directional_pivot.patch_action_policy_snapshot`
+        - `persist_directional_pivot.patch_action_policy_applied`
+      - outputs:
+        - `patch_action_policy_json`
+
+- Verification:
+  - `python -m py_compile scripts/run_patch_action_override_ab.py scripts/run_candidate_auto_improvement_loop.py` PASS
+  - policy artifact generation:
+    - `python scripts/run_patch_action_override_ab.py --seed-patch-template exit_risk_v1 --require-handoff-applied --repeat-runs 1 --max-iterations 1 --max-runtime-minutes 60 --tune-max-scenarios 1 --tune-screen-dataset-limit 1 --tune-screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --tune-holdout-suppression-hint-ratio-threshold 0.60 --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate` PASS
+    - result:
+      - `candidate_patch_action_override_policy_decision.json`
+      - decision: `decrease_override_strength`
+  - policy consumption validation (handoff+policy 동시):
+    - patch-plan을 `exit_risk_v1`로 seed 후:
+      - `python scripts/run_candidate_auto_improvement_loop.py --max-iterations 1 --max-runtime-minutes 60 --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate --tune-max-scenarios 1 --tune-screen-dataset-limit 1 --tune-screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --tune-holdout-suppression-hint-ratio-threshold 0.60` PASS
+    - observed logs:
+      - `패치 액션 정책 적용 ... decision=decrease_override_strength ... strength_scale=0.5`
+      - `패치 플랜 handoff 로드 ... template=exit_risk_v1`
+      - `패치 플랜 액션 오버라이드 적용 완료 ... matched=4 ...`
+    - summary checks:
+      - `patch_action_policy_applied=true`
+      - `patch_action_override_strength_scale=0.5`
+      - `last_action_override.strength_scale=0.5`
+    - iteration checks:
+      - baseline `patch_plan_action_override_applied=True`
+      - baseline `tune_objective_mode_iter=profitable_ratio_priority`
+
+- Next subtask:
+  - 정책 결정을 템플릿별로 분리 저장(예: `entry_timing_v1`, `exit_risk_v1`)하고
+    auto-loop에서 현재 handoff 템플릿 ID에 맞는 정책만 적용하도록 확장.
+    - target artifact:
+      - `build/Release/logs/candidate_patch_action_override_policy_registry.json`
+
+50. P1 step-2 continued: template별 정책 registry 저장 + handoff 템플릿 매칭 적용 완료 (2026-02-16)
+- What changed:
+  - `scripts/run_patch_action_override_ab.py`
+    - policy registry 출력/갱신 추가:
+      - `--policy-registry-json` (default: `build/Release/logs/candidate_patch_action_override_policy_registry.json`)
+      - `--update-policy-registry` / `--disable-update-policy-registry`
+    - 정책 결정을 template key로 registry에 기록:
+      - `template_policies.<template_id>`
+      - `latest_template_id`, `latest_decision`, `history[]`
+    - A/B 결과 아티팩트 경로에 registry/policy decision 경로 포함.
+    - 깨진 문자열 로그 정리:
+      - 완료/에러 메시지 UTF-8 한국어로 복구.
+
+  - `scripts/run_candidate_auto_improvement_loop.py`
+    - template-매칭 policy 입력 추가:
+      - `--patch-action-policy-registry-json`
+    - registry 스냅샷 로더 추가:
+      - `read_patch_action_policy_registry(path, template_id)`
+    - 정책 적용 우선순위 변경:
+      - registry 파일이 존재하면 현재 handoff `template_id`에 매칭된 정책만 적용.
+      - 매칭 정책이 없으면 정책 미적용(단일 policy fallback 금지; template 오염 방지).
+      - registry 파일이 없을 때만 기존 단일 policy(`patch_action_policy_json`) 사용.
+    - observability 확장:
+      - `tuning.patch_action_policy_source`
+      - `tuning.patch_action_policy_template_id`
+      - `persist_directional_pivot.patch_action_policy_registry_snapshot`
+      - `persist_directional_pivot.patch_action_policy_effective_snapshot`
+      - `outputs.patch_action_policy_registry_json`
+
+- Verification:
+  - 문법 검사:
+    - `python -m py_compile scripts/run_patch_action_override_ab.py scripts/run_candidate_auto_improvement_loop.py` PASS
+  - registry 생성 검증:
+    - `python scripts/run_patch_action_override_ab.py --seed-patch-template exit_risk_v1 --require-handoff-applied --repeat-runs 1 --max-iterations 1 --max-runtime-minutes 60 --tune-max-scenarios 1 --tune-screen-dataset-limit 1 --tune-screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --tune-holdout-suppression-hint-ratio-threshold 0.60 --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate` PASS
+    - 결과:
+      - `candidate_patch_action_override_policy_registry.json` 생성
+      - `template_policies.exit_risk_v1.decision=decrease_override_strength`
+  - template 매칭 적용 검증:
+    - handoff template 없음(`template=none`) 상태:
+      - `python scripts/run_candidate_auto_improvement_loop.py --max-iterations 1 --max-runtime-minutes 60 --skip-tune-phase --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate --matrix-max-workers 1 --matrix-backtest-retry-count 1` PASS
+      - 로그: `패치 액션 정책 미적용: registry에 현재 템플릿 정책이 없습니다`
+    - handoff template를 `exit_risk_v1`로 seed한 상태:
+      - 동일 auto-loop 명령 PASS
+      - 로그: `패치 액션 정책 적용: ... source=registry, template=exit_risk_v1 ...`
+      - summary 확인:
+        - `tuning.patch_action_policy_source=registry`
+        - `tuning.patch_action_policy_template_id=exit_risk_v1`
+
+- Next subtask:
+  - template policy registry의 신선도/유효성 제어 추가:
+    - `max_policy_age_hours`(만료 정책 자동 무시),
+    - `min_repeat_runs`(검증 수 미달 정책 미적용),
+    - 적용 실패/미매칭 원인 코드 표준화.
+  - target artifact:
+    - `build/Release/logs/candidate_patch_action_override_policy_registry_guard_report.json`
+
+51. P1 step-2 continued: policy registry guard(신선도/반복수) 적용 + 원인코드 리포트 추가 (2026-02-16)
+- What changed:
+  - `scripts/run_candidate_auto_improvement_loop.py`
+    - registry guard 입력 추가:
+      - `--patch-action-policy-guard-report-json` (default: `build/Release/logs/candidate_patch_action_override_policy_registry_guard_report.json`)
+      - `--patch-action-policy-min-repeat-runs` (default: `1`)
+      - `--patch-action-policy-max-age-hours` (default: `72.0`)
+      - `--enable-patch-action-policy-registry-guards` / `--disable-patch-action-policy-registry-guards`
+    - guard 판정 함수 추가:
+      - `evaluate_patch_action_policy_registry_guard(...)`
+      - 판정 항목:
+        - template 매칭 여부,
+        - decision 유효성,
+        - repeat_runs 하한,
+        - policy updated_at 신선도(시간).
+    - 적용 규칙:
+      - registry 존재 시 guard를 통과한 정책만 usable.
+      - guard 미통과면 policy 미적용 + 원인코드 로그 출력.
+    - observability 확장:
+      - `tuning.patch_action_policy_registry_guards_enabled`
+      - `tuning.patch_action_policy_min_repeat_runs`
+      - `tuning.patch_action_policy_max_age_hours`
+      - `persist_directional_pivot.patch_action_policy_registry_guard_report`
+      - `outputs.patch_action_policy_guard_report_json`
+
+- Verification:
+  - 문법 검사:
+    - `python -m py_compile scripts/run_candidate_auto_improvement_loop.py scripts/run_patch_action_override_ab.py` PASS
+  - guard 적용(정책 허용) 검증:
+    - handoff template를 `exit_risk_v1`로 seed 후:
+      - `python scripts/run_candidate_auto_improvement_loop.py --max-iterations 0 --max-runtime-minutes 10 --skip-tune-phase --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate` PASS
+      - 로그: `패치 액션 정책 적용 ... source=registry, template=exit_risk_v1 ...`
+  - guard 차단 검증:
+    - 동일 seed + `--patch-action-policy-min-repeat-runs 2`
+      - `python scripts/run_candidate_auto_improvement_loop.py --max-iterations 0 --max-runtime-minutes 10 --skip-tune-phase --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate --patch-action-policy-min-repeat-runs 2` PASS
+      - 로그: `패치 액션 정책 미적용: registry guard/reason=repeat_runs_below_min ...`
+      - guard report:
+        - `accepted=false`
+        - `reason_codes=[\"repeat_runs_below_min\"]`
+        - `policy_age_hours` 값 기록 확인.
+
+- Next subtask:
+  - A/B 실행 스크립트(`run_patch_action_override_ab.py`)에서 template별 최소 반복수(`min_repeat_runs`)를 자동 상향/완화하는 피드백 규칙 추가:
+    - 반복 실험 누적 근거가 약한 템플릿은 auto-loop 소비를 기본 차단,
+    - 충분한 누적 후에만 `keep_override` 승격 허용.
+  - target artifact:
+    - `build/Release/logs/candidate_patch_action_override_policy_registry_feedback.json`
+
+52. P1 step-2 continued: template별 policy feedback 규칙 추가 + auto-loop guard 연동 완료 (2026-02-16)
+- What changed:
+  - `scripts/run_patch_action_override_ab.py`
+    - feedback artifact 출력/갱신 추가:
+      - `--policy-registry-feedback-json` (default: `build/Release/logs/candidate_patch_action_override_policy_registry_feedback.json`)
+      - `--update-policy-registry-feedback` / `--disable-update-policy-registry-feedback`
+      - `--feedback-min-repeat-runs-floor` (default: `2`)
+      - `--feedback-min-repeat-runs-ceiling` (default: `6`)
+      - `--feedback-promote-min-consecutive-keeps` (default: `2`)
+    - template별 feedback 상태 저장:
+      - `recommended_min_repeat_runs`
+      - `block_auto_loop_consumption`
+      - `allow_keep_promotion`
+      - decision 카운트/연속 streak/history
+    - 정책 결과가 약한 반복수에서 들어오면 최소 반복수 자동 상향 + 소비 차단.
+
+  - `scripts/run_candidate_auto_improvement_loop.py`
+    - feedback 입력 추가:
+      - `--patch-action-policy-registry-feedback-json`
+      - `--consume-patch-action-policy-registry-feedback` / `--disable-consume-patch-action-policy-registry-feedback`
+    - registry guard가 feedback을 함께 반영:
+      - `effective_min_repeat_runs = max(cli_min_repeat_runs, feedback.recommended_min_repeat_runs)`
+      - `feedback.block_auto_loop_consumption=true`면 정책 소비 차단.
+      - `decision=keep_override`에서 `allow_keep_promotion=false`면 승격 차단.
+    - observability 확장:
+      - `tuning.consume_patch_action_policy_registry_feedback`
+      - `tuning.patch_action_policy_effective_min_repeat_runs`
+      - `persist_directional_pivot.patch_action_policy_registry_feedback_snapshot`
+      - `outputs.patch_action_policy_registry_feedback_json`
+
+- Verification:
+  - 문법 검사:
+    - `python -m py_compile scripts/run_patch_action_override_ab.py scripts/run_candidate_auto_improvement_loop.py` PASS
+  - feedback artifact 생성:
+    - `python scripts/run_patch_action_override_ab.py --seed-patch-template exit_risk_v1 --require-handoff-applied --repeat-runs 1 --max-iterations 1 --max-runtime-minutes 60 --tune-max-scenarios 1 --tune-screen-dataset-limit 1 --tune-screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --tune-holdout-suppression-hint-ratio-threshold 0.60 --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate` PASS
+    - 결과:
+      - `candidate_patch_action_override_policy_registry_feedback.json`
+      - `exit_risk_v1.recommended_min_repeat_runs=3`
+      - `exit_risk_v1.block_auto_loop_consumption=true`
+      - `exit_risk_v1.allow_keep_promotion=false`
+  - auto-loop feedback guard 차단:
+    - handoff template `exit_risk_v1` seed 후:
+      - `python scripts/run_candidate_auto_improvement_loop.py --max-iterations 0 --max-runtime-minutes 10 --skip-tune-phase --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate` PASS
+      - 로그: `registry guard/reason=feedback_block_auto_loop_consumption,repeat_runs_below_min`
+      - summary:
+        - `tuning.consume_patch_action_policy_registry_feedback=true`
+        - `tuning.patch_action_policy_effective_min_repeat_runs=3`
+  - feedback bypass 회귀 확인:
+    - 동일 조건 + `--disable-consume-patch-action-policy-registry-feedback` PASS
+    - 로그: `패치 액션 정책 적용 ... source=registry, template=exit_risk_v1 ...`
+
+- Next subtask:
+  - feedback 기반 승격 실험 시나리오 추가:
+    - 동일 template에 대해 다회 반복(`repeat_runs>=recommended_min_repeat_runs`) 실행 후
+      `allow_keep_promotion=true`가 되는지 자동 체크하는 검증 스크립트/리포트 추가.
+  - target artifact:
+    - `build/Release/logs/candidate_patch_action_override_feedback_promotion_check.json`
+
+53. P1 step-2 continued: feedback 승격 체크 스크립트/리포트 추가 완료 (2026-02-16)
+- What changed:
+  - 신규 스크립트:
+    - `scripts/run_patch_action_override_feedback_promotion_check.py`
+  - 기능:
+    - policy feedback/registry/decision 아티팩트를 읽어 template별 승격 가능성 자동 판정.
+    - 핵심 판정:
+      - `promotion_ready`
+      - `required_min_repeat_runs`
+      - `required_keep_streak`
+      - `blocker_reason_codes`
+    - 다음 실험 권장치 계산:
+      - `recommended_repeat_runs`
+      - 재실행 커맨드 템플릿(`recommended_command`)
+  - 출력:
+    - `build/Release/logs/candidate_patch_action_override_feedback_promotion_check.json`
+
+- Verification:
+  - 문법 검사:
+    - `python -m py_compile scripts/run_patch_action_override_feedback_promotion_check.py scripts/run_patch_action_override_ab.py scripts/run_candidate_auto_improvement_loop.py` PASS
+  - 승격 체크 리포트 생성:
+    - `python scripts/run_patch_action_override_feedback_promotion_check.py` PASS
+    - 결과:
+      - `template_id=exit_risk_v1`
+      - `promotion_ready=false`
+      - blockers:
+        - `latest_decision_not_keep_override`
+        - `allow_keep_promotion_false`
+        - `block_auto_loop_consumption_true`
+        - `repeat_runs_below_required`
+        - `keep_streak_below_required`
+      - `recommended_repeat_runs=3`
+      - `recommended_command` 포함 확인
+
+- Next subtask:
+  - promotion-check 스크립트를 auto-loop summary chain에 옵션으로 연결:
+    - auto-loop 실행 종료 시 현재 template 기준 promotion-check 리포트를 자동 갱신,
+    - summary.outputs에 promotion-check 경로를 표준 포함.
+  - target artifact:
+    - `build/Release/logs/candidate_patch_action_override_feedback_promotion_check.json` (auto-loop chain 갱신본)
+
+54. P1 step-2 continued: promotion-check를 auto-loop summary chain에 연동 완료 (2026-02-16)
+- What changed:
+  - `scripts/run_candidate_auto_improvement_loop.py`
+    - auto-loop 종료 후 promotion-check 자동 실행 연동:
+      - 내부 호출: `run_patch_action_override_feedback_promotion_check.main(...)`
+    - 신규 옵션:
+      - `--run-patch-action-feedback-promotion-check` / `--disable-run-patch-action-feedback-promotion-check`
+      - `--patch-action-feedback-promotion-check-json`
+      - `--patch-action-feedback-promotion-check-required-keep-streak`
+    - summary observability 확장:
+      - `tuning.run_patch_action_feedback_promotion_check`
+      - `tuning.patch_action_feedback_promotion_check_required_keep_streak`
+      - `persist_directional_pivot.patch_action_feedback_promotion_check_snapshot`
+      - `outputs.patch_action_feedback_promotion_check_json`
+
+- Verification:
+  - 문법 검사:
+    - `python -m py_compile scripts/run_candidate_auto_improvement_loop.py scripts/run_patch_action_override_feedback_promotion_check.py scripts/run_patch_action_override_ab.py` PASS
+  - chain 연동 실행 확인:
+    - `python scripts/run_candidate_auto_improvement_loop.py --max-iterations 0 --max-runtime-minutes 10 --skip-tune-phase --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate` PASS
+    - 로그:
+      - `PatchActionFeedbackPromotionCheck 완료`
+      - `patch_action_feedback_promotion_check_json=...` 출력 확인
+    - summary 확인:
+      - `persist_directional_pivot.patch_action_feedback_promotion_check_snapshot.invoked=true`
+      - `outputs.patch_action_feedback_promotion_check_json` 존재
+      - `tuning.run_patch_action_feedback_promotion_check=true`
+
+- Next subtask:
+  - feedback 승격 조건 달성 실험 실행:
+    - promotion-check가 제안한 `recommended_repeat_runs`(현재 3)로
+      동일 template(`exit_risk_v1`) A/B를 반복 수행해
+      `block_auto_loop_consumption` 해제와 `allow_keep_promotion` 전환 가능성 검증.
+  - target artifact:
+    - `build/Release/logs/candidate_patch_action_override_policy_registry_feedback.json` (전환 여부 반영본)
+
+55. P1 step-2 continued: feedback 승격 조건 실험(반복 3/4) 실행 + 규칙 안정화 검증 완료 (2026-02-16)
+- What changed:
+  - `scripts/run_patch_action_override_ab.py`
+    - feedback 규칙 안정화 수정:
+      - `decrease_override_strength` / `disable_override`에서
+        repeat_runs 미달 시 `recommended_min_repeat_runs`를 추가 상향하지 않도록 수정(추격형 임계치 방지).
+      - repeat_runs 충족 시 `recommended_min_repeat_runs`를 현 수준 유지로 처리.
+
+- Verification:
+  - 규칙 단위 검증(임시 파일 기반):
+    - case1: prev_required=4, repeat_runs=3 -> `recommended_min_repeat_runs=4`, `block=true`
+    - case2: prev_required=4, repeat_runs=4 -> `recommended_min_repeat_runs=4`, `block=false`
+  - A/B 실험 재실행:
+    - `python scripts/run_patch_action_override_ab.py --seed-patch-template exit_risk_v1 --require-handoff-applied --repeat-runs 3 --max-iterations 1 --max-runtime-minutes 60 --tune-max-scenarios 1 --tune-screen-dataset-limit 1 --tune-screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --tune-holdout-suppression-hint-ratio-threshold 0.60 --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate` PASS
+    - `python scripts/run_patch_action_override_ab.py --seed-patch-template exit_risk_v1 --require-handoff-applied --repeat-runs 4 --max-iterations 1 --max-runtime-minutes 60 --tune-max-scenarios 1 --tune-screen-dataset-limit 1 --tune-screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --tune-holdout-suppression-hint-ratio-threshold 0.60 --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate` PASS
+  - 최신 feedback 상태(`candidate_patch_action_override_policy_registry_feedback.json`):
+    - `last_repeat_runs=4`
+    - `recommended_min_repeat_runs=4`
+    - `block_auto_loop_consumption=false`
+    - `allow_keep_promotion=false`
+    - `latest_decision=decrease_override_strength`
+  - promotion-check 최신 상태:
+    - `python scripts/run_patch_action_override_feedback_promotion_check.py` PASS
+    - `promotion_ready=false`
+    - blockers:
+      - `latest_decision_not_keep_override`
+      - `allow_keep_promotion_false`
+      - `keep_streak_below_required`
+    - `repeat_runs_below_required` / `block_auto_loop_consumption_true`는 해소됨.
+  - auto-loop 정책 적용 재확인(템플릿 seed):
+    - `python scripts/run_candidate_auto_improvement_loop.py --max-iterations 0 --max-runtime-minutes 10 --skip-tune-phase --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate` PASS
+    - 로그: `패치 액션 정책 적용: decision=decrease_override_strength, source=registry, template=exit_risk_v1 ...`
+
+- Next subtask:
+  - `keep_override` 신호 확보 실험:
+    - `entry_timing_v1` 템플릿으로 다회 A/B를 실행해 `latest_decision=keep_override` 후보를 탐색,
+    - 승격 조건(`allow_keep_promotion=true`, keep streak>=required) 달성 여부 비교.
+  - target artifact:
+    - `build/Release/logs/candidate_patch_action_override_policy_registry_feedback.json` (entry/exit 템플릿 비교 반영본)
+
+56. P1 step-2 continued: 정책 과보정 완화 + `entry_timing_v1` keep 승격 조건 달성 (2026-02-16)
+- What changed:
+  - `scripts/run_patch_action_override_ab.py`
+    - 정책 판정 완화:
+      - `avg_expectancy/pf/profitable_ratio`가 중립대(`epsilon`) 안이고
+        `selected_combo_objective`만 흔들리는 케이스를
+        `decrease_override_strength`가 아니라 `keep_override`로 판정하도록 수정.
+      - reason code 추가:
+        - `primary_metrics_neutral_combo_shift_only`
+
+- Verification:
+  - 문법 검사:
+    - `python -m py_compile scripts/run_patch_action_override_ab.py` PASS
+  - 다회 A/B 재실행 (동일 조건, `repeat_runs=3`) 2회:
+    - `python scripts/run_patch_action_override_ab.py --seed-patch-template entry_timing_v1 --require-handoff-applied --repeat-runs 3 --max-iterations 1 --max-runtime-minutes 60 --tune-max-scenarios 1 --tune-screen-dataset-limit 1 --tune-screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --tune-holdout-suppression-hint-ratio-threshold 0.60 --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate` PASS
+    - 결과(최신 feedback):
+      - `latest_decision=keep_override`
+      - `latest_reason_code=primary_metrics_neutral_combo_shift_only`
+      - `consecutive_keep_streak=2`
+      - `recommended_min_repeat_runs=2`
+      - `allow_keep_promotion=true`
+      - `block_auto_loop_consumption=false`
+  - 승격 체크:
+    - `python scripts/run_patch_action_override_feedback_promotion_check.py --template-id entry_timing_v1` PASS
+    - `promotion_ready=true`
+    - `blockers=ready`
+
+- Next subtask:
+  - auto-loop에서 최신 feedback 승격 상태를 실제 소비하는지 1회 bounded 실행으로 확인:
+    - guard report에서 `entry_timing_v1` 정책 usable 여부,
+    - iteration summary에서 정책 소스/결정값 반영 여부 검증.
+  - target artifacts:
+    - `build/Release/logs/candidate_patch_action_override_policy_registry_guard_report.json`
+    - `build/Release/logs/candidate_auto_improvement_summary.json`
+
+57. P1 step-2 continued: auto-loop 정책 소비 검증 완료 (entry handoff seed 기준, 2026-02-16)
+- What changed:
+  - 코드 변경 없음(검증 실행).
+  - 참고:
+    - handoff 템플릿 없이 단독 auto-loop를 실행하면 `template_id=none`으로 registry 매칭이 되지 않음.
+    - 실제 운영 경로(템플릿 seed/handoff 포함) 기준으로 재검증 수행.
+
+- Verification:
+  - handoff seed 기반 A/B 점검(상태 오염 방지):
+    - `python scripts/run_patch_action_override_ab.py --seed-patch-template entry_timing_v1 --require-handoff-applied --repeat-runs 1 --max-iterations 0 --max-runtime-minutes 20 --tune-max-scenarios 1 --tune-screen-dataset-limit 1 --tune-screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --tune-holdout-suppression-hint-ratio-threshold 0.60 --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate --disable-update-policy-registry --disable-update-policy-registry-feedback` PASS
+  - 로그 확인:
+    - `AutoImprove`에서
+      - `패치 액션 정책 적용: decision=keep_override, source=registry, template=entry_timing_v1`
+      - (override on/off 분기 모두) 확인.
+  - 최신 feedback 재확인:
+    - `entry_timing_v1`:
+      - `latest_decision=keep_override`
+      - `consecutive_keep_streak=2`
+      - `allow_keep_promotion=true`
+      - `block_auto_loop_consumption=false`
+  - promotion-check:
+    - `python scripts/run_patch_action_override_feedback_promotion_check.py --template-id entry_timing_v1` PASS
+    - `promotion_ready=true`
+
+- Next subtask:
+  - P1 본작업 복귀:
+    - 전략 파이프라인(5개)에서 rejection reason taxonomy와 `NO_TRADE` 정책을 활용해
+      `avg_expectancy_krw` / `profitable_ratio` 병목을 직접 줄이는 로직 수정(필터 임계치 튜닝 위주 접근 지양).
+  - target artifacts:
+    - `build/Release/logs/profitability_gate_report_realdata.json`
+    - `build/Release/logs/strategy_rejection_taxonomy_report.json`
+
+58. P1 step-3 started: 전략 품질 게이트를 alpha-head 우회 경로까지 확장 (2026-02-16)
+- What changed:
+  - `src/strategy/StrategyManager.cpp`
+    - 선택/필터 단계 품질 강화:
+      - RR 기반 품질 점수/패널티 추가 (`computeRewardRiskRatioForManager`)
+      - 정적 EV 컷 대신 시장/유동성/변동성/전략 히스토리 반영 EV 타이트닝 추가 (`computeExpectedValueTighteningForManager`)
+      - 단일 후보 저품질 차단:
+        - `no_best_signal_single_candidate_quality_floor`
+      - no-trade-bias 활성 시(포지션 상태 병목) 저엣지/저RR 후보 감점:
+        - `no_best_signal_no_trade_bias_low_edge`
+        - `no_best_signal_no_trade_bias_low_reward_risk`
+      - manager prefilter 품질 사유 추가:
+        - `filtered_out_by_manager_ev_quality_floor`
+        - `filtered_out_by_manager_low_reward_risk`
   - `src/engine/TradingEngine.cpp`
+    - alpha-head 스캔 경로에서 “무조건 후보 유지”를 제거하고,
+      완화된 manager prefilter 후 후보를 pending queue에 적재하도록 변경.
   - `src/backtest/BacktestEngine.cpp`
+    - alpha-head 경로에도 완화된 manager prefilter 적용.
+    - `core_bridge_enabled`에서는 alpha-head 여부와 무관하게 robust selection 경로 사용.
+  - `scripts/generate_strategy_rejection_taxonomy_report.py`
+    - 신규 거절 사유 코드를 expected taxonomy에 등록(coverage 유지).
 
-### Verification
-- Build PASS:
-  - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release`
-- Loop PASS:
-  - `python scripts/run_realdata_candidate_loop.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --run-both-hostility-modes --gate-min-avg-trades 8 --matrix-max-workers 1 --matrix-backtest-retry-count 2`
+- Verification:
+  - 빌드:
+    - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release -j 6` PASS
+  - 실검증:
+    - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions` PASS
+    - `core_full` 변화(직전 대비):
+      - `avg_profit_factor`: `0.5277 -> 0.5443` (개선)
+      - `avg_expectancy_krw`: `-7.8330 -> -7.1410` (개선)
+      - `avg_total_trades`: `118.8333 -> 121.0833` (유지/소폭 증가)
+      - `profitable_ratio`: `0.0` (미개선)
+      - `overall_gate_pass=false` 유지
+  - taxonomy:
+    - `python scripts/generate_strategy_rejection_taxonomy_report.py` PASS
+    - `taxonomy_coverage_ratio=1.0`, `unknown_reason_codes=0`
+    - overall top reason:
+      - `filtered_out_by_manager_ev_quality_floor`
 
-### Snapshot delta (core_full)
-- before: PF `12.0938`, trades `8.0`, expectancy `3.7766`, profitable_ratio `0.5556`
-- after:  PF `12.2370`, trades `7.7778`, expectancy `5.1564`, profitable_ratio `0.5556`
-- strict/adaptive: both `overall_gate_pass=true`
+- Next subtask:
+  - P1 step-3 continued:
+    - `profitable_ratio` 병목 직접 타격용으로
+      “신호 발생 후 포지션 보유 중 재진입 후보 처리”와 “second-stage/risk gate 직전 RR-edge 보정”을 점검해
+      손실 트레이드 클러스터를 줄이는 쪽으로 추가 수정.
+  - target artifacts:
+    - `build/Release/logs/profitability_gate_report_realdata.json`
+    - `build/Release/logs/entry_rejection_summary_realdata.json`
 
-### Root-cause impact
-- `BREAKOUT_CONTINUATION,TRENDING_UP` dropped out from top-loss pattern list in latest diagnostics.
+59. P1 step-3 continued: 추세형 전략 off-regime 억제 보정(구조 안전장치, 성능 중립) (2026-02-16)
+- What changed:
+  - `src/strategy/StrategyManager.cpp`
+    - Momentum/Breakout가 `TRENDING_UP`이 아닌 구간에서 저엣지 후보를 고르기 어렵도록
+      selection/filter 단계 보정 추가.
+    - 신규 reason code:
+      - `no_best_signal_trend_off_regime_low_edge`
+      - `filtered_out_by_manager_trend_off_regime_strength`
+      - `filtered_out_by_manager_trend_off_regime_ev`
+  - `scripts/generate_strategy_rejection_taxonomy_report.py`
+    - 신규 reason code taxonomy expected 목록 반영.
 
-## Stage 15 Step 4 Update (2026-02-15, Scalping PullbackReclaim Quality Gate)
+- Verification:
+  - 빌드:
+    - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release -j 6` PASS
+  - 실검증:
+    - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions` PASS
+    - `core_full`:
+      - `avg_profit_factor=0.5439`
+      - `avg_total_trades=121.1667`
+      - `avg_expectancy_krw=-7.1500`
+      - `profitable_ratio=0.0`
+      - `overall_gate_pass=false`
+    - 직전 스냅샷(`0.5443 / -7.1410`) 대비 성능 개선은 사실상 중립 범위.
+  - taxonomy:
+    - `python scripts/generate_strategy_rejection_taxonomy_report.py` PASS
+    - `taxonomy_coverage_ratio=1.0`, `unknown_reason_codes=0`
 
-### Targeted change
-- Bottleneck focus: `Advanced Scalping / PULLBACK_RECLAIM / TRENDING_UP`.
-- Applied quality-tiered filtering and risk control for pullback reclaim:
-  - stronger baseline archetype classification thresholds
-  - explicit pullback quality tier (`LOW/MEDIUM/HIGH`) and low-tier block
-  - stricter setup/trigger floors for non-high-quality pullbacks
-  - reduced strength-floor relaxation in pullback path
-  - higher edge/RR requirements for non-high-quality pullbacks
-  - reduced position size for non-high-quality pullbacks
-  - tighter weak-quality pullback exits in `shouldExit`
-- File:
-  - `src/strategy/ScalpingStrategy.cpp`
+- Next subtask:
+  - 손실 기여 상위 전략(Momentum/Breakout) 내부 로직(신호 발생/진입 타이밍/청산) 정밀 개선:
+    - 필터 임계치 추가보다, 진입 후 손실 꼬리(`left-tail`)를 줄이는 청산/리스크 관리 규칙 우선.
+  - target artifacts:
+    - `build/Release/logs/loss_contributor_by_strategy.csv`
+    - `build/Release/logs/profitability_gate_report_realdata.json`
 
-### Verification
-- Build PASS:
-  - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release`
-- Loop PASS:
-  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions`
-- Root-cause PASS:
-  - `python scripts/analyze_root_cause_diagnostics.py --profile-id core_full --max-workers 1`
+## P0 (Must do first)
+1. Upbit compliance hardening
+- Enforce shared rate budget across scanner/live/backtest fetch tools.
+- Respect `Remaining-Req`, and implement deterministic handling for `429` and `418`.
+- Add compliance telemetry to logs:
+  - request bucket usage,
+  - throttle/degrade events,
+  - recover timestamps.
 
-### Snapshot delta (core_full)
-- before step4: PF `12.3473`, trades `7.2222`, expectancy `5.6638`, profitable_ratio `0.5556`
-- after step4:  PF `12.5628`, trades `6.6667`, expectancy `6.8766`, profitable_ratio `0.5556`
-- strict/adaptive: `overall_gate_pass=true`
+2. Live-backtest parity (critical)
+- Use same candle inputs and same decision path in live and backtest:
+  - `1m`, `5m`, `15m`, `1h`, `4h` (when available).
+- Enforce identical candle ordering/normalization before strategy logic.
+- Backtest must use rolling-window semantics equivalent to live cache updates.
+- Status update (2026-02-15):
+  - `15m` companion timeframe is now provided on both paths:
+    - live scanner derives `15m` from cached `1m` (fallback from `5m`) and stores into `candles_by_tf`.
+    - trading engine enforces `15m` parity companion fill before strategy collection.
+    - backtest now loads `15m` companion csv when present and exposes `candles_by_tf["15m"]` with rolling cursor semantics.
+  - changed files:
+    - `src/analytics/MarketScanner.cpp`
+    - `src/engine/TradingEngine.cpp`
+    - `src/backtest/BacktestEngine.cpp`
+  - next:
+    - completed: parity invariant check/report linked into realdata profitability artifact chain.
+    - next: apply dataset quality gate policy using parity diagnostics (`gap/dup/stale`) before tuning selection.
 
-### Root-cause impact
-- `Advanced Scalping` aggregate shifted positive in latest diagnostics:
-  - `total_trades=5`, `win_rate=0.8`, `avg_profit_krw=4.1354`
-- Remaining scalping loss pocket:
-  - `PULLBACK_RECLAIM/TRENDING_UP/ev_positive`: `3 trades`, `avg_profit_krw=-3.0858`
-- Primary remaining bottleneck is still:
-  - `Advanced Momentum / TREND_REACCELERATION / TRENDING_UP`
+3. Data quality gate
+- Validate each dataset before tuning:
+  - timestamp order,
+  - duplicate ratio,
+  - gap ratio,
+  - stale tail,
+  - companion TF coverage.
+- Compute and store `market_hostility_score` and apply adaptive gate floors from hostility band.
 
-## Stage 15 Step 5 Update (2026-02-15, Momentum Reacc Tail-Risk Trim)
+4. Learning persistence
+- Keep adaptive state in `state/learning_state.json` with atomic write.
+- Add schema version + migration guard.
+- Persist per-bucket performance stats used by core policy scoring.
+- Restart must warm-load state without silent reset.
+- Status update (2026-02-15):
+  - `LearningStateStoreJson` now enforces `kCurrentSchemaVersion` and validates required fields on load.
+  - Legacy/unversioned payloads are migrated to current schema (policy params normalization) and written back atomically.
+  - Unsupported/future schema payloads are rejected with warning logs instead of silent fallback parse.
 
-### Targeted change
-- Reduced tail-risk impact for `Momentum / TREND_REACCELERATION` without adding broad hard blocks:
-  - tighter invalidation/progress floors at archetype classification
-  - smaller position-size scale for reacc entries (quality-split)
-  - stricter RR floor and min-net-edge for reacc
-  - tighter weak-quality reacc exit timing and flat-floor requirement
-- File:
-  - `src/strategy/MomentumStrategy.cpp`
+5. Verification split enforcement (started)
+- Use `train/validation/holdout` market split before any candidate promotion decision.
+- Keep tuning/learning on `train` split only, and force deterministic eval on `validation/holdout` with `skip-tune`.
+- Enforce walk-forward checks per split before promotion.
 
-### Verification
-- Build PASS:
-  - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release`
-- Loop PASS:
-  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions`
-- Root-cause PASS:
-  - `python scripts/analyze_root_cause_diagnostics.py --profile-id core_full --max-workers 1`
+## P1 (After P0)
+1. Strategy pipeline refactor (5 strategies)
+- Audit end-to-end path per strategy:
+  - filter -> signal -> entry -> risk sizing -> exit.
+- Remove duplicated ad-hoc thresholds and move shared logic into core adaptive utilities.
+- Add consistent rejection reason codes for every strategy decision.
+- Stage-2 started:
+  - `use_strategy_alpha_head_mode` added (strategy prefilter minimization, final gating in engine/core).
+  - `NO_TRADE` journal event added for hostile/policy/execution rejection visibility.
+  - Alpha-head mode now bypasses strategy auto-disable by historical EV gate in live loop.
 
-### Snapshot delta (core_full)
-- before step5: PF `12.5628`, trades `6.6667`, expectancy `6.8766`, profitable_ratio `0.5556`
-- after step5:  PF `12.5658`, trades `6.6667`, expectancy `6.8953`, profitable_ratio `0.5556`
-- strict/adaptive: `overall_gate_pass=true`
+2. Expectancy-first improvement loop
+- Optimize for:
+  - `avg_expectancy_krw`,
+  - `profitable_ratio`,
+  - drawdown stability.
+- Keep a minimum trade floor, but make it hostility-adaptive instead of fixed-only.
 
-### Root-cause impact
-- `TREND_REACCELERATION/TRENDING_UP` remained the top loss pattern, but improved:
-  - avg loss per trade: `-4.2437 -> -4.1751`
-  - total loss: `-114.5808 -> -112.7276`
-- aggregate strategy expectancy also improved:
-  - `Advanced Momentum avg_profit_krw: 0.5859 -> 0.6190`
+3. Candidate promotion readiness
+- Repeat matrix/tuning on expanded real datasets.
+- Record baseline vs candidate delta with explicit failure attribution.
+
+## P2 (Migration closure)
+1. Core migration finalization
+- Make core path default for all decision planes in production profile.
+- Keep one explicit rollback preset during burn-in.
+- Remove legacy-only branches after burn-in evidence is complete.
+
+2. Documentation and CI alignment
+- Keep only active operational docs.
+- Ensure CI PR Gate includes exploratory profitability report upload path checks.
+
+## Validation Commands
+- Exploratory profitability:
+  - `python scripts/run_profitability_exploratory.py`
+- Real-data candidate loop:
+  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune`
+- Candidate tuning:
+  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions`
+- Split train/eval cycle with walk-forward gate:
+  - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+
+## Exit Criteria
+- Backtest/live parity checks pass on decision-path and candle-path invariants.
+- Adaptive learning state survives restart and remains usable.
+- Candidate gate passes expectancy/profitable-ratio focused thresholds on real-data matrix.
+- Core path is proven and legacy cleanup can proceed in controlled PR batches.

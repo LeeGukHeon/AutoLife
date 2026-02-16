@@ -35,6 +35,7 @@ constexpr double LEGACY_STOP_SLIPPAGE_PCT = 0.0010;  // 0.10%
 // Keep backtest 1m window aligned for live-like parity.
 constexpr size_t BACKTEST_CANDLE_WINDOW = 200;
 constexpr size_t TF_5M_MAX_BARS = 120;
+constexpr size_t TF_15M_MAX_BARS = 120;
 constexpr size_t TF_1H_MAX_BARS = 120;
 constexpr size_t TF_4H_MAX_BARS = 90;
 constexpr size_t TF_1D_MAX_BARS = 60;
@@ -284,6 +285,24 @@ double computeCalibratedExpectedEdgePct(const strategy::Signal& signal, const en
         default:
             break;
     }
+    if (signal.reason == "alpha_head_fallback_candidate") {
+        if (signal.market_regime == analytics::MarketRegime::TRENDING_UP) {
+            win_prob += 0.08;
+        } else if (signal.market_regime == analytics::MarketRegime::RANGING ||
+                   signal.market_regime == analytics::MarketRegime::UNKNOWN) {
+            win_prob += 0.05;
+        } else {
+            win_prob += 0.01;
+        }
+        if (signal.liquidity_score >= 60.0) {
+            win_prob += 0.03;
+        } else if (signal.liquidity_score > 0.0 && signal.liquidity_score < 50.0) {
+            win_prob -= 0.02;
+        }
+        if (signal.volatility > 0.0 && signal.volatility <= 3.0) {
+            win_prob += 0.02;
+        }
+    }
 
     // Archetype-level priors from loss-cluster diagnostics.
     // Keep it market-agnostic: apply only by strategy/archetype/regime.
@@ -320,7 +339,10 @@ double computeCalibratedExpectedEdgePct(const strategy::Signal& signal, const en
     win_prob += computeStrategyHistoryWinProbPrior(signal, cfg);
     win_prob = std::clamp(win_prob, 0.12, 0.88);
 
-    const double round_trip_cost_pct = computeEffectiveRoundTripCostPct(signal, cfg);
+    double round_trip_cost_pct = computeEffectiveRoundTripCostPct(signal, cfg);
+    if (signal.reason == "alpha_head_fallback_candidate" && signal.liquidity_score >= 58.0) {
+        round_trip_cost_pct *= 0.88;
+    }
     const double expected_gross_pct = (win_prob * gross_reward_pct) - ((1.0 - win_prob) * gross_risk_pct);
     return expected_gross_pct - round_trip_cost_pct;
 }
@@ -460,6 +482,10 @@ bool requiresTypedArchetype(const std::string& strategy_name) {
            strategy_name == "Advanced Momentum";
 }
 
+bool isAlphaHeadFallbackCandidate(const strategy::Signal& signal, bool alpha_head_mode) {
+    return alpha_head_mode && signal.reason == "alpha_head_fallback_candidate";
+}
+
 void normalizeSignalStopLossByRegime(strategy::Signal& signal, analytics::MarketRegime regime) {
     if (signal.entry_price <= 0.0) {
         return;
@@ -551,6 +577,15 @@ bool passesSecondStageEntryConfirmation(
         signal.liquidity_score >= 62.0) {
         min_rr_margin -= 0.02;
         min_edge_margin -= 0.00003;
+    }
+    if (signal.reason == "alpha_head_fallback_candidate" &&
+        (signal.market_regime == analytics::MarketRegime::TRENDING_UP ||
+         signal.market_regime == analytics::MarketRegime::RANGING) &&
+        signal.liquidity_score >= 58.0) {
+        // Alpha-head fallback is an exploration path; keep margin checks
+        // but avoid over-pruning in favorable liquid regimes.
+        min_rr_margin -= 0.015;
+        min_edge_margin -= 0.00002;
     }
 
     min_rr_margin = std::clamp(min_rr_margin, 0.02, 0.22);
@@ -660,6 +695,7 @@ void BacktestEngine::init(const Config& config) {
     strategy_selected_best_counts_.clear();
     strategy_blocked_by_risk_manager_counts_.clear();
     strategy_entries_executed_counts_.clear();
+    entry_rejection_reason_counts_.clear();
     intrabar_stop_tp_collision_count_ = 0;
     intrabar_collision_by_strategy_.clear();
     
@@ -844,6 +880,7 @@ void BacktestEngine::loadCompanionTimeframes(const std::string& file_path) {
 
     const std::vector<TfSpec> specs = {
         {"5m", {"5m"}},
+        {"15m", {"15m"}},
         {"1h", {"60m"}},
         {"4h", {"240m"}},
         {"1d", {"1d", "1440m"}}
@@ -977,6 +1014,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
     metrics.candles = current_candles_;
     metrics.candles_by_tf["1m"] = metrics.candles;
     metrics.candles_by_tf["5m"] = getTimeframeCandles("5m", candle.timestamp, 5, TF_5M_MAX_BARS);
+    metrics.candles_by_tf["15m"] = getTimeframeCandles("15m", candle.timestamp, 15, TF_15M_MAX_BARS);
     metrics.candles_by_tf["1h"] = getTimeframeCandles("1h", candle.timestamp, 60, TF_1H_MAX_BARS);
     metrics.candles_by_tf["4h"] = getTimeframeCandles("4h", candle.timestamp, 240, TF_4H_MAX_BARS);
     metrics.candles_by_tf["1d"] = getTimeframeCandles("1d", candle.timestamp, 1440, TF_1D_MAX_BARS);
@@ -1200,6 +1238,17 @@ void BacktestEngine::processCandle(const Candle& candle) {
     if (!position) {
         entry_funnel_.entry_rounds++;
         bool entry_executed = false;
+        auto markEntryReject = [&](const char* reason) {
+            entry_rejection_reason_counts_[reason]++;
+        };
+        auto mergeEntryRejectCounts = [&](const std::map<std::string, int>& counts) {
+            for (const auto& kv : counts) {
+                if (kv.first.empty() || kv.second <= 0) {
+                    continue;
+                }
+                entry_rejection_reason_counts_[kv.first] += kv.second;
+            }
+        };
         auto signals = strategy_manager_->collectSignals(
             market_name_,
             metrics,
@@ -1210,6 +1259,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
         );
         if (signals.empty()) {
             entry_funnel_.no_signal_generated++;
+            markEntryReject("no_signal_generated");
         }
         for (const auto& signal : signals) {
             if (!signal.strategy_name.empty()) {
@@ -1227,6 +1277,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
         const bool core_bridge_enabled = engine_config_.enable_core_plane_bridge;
         const bool core_policy_enabled = core_bridge_enabled && engine_config_.enable_core_policy_plane;
         const bool core_risk_enabled = core_bridge_enabled && engine_config_.enable_core_risk_plane;
+        const bool alpha_head_mode = engine_config_.use_strategy_alpha_head_mode;
         const double hostility_alpha = std::clamp(engine_config_.hostility_ewma_alpha, 0.01, 0.99);
         const double hostile_threshold = std::clamp(engine_config_.hostility_hostile_threshold, 0.0, 1.0);
         const double severe_threshold = std::clamp(
@@ -1365,11 +1416,43 @@ void BacktestEngine::processCandle(const Candle& candle) {
         filter_threshold = std::clamp(filter_threshold, 0.35, 0.98);
         min_expected_value = std::clamp(min_expected_value, -0.0002, 0.0050);
 
-        auto filtered_signals = strategy_manager_->filterSignals(
-            signals, filter_threshold, min_expected_value, regime.regime
-        );
+        std::vector<strategy::Signal> filtered_signals;
+        strategy::StrategyManager::FilterDiagnostics manager_filter_diag;
+        if (alpha_head_mode) {
+            // Alpha-head mode mirrors live multi-candidate flow but still applies
+            // a permissive quality prefilter to avoid extremely weak signals.
+            double alpha_min_strength = 0.34;
+            double alpha_min_expected_value = -0.00015;
+            if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
+                alpha_min_strength = 0.42;
+                alpha_min_expected_value = 0.00005;
+            } else if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
+                alpha_min_strength = 0.45;
+                alpha_min_expected_value = 0.00008;
+            } else if (regime.regime == analytics::MarketRegime::RANGING) {
+                alpha_min_strength = 0.36;
+                alpha_min_expected_value = -0.00008;
+            }
+            filtered_signals = strategy_manager_->filterSignalsWithDiagnostics(
+                signals,
+                alpha_min_strength,
+                alpha_min_expected_value,
+                regime.regime,
+                &manager_filter_diag
+            );
+        } else {
+            filtered_signals = strategy_manager_->filterSignalsWithDiagnostics(
+                signals,
+                filter_threshold,
+                min_expected_value,
+                regime.regime,
+                &manager_filter_diag
+            );
+        }
         if (!signals.empty() && filtered_signals.empty()) {
             entry_funnel_.filtered_out_by_manager++;
+            markEntryReject("filtered_out_by_manager");
+            mergeEntryRejectCounts(manager_filter_diag.rejection_reason_counts);
         }
         std::vector<strategy::Signal> candidate_signals = filtered_signals;
         if (core_policy_enabled && policy_controller_) {
@@ -1392,18 +1475,26 @@ void BacktestEngine::processCandle(const Candle& candle) {
         }
         if (core_policy_enabled && !filtered_signals.empty() && candidate_signals.empty()) {
             entry_funnel_.filtered_out_by_policy++;
+            markEntryReject("filtered_out_by_policy");
         }
 
         strategy::Signal best_signal;
+        strategy::StrategyManager::SelectionDiagnostics manager_select_diag;
         if (!candidate_signals.empty()) {
             if (core_bridge_enabled) {
-                best_signal = strategy_manager_->selectRobustSignal(candidate_signals, regime.regime);
+                best_signal = strategy_manager_->selectRobustSignalWithDiagnostics(
+                    candidate_signals,
+                    regime.regime,
+                    &manager_select_diag
+                );
             } else {
                 best_signal = strategy_manager_->selectBestSignal(candidate_signals);
             }
         }
         if (!candidate_signals.empty() && best_signal.type == strategy::SignalType::NONE) {
             entry_funnel_.no_best_signal++;
+            markEntryReject("no_best_signal");
+            mergeEntryRejectCounts(manager_select_diag.rejection_reason_counts);
         }
         if (best_signal.type != strategy::SignalType::NONE && !best_signal.strategy_name.empty()) {
             strategy_selected_best_counts_[best_signal.strategy_name]++;
@@ -1423,11 +1514,31 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 !archetype_required ||
                 (!best_signal.entry_archetype.empty() && best_signal.entry_archetype != "UNSPECIFIED") ||
                 archetype_fallback_allowed;
+            const bool alpha_head_fallback_candidate =
+                isAlphaHeadFallbackCandidate(best_signal, alpha_head_mode);
+            const double history_penalty_scale = alpha_head_fallback_candidate ? 0.45 : 1.0;
             bool strategy_ev_ok = true;
             double adaptive_rr_add = 0.0;
             double adaptive_edge_add = 0.0;
             double required_strength_floor = filter_threshold;
+            if (alpha_head_fallback_candidate) {
+                required_strength_floor = std::min(required_strength_floor, 0.58);
+            }
             bool regime_pattern_block = false;
+            auto markPatternBlockOrSoften = [&](int trades, double exp_krw, double wr, double pf) {
+                if (!alpha_head_fallback_candidate) {
+                    regime_pattern_block = true;
+                    return;
+                }
+                // In alpha-head fallback mode, require stronger evidence before full hard block.
+                if (trades >= 18 && exp_krw <= -28.0 && wr <= 0.18 && pf <= 0.70) {
+                    regime_pattern_block = true;
+                    return;
+                }
+                required_strength_floor = std::max(required_strength_floor, 0.60);
+                adaptive_rr_add += 0.10;
+                adaptive_edge_add += 0.00015;
+            };
             auto stat_it = strategy_edge.find(best_signal.strategy_name);
             if (core_risk_enabled && stat_it != strategy_edge.end()) {
                 const auto& stat = stat_it->second;
@@ -1436,12 +1547,18 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     const double pf = stat.profitFactor();
                     if (exp_krw < engine_config_.min_strategy_expectancy_krw ||
                         pf < engine_config_.min_strategy_profit_factor) {
-                        required_strength_floor += 0.04;
-                        adaptive_rr_add += 0.12;
-                        adaptive_edge_add += 0.00025;
+                        required_strength_floor += (0.04 * history_penalty_scale);
+                        adaptive_rr_add += (0.12 * history_penalty_scale);
+                        adaptive_edge_add += (0.00025 * history_penalty_scale);
                         if (exp_krw < (engine_config_.min_strategy_expectancy_krw - 15.0) &&
                             pf < std::max(0.75, engine_config_.min_strategy_profit_factor - 0.20)) {
-                            strategy_ev_ok = false;
+                            if (alpha_head_fallback_candidate) {
+                                required_strength_floor = std::max(required_strength_floor, 0.62);
+                                adaptive_rr_add += 0.08;
+                                adaptive_edge_add += 0.00012;
+                            } else {
+                                strategy_ev_ok = false;
+                            }
                         }
                     }
                 }
@@ -1450,22 +1567,22 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     const double pf = stat.profitFactor();
                     const double exp_krw = stat.expectancy();
                     if (wr < 0.42) {
-                        adaptive_rr_add += 0.35;
-                        adaptive_edge_add += 0.0006;
+                        adaptive_rr_add += (0.35 * history_penalty_scale);
+                        adaptive_edge_add += (0.0006 * history_penalty_scale);
                     } else if (wr < 0.48) {
-                        adaptive_rr_add += 0.20;
-                        adaptive_edge_add += 0.0003;
+                        adaptive_rr_add += (0.20 * history_penalty_scale);
+                        adaptive_edge_add += (0.0003 * history_penalty_scale);
                     }
                     if (pf < 0.90) {
-                        adaptive_rr_add += 0.25;
-                        adaptive_edge_add += 0.0005;
+                        adaptive_rr_add += (0.25 * history_penalty_scale);
+                        adaptive_edge_add += (0.0005 * history_penalty_scale);
                     } else if (pf < 1.00) {
-                        adaptive_rr_add += 0.12;
-                        adaptive_edge_add += 0.0002;
+                        adaptive_rr_add += (0.12 * history_penalty_scale);
+                        adaptive_edge_add += (0.0002 * history_penalty_scale);
                     }
                     if (exp_krw < 0.0) {
-                        adaptive_rr_add += std::clamp((-exp_krw) / 1000.0, 0.0, 0.25);
-                        adaptive_edge_add += std::clamp((-exp_krw) / 80000.0, 0.0, 0.0004);
+                        adaptive_rr_add += std::clamp((-exp_krw) / 1000.0, 0.0, 0.25) * history_penalty_scale;
+                        adaptive_edge_add += std::clamp((-exp_krw) / 80000.0, 0.0, 0.0004) * history_penalty_scale;
                     }
                 }
             }
@@ -1479,38 +1596,38 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     const double pf = stat.profitFactor();
                     const double exp_krw = stat.expectancy();
                     if (exp_krw < -20.0 || (wr < 0.30 && pf < 0.78)) {
-                        regime_pattern_block = true;
+                        markPatternBlockOrSoften(stat.trades, exp_krw, wr, pf);
                     }
                     if (stat.trades >= 12 &&
                         exp_krw < -15.0 &&
                         (wr < 0.40 || pf < 0.90)) {
                         required_strength_floor = std::max(required_strength_floor, 0.62);
-                        adaptive_rr_add += 0.20;
-                        adaptive_edge_add += 0.0003;
+                        adaptive_rr_add += (0.20 * history_penalty_scale);
+                        adaptive_edge_add += (0.0003 * history_penalty_scale);
                     }
                     if (stat.trades >= 18 &&
                         exp_krw < -22.0 &&
                         wr < 0.20) {
-                        regime_pattern_block = true;
+                        markPatternBlockOrSoften(stat.trades, exp_krw, wr, pf);
                     }
                     if (exp_krw < 0.0) {
-                        required_strength_floor += std::clamp((-exp_krw) / 2500.0, 0.0, 0.08);
-                        adaptive_rr_add += std::clamp((-exp_krw) / 1800.0, 0.0, 0.20);
-                        adaptive_edge_add += std::clamp((-exp_krw) / 200000.0, 0.0, 0.0004);
+                        required_strength_floor += std::clamp((-exp_krw) / 2500.0, 0.0, 0.08) * history_penalty_scale;
+                        adaptive_rr_add += std::clamp((-exp_krw) / 1800.0, 0.0, 0.20) * history_penalty_scale;
+                        adaptive_edge_add += std::clamp((-exp_krw) / 200000.0, 0.0, 0.0004) * history_penalty_scale;
                     } else if (exp_krw > 8.0 && wr >= 0.58 && pf >= 1.15) {
                         required_strength_floor -= 0.02;
                         adaptive_rr_add -= 0.08;
                         adaptive_edge_add -= 0.00015;
                     }
                     if (wr < 0.42) {
-                        required_strength_floor += 0.03;
-                        adaptive_rr_add += 0.10;
-                        adaptive_edge_add += 0.0002;
+                        required_strength_floor += (0.03 * history_penalty_scale);
+                        adaptive_rr_add += (0.10 * history_penalty_scale);
+                        adaptive_edge_add += (0.0002 * history_penalty_scale);
                     }
                     if (pf < 0.95) {
-                        required_strength_floor += 0.02;
-                        adaptive_rr_add += 0.08;
-                        adaptive_edge_add += 0.0002;
+                        required_strength_floor += (0.02 * history_penalty_scale);
+                        adaptive_rr_add += (0.08 * history_penalty_scale);
+                        adaptive_edge_add += (0.0002 * history_penalty_scale);
                     }
                 }
             }
@@ -1529,16 +1646,16 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     const double exp_krw = stat.expectancy();
 
                     if (exp_krw < -40.0 && wr < 0.25 && pf < 0.75) {
-                        regime_pattern_block = true;
+                        markPatternBlockOrSoften(stat.trades, exp_krw, wr, pf);
                     }
                     if (exp_krw < -20.0 && wr < 0.35 && pf < 0.85) {
-                        required_strength_floor += 0.05;
-                        adaptive_rr_add += 0.15;
-                        adaptive_edge_add += 0.0003;
+                        required_strength_floor += (0.05 * history_penalty_scale);
+                        adaptive_rr_add += (0.15 * history_penalty_scale);
+                        adaptive_edge_add += (0.0003 * history_penalty_scale);
                     } else if (exp_krw < -10.0) {
-                        required_strength_floor += 0.02;
-                        adaptive_rr_add += 0.08;
-                        adaptive_edge_add += 0.00015;
+                        required_strength_floor += (0.02 * history_penalty_scale);
+                        adaptive_rr_add += (0.08 * history_penalty_scale);
+                        adaptive_edge_add += (0.00015 * history_penalty_scale);
                     } else if (exp_krw > 10.0 && wr >= 0.60 && pf >= 1.20) {
                         required_strength_floor -= 0.02;
                         adaptive_rr_add -= 0.06;
@@ -1553,11 +1670,25 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 adaptive_edge_add,
                 regime_pattern_block
             );
-            required_strength_floor = std::clamp(required_strength_floor, 0.35, 0.92);
+            if (alpha_head_fallback_candidate) {
+                required_strength_floor = std::max(0.46, required_strength_floor - 0.05);
+            }
+            required_strength_floor = std::clamp(
+                required_strength_floor,
+                alpha_head_fallback_candidate ? 0.34 : 0.35,
+                alpha_head_fallback_candidate ? 0.78 : 0.92
+            );
+            const bool alpha_head_quality_override =
+                alpha_head_fallback_candidate &&
+                !regime_pattern_block &&
+                archetype_ready &&
+                best_signal.expected_value >= 0.0007 &&
+                best_signal.liquidity_score >= 58.0 &&
+                best_signal.strength >= (required_strength_floor - 0.03);
             const bool pattern_strength_ok =
                 !regime_pattern_block &&
                 archetype_ready &&
-                best_signal.strength >= required_strength_floor;
+                (best_signal.strength >= required_strength_floor || alpha_head_quality_override);
             if (!pattern_strength_ok && core_risk_enabled) {
                 if (!archetype_ready) {
                     LOG_INFO("{} pattern gate blocked [{}]: missing typed archetype",
@@ -1601,6 +1732,19 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     tuned_cfg.min_expected_edge_pct + adaptive_edge_add,
                     tuned_cfg.min_expected_edge_pct,
                     tuned_cfg.min_expected_edge_pct + 0.0012
+                );
+            }
+            if (core_risk_enabled && alpha_head_fallback_candidate) {
+                const bool hostile_or_thin =
+                    best_signal.market_regime == analytics::MarketRegime::HIGH_VOLATILITY ||
+                    best_signal.market_regime == analytics::MarketRegime::TRENDING_DOWN ||
+                    (best_signal.liquidity_score > 0.0 && best_signal.liquidity_score < 50.0);
+                const double rr_relax = hostile_or_thin ? 0.06 : 0.16;
+                const double edge_relax = hostile_or_thin ? 0.00035 : 0.00100;
+                tuned_cfg.min_reward_risk = std::max(1.03, tuned_cfg.min_reward_risk - rr_relax);
+                tuned_cfg.min_expected_edge_pct = std::max(
+                    std::max(0.00035, engine_config_.min_expected_edge_pct * 0.35),
+                    tuned_cfg.min_expected_edge_pct - edge_relax
                 );
             }
             if (core_risk_enabled &&
@@ -1649,16 +1793,28 @@ void BacktestEngine::processCandle(const Candle& candle) {
                      tuned_cfg.min_expected_edge_pct));
             if (!pattern_strength_ok) {
                 entry_funnel_.blocked_pattern_gate++;
+                if (!archetype_ready) {
+                    markEntryReject("blocked_pattern_missing_archetype");
+                } else {
+                    markEntryReject("blocked_pattern_strength_or_regime");
+                }
             } else if (!rr_rebalance_ok) {
                 entry_funnel_.blocked_rr_rebalance++;
+                markEntryReject("blocked_rr_rebalance");
             } else if (!risk_gate_ok || !second_stage_ok) {
                 entry_funnel_.blocked_risk_gate++;
+                if (!risk_gate_ok) {
+                    markEntryReject("blocked_risk_gate");
+                } else {
+                    markEntryReject("blocked_second_stage_confirmation");
+                }
             } else if (pattern_strength_ok && rr_rebalance_ok && risk_gate_ok && second_stage_ok) {
                 const double min_order_krw = std::max(5000.0, engine_config_.min_order_krw);
                 const double available_cash_for_gate = risk_manager_->getRiskMetrics().available_capital;
                 const bool has_min_order_capital = available_cash_for_gate >= min_order_krw;
                 if (!has_min_order_capital) {
                     entry_funnel_.blocked_min_order_or_capital++;
+                    markEntryReject("blocked_min_order_or_capital");
                 } else {
                     const double min_position_size_for_order = min_order_krw / available_cash_for_gate;
                     const double effective_position_size = std::clamp(
@@ -1675,6 +1831,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     );
                     if (!can_enter_position) {
                         entry_funnel_.blocked_risk_manager++;
+                        markEntryReject("blocked_risk_manager");
                         if (!best_signal.strategy_name.empty()) {
                             strategy_blocked_by_risk_manager_counts_[best_signal.strategy_name]++;
                         }
@@ -1767,9 +1924,11 @@ void BacktestEngine::processCandle(const Candle& candle) {
                             }
                         } else {
                             entry_funnel_.blocked_order_sizing++;
+                            markEntryReject("blocked_order_sizing");
                         }
                     } else {
                         entry_funnel_.blocked_min_order_or_capital++;
+                        markEntryReject("blocked_min_order_or_capital");
                     }
                     }
                 }
@@ -1783,6 +1942,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
         }
     } else {
         entry_funnel_.skipped_due_to_open_position++;
+        entry_rejection_reason_counts_["skipped_due_to_open_position"]++;
     }
 
     // Execute pending order lifecycle transitions for this candle.
@@ -2092,6 +2252,7 @@ BacktestEngine::Result BacktestEngine::getResult() const {
     result.avg_holding_minutes = (closed_trades > 0) ? (total_holding_minutes / static_cast<double>(closed_trades)) : 0.0;
     result.avg_fee_krw = (closed_trades > 0) ? (total_fees / static_cast<double>(closed_trades)) : 0.0;
     result.exit_reason_counts = std::move(exit_reason_counts);
+    result.entry_rejection_reason_counts = entry_rejection_reason_counts_;
     result.intrabar_stop_tp_collision_count = intrabar_stop_tp_collision_count_;
     result.intrabar_collision_by_strategy = intrabar_collision_by_strategy_;
     std::set<std::string> strategy_names;

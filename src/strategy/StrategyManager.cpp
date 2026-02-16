@@ -4,11 +4,12 @@
 #include "risk/RiskManager.h"
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <cmath>
 #include <map>
 
 #undef max
 #undef min
-#include <numeric>
 
 namespace autolife {
 namespace strategy {
@@ -100,12 +101,290 @@ double computeImpliedWinProbForManager(const Signal& signal) {
 
     return std::clamp(implied_win, 0.18, 0.85);
 }
+
+double computeRewardRiskRatioForManager(const Signal& signal) {
+    if (!(signal.entry_price > 0.0) || !(signal.stop_loss > 0.0)) {
+        return 0.0;
+    }
+    const double take_profit = signal.getTakeProfitForLegacy();
+    if (!(take_profit > 0.0)) {
+        return 0.0;
+    }
+    const double risk = std::abs(signal.entry_price - signal.stop_loss);
+    if (risk <= 1e-12) {
+        return 0.0;
+    }
+    const double reward = std::abs(take_profit - signal.entry_price);
+    return reward / risk;
+}
+
+double computeExpectedValueTighteningForManager(
+    const Signal& signal,
+    analytics::MarketRegime regime
+) {
+    double tighten = 0.0;
+
+    if (regime == analytics::MarketRegime::TRENDING_DOWN) {
+        tighten += 0.00012;
+    } else if (regime == analytics::MarketRegime::HIGH_VOLATILITY) {
+        tighten += 0.00010;
+    } else if (regime == analytics::MarketRegime::RANGING) {
+        tighten += 0.00003;
+    }
+
+    if (signal.liquidity_score > 0.0 && signal.liquidity_score < 55.0) {
+        tighten += std::clamp((55.0 - signal.liquidity_score) * 0.0000030, 0.0, 0.00018);
+    }
+    if (signal.volatility > 4.5) {
+        tighten += std::clamp((signal.volatility - 4.5) * 0.000025, 0.0, 0.00012);
+    }
+
+    const double reward_risk_ratio = computeRewardRiskRatioForManager(signal);
+    if (reward_risk_ratio > 0.0) {
+        if (reward_risk_ratio < 1.10) {
+            tighten += 0.00010;
+        } else if (reward_risk_ratio < 1.25) {
+            tighten += 0.00006;
+        }
+    }
+
+    if (signal.strategy_trade_count >= 20 &&
+        (signal.strategy_win_rate < 0.45 ||
+         (signal.strategy_profit_factor > 0.0 && signal.strategy_profit_factor < 1.00))) {
+        tighten += 0.00012;
+    }
+
+    if (signal.reason == "alpha_head_fallback_candidate") {
+        // Keep fallback path usable, but still quality-bound by the rest of this function.
+        tighten = std::max(0.0, tighten - 0.00003);
+    }
+
+    return std::clamp(tighten, 0.0, 0.00040);
+}
+
+bool alphaHeadModeEnabledForManager() {
+    return Config::getInstance().getEngineConfig().use_strategy_alpha_head_mode;
+}
+
+void incrementRejectionReason(std::map<std::string, int>* bucket, const char* reason) {
+    if (bucket == nullptr || reason == nullptr || reason[0] == '\0') {
+        return;
+    }
+    (*bucket)[reason]++;
+}
+
+Signal buildAlphaHeadFallbackSignal(
+    const std::string& strategy_name,
+    const std::string& market,
+    const analytics::CoinMetrics& metrics,
+    const std::vector<Candle>& candles,
+    double current_price,
+    const analytics::RegimeAnalysis& regime
+) {
+    Signal out;
+    if (candles.size() < 30 || current_price <= 0.0) {
+        return out;
+    }
+
+    const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()
+    ).count();
+
+    auto safe_close_from_end = [&](size_t idx_from_end) -> double {
+        if (candles.size() <= idx_from_end) {
+            return 0.0;
+        }
+        return candles[candles.size() - 1 - idx_from_end].close;
+    };
+
+    const double c0 = safe_close_from_end(0);
+    const double c5 = safe_close_from_end(5);
+    const double c20 = safe_close_from_end(20);
+    if (c0 <= 0.0 || c5 <= 0.0 || c20 <= 0.0) {
+        return out;
+    }
+
+    const double ret5 = (c0 - c5) / c5;
+    const double ret20 = (c0 - c20) / c20;
+    const double pressure_total = std::max(1e-6, std::abs(metrics.buy_pressure) + std::abs(metrics.sell_pressure));
+    const double buy_bias = std::clamp((metrics.buy_pressure - metrics.sell_pressure) / pressure_total, -1.0, 1.0);
+    const bool liquid_ok = metrics.liquidity_score >= 45.0;
+    double hostility = 0.0;
+    switch (regime.regime) {
+        case analytics::MarketRegime::HIGH_VOLATILITY:
+            hostility += 0.72;
+            break;
+        case analytics::MarketRegime::TRENDING_DOWN:
+            hostility += 0.62;
+            break;
+        case analytics::MarketRegime::RANGING:
+            hostility += 0.34;
+            break;
+        case analytics::MarketRegime::TRENDING_UP:
+            hostility += 0.12;
+            break;
+        default:
+            hostility += 0.28;
+            break;
+    }
+    if (metrics.volatility > 0.0) {
+        hostility += std::clamp((metrics.volatility - 1.8) / 6.0, 0.0, 0.28);
+    }
+    if (metrics.liquidity_score > 0.0) {
+        hostility += std::clamp((55.0 - metrics.liquidity_score) / 90.0, 0.0, 0.20);
+    }
+    if (metrics.orderbook_snapshot.valid) {
+        const double spread_pct = metrics.orderbook_snapshot.spread_pct * 100.0;
+        hostility += std::clamp((spread_pct - 0.18) / 0.40, 0.0, 0.18);
+    }
+    hostility = std::clamp(hostility, 0.0, 1.0);
+    const bool hostile_band = hostility >= 0.62;
+    const bool severe_hostile_band = hostility >= 0.78;
+    if (severe_hostile_band) {
+        return out;
+    }
+
+    const std::string lower = toLowerCopy(strategy_name);
+    const bool is_scalping = (lower.find("scalping") != std::string::npos);
+    const bool is_momentum = (lower.find("momentum") != std::string::npos);
+    const bool is_breakout = (lower.find("breakout") != std::string::npos);
+    const bool is_mean_reversion =
+        (lower.find("mean reversion") != std::string::npos) ||
+        (lower.find("mean_reversion") != std::string::npos);
+
+    bool candidate_ok = false;
+    double base_strength = 0.0;
+    std::string archetype = "FALLBACK_GENERIC";
+
+    if (is_scalping || is_momentum || is_breakout) {
+        const bool regime_ok =
+            (regime.regime == analytics::MarketRegime::TRENDING_UP ||
+             regime.regime == analytics::MarketRegime::RANGING ||
+             regime.regime == analytics::MarketRegime::UNKNOWN);
+        candidate_ok = regime_ok && liquid_ok && ret5 >= -0.0015 && ret20 >= -0.01 && buy_bias >= -0.06;
+        base_strength = 0.45
+            + std::clamp(ret5 * 40.0, -0.08, 0.14)
+            + std::clamp(ret20 * 18.0, -0.06, 0.12)
+            + std::clamp((metrics.liquidity_score - 55.0) / 240.0, -0.05, 0.08)
+            + std::clamp(buy_bias * 0.12, -0.05, 0.08);
+        if (regime.regime == analytics::MarketRegime::TRENDING_UP) {
+            base_strength += 0.05;
+        } else if (regime.regime == analytics::MarketRegime::RANGING) {
+            base_strength += 0.02;
+        }
+        if (metrics.volume_surge_ratio >= 1.35) {
+            base_strength += 0.03;
+        }
+        if (hostile_band) {
+            candidate_ok = candidate_ok &&
+                metrics.liquidity_score >= 55.0 &&
+                ret5 >= 0.0 &&
+                buy_bias >= 0.02;
+            base_strength -= 0.03;
+        } else if (hostility <= 0.35) {
+            base_strength += 0.02;
+        }
+        if (is_scalping) {
+            archetype = "FALLBACK_SCALP_FLOW";
+        } else if (is_momentum) {
+            archetype = "FALLBACK_MOMENTUM_CONT";
+        } else {
+            archetype = "FALLBACK_BREAKOUT_CONT";
+        }
+    } else if (is_mean_reversion) {
+        const bool regime_ok =
+            (regime.regime == analytics::MarketRegime::RANGING ||
+             regime.regime == analytics::MarketRegime::HIGH_VOLATILITY ||
+             regime.regime == analytics::MarketRegime::UNKNOWN);
+        candidate_ok = regime_ok && liquid_ok && ret5 <= 0.002 && ret20 <= 0.01 && buy_bias >= -0.12;
+        base_strength = 0.44
+            + std::clamp((-ret5) * 28.0, -0.04, 0.12)
+            + std::clamp((-ret20) * 10.0, -0.04, 0.08)
+            + std::clamp((metrics.liquidity_score - 55.0) / 260.0, -0.05, 0.08)
+            + std::clamp(buy_bias * 0.10, -0.05, 0.06);
+        if (regime.regime == analytics::MarketRegime::RANGING) {
+            base_strength += 0.04;
+        } else if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
+            base_strength += 0.01;
+        }
+        if (hostile_band) {
+            candidate_ok = candidate_ok &&
+                metrics.liquidity_score >= 55.0 &&
+                ret5 <= -0.0005;
+            base_strength -= 0.02;
+        } else if (hostility <= 0.35) {
+            base_strength += 0.02;
+        }
+        archetype = "FALLBACK_MEAN_REV_PULLBACK";
+    } else {
+        return out;
+    }
+
+    if (!candidate_ok) {
+        return out;
+    }
+    if (regime.regime == analytics::MarketRegime::TRENDING_DOWN && buy_bias < 0.08) {
+        return out;
+    }
+
+    const double strength = std::clamp(base_strength, 0.38, 0.80);
+    const double vol_pct = std::max(0.2, metrics.volatility) / 100.0;
+    const double risk_pct = std::clamp((vol_pct * 0.85) + 0.0042, 0.0045, 0.0180);
+    double rr_target = 1.45;
+    if (is_momentum || is_breakout) {
+        rr_target = (regime.regime == analytics::MarketRegime::TRENDING_UP) ? 1.85 : 1.70;
+    } else if (is_mean_reversion) {
+        rr_target = 1.50;
+    }
+    const double tp2_pct = std::clamp(risk_pct * rr_target, 0.0085, 0.0320);
+    const double tp1_pct = std::clamp(tp2_pct * 0.62, 0.0045, 0.0200);
+
+    out.type = (strength >= 0.62) ? SignalType::STRONG_BUY : SignalType::BUY;
+    out.market = market;
+    out.strategy_name = strategy_name;
+    out.strength = strength;
+    out.entry_price = current_price;
+    out.stop_loss = current_price * (1.0 - risk_pct);
+    out.take_profit_1 = current_price * (1.0 + tp1_pct);
+    out.take_profit_2 = current_price * (1.0 + tp2_pct);
+    out.position_size = std::clamp(0.022 + (strength - 0.40) * 0.060, 0.010, 0.045);
+    out.buy_order_type = OrderTypePolicy::LIMIT_WITH_FALLBACK;
+    out.sell_order_type = OrderTypePolicy::LIMIT_WITH_FALLBACK;
+    out.max_retries = 2;
+    out.retry_wait_ms = 700;
+    out.signal_filter = strength;
+    out.market_regime = regime.regime;
+    out.entry_archetype = archetype;
+    out.used_preloaded_tf_5m =
+        (metrics.candles_by_tf.find("5m") != metrics.candles_by_tf.end() &&
+         metrics.candles_by_tf.at("5m").size() >= 20);
+    out.used_preloaded_tf_1h =
+        (metrics.candles_by_tf.find("1h") != metrics.candles_by_tf.end() &&
+         metrics.candles_by_tf.at("1h").size() >= 10);
+    out.used_resampled_tf_fallback = !out.used_preloaded_tf_5m;
+    out.expected_return_pct = tp2_pct;
+    out.expected_risk_pct = risk_pct;
+    out.expected_value = (tp2_pct * std::clamp(0.42 + (strength * 0.28), 0.38, 0.68)) - (risk_pct * 0.58);
+    out.reason = "alpha_head_fallback_candidate";
+    out.timestamp = now_ms;
+    return out;
+}
 }
 
 StrategyManager::StrategyManager(std::shared_ptr<network::UpbitHttpClient> client)
     : client_(client)
 {
     LOG_INFO("StrategyManager initialized");
+}
+
+void StrategyManager::setLiveSignalBottleneckHint(const LiveSignalBottleneckHint& hint) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    live_bottleneck_hint_ = hint;
+}
+
+StrategyManager::LiveSignalBottleneckHint StrategyManager::getLiveSignalBottleneckHint() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return live_bottleneck_hint_;
 }
 
 void StrategyManager::registerStrategy(std::shared_ptr<IStrategy> strategy) {
@@ -142,6 +421,16 @@ Signal StrategyManager::processStrategySignal(
         }
 
         auto signal = strategy->generateSignal(market, metrics, candles, current_price, available_capital, regime);
+        if (signal.type == SignalType::NONE && alphaHeadModeEnabledForManager()) {
+            signal = buildAlphaHeadFallbackSignal(
+                strategy->getInfo().name,
+                market,
+                metrics,
+                candles,
+                current_price,
+                regime
+            );
+        }
 
         if (signal.type != SignalType::NONE) {
             auto stats = strategy->getStatistics();
@@ -173,6 +462,10 @@ Signal StrategyManager::processStrategySignal(
             }
 
             signal.score = calculateSignalScore(signal);
+            if (signal.reason == "alpha_head_fallback_candidate") {
+                LOG_INFO("{} - {} fallback candidate generated (strength {:.2f}, archetype {})",
+                         market, signal.strategy_name, signal.strength, signal.entry_archetype);
+            }
 
             return signal;
         }
@@ -241,9 +534,28 @@ Signal StrategyManager::selectRobustSignal(
     const std::vector<Signal>& signals,
     analytics::MarketRegime regime
 ) {
+    return selectRobustSignalWithDiagnostics(signals, regime, nullptr);
+}
+
+Signal StrategyManager::selectRobustSignalWithDiagnostics(
+    const std::vector<Signal>& signals,
+    analytics::MarketRegime regime,
+    SelectionDiagnostics* diagnostics
+) {
+    if (diagnostics != nullptr) {
+        diagnostics->input_count = static_cast<int>(signals.size());
+        diagnostics->directional_candidate_count = 0;
+        diagnostics->scored_candidate_count = 0;
+        diagnostics->rejection_reason_counts.clear();
+        diagnostics->live_hint_adjusted_candidate_count = 0;
+        diagnostics->live_hint_adjustment_counts.clear();
+    }
+
     if (signals.empty()) {
         return Signal();
     }
+
+    const LiveSignalBottleneckHint live_hint = getLiveSignalBottleneckHint();
 
     std::map<int, int> direction_votes;
     std::map<StrategyRole, int> role_votes;
@@ -273,7 +585,15 @@ Signal StrategyManager::selectRobustSignal(
         }
     }
 
+    if (diagnostics != nullptr) {
+        diagnostics->directional_candidate_count = static_cast<int>(directional_candidates.size());
+    }
+
     if (directional_candidates.empty()) {
+        incrementRejectionReason(
+            diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+            "no_best_signal_no_directional_candidates"
+        );
         return Signal();
     }
 
@@ -283,6 +603,25 @@ Signal StrategyManager::selectRobustSignal(
         static_cast<int>(directional_candidates.size()) == 1) {
         const auto& only = directional_candidates.front();
         if (only.strength < 0.78 || only.expected_value < 0.0008) {
+            incrementRejectionReason(
+                diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                "no_best_signal_high_stress_single_candidate"
+            );
+            return Signal();
+        }
+    }
+
+    if (static_cast<int>(directional_candidates.size()) == 1) {
+        const auto& only = directional_candidates.front();
+        const double rr_ratio = computeRewardRiskRatioForManager(only);
+        const bool weak_quality_single =
+            (only.expected_value < 0.00010 || (rr_ratio > 0.0 && rr_ratio < 1.15)) &&
+            only.strength < 0.70;
+        if (weak_quality_single) {
+            incrementRejectionReason(
+                diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                "no_best_signal_single_candidate_quality_floor"
+            );
             return Signal();
         }
     }
@@ -292,7 +631,16 @@ Signal StrategyManager::selectRobustSignal(
     for (const auto& signal : directional_candidates) {
         const StrategyRole role = detectStrategyRole(signal.strategy_name);
         const RegimePolicy policy = getRegimePolicy(role, regime);
+        const double reward_risk_ratio = computeRewardRiskRatioForManager(signal);
+        const bool trend_role = (role == StrategyRole::MOMENTUM || role == StrategyRole::BREAKOUT);
+        const bool off_trend_regime =
+            trend_role &&
+            regime != analytics::MarketRegime::TRENDING_UP;
         if (policy == RegimePolicy::BLOCK) {
+            incrementRejectionReason(
+                diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                "no_best_signal_policy_block"
+            );
             continue;
         }
 
@@ -329,21 +677,115 @@ Signal StrategyManager::selectRobustSignal(
         }
 
         if (signal.expected_value < 0.0) {
+            incrementRejectionReason(
+                diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                "no_best_signal_negative_expected_value"
+            );
             score *= 0.80;
+        }
+
+        if (off_trend_regime) {
+            if (signal.expected_value < 0.00020 ||
+                (reward_risk_ratio > 0.0 && reward_risk_ratio < 1.28)) {
+                incrementRejectionReason(
+                    diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                    "no_best_signal_trend_off_regime_low_edge"
+                );
+                score *= 0.62;
+            } else {
+                score *= 0.90;
+            }
+        }
+
+        if (reward_risk_ratio > 0.0 && reward_risk_ratio < 1.25) {
+            incrementRejectionReason(
+                diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                "no_best_signal_low_reward_risk"
+            );
+            score *= (reward_risk_ratio < 1.10) ? 0.74 : 0.84;
+        }
+
+        // Runtime hint parity with tuning loop: when signal-generation bottleneck
+        // dominates, modestly prioritize scalable alpha-head strategies.
+        if (live_hint.enabled &&
+            live_hint.top_group == "signal_generation" &&
+            !live_hint.no_trade_bias_active) {
+            if ((role == StrategyRole::SCALPING || role == StrategyRole::MOMENTUM) &&
+                signal.strength >= 0.40 &&
+                signal.expected_value >= -0.0002) {
+                double boost = 1.03;
+                if (live_hint.signal_generation_share >= 0.60) {
+                    boost += 0.02;
+                } else if (live_hint.signal_generation_share >= 0.50) {
+                    boost += 0.01;
+                }
+                if (signal.reason == "alpha_head_fallback_candidate") {
+                    boost += 0.01;
+                }
+                score *= boost;
+                if (diagnostics != nullptr) {
+                    diagnostics->live_hint_adjusted_candidate_count++;
+                    if (role == StrategyRole::SCALPING) {
+                        diagnostics->live_hint_adjustment_counts["boost_scalping"]++;
+                    } else {
+                        diagnostics->live_hint_adjustment_counts["boost_momentum"]++;
+                    }
+                    if (signal.reason == "alpha_head_fallback_candidate") {
+                        diagnostics->live_hint_adjustment_counts["boost_alpha_fallback"]++;
+                    }
+                }
+            } else if (role == StrategyRole::GRID) {
+                score *= 0.98;
+                if (diagnostics != nullptr) {
+                    diagnostics->live_hint_adjusted_candidate_count++;
+                    diagnostics->live_hint_adjustment_counts["dampen_grid"]++;
+                }
+            }
+        } else if (live_hint.enabled && live_hint.no_trade_bias_active) {
+            if (signal.expected_value < 0.00020) {
+                incrementRejectionReason(
+                    diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                    "no_best_signal_no_trade_bias_low_edge"
+                );
+                score *= 0.86;
+            }
+            if (reward_risk_ratio > 0.0 && reward_risk_ratio < 1.25) {
+                incrementRejectionReason(
+                    diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                    "no_best_signal_no_trade_bias_low_reward_risk"
+                );
+                score *= 0.88;
+            }
         }
 
         // Harder reliability down-weight for strategies that have accumulated poor edge.
         if (signal.strategy_trade_count >= 20) {
             if (signal.strategy_win_rate < 0.42) {
+                incrementRejectionReason(
+                    diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                    "no_best_signal_low_win_rate_history"
+                );
                 score *= 0.75;
             }
             if (signal.strategy_profit_factor > 0.0 && signal.strategy_profit_factor < 0.95) {
+                incrementRejectionReason(
+                    diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                    "no_best_signal_low_profit_factor_history"
+                );
                 score *= 0.78;
             }
             if ((signal.strategy_win_rate < 0.42 || signal.strategy_profit_factor < 0.95) &&
                 signal.expected_value < 0.0002) {
+                incrementRejectionReason(
+                    diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                    "no_best_signal_low_reliability_combo"
+                );
                 score *= 0.55;
             }
+        }
+
+        if (diagnostics != nullptr) {
+            diagnostics->scored_candidate_count++;
         }
 
         if (score > best_score) {
@@ -351,6 +793,13 @@ Signal StrategyManager::selectRobustSignal(
             best_signal = signal;
             best_signal.score = score;
         }
+    }
+
+    if (best_signal.type == SignalType::NONE) {
+        incrementRejectionReason(
+            diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+            "no_best_signal_no_scored_candidates"
+        );
     }
 
     return best_signal;
@@ -362,12 +811,42 @@ std::vector<Signal> StrategyManager::filterSignals(
     double min_expected_value,
     analytics::MarketRegime regime
 ) {
+    return filterSignalsWithDiagnostics(
+        signals,
+        min_strength,
+        min_expected_value,
+        regime,
+        nullptr
+    );
+}
+
+std::vector<Signal> StrategyManager::filterSignalsWithDiagnostics(
+    const std::vector<Signal>& signals,
+    double min_strength,
+    double min_expected_value,
+    analytics::MarketRegime regime,
+    FilterDiagnostics* diagnostics
+) {
     std::vector<Signal> filtered;
+    if (diagnostics != nullptr) {
+        diagnostics->input_count = static_cast<int>(signals.size());
+        diagnostics->output_count = 0;
+        diagnostics->rejection_reason_counts.clear();
+    }
 
     for (const auto& signal : signals) {
         const StrategyRole role = detectStrategyRole(signal.strategy_name);
         const RegimePolicy policy = getRegimePolicy(role, regime);
+        const double reward_risk_ratio = computeRewardRiskRatioForManager(signal);
+        const bool trend_role = (role == StrategyRole::MOMENTUM || role == StrategyRole::BREAKOUT);
+        const bool off_trend_regime =
+            trend_role &&
+            regime != analytics::MarketRegime::TRENDING_UP;
         if (policy == RegimePolicy::BLOCK) {
+            incrementRejectionReason(
+                diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                "filtered_out_by_manager_policy_block"
+            );
             continue;
         }
 
@@ -382,6 +861,14 @@ std::vector<Signal> StrategyManager::filterSignals(
             }
         }
 
+        if (off_trend_regime) {
+            required_strength = std::min(0.95, required_strength + 0.06);
+            required_expected_value += 0.00015;
+            if (regime == analytics::MarketRegime::RANGING && signal.liquidity_score < 60.0) {
+                required_expected_value += 0.00008;
+            }
+        }
+
         const PerformanceGate gate = getPerformanceGate(role, regime);
         const bool has_sample = signal.strategy_trade_count >= gate.min_sample_trades;
         if (has_sample) {
@@ -393,13 +880,47 @@ std::vector<Signal> StrategyManager::filterSignals(
             }
         }
 
+        if (reward_risk_ratio > 0.0 && reward_risk_ratio < 1.15) {
+            required_strength = std::min(0.95, required_strength + 0.05);
+            required_expected_value += 0.00008;
+        }
+
         // Keep pre-filter permissive; engine layer applies final EV/edge gates.
         const double permissive_ev_floor = std::min(0.0, required_expected_value) - 0.00015;
-        if (signal.strength >= required_strength && signal.expected_value >= permissive_ev_floor) {
+        const double adaptive_ev_floor =
+            permissive_ev_floor + computeExpectedValueTighteningForManager(signal, regime);
+        if (signal.strength >= required_strength && signal.expected_value >= adaptive_ev_floor) {
             filtered.push_back(signal);
+        } else if (signal.strength < required_strength) {
+            incrementRejectionReason(
+                diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                off_trend_regime
+                    ? "filtered_out_by_manager_trend_off_regime_strength"
+                    : "filtered_out_by_manager_strength"
+            );
+        } else if (signal.expected_value < adaptive_ev_floor) {
+            incrementRejectionReason(
+                diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                off_trend_regime
+                    ? "filtered_out_by_manager_trend_off_regime_ev"
+                    : "filtered_out_by_manager_ev_quality_floor"
+            );
+        } else if (reward_risk_ratio > 0.0 && reward_risk_ratio < 1.15) {
+            incrementRejectionReason(
+                diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                "filtered_out_by_manager_low_reward_risk"
+            );
+        } else {
+            incrementRejectionReason(
+                diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                "filtered_out_by_manager_expected_value"
+            );
         }
     }
 
+    if (diagnostics != nullptr) {
+        diagnostics->output_count = static_cast<int>(filtered.size());
+    }
     return filtered;
 }
 
