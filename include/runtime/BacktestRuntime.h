@@ -72,8 +72,12 @@ public:
             int blocked_risk_gate_regime = 0;
             int blocked_risk_gate_entry_quality = 0;
             int blocked_risk_gate_entry_quality_rr = 0;
+            int blocked_risk_gate_entry_quality_rr_base = 0;
+            int blocked_risk_gate_entry_quality_rr_adaptive = 0;
             int blocked_risk_gate_entry_quality_edge = 0;
             int blocked_risk_gate_entry_quality_rr_edge = 0;
+            int blocked_risk_gate_entry_quality_rr_edge_base = 0;
+            int blocked_risk_gate_entry_quality_rr_edge_adaptive = 0;
             int blocked_risk_gate_entry_quality_invalid_levels = 0;
             int blocked_risk_gate_other = 0;
             int blocked_second_stage_confirmation = 0;

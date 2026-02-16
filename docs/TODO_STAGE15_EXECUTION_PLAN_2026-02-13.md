@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-17 (overfit guard maintained + entry-quality gate ownership decomposition)
+Last updated: 2026-02-17 (overfit guard maintained + RR base/adaptive ownership split)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -508,6 +508,42 @@ The system must:
     - promotion recommendation: `hold_candidate_calibrate_risk_gate_entry_quality_rr`
   - next:
     - tighten ownership around RR threshold construction (`min_reward_risk` baseline vs adaptive adders) before any new relaxation experiments.
+
+- Stage-2.13 update (2026-02-17):
+  - RR ownership split (`base` vs `adaptive adders`) implemented:
+    - backtest entry-quality RR failure is now classified as:
+      - `blocked_risk_gate_entry_quality_rr_base`
+      - `blocked_risk_gate_entry_quality_rr_adaptive`
+      - `blocked_risk_gate_entry_quality_rr_edge_base`
+      - `blocked_risk_gate_entry_quality_rr_edge_adaptive`
+    - runtime/summary counters were extended to expose the split.
+  - train/eval promotion routing updated:
+    - new recommendation codes:
+      - `hold_candidate_calibrate_risk_gate_rr_baseline_floor`
+      - `hold_candidate_calibrate_risk_gate_rr_adaptive_adders`
+    - latest split recommendation switched to:
+      - `hold_candidate_calibrate_risk_gate_rr_adaptive_adders`
+  - tuner bottleneck context updated:
+    - risk-gate focus now distinguishes:
+      - `entry_quality_rr_base`
+      - `entry_quality_rr_adaptive`
+      - `entry_quality_rr_edge_base`
+      - `entry_quality_rr_edge_adaptive`
+    - added adaptive-focused scenario family:
+      - `risk_gate_adaptive_rebalance`
+  - verification:
+    - `python -m py_compile scripts/generate_strategy_rejection_taxonomy_report.py scripts/run_profitability_matrix.py scripts/run_realdata_candidate_loop.py scripts/run_candidate_train_eval_cycle.py scripts/tune_candidate_gate_trade_density.py` PASS
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full`):
+    - train top risk component: `blocked_risk_gate_entry_quality_rr_adaptive:11766`
+    - validation top risk component: `blocked_risk_gate_entry_quality_rr_adaptive:6662`
+    - holdout top risk component: `blocked_risk_gate_entry_quality_rr_adaptive:7116`
+  - next:
+    - calibrate adaptive RR adders by source (history/regime/hostility/no-entry recovery) before touching base RR floor.
 
 2. Expectancy-first improvement loop
 - Optimize for:

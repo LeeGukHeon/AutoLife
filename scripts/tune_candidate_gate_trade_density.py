@@ -216,10 +216,18 @@ def build_effective_bottleneck_context(
     risk_gate_focus = ""
     if top_risk_gate_component_reason == "blocked_risk_gate_entry_quality_invalid_levels":
         risk_gate_focus = "entry_quality_invalid_levels"
+    elif top_risk_gate_component_reason == "blocked_risk_gate_entry_quality_rr_base":
+        risk_gate_focus = "entry_quality_rr_base"
+    elif top_risk_gate_component_reason == "blocked_risk_gate_entry_quality_rr_adaptive":
+        risk_gate_focus = "entry_quality_rr_adaptive"
     elif top_risk_gate_component_reason == "blocked_risk_gate_entry_quality_rr":
         risk_gate_focus = "entry_quality_rr"
     elif top_risk_gate_component_reason == "blocked_risk_gate_entry_quality_edge":
         risk_gate_focus = "entry_quality_edge"
+    elif top_risk_gate_component_reason == "blocked_risk_gate_entry_quality_rr_edge_base":
+        risk_gate_focus = "entry_quality_rr_edge_base"
+    elif top_risk_gate_component_reason == "blocked_risk_gate_entry_quality_rr_edge_adaptive":
+        risk_gate_focus = "entry_quality_rr_edge_adaptive"
     elif top_risk_gate_component_reason == "blocked_risk_gate_entry_quality_rr_edge":
         risk_gate_focus = "entry_quality_rr_edge"
     elif top_risk_gate_component_reason.startswith("blocked_risk_gate_entry_quality"):
@@ -336,6 +344,10 @@ def compute_combo_bottleneck_priority_score(combo: Dict[str, Any], context: Dict
         if risk_gate_focus == "entry_quality_invalid_levels":
             # Price-level inconsistency is structural; keep exploration conservative.
             return round((quality_score * 0.92) + (relax_score * 0.08), 6)
+        if risk_gate_focus in {"entry_quality_rr_base", "entry_quality_rr_edge_base"}:
+            return round((quality_score * 0.90) + (relax_score * 0.10), 6)
+        if risk_gate_focus in {"entry_quality_rr_adaptive", "entry_quality_rr_edge_adaptive"}:
+            return round((quality_score * 0.84) + (relax_score * 0.16), 6)
         if risk_gate_focus in {"entry_quality_rr", "entry_quality_edge", "entry_quality_rr_edge"}:
             return round((quality_score * 0.88) + (relax_score * 0.12), 6)
         if risk_gate_focus in {"entry_quality", "second_stage_confirmation"}:
@@ -667,7 +679,12 @@ def adapt_combo_specs_for_bottleneck(
     if top_group == "position_state":
         family = "position_turnover_quality"
     elif top_group == "risk_gate":
-        family = "risk_gate_structure_guard" if risk_gate_focus == "entry_quality_invalid_levels" else "risk_gate_quality_rebalance"
+        if risk_gate_focus == "entry_quality_invalid_levels":
+            family = "risk_gate_structure_guard"
+        elif risk_gate_focus in {"entry_quality_rr_adaptive", "entry_quality_rr_edge_adaptive"}:
+            family = "risk_gate_adaptive_rebalance"
+        else:
+            family = "risk_gate_quality_rebalance"
     elif top_group == "manager_prefilter":
         family = "manager_prefilter_relax"
     elif top_group == "signal_generation" or no_trade_bias_active:
@@ -815,6 +832,43 @@ def adapt_combo_specs_for_bottleneck(
             clone["backtest_hostility_pause_candles"] = int(
                 min(210, int(clone.get("backtest_hostility_pause_candles", 36)) + 12)
             )
+
+        elif adapted and family == "risk_gate_adaptive_rebalance":
+            # Adaptive RR adders suspected too strict: keep quality, but avoid aggressive tightening.
+            clone["min_expected_edge_pct"] = round(
+                _clamp(float(clone.get("min_expected_edge_pct", 0.0010)) * 1.03, 0.0006, 0.0017), 4
+            )
+            clone["min_reward_risk"] = round(
+                _clamp(float(clone.get("min_reward_risk", 1.20)) + 0.02, 1.00, 1.70), 2
+            )
+            clone["min_rr_weak_signal"] = round(
+                _clamp(float(clone.get("min_rr_weak_signal", 1.80)) + 0.03, 1.10, 2.20), 2
+            )
+            clone["min_rr_strong_signal"] = round(
+                _clamp(float(clone.get("min_rr_strong_signal", 1.20)) + 0.02, 0.90, 1.60), 2
+            )
+            clone["min_strategy_trades_for_ev"] = int(min(72, int(clone.get("min_strategy_trades_for_ev", 30)) + 4))
+            clone["min_strategy_profit_factor"] = round(
+                _clamp(float(clone.get("min_strategy_profit_factor", 0.95)) + 0.01, 0.88, 1.25), 2
+            )
+            clone["min_strategy_expectancy_krw"] = round(
+                float(clone.get("min_strategy_expectancy_krw", -1.0)) + 0.15, 2
+            )
+            clone["max_new_orders_per_scan"] = int(max(1, int(clone.get("max_new_orders_per_scan", 2)) - 1))
+            clone["scalping_min_signal_strength"] = round(
+                _clamp(float(clone.get("scalping_min_signal_strength", 0.70)) + 0.01, 0.60, 0.90), 2
+            )
+            clone["momentum_min_signal_strength"] = round(
+                _clamp(float(clone.get("momentum_min_signal_strength", 0.72)) + 0.01, 0.60, 0.90), 2
+            )
+            clone["breakout_min_signal_strength"] = round(
+                _clamp(float(clone.get("breakout_min_signal_strength", 0.40)) + 0.01, 0.30, 0.56), 2
+            )
+            clone["mean_reversion_min_signal_strength"] = round(
+                _clamp(float(clone.get("mean_reversion_min_signal_strength", 0.40)) + 0.01, 0.30, 0.56), 2
+            )
+            clone["avoid_high_volatility"] = True
+            clone["avoid_trending_down"] = True
 
         elif adapted and family == "risk_gate_quality_rebalance":
             clone["min_expected_edge_pct"] = round(

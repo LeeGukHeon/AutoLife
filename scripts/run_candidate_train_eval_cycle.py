@@ -377,7 +377,13 @@ def read_gate_snapshot(report_path: Path) -> Dict[str, Any]:
     risk_gate_component_breakdown = {
         k: int(v)
         for k, v in risk_gate_breakdown.items()
-        if str(k) not in {"blocked_risk_gate_total", "blocked_risk_gate_entry_quality"}
+        if str(k)
+        not in {
+            "blocked_risk_gate_total",
+            "blocked_risk_gate_entry_quality",
+            "blocked_risk_gate_entry_quality_rr",
+            "blocked_risk_gate_entry_quality_rr_edge",
+        }
     }
     top_risk_gate_component_reason = ""
     top_risk_gate_component_count = 0
@@ -871,10 +877,18 @@ def build_promotion_verdict(
     ):
         risk_component = str(val_core_reject_ctx.get("top_entry_risk_gate_component_reason", ""))
         if risk_component.startswith("blocked_risk_gate_entry_quality"):
-            if risk_component == "blocked_risk_gate_entry_quality_rr":
+            if risk_component == "blocked_risk_gate_entry_quality_rr_base":
+                recommendation = "hold_candidate_calibrate_risk_gate_rr_baseline_floor"
+            elif risk_component == "blocked_risk_gate_entry_quality_rr_adaptive":
+                recommendation = "hold_candidate_calibrate_risk_gate_rr_adaptive_adders"
+            elif risk_component == "blocked_risk_gate_entry_quality_rr":
                 recommendation = "hold_candidate_calibrate_risk_gate_entry_quality_rr"
             elif risk_component == "blocked_risk_gate_entry_quality_edge":
                 recommendation = "hold_candidate_calibrate_risk_gate_entry_quality_edge"
+            elif risk_component == "blocked_risk_gate_entry_quality_rr_edge_base":
+                recommendation = "hold_candidate_calibrate_risk_gate_rr_baseline_floor"
+            elif risk_component == "blocked_risk_gate_entry_quality_rr_edge_adaptive":
+                recommendation = "hold_candidate_calibrate_risk_gate_rr_adaptive_adders"
             elif risk_component == "blocked_risk_gate_entry_quality_rr_edge":
                 recommendation = "hold_candidate_calibrate_risk_gate_entry_quality_rr_edge"
             elif risk_component == "blocked_risk_gate_entry_quality_invalid_levels":

@@ -150,8 +150,20 @@ def run_profile_backtests(
             "blocked_risk_gate_regime": int(entry_funnel.get("blocked_risk_gate_regime", 0) or 0),
             "blocked_risk_gate_entry_quality": int(entry_funnel.get("blocked_risk_gate_entry_quality", 0) or 0),
             "blocked_risk_gate_entry_quality_rr": int(entry_funnel.get("blocked_risk_gate_entry_quality_rr", 0) or 0),
+            "blocked_risk_gate_entry_quality_rr_base": int(
+                entry_funnel.get("blocked_risk_gate_entry_quality_rr_base", 0) or 0
+            ),
+            "blocked_risk_gate_entry_quality_rr_adaptive": int(
+                entry_funnel.get("blocked_risk_gate_entry_quality_rr_adaptive", 0) or 0
+            ),
             "blocked_risk_gate_entry_quality_edge": int(entry_funnel.get("blocked_risk_gate_entry_quality_edge", 0) or 0),
             "blocked_risk_gate_entry_quality_rr_edge": int(entry_funnel.get("blocked_risk_gate_entry_quality_rr_edge", 0) or 0),
+            "blocked_risk_gate_entry_quality_rr_edge_base": int(
+                entry_funnel.get("blocked_risk_gate_entry_quality_rr_edge_base", 0) or 0
+            ),
+            "blocked_risk_gate_entry_quality_rr_edge_adaptive": int(
+                entry_funnel.get("blocked_risk_gate_entry_quality_rr_edge_adaptive", 0) or 0
+            ),
             "blocked_risk_gate_entry_quality_invalid_levels": int(
                 entry_funnel.get("blocked_risk_gate_entry_quality_invalid_levels", 0) or 0
             ),
@@ -980,7 +992,13 @@ def main() -> int:
         risk_gate_component_counts = {
             k: int(v)
             for k, v in risk_gate_counts.items()
-            if str(k) not in {"blocked_risk_gate_total", "blocked_risk_gate_entry_quality"}
+            if str(k)
+            not in {
+                "blocked_risk_gate_total",
+                "blocked_risk_gate_entry_quality",
+                "blocked_risk_gate_entry_quality_rr",
+                "blocked_risk_gate_entry_quality_rr_edge",
+            }
         }
         top_risk_gate_component_reason = ""
         top_risk_gate_component_count = 0
