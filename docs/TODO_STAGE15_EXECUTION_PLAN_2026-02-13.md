@@ -383,8 +383,10 @@ The system must:
     - `skipped_due_to_open_position` count observed as `0` in current split summaries (`core_full`).
   - promotion verdict:
     - recommendation: `hold_candidate_improve_signal_generation_or_dataset_quality`
-  - environment note:
-    - `cmake` command is unavailable in current shell, so source rebuild could not be executed in this session.
+  - build verification:
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `./build/Release/AutoLifeV2ShadowParityTest.exe` PASS
+    - `./build/Release/AutoLifeV2EngineBacktestSmokeTest.exe` PASS
 
 2. Expectancy-first improvement loop
 - Optimize for:
