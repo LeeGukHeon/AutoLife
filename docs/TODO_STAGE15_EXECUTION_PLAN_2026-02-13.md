@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-16 (build/generated outputs + unused warnings cleanup executed)
+Last updated: 2026-02-16 (retention override applied + final delete executed)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -26,11 +26,182 @@ The system must:
 
 ## Active Snapshot (2026-02-16)
 - Historical progress logs were archived to:
-  - `docs/archive/STAGE15_WORKLOG_ARCHIVE_2026-02-16.md`
+  - `legacy_archive/docs/archive/STAGE15_WORKLOG_ARCHIVE_2026-02-16.md`
 - Current execution baseline:
   - Latest completed branch updates: `Stage-2.1` to `Stage-2.6`
   - Current major bottlenecks: `filtered_out_by_manager_ev_quality_floor`, `skipped_due_to_open_position`
   - Next action order: manager EV prefilter calibration -> position-state skip policy calibration
+  - Stage cleanup Wave A executed (2026-02-16):
+    - moved research-aux assets to `legacy_archive/` (two-stage delete policy)
+    - added `docs/FILE_USAGE_MAP.md`, `docs/DELETE_WAVE_MANIFEST.md`, `legacy_archive/manifest.json`
+    - added migration skeleton directories `src/v2/`, `include/v2/`
+    - updated `.vscode/settings.json` excludes for build/log/state/large data folders
+  - v2 bootstrap scaffold added (2026-02-16):
+    - added decoupled v2 kernel model/contracts: `include/v2/model/KernelTypes.h`, `include/v2/contracts/*`
+    - added v2 orchestration skeleton: `include/v2/orchestration/DecisionKernel.h`, `src/v2/orchestration/DecisionKernel.cpp`
+    - added legacy bridge adapters for staged migration: `include/v2/adapters/*`, `src/v2/adapters/*`
+    - added v2 engine/backtest scaffold:
+      - `include/v2/engine/TradingEngineV2.h`, `src/v2/engine/TradingEngineV2.cpp`
+      - `include/v2/backtest/BacktestEngineV2.h`, `src/v2/backtest/BacktestEngineV2.cpp`
+    - added repeatable Wave A verification command/script: `scripts/verify_cleanup_wave_a.py`
+  - v2 bootstrap smoke wiring verified (2026-02-16):
+    - added dedicated CMake smoke target: `AutoLifeV2KernelSmokeTest`
+    - added dedicated v2 engine/backtest smoke target: `AutoLifeV2EngineBacktestSmokeTest`
+    - added dedicated v2 compile-guard target: `AutoLifeV2CompileObjects`
+    - added v2 kernel smoke test: `tests/TestV2DecisionKernel.cpp`
+    - added v2 engine/backtest scaffold smoke test: `tests/TestV2EngineBacktestScaffold.cpp`
+    - verification PASS:
+      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeV2CompileObjects AutoLifeV2KernelSmokeTest AutoLifeV2EngineBacktestSmokeTest`
+      - `.\build\Release\AutoLifeV2KernelSmokeTest.exe`
+      - `.\build\Release\AutoLifeV2EngineBacktestSmokeTest.exe`
+  - v2 shadow parity harness verified (2026-02-16):
+    - added dedicated CMake parity target: `AutoLifeV2ShadowParityTest`
+    - added parity test/scenario: `tests/TestV2ShadowParity.cpp`
+    - added parity report script: `scripts/validate_v2_shadow_parity.py`
+    - connected runtime shadow probe to backtest policy input:
+      - `BacktestEngine` now writes per-candle policy parity log to `build/Release/logs/v2_shadow_policy_parity_backtest.jsonl`
+      - static parity + runtime parity strict check:
+        - `python scripts/validate_v2_shadow_parity.py -CheckRuntimeShadow -Strict`
+    - connected runtime shadow probe to live policy input:
+      - `LiveTradingRuntime::executeSignals` now writes policy parity log to `build/Release/logs/v2_shadow_policy_parity_live.jsonl`
+      - live runtime strict check option added:
+        - `python scripts/validate_v2_shadow_parity.py -CheckRuntimeLiveShadow -Strict`
+      - note: strict-live requires at least one live/paper scan cycle that reaches `executeSignals`.
+    - integrated optional gate hooks:
+      - `scripts/validate_operational_readiness.py --include-v2-shadow-parity --strict-v2-shadow-parity`
+      - `scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity`
+      - runtime-aware strict option:
+        - `--check-runtime-v2-shadow-parity` (`validate_operational_readiness` / `run_ci_operational_gate`)
+        - `--check-runtime-live-v2-shadow-parity` (`validate_operational_readiness` / `run_ci_operational_gate`)
+    - verification PASS:
+      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeV2ShadowParityTest`
+      - `python scripts/validate_v2_shadow_parity.py -Strict`
+      - artifact: `build/Release/logs/v2_shadow_parity_report.json`
+  - live-order safety lock hardened (2026-02-16):
+    - default `trading.allow_live_orders=false` (explicit opt-in required)
+    - `TradingEngine` live branches now block real submits when `allow_live_orders=false` and use simulation path
+    - no-arg/non-input startup no longer falls through to live mode; now exits safely
+    - `AutoLifeLiveExecutionProbe` now requires explicit `--allow-live-order` flag
+    - CI gate live probe also requires explicit `--allow-live-probe-order` opt-in
+  - Wave B readiness assessor added (2026-02-16):
+    - added `scripts/assess_wave_b_readiness.py`
+    - report artifact: `build/Release/logs/wave_b_readiness_report.json`
+    - latest assessment:
+      - `global_ready=true`
+      - `B1=true` (legacy core adapters moved to archive and replacement wiring active)
+      - `B2=true` (legacy engine/backtest moved to archive and runtime replacement wiring active)
+      - `B3_any=true`, `B3_all=true` (no remaining v1 strategy units detected)
+      - `ready_for_full_wave_b=true`
+      - retention override: immediate final delete executed (no date wait)
+  - Wave B1 stage-1 move executed (2026-02-16):
+    - moved to archive:
+      - `include/core/adapters/LegacyExecutionPlaneAdapter.h`
+      - `include/core/adapters/LegacyPolicyLearningPlaneAdapter.h`
+      - `src/core/adapters/LegacyExecutionPlaneAdapter.cpp`
+      - `src/core/adapters/LegacyPolicyLearningPlaneAdapter.cpp`
+    - replacement files added/wired:
+      - `include/core/adapters/ExecutionPlaneAdapter.h`
+      - `include/core/adapters/PolicyLearningPlaneAdapter.h`
+      - `src/core/adapters/ExecutionPlaneAdapter.cpp`
+      - `src/core/adapters/PolicyLearningPlaneAdapter.cpp`
+    - verification PASS:
+      - `AutoLifeTrading`, `AutoLifeV2*` build targets
+      - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity`
+      - `python scripts/assess_wave_b_readiness.py --run-refresh-checks` (`B1=true`)
+  - Wave B2 stage-1 move executed (2026-02-16):
+    - moved to archive:
+      - `include/engine/TradingEngine.h`
+      - `src/engine/TradingEngine.cpp`
+      - `include/backtest/BacktestEngine.h`
+      - `src/backtest/BacktestEngine.cpp`
+    - runtime replacement files added/wired:
+      - `include/runtime/LiveTradingRuntime.h`
+      - `src/runtime/LiveTradingRuntime.cpp`
+      - `include/runtime/BacktestRuntime.h`
+      - `src/runtime/BacktestRuntime.cpp`
+    - include/source wiring updates:
+      - `src/main.cpp`
+      - `CMakeLists.txt`
+      - `include/strategy/ScalpingStrategy.h`
+      - `include/strategy/MomentumStrategy.h`
+      - `include/strategy/GridTradingStrategy.h`
+    - verification PASS:
+      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading AutoLifeV2CompileObjects AutoLifeV2KernelSmokeTest AutoLifeV2EngineBacktestSmokeTest AutoLifeV2ShadowParityTest`
+      - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity`
+      - `python scripts/assess_wave_b_readiness.py --run-refresh-checks` (`B2=true`)
+  - Wave B3 first-unit readiness opened (2026-02-16):
+    - `StrategyConfig` v2 replacement signal added:
+      - `include/v2/strategy/StrategyConfig.h`
+      - `src/v2/strategy/StrategyConfig.cpp`
+      - `include/common/Config.h` include switched to `v2/strategy/StrategyConfig.h`
+    - readiness assessor false-positive fix:
+      - `scripts/assess_wave_b_readiness.py` path match now uses token-boundary matching
+      - avoids counting `v2/strategy/Foo.h` as legacy `strategy/Foo.h`
+    - verification PASS:
+      - `python scripts/assess_wave_b_readiness.py --run-refresh-checks` (`B3_any=true`)
+  - Wave B3 partial stage-1 move executed (2026-02-16):
+    - moved to archive:
+      - `include/strategy/BreakoutStrategy.h`
+      - `src/strategy/BreakoutStrategy.cpp`
+    - v2 replacement wiring:
+      - `include/v2/strategy/BreakoutStrategy.h`
+      - `src/v2/strategy/BreakoutStrategy.cpp`
+      - `src/runtime/LiveTradingRuntime.cpp`
+      - `src/runtime/BacktestRuntime.cpp`
+      - `CMakeLists.txt` (runtime source switched to v2 breakout cpp)
+    - verification PASS:
+      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading AutoLifeV2CompileObjects AutoLifeV2KernelSmokeTest AutoLifeV2EngineBacktestSmokeTest AutoLifeV2ShadowParityTest`
+      - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity`
+      - `python scripts/assess_wave_b_readiness.py --run-refresh-checks` (`B3_any=true`)
+  - Wave B3 stage-1 expansion executed (2026-02-16):
+    - additional moved strategy headers:
+      - `include/strategy/IStrategy.h`
+      - `include/strategy/StrategyManager.h`
+      - `include/strategy/ScalpingStrategy.h`
+      - `include/strategy/MomentumStrategy.h`
+      - `include/strategy/MeanReversionStrategy.h`
+      - `include/strategy/GridTradingStrategy.h`
+    - additional moved strategy sources:
+      - `src/strategy/StrategyManager.cpp`
+      - `src/strategy/ScalpingStrategy.cpp`
+      - `src/strategy/MomentumStrategy.cpp`
+      - `src/strategy/MeanReversionStrategy.cpp`
+      - `src/strategy/GridTradingStrategy.cpp`
+    - v2 replacement wiring switched:
+      - `include/v2/strategy/*.h` (IStrategy/StrategyManager/Scalping/Momentum/MeanReversion/Grid/Breakout)
+      - `src/v2/strategy/*.cpp` (StrategyManager/Scalping/Momentum/MeanReversion/Grid/Breakout/StrategyConfig)
+      - `src/runtime/LiveTradingRuntime.cpp`
+      - `src/runtime/BacktestRuntime.cpp`
+      - `include/runtime/LiveTradingRuntime.h`
+      - `include/runtime/BacktestRuntime.h`
+      - `include/risk/RiskManager.h`
+      - `include/engine/AdaptivePolicyController.h`
+      - `include/core/model/PlaneTypes.h`
+      - `include/core/contracts/IPolicyLearningPlane.h`
+      - `include/core/contracts/IRiskCompliancePlane.h`
+      - `include/core/orchestration/TradingCycleCoordinator.h`
+      - `CMakeLists.txt` (strategy compilation path switched to `src/v2/strategy/*.cpp`)
+    - verification PASS:
+      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading AutoLifeV2CompileObjects AutoLifeV2KernelSmokeTest AutoLifeV2EngineBacktestSmokeTest AutoLifeV2ShadowParityTest`
+      - `python scripts/verify_cleanup_wave_a.py --run-tests --run-help-checks`
+      - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity`
+      - `python scripts/assess_wave_b_readiness.py --run-refresh-checks` (`B3_any=true`, `B3_all=true`)
+  - Wave B3 final stage-1 marker (2026-02-16):
+    - moved to archive:
+      - `include/strategy/StrategyConfig.h`
+    - readiness script update:
+      - `scripts/assess_wave_b_readiness.py` now treats zero remaining v1 strategy units as:
+        - `B3_any=true`, `B3_all=true` (when global gates are ready)
+      - report note: `no_remaining_v1_strategy_units_detected`
+    - IDE tree readability update:
+      - `.vscode/settings.json` excludes `legacy_archive`
+  - Final delete executed (2026-02-16):
+    - operator requested no date wait; retention window overridden to `0 days`
+    - `legacy_archive` payload files hard-deleted (Wave A + Wave B)
+    - archive audit metadata retained:
+      - `legacy_archive/manifest.json`
+    - verification compatibility update:
+      - `scripts/verify_cleanup_wave_a.py` now treats `wave_a.final_delete_executed=true` as valid when archive payload files are absent
 
 ## P0 (Must do first)
 1. Upbit compliance hardening
@@ -53,8 +224,8 @@ The system must:
     - backtest now loads `15m` companion csv when present and exposes `candles_by_tf["15m"]` with rolling cursor semantics.
   - changed files:
     - `src/analytics/MarketScanner.cpp`
-    - `src/engine/TradingEngine.cpp`
-    - `src/backtest/BacktestEngine.cpp`
+    - `src/runtime/LiveTradingRuntime.cpp`
+    - `src/runtime/BacktestRuntime.cpp`
   - next:
     - completed: parity invariant check/report linked into realdata profitability artifact chain.
     - next: apply dataset quality gate policy using parity diagnostics (`gap/dup/stale`) before tuning selection.
@@ -222,6 +393,10 @@ The system must:
   - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions`
 - Split train/eval cycle with walk-forward gate:
   - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+- v2 shadow parity gate:
+  - `python scripts/validate_v2_shadow_parity.py -Strict`
+  - `python scripts/validate_v2_shadow_parity.py -CheckRuntimeShadow -Strict`
+  - `python scripts/validate_v2_shadow_parity.py -CheckRuntimeShadow -CheckRuntimeLiveShadow -Strict`
 
 ## Exit Criteria
 - Backtest/live parity checks pass on decision-path and candle-path invariants.

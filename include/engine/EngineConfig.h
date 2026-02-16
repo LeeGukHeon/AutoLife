@@ -39,6 +39,7 @@ struct EngineConfig {
     double order_fee_reserve_pct = 0.001;
     int max_new_orders_per_scan = 2;
     bool dry_run = false;
+    bool allow_live_orders = false;
     double min_expected_edge_pct = 0.0010; // 0.10% after cost
     double min_reward_risk = 1.20;         // TP/SL ratio
     double min_rr_weak_signal = 1.80;      // dynamic RR target for weak signals
@@ -52,6 +53,7 @@ struct EngineConfig {
     bool enable_core_policy_plane = true;
     bool enable_core_risk_plane = true;
     bool enable_core_execution_plane = true;
+    bool enable_v2_shadow_policy_probe = true;
     bool use_strategy_alpha_head_mode = false;
     double hostility_ewma_alpha = 0.14;
     double hostility_hostile_threshold = 0.62;

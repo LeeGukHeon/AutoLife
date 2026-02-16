@@ -75,6 +75,10 @@ tmp/
 *.pid
 *.tmp
 *.bak
+!include/runtime/
+!include/runtime/**
+!src/runtime/
+!src/runtime/**
 
 # ===== Python Tooling Cache (Stage 12) =====
 .venv/

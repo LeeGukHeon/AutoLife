@@ -2,7 +2,7 @@
 
 #include "common/Types.h"
 #include "analytics/TechnicalIndicators.h"
-#include "strategy/IStrategy.h"
+#include "v2/strategy/IStrategy.h"
 #include <string>
 #include <map>
 #include <vector>
@@ -405,4 +405,5 @@ private:
 
 } // namespace risk
 } // namespace autolife
+
 

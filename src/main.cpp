@@ -1,8 +1,8 @@
 ﻿#include "common/Logger.h"
 #include "common/Config.h"
 #include "network/UpbitHttpClient.h"
-#include "engine/TradingEngine.h"
-#include "backtest/BacktestEngine.h"
+#include "runtime/LiveTradingRuntime.h"
+#include "runtime/BacktestRuntime.h"
 
 #include <Windows.h>
 #include <nlohmann/json.hpp>
@@ -548,6 +548,16 @@ int main(int argc, char* argv[]) {
         int mode_choice = 0;
         try { mode_choice = std::stoi(mode_input); } catch (...) {}
 
+        if (mode_choice != 1 && mode_choice != 2) {
+            if (mode_input.empty()) {
+                std::cout << "\n입력이 없어 안전 종료합니다.\n";
+                std::cout << "실거래를 시작하려면 반드시 [1]을 명시적으로 입력하세요.\n";
+                return 0;
+            }
+            std::cout << "\n잘못된 입력입니다. [1] 또는 [2]를 선택하세요.\n";
+            return 1;
+        }
+
         if (mode_choice == 2) {
             std::cout << "\n[백테스트 설정]\n";
 
@@ -701,6 +711,13 @@ int main(int argc, char* argv[]) {
         }
 
         bool dry_run = readYesNo("Dry Run 모드로 실행할까요? (실주문 없음)", cfg_engine.dry_run);
+        bool allow_live_orders = false;
+        if (!dry_run) {
+            allow_live_orders = readYesNo(
+                "실주문 제출을 허용할까요? (매우 주의)",
+                cfg_engine.allow_live_orders
+            );
+        }
         int max_positions = readInt("동시 보유 최대 종목 수", cfg_engine.max_positions);
         int max_daily_trades = readInt("일일 최대 거래 횟수", cfg_engine.max_daily_trades);
         bool advanced_mode = readYesNo("고급 설정 모드로 세부 파라미터를 직접 조정할까요?", false);
@@ -796,6 +813,7 @@ int main(int argc, char* argv[]) {
         engine::EngineConfig engine_config;
         engine_config.mode = engine::TradingMode::LIVE;
         engine_config.dry_run = dry_run;
+        engine_config.allow_live_orders = allow_live_orders;
         engine_config.initial_capital = 0;
         engine_config.max_positions = max_positions;
         engine_config.max_daily_trades = max_daily_trades;
@@ -829,6 +847,7 @@ int main(int argc, char* argv[]) {
 
         std::cout << "\n[설정 요약]\n";
         std::cout << "모드:            " << (dry_run ? "DRY RUN" : "LIVE") << "\n";
+        std::cout << "실주문 제출:     " << (engine_config.allow_live_orders ? "허용" : "차단(시뮬레이션)") << "\n";
         std::cout << "설정 방식:       "
                   << (advanced_mode ? "ADVANCED(직접입력)" : (std::string("SIMPLE(") + live_profile_name + ")"))
                   << "\n";
@@ -919,3 +938,4 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 }
+

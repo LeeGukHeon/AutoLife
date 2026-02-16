@@ -76,7 +76,7 @@ bool artifactContainsOrderId(const std::filesystem::path& artifact_path, const s
 
 void printUsage() {
     std::cout << "Usage: AutoLifeLiveExecutionProbe [--market KRW-BTC] [--notional-krw 5100] "
-              << "[--discount-pct 2.0] [--cancel-delay-ms 1500]\n";
+              << "[--discount-pct 2.0] [--cancel-delay-ms 1500] [--allow-live-order]\n";
 }
 
 } // namespace
@@ -86,6 +86,7 @@ int main(int argc, char* argv[]) {
     double notional_krw = 5100.0;
     double discount_pct = 2.0;
     int cancel_delay_ms = 1500;
+    bool allow_live_order = false;
     const std::string strategy_name = "Stage7ParityProbe";
 
     for (int i = 1; i < argc; ++i) {
@@ -115,6 +116,10 @@ int main(int argc, char* argv[]) {
             }
             continue;
         }
+        if (arg == "--allow-live-order") {
+            allow_live_order = true;
+            continue;
+        }
         if (arg == "--help" || arg == "-h") {
             printUsage();
             return 0;
@@ -127,6 +132,11 @@ int main(int argc, char* argv[]) {
 
     try {
         autolife::Logger::getInstance().initialize("logs");
+
+        if (!allow_live_order) {
+            std::cerr << "Live order probe is blocked by default. Add --allow-live-order to run.\n";
+            return 1;
+        }
 
         auto& cfg = autolife::Config::getInstance();
         cfg.load("config/config.json");

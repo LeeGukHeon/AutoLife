@@ -14,7 +14,12 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--exe-path", "-ExePath", default="build/Release/AutoLifeTrading.exe")
     parser.add_argument("--include-backtest", "-IncludeBacktest", action="store_true")
     parser.add_argument("--run-live-probe", "-RunLiveProbe", action="store_true")
+    parser.add_argument("--allow-live-probe-order", "-AllowLiveProbeOrder", action="store_true")
     parser.add_argument("--strict-execution-parity", "-StrictExecutionParity", action="store_true")
+    parser.add_argument("--include-v2-shadow-parity", "-IncludeV2ShadowParity", action="store_true")
+    parser.add_argument("--strict-v2-shadow-parity", "-StrictV2ShadowParity", action="store_true")
+    parser.add_argument("--check-runtime-v2-shadow-parity", "-CheckRuntimeV2ShadowParity", action="store_true")
+    parser.add_argument("--check-runtime-live-v2-shadow-parity", "-CheckRuntimeLiveV2ShadowParity", action="store_true")
     parser.add_argument("--backtest-prime-csv", "-BacktestPrimeCsv", default="data/backtest/simulation_large.csv")
     parser.add_argument(
         "--backtest-prime-fallback-csv",
@@ -81,6 +86,9 @@ def main(argv=None) -> int:
             print(f"[CIGate] Backtest execution artifact empty after prime runs: {backtest_artifact_path}")
 
     if args.run_live_probe:
+        if not args.allow_live_probe_order:
+            print("[CIGate] BLOCKED - add --allow-live-probe-order with --run-live-probe")
+            return 1
         probe_exit = generate_live_execution_probe.main(
             [
                 "-Market",
@@ -91,6 +99,7 @@ def main(argv=None) -> int:
                 str(args.probe_discount_pct),
                 "-CancelDelayMs",
                 str(args.probe_cancel_delay_ms),
+                "-AllowLiveOrder",
             ]
         )
         if probe_exit != 0:
@@ -105,6 +114,14 @@ def main(argv=None) -> int:
         operational_args.append("-IncludeBacktest")
     if args.strict_execution_parity:
         operational_args.append("-StrictExecutionParity")
+    if args.include_v2_shadow_parity:
+        operational_args.append("-IncludeV2ShadowParity")
+    if args.strict_v2_shadow_parity:
+        operational_args.append("-StrictV2ShadowParity")
+    if args.check_runtime_v2_shadow_parity:
+        operational_args.append("-CheckRuntimeV2ShadowParity")
+    if args.check_runtime_live_v2_shadow_parity:
+        operational_args.append("-CheckRuntimeLiveV2ShadowParity")
 
     operational_exit = validate_operational_readiness.main(operational_args)
     if operational_exit != 0:

@@ -1,8 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include "analytics/RegimeDetector.h"
 #include "engine/PerformanceStore.h"
-#include "strategy/IStrategy.h"
+#include "v2/strategy/IStrategy.h"
 #include <unordered_map>
 #include <vector>
 
@@ -53,3 +53,4 @@ public:
 
 } // namespace engine
 } // namespace autolife
+

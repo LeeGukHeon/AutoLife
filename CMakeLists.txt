@@ -41,25 +41,27 @@ set(LIB_SOURCES
     src/analytics/MarketScanner.cpp
     src/analytics/TechnicalIndicators.cpp
     src/analytics/OrderbookAnalyzer.cpp
-    src/strategy/StrategyManager.cpp
-    src/strategy/ScalpingStrategy.cpp
-    src/strategy/MomentumStrategy.cpp
-    src/strategy/BreakoutStrategy.cpp
-    src/strategy/MeanReversionStrategy.cpp
-    src/strategy/GridTradingStrategy.cpp
+    src/v2/strategy/StrategyManager.cpp
+    src/v2/strategy/ScalpingStrategy.cpp
+    src/v2/strategy/MomentumStrategy.cpp
+    src/v2/strategy/BreakoutStrategy.cpp
+    src/v2/strategy/MeanReversionStrategy.cpp
+    src/v2/strategy/GridTradingStrategy.cpp
     src/risk/RiskManager.cpp
-    src/engine/TradingEngine.cpp
+    src/runtime/LiveTradingRuntime.cpp
     src/engine/AdaptivePolicyController.cpp
     src/engine/PerformanceStore.cpp
-    src/core/adapters/LegacyExecutionPlaneAdapter.cpp
-    src/core/adapters/LegacyPolicyLearningPlaneAdapter.cpp
+    src/core/adapters/ExecutionPlaneAdapter.cpp
+    src/core/adapters/PolicyLearningPlaneAdapter.cpp
     src/core/adapters/UpbitComplianceAdapter.cpp
+    src/v2/orchestration/DecisionKernel.cpp
+    src/v2/adapters/LegacyPolicyPlaneAdapter.cpp
     src/core/execution/OrderLifecycleStateMachine.cpp
     src/core/orchestration/TradingCycleCoordinator.cpp
     src/core/state/EventJournalJsonl.cpp
     src/core/state/LearningStateStoreJson.cpp
     src/backtest/DataHistory.cpp
-    src/backtest/BacktestEngine.cpp
+    src/runtime/BacktestRuntime.cpp
     src/execution/OrderManager.cpp
     src/execution/OrderStateMapper.cpp
     src/analytics/RegimeDetector.cpp
@@ -227,3 +229,61 @@ target_compile_definitions(AutoLifeRateLimiterComplianceTest PRIVATE
     _WIN32_WINNT=0x0A00
     NOMINMAX
 )
+
+add_executable(
+    AutoLifeV2KernelSmokeTest
+    tests/TestV2DecisionKernel.cpp
+    src/v2/orchestration/DecisionKernel.cpp
+)
+
+add_executable(
+    AutoLifeV2EngineBacktestSmokeTest
+    tests/TestV2EngineBacktestScaffold.cpp
+    src/v2/orchestration/DecisionKernel.cpp
+    src/v2/engine/TradingEngineV2.cpp
+    src/v2/backtest/BacktestEngineV2.cpp
+)
+
+add_library(
+    AutoLifeV2CompileObjects OBJECT
+    src/v2/orchestration/DecisionKernel.cpp
+    src/v2/adapters/LegacyPolicyPlaneAdapter.cpp
+    src/v2/adapters/LegacyRiskPlaneAdapter.cpp
+    src/v2/adapters/LegacyExecutionPlaneAdapter.cpp
+    src/v2/engine/TradingEngineV2.cpp
+    src/v2/backtest/BacktestEngineV2.cpp
+    src/v2/strategy/StrategyManager.cpp
+    src/v2/strategy/ScalpingStrategy.cpp
+    src/v2/strategy/MomentumStrategy.cpp
+    src/v2/strategy/BreakoutStrategy.cpp
+    src/v2/strategy/MeanReversionStrategy.cpp
+    src/v2/strategy/GridTradingStrategy.cpp
+    src/v2/strategy/StrategyConfig.cpp
+)
+target_compile_definitions(AutoLifeV2CompileObjects PRIVATE
+    _WIN32_WINNT=0x0A00
+    NOMINMAX
+)
+target_link_libraries(AutoLifeV2CompileObjects PRIVATE
+    CURL::libcurl
+    OpenSSL::SSL
+    OpenSSL::Crypto
+    nlohmann_json::nlohmann_json
+    spdlog::spdlog
+    Boost::system
+    Boost::thread
+)
+
+add_executable(
+    AutoLifeV2ShadowParityTest
+    tests/TestV2ShadowParity.cpp
+    src/engine/AdaptivePolicyController.cpp
+    src/core/adapters/PolicyLearningPlaneAdapter.cpp
+    src/v2/adapters/LegacyPolicyPlaneAdapter.cpp
+)
+target_link_libraries(AutoLifeV2ShadowParityTest PRIVATE nlohmann_json::nlohmann_json)
+target_compile_definitions(AutoLifeV2ShadowParityTest PRIVATE
+    _WIN32_WINNT=0x0A00
+    NOMINMAX
+)
+

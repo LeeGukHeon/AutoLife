@@ -213,6 +213,7 @@ void Config::load(const std::string& path) {
             std::string mode_str = t.value("mode", "PAPER");
             engine_config_.mode = (mode_str == "LIVE") ? engine::TradingMode::LIVE : engine::TradingMode::PAPER;
             engine_config_.dry_run = t.value("dry_run", false);
+            engine_config_.allow_live_orders = t.value("allow_live_orders", false);
             engine_config_.initial_capital = initial_capital_;
 
             engine_config_.scan_interval_seconds = t.value("scan_interval_seconds", 60);
@@ -248,6 +249,7 @@ void Config::load(const std::string& path) {
             engine_config_.enable_core_policy_plane = t.value("enable_core_policy_plane", true);
             engine_config_.enable_core_risk_plane = t.value("enable_core_risk_plane", true);
             engine_config_.enable_core_execution_plane = t.value("enable_core_execution_plane", true);
+            engine_config_.enable_v2_shadow_policy_probe = t.value("enable_v2_shadow_policy_probe", true);
             engine_config_.use_strategy_alpha_head_mode = t.value("use_strategy_alpha_head_mode", false);
             engine_config_.hostility_ewma_alpha = t.value("hostility_ewma_alpha", 0.14);
             engine_config_.hostility_hostile_threshold = t.value("hostility_hostile_threshold", 0.62);

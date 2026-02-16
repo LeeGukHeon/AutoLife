@@ -1,9 +1,9 @@
-#pragma once
+﻿#pragma once
 
 #include <vector>
 
 #include "core/model/PlaneTypes.h"
-#include "strategy/IStrategy.h"
+#include "v2/strategy/IStrategy.h"
 
 namespace autolife {
 namespace core {
@@ -20,4 +20,5 @@ public:
 
 } // namespace core
 } // namespace autolife
+
 

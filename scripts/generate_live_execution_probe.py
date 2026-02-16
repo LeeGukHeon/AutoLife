@@ -13,6 +13,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--notional-krw", "-NotionalKrw", type=float, default=5100.0)
     parser.add_argument("--discount-pct", "-DiscountPct", type=float, default=2.0)
     parser.add_argument("--cancel-delay-ms", "-CancelDelayMs", type=int, default=1500)
+    parser.add_argument("--allow-live-order", "-AllowLiveOrder", action="store_true")
     parser.add_argument(
         "--live-execution-updates-path",
         "-LiveExecutionUpdatesPath",
@@ -28,6 +29,9 @@ def main(argv=None) -> int:
 
     if not exe_path.exists():
         raise FileNotFoundError(f"Probe executable not found: {exe_path}")
+    if not args.allow_live_order:
+        print("[LiveExecutionProbe] BLOCKED - add --allow-live-order to run")
+        return 1
 
     before_count = len(read_nonempty_lines(live_path))
     cmd = [
@@ -40,6 +44,7 @@ def main(argv=None) -> int:
         str(args.discount_pct),
         "--cancel-delay-ms",
         str(args.cancel_delay_ms),
+        "--allow-live-order",
     ]
     proc = subprocess.run(cmd)
     if proc.returncode != 0:

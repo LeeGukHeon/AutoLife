@@ -3,9 +3,8 @@
 #include <string>
 #include <mutex>
 #include <nlohmann/json.hpp>
-#include <nlohmann/json.hpp>
 #include "engine/EngineConfig.h"
-#include "strategy/StrategyConfig.h"
+#include "v2/strategy/StrategyConfig.h"
 
 namespace autolife {
 
