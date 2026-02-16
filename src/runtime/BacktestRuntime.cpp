@@ -2022,34 +2022,72 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     const double wr = stat.winRate();
                     const double pf = stat.profitFactor();
                     const double exp_krw = stat.expectancy();
-                    if (wr < 0.42) {
-                        addAdaptiveHistory(
-                            (0.35 * history_penalty_scale),
-                            (0.0006 * history_penalty_scale)
-                        );
+                    const double history_confidence = std::clamp(
+                        (static_cast<double>(stat.trades) - 8.0) / 24.0,
+                        0.35,
+                        1.0
+                    );
+                    double rr_band_add = 0.0;
+                    double edge_band_add = 0.0;
+
+                    if (wr < 0.36) {
+                        rr_band_add += 0.24;
+                        edge_band_add += 0.00042;
+                    } else if (wr < 0.42) {
+                        rr_band_add += 0.16;
+                        edge_band_add += 0.00028;
                     } else if (wr < 0.48) {
-                        addAdaptiveHistory(
-                            (0.20 * history_penalty_scale),
-                            (0.0003 * history_penalty_scale)
-                        );
+                        rr_band_add += 0.09;
+                        edge_band_add += 0.00016;
+                    } else if (wr < 0.52) {
+                        rr_band_add += 0.04;
+                        edge_band_add += 0.00007;
                     }
-                    if (pf < 0.90) {
-                        addAdaptiveHistory(
-                            (0.25 * history_penalty_scale),
-                            (0.0005 * history_penalty_scale)
-                        );
+
+                    if (pf < 0.82) {
+                        rr_band_add += 0.20;
+                        edge_band_add += 0.00036;
+                    } else if (pf < 0.92) {
+                        rr_band_add += 0.13;
+                        edge_band_add += 0.00023;
                     } else if (pf < 1.00) {
-                        addAdaptiveHistory(
-                            (0.12 * history_penalty_scale),
-                            (0.0002 * history_penalty_scale)
-                        );
+                        rr_band_add += 0.07;
+                        edge_band_add += 0.00012;
+                    } else if (pf < 1.05) {
+                        rr_band_add += 0.03;
+                        edge_band_add += 0.00005;
                     }
-                    if (exp_krw < 0.0) {
-                        addAdaptiveHistory(
-                            std::clamp((-exp_krw) / 1000.0, 0.0, 0.25) * history_penalty_scale,
-                            std::clamp((-exp_krw) / 80000.0, 0.0, 0.0004) * history_penalty_scale
-                        );
+
+                    if (exp_krw < -30.0) {
+                        rr_band_add += 0.16;
+                        edge_band_add += 0.00028;
+                    } else if (exp_krw < -15.0) {
+                        rr_band_add += 0.10;
+                        edge_band_add += 0.00017;
+                    } else if (exp_krw < 0.0) {
+                        rr_band_add += 0.05;
+                        edge_band_add += 0.00008;
                     }
+
+                    rr_band_add *= (history_penalty_scale * history_confidence);
+                    edge_band_add *= (history_penalty_scale * history_confidence);
+
+                    const bool favorable_recovery_signal =
+                        no_entry_streak_candles_ >= 45 &&
+                        (best_signal.market_regime == analytics::MarketRegime::TRENDING_UP ||
+                         best_signal.market_regime == analytics::MarketRegime::RANGING) &&
+                        best_signal.strength >= 0.72 &&
+                        best_signal.liquidity_score >= 60.0;
+                    if (favorable_recovery_signal) {
+                        rr_band_add *= 0.88;
+                        edge_band_add *= 0.88;
+                    }
+
+                    const double rr_band_cap = alpha_head_fallback_candidate ? 0.24 : 0.32;
+                    const double edge_band_cap = alpha_head_fallback_candidate ? 0.00042 : 0.00062;
+                    rr_band_add = std::clamp(rr_band_add, 0.0, rr_band_cap);
+                    edge_band_add = std::clamp(edge_band_add, 0.0, edge_band_cap);
+                    addAdaptiveHistory(rr_band_add, edge_band_add);
                 }
             }
             auto regime_it = strategy_regime_edge.find(

@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-16 (overfit guard maintained + RR adaptive source ownership split)
+Last updated: 2026-02-16 (overfit guard maintained + history adaptive RR band calibration)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -619,6 +619,32 @@ The system must:
     - promotion recommendation: `hold_candidate_calibrate_risk_gate_rr_adaptive_history_adders`
   - next:
     - calibrate history adaptive RR adders first (tiered by expectancy/win-rate/profit-factor bands), then rebalance regime/archetype adders with holdout guard.
+
+- Stage-2.16 update (2026-02-16):
+  - history adaptive RR band calibration implemented:
+    - strategy-history RR/edge penalties replaced with tiered bands:
+      - win-rate band
+      - profit-factor band
+      - expectancy(krw) band
+    - added sample-confidence shrink:
+      - low-trade history receives reduced penalty weight
+    - added favorable no-entry recovery dampener:
+      - after long no-entry streak, high-quality favorable-regime candidates get partial history-penalty relaxation
+    - added per-block cap for history adaptive RR/edge adders:
+      - prevents single history block from dominating gate lift.
+  - verification:
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full`):
+    - train: `pf=0.5475`, `trades=119.7143`, `exp=-7.7759`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:6518`
+    - validation: `pf=0.5496`, `trades=178.0`, `exp=-6.6303`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:740`
+    - holdout: `pf=0.5496`, `trades=152.0`, `exp=-6.3166`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:978`
+    - promotion recommendation: `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+  - next:
+    - recalibrate regime/archetype adaptive RR adders with the same anti-overfit discipline (banded + evidence-weighted + capped).
 
 2. Expectancy-first improvement loop
 - Optimize for:
