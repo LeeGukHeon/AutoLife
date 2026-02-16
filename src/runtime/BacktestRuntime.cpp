@@ -2454,8 +2454,102 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     edge_base_shift = std::max(edge_base_shift, -0.00003);
                 }
 
-                edge_base_shift = std::clamp(edge_base_shift, -0.00012, 0.00014);
-                const double edge_floor_min = std::max(0.00030, edge_floor_nominal * 0.70);
+                // Holdout guardrails for edge baseline:
+                // relax only when edge pressure dominates under favorable quality contexts,
+                // and avoid extra relaxation when RR pressure is already elevated.
+                const double rr_history_cap_ref = alpha_head_fallback_candidate ? 0.24 : 0.32;
+                const double edge_history_cap_ref = alpha_head_fallback_candidate ? 0.00042 : 0.00062;
+                const double rr_regime_pressure = std::clamp(
+                    std::max(0.0, adaptive_rr_add_regime) / std::max(0.12, regime_rr_global_cap),
+                    0.0,
+                    1.0
+                );
+                const double rr_history_pressure = std::clamp(
+                    std::max(0.0, adaptive_rr_add_history) / rr_history_cap_ref,
+                    0.0,
+                    1.0
+                );
+                const double edge_regime_pressure = std::clamp(
+                    std::max(0.0, adaptive_edge_add_regime) / std::max(0.00020, regime_edge_global_cap),
+                    0.0,
+                    1.0
+                );
+                const double edge_history_pressure = std::clamp(
+                    std::max(0.0, adaptive_edge_add_history) / edge_history_cap_ref,
+                    0.0,
+                    1.0
+                );
+                const double rr_pressure = std::clamp(
+                    (0.72 * rr_regime_pressure) + (0.28 * rr_history_pressure),
+                    0.0,
+                    1.0
+                );
+                const double edge_pressure = std::clamp(
+                    (0.72 * edge_regime_pressure) + (0.28 * edge_history_pressure),
+                    0.0,
+                    1.0
+                );
+                const bool hostile_regime_for_base =
+                    best_signal.market_regime == analytics::MarketRegime::HIGH_VOLATILITY ||
+                    best_signal.market_regime == analytics::MarketRegime::TRENDING_DOWN;
+                const bool favorable_edge_context =
+                    !hostile_regime_for_base &&
+                    best_signal.strength >= 0.72 &&
+                    best_signal.liquidity_score >= 60.0 &&
+                    best_signal.expected_value >= 0.00080;
+                const bool supportive_edge_context =
+                    !hostile_regime_for_base &&
+                    best_signal.strength >= 0.66 &&
+                    best_signal.liquidity_score >= 55.0 &&
+                    best_signal.expected_value >= 0.00065;
+                if (rr_pressure >= 0.62 && edge_pressure <= rr_pressure) {
+                    edge_base_shift += (0.00003 * rr_pressure);
+                    edge_base_shift = std::max(edge_base_shift, -0.00002);
+                } else if (favorable_edge_context &&
+                           edge_pressure >= 0.48 &&
+                           rr_pressure <= 0.46) {
+                    const double relax_conf = std::clamp(
+                        (edge_pressure - rr_pressure + 0.05) / 0.55,
+                        0.0,
+                        1.0
+                    );
+                    edge_base_shift -= (0.00006 * relax_conf);
+                } else if (favorable_edge_context &&
+                           rr_pressure <= 0.46 &&
+                           edge_pressure < 0.48) {
+                    const double low_pressure_relax = std::clamp(
+                        (0.48 - edge_pressure) / 0.48,
+                        0.0,
+                        1.0
+                    );
+                    edge_base_shift -= (0.00003 + (0.00002 * low_pressure_relax));
+                } else if (supportive_edge_context &&
+                           rr_pressure <= 0.42) {
+                    edge_base_shift -= 0.00003;
+                } else if (!hostile_regime_for_base &&
+                           favorable_recovery_signal &&
+                           rr_pressure <= 0.40 &&
+                           edge_pressure >= 0.40) {
+                    edge_base_shift -= 0.00002;
+                }
+
+                double edge_shift_min = hostile_regime_for_base ? -0.00010 : -0.00015;
+                double edge_floor_min_ratio = hostile_regime_for_base ? 0.72 : 0.66;
+                if (rr_pressure >= 0.62) {
+                    edge_shift_min = -0.00006;
+                    edge_floor_min_ratio = 0.74;
+                } else if (favorable_edge_context && rr_pressure <= 0.40) {
+                    edge_shift_min = -0.00020;
+                    edge_floor_min_ratio = 0.60;
+                } else if (favorable_edge_context &&
+                           rr_pressure <= 0.48 &&
+                           edge_pressure >= 0.35) {
+                    edge_shift_min = -0.00015;
+                    edge_floor_min_ratio = 0.66;
+                }
+
+                edge_base_shift = std::clamp(edge_base_shift, edge_shift_min, 0.00014);
+                const double edge_floor_min = std::max(0.00030, edge_floor_nominal * edge_floor_min_ratio);
                 const double edge_floor_max = edge_floor_nominal + 0.00018;
                 tuned_cfg.min_expected_edge_pct = std::clamp(
                     edge_floor_nominal + edge_base_shift,

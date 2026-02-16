@@ -763,6 +763,32 @@ The system must:
   - next:
     - calibrate edge baseline floor with holdout guardrails to prevent RR adaptive regression.
 
+- Stage-2.21 update (2026-02-16):
+  - edge baseline floor holdout guardrails expanded:
+    - baseline edge-floor calibration now applies pressure-aware guards:
+      - RR/edge pressure blend (`history + regime`) derived from adaptive adders
+      - supportive/favorable quality contexts separated for staged relaxation
+      - hostile regime keeps tighter floor, favorable low-RR contexts allow deeper but bounded floor relaxation
+    - clamp stack remains bounded:
+      - dynamic `edge_shift_min` and `edge_floor_min_ratio`
+      - final shift upper clamp and nominal-plus cap remain unchanged
+  - verification:
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full`):
+    - train: `pf=0.6201`, `trades=120.7143`, `exp=-8.0239`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_mixed:1835`
+    - validation: `pf=0.5335`, `trades=174.0`, `exp=-7.0549`, top risk=`blocked_risk_gate_entry_quality_edge_base:816`
+    - holdout: `pf=0.4967`, `trades=139.3333`, `exp=-7.6032`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:992`
+    - promotion recommendation: `hold_candidate_calibrate_risk_gate_edge_baseline_floor`
+  - effect:
+    - validation `edge_base` bottleneck remained unchanged in this run (`816`).
+    - holdout `rr_adaptive_regime` remained controlled (`996 -> 992`) without regression.
+  - next:
+    - move edge baseline calibration ownership from runtime micro-shifts to candidate config/tuning baseline (`min_expected_edge_pct`) sweep with holdout guardrails.
+
 2. Expectancy-first improvement loop
 - Optimize for:
   - `avg_expectancy_krw`,
