@@ -964,6 +964,7 @@ std::vector<Signal> StrategyManager::filterSignalsWithDiagnostics(
 ) {
     std::vector<Signal> filtered;
     const bool core_signal_ownership = coreSignalOwnershipEnabledForManager();
+    const LiveSignalBottleneckHint live_hint = getLiveSignalBottleneckHint();
     if (diagnostics != nullptr) {
         diagnostics->input_count = static_cast<int>(signals.size());
         diagnostics->output_count = 0;
@@ -1052,7 +1053,30 @@ std::vector<Signal> StrategyManager::filterSignalsWithDiagnostics(
                 ev_tightening = std::max(0.0, ev_tightening - 0.00005);
             }
         }
-        const double adaptive_ev_floor = permissive_ev_floor + ev_tightening;
+        double adaptive_ev_floor = permissive_ev_floor + ev_tightening;
+        double live_prefilter_ev_relief = 0.0;
+        if (live_hint.enabled && live_hint.top_group == "manager_prefilter") {
+            live_prefilter_ev_relief = 0.00003;
+            if (live_hint.manager_prefilter_share >= 0.55) {
+                live_prefilter_ev_relief += 0.00003;
+            } else if (live_hint.manager_prefilter_share >= 0.45) {
+                live_prefilter_ev_relief += 0.00002;
+            }
+            if (live_hint.no_trade_bias_active) {
+                live_prefilter_ev_relief += 0.00002;
+            }
+            if (off_trend_regime ||
+                regime == analytics::MarketRegime::HIGH_VOLATILITY ||
+                regime == analytics::MarketRegime::TRENDING_DOWN) {
+                live_prefilter_ev_relief *= 0.55;
+            }
+            if (signal.reason == "core_rescue_candidate") {
+                live_prefilter_ev_relief += 0.00001;
+            }
+            live_prefilter_ev_relief = std::clamp(live_prefilter_ev_relief, 0.0, 0.00010);
+            adaptive_ev_floor -= live_prefilter_ev_relief;
+            adaptive_ev_floor = std::max(adaptive_ev_floor, permissive_ev_floor - 0.00010);
+        }
         if (signal.strength >= required_strength && signal.expected_value >= adaptive_ev_floor) {
             filtered.push_back(signal);
         } else if (signal.strength < required_strength) {

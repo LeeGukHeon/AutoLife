@@ -304,6 +304,10 @@ private:
         std::map<std::string, long long> selection_hint_adjustment_counts;
         std::map<std::string, long long> rejection_reason_counts;
     } live_signal_funnel_;
+
+    // Counts open-position skips once per market holding episode to avoid
+    // per-scan overcount distortion in bottleneck diagnostics.
+    std::map<std::string, bool> open_position_skip_latch_;
     
     // [NEW] Prometheus HTTP ?쒕쾭 愿??
     int prometheus_server_port_ = 8080;  // HTTP ?쒕쾭 ?ы듃 (湲곕낯媛? 8080)

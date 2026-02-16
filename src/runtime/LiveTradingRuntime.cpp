@@ -1428,11 +1428,17 @@ void TradingEngine::generateSignals() {
 
     for (const auto& coin : scanned_markets_) {
         live_signal_funnel_.markets_considered++;
-        if (risk_manager_->getPosition(coin.market) != nullptr) {
-            live_signal_funnel_.skipped_due_to_open_position++;
-            markScanReject("skipped_due_to_open_position");
+        const bool has_open_position = (risk_manager_->getPosition(coin.market) != nullptr);
+        if (has_open_position) {
+            bool& skip_latched = open_position_skip_latch_[coin.market];
+            if (!skip_latched) {
+                live_signal_funnel_.skipped_due_to_open_position++;
+                markScanReject("skipped_due_to_open_position");
+                skip_latched = true;
+            }
             continue;
         }
+        open_position_skip_latch_.erase(coin.market);
 
         if (order_manager_->hasActiveOrder(coin.market)) {
             live_signal_funnel_.skipped_due_to_active_order++;

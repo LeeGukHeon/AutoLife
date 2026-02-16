@@ -29,8 +29,8 @@ The system must:
   - `legacy_archive/docs/archive/STAGE15_WORKLOG_ARCHIVE_2026-02-16.md`
 - Current execution baseline:
   - Latest completed branch updates: `Stage-2.1` to `Stage-2.6`
-  - Current major bottlenecks: `filtered_out_by_manager_ev_quality_floor`, `skipped_due_to_open_position`
-  - Next action order: manager EV prefilter calibration -> position-state skip policy calibration
+  - Current major bottlenecks: `filtered_out_by_manager_ev_quality_floor`, `blocked_risk_gate`
+  - Next action order: risk-gate ownership calibration -> signal generation bottleneck recovery
   - Stage cleanup Wave A executed (2026-02-16):
     - moved research-aux assets to `legacy_archive/` (two-stage delete policy)
     - added `docs/FILE_USAGE_MAP.md`, `docs/DELETE_WAVE_MANIFEST.md`, `legacy_archive/manifest.json`
@@ -362,6 +362,29 @@ The system must:
   - next bottleneck target by bottom-line chain:
     - manager prefilter EV floor calibration (`filtered_out_by_manager_ev_quality_floor`)
     - position state/open-slot policy calibration (`skipped_due_to_open_position`)
+- Stage-2.7 update (2026-02-16):
+  - Runtime bottleneck calibration patch applied:
+    - manager EV prefilter calibration:
+      - `src/v2/strategy/StrategyManager.cpp`
+      - `filterSignalsWithDiagnostics(...)` now applies bounded EV-floor relief when live bottleneck hint top group is `manager_prefilter`.
+    - open-position skip policy calibration:
+      - `include/runtime/LiveTradingRuntime.h`
+      - `src/runtime/LiveTradingRuntime.cpp`
+      - live telemetry now counts `skipped_due_to_open_position` once per market holding episode (entry block behavior unchanged).
+  - verification:
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/validate_v2_shadow_parity.py -CheckRuntimeShadow -CheckRuntimeLiveShadow -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+  - latest split readout (core_full):
+    - train(7): `avg_profit_factor=0.5095`, `avg_expectancy_krw=-8.9636`, top rejection `no_signal_generated`
+    - validation(2): `avg_profit_factor=0.5352`, `avg_expectancy_krw=-6.7473`, top rejection `blocked_risk_gate`
+    - holdout(3): `avg_profit_factor=0.4753`, `avg_expectancy_krw=-7.9406`, top rejection `blocked_risk_gate`
+    - `skipped_due_to_open_position` count observed as `0` in current split summaries (`core_full`).
+  - promotion verdict:
+    - recommendation: `hold_candidate_improve_signal_generation_or_dataset_quality`
+  - environment note:
+    - `cmake` command is unavailable in current shell, so source rebuild could not be executed in this session.
 
 2. Expectancy-first improvement loop
 - Optimize for:
