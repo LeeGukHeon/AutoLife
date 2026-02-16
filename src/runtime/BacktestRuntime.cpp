@@ -2303,6 +2303,49 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 adaptive_rr_add_regime *= 0.94;
                 adaptive_edge_add_regime *= 0.94;
             }
+            if (adaptive_rr_add_regime > 0.0 && adaptive_edge_add_regime > 0.0) {
+                const bool hostile_regime =
+                    best_signal.market_regime == analytics::MarketRegime::HIGH_VOLATILITY ||
+                    best_signal.market_regime == analytics::MarketRegime::TRENDING_DOWN;
+                const bool quality_signal =
+                    best_signal.strength >= 0.72 &&
+                    best_signal.liquidity_score >= 58.0 &&
+                    best_signal.expected_value >= 0.00075;
+                if (!hostile_regime && quality_signal) {
+                    // Joint RR/edge regime softening:
+                    // avoid double-penalizing both gates on favorable, high-quality contexts.
+                    const double strength_conf = std::clamp((best_signal.strength - 0.70) / 0.18, 0.0, 1.0);
+                    const double liquidity_conf = std::clamp((best_signal.liquidity_score - 58.0) / 18.0, 0.0, 1.0);
+                    const double ev_conf = std::clamp((best_signal.expected_value - 0.00075) / 0.00120, 0.0, 1.0);
+                    double evidence_conf = 0.40 +
+                        (0.60 * ((0.45 * strength_conf) + (0.35 * liquidity_conf) + (0.20 * ev_conf)));
+                    if (regime_it != strategy_regime_edge.end()) {
+                        const auto& regime_stat = regime_it->second;
+                        if (regime_stat.trades >= 10 &&
+                            regime_stat.expectancy() >= 4.0 &&
+                            regime_stat.winRate() >= 0.52 &&
+                            regime_stat.profitFactor() >= 1.05) {
+                            evidence_conf = std::min(1.0, evidence_conf + 0.10);
+                        }
+                    }
+
+                    const double rr_cap_ref = alpha_head_fallback_candidate ? 0.30 : 0.38;
+                    const double edge_cap_ref = alpha_head_fallback_candidate ? 0.00055 : 0.00082;
+                    const double rr_pressure = std::clamp(adaptive_rr_add_regime / rr_cap_ref, 0.0, 1.0);
+                    const double edge_pressure = std::clamp(adaptive_edge_add_regime / edge_cap_ref, 0.0, 1.0);
+                    const double joint_pressure = std::clamp((rr_pressure + edge_pressure) * 0.5, 0.0, 1.0);
+
+                    double rr_relax = std::min(adaptive_rr_add_regime * 0.30, 0.08 * evidence_conf * joint_pressure);
+                    double edge_relax = std::min(adaptive_edge_add_regime * 0.34, 0.00014 * evidence_conf * joint_pressure);
+                    if (favorable_recovery_signal) {
+                        rr_relax *= 1.10;
+                        edge_relax *= 1.10;
+                    }
+
+                    adaptive_rr_add_regime = std::max(0.0, adaptive_rr_add_regime - rr_relax);
+                    adaptive_edge_add_regime = std::max(0.0, adaptive_edge_add_regime - edge_relax);
+                }
+            }
             const double regime_rr_global_cap = alpha_head_fallback_candidate ? 0.30 : 0.38;
             const double regime_edge_global_cap = alpha_head_fallback_candidate ? 0.00055 : 0.00082;
             adaptive_rr_add_regime = std::clamp(adaptive_rr_add_regime, -0.12, regime_rr_global_cap);

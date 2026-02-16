@@ -734,6 +734,35 @@ The system must:
   - next:
     - calibrate regime adaptive RR/edge adders jointly with the same bounded evidence-weighted policy.
 
+- Stage-2.20 update (2026-02-16):
+  - regime adaptive RR/edge joint calibration implemented:
+    - added joint regime softening when both `adaptive_rr_add_regime` and `adaptive_edge_add_regime` are positive.
+    - activation guards:
+      - non-hostile regime (`!HIGH_VOLATILITY`, `!TRENDING_DOWN`)
+      - high-quality signal (`strength/liquidity/expected_value` floor)
+    - evidence weighting:
+      - signal quality confidence blend (`strength`, `liquidity`, `expected_value`)
+      - regime-stat bonus when trades/win-rate/pf/expectancy evidence is sufficiently positive
+    - anti-overfit guards:
+      - softening uses bounded pressure-based relax only (no direct gate floor cuts)
+      - relax upper bounds are hard-capped (`rr<=0.08`, `edge<=0.00014`) and remain under existing global clamp stack
+  - verification:
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full`):
+    - train: `pf=0.6201`, `trades=120.7143`, `exp=-8.0239`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_mixed:1836`
+    - validation: `pf=0.5335`, `trades=174.0`, `exp=-7.0549`, top risk=`blocked_risk_gate_entry_quality_edge_base:816`
+    - holdout: `pf=0.4967`, `trades=139.3333`, `exp=-7.6032`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:996`
+    - promotion recommendation: `hold_candidate_calibrate_risk_gate_edge_baseline_floor`
+  - effect:
+    - validation `blocked_risk_gate_entry_quality_rr_edge_adaptive_regime` count reduced (`872 -> 122`).
+    - validation top bottleneck moved back to edge baseline floor ownership (`blocked_risk_gate_entry_quality_edge_base`).
+  - next:
+    - calibrate edge baseline floor with holdout guardrails to prevent RR adaptive regression.
+
 2. Expectancy-first improvement loop
 - Optimize for:
   - `avg_expectancy_krw`,
