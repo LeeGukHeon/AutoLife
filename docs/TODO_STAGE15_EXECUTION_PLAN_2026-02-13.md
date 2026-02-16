@@ -820,6 +820,36 @@ The system must:
   - next:
     - apply best tuned edge-baseline candidate to build config and re-run train/validation/holdout cycle to measure `blocked_risk_gate_entry_quality_edge_base` delta on realdata split.
 
+- Stage-2.23 update (2026-02-17):
+  - best edge-baseline sweep candidate applied and re-evaluated:
+    - applied combo: `scenario_quality_focus_004`
+    - reproducibility preset added:
+      - `config/presets/candidate_stage15_edge_baseline_floor_sweep_004.json`
+    - applied key values:
+      - `min_expected_edge_pct=0.0008`
+      - `min_reward_risk=1.27`
+      - `min_rr_weak_signal=1.8`
+      - `min_rr_strong_signal=1.18`
+      - `min_strategy_profit_factor=1.00`
+      - `min_strategy_expectancy_krw=-1.08`
+  - verification:
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+  - latest readout (`core_full`):
+    - train: `pf=0.7338`, `trades=131.2857`, `exp=-7.6603`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1894`
+    - validation: `pf=0.5108`, `trades=176.5`, `exp=-7.4568`, top risk=`blocked_second_stage_confirmation:978`
+    - holdout: `pf=0.4657`, `trades=149.6667`, `exp=-7.5247`, top risk=`blocked_second_stage_confirmation:2553`
+    - promotion recommendation: `hold_candidate_calibrate_second_stage_confirmation_consistency`
+  - effect:
+    - validation `edge_base` decreased strongly (`816 -> 223`).
+    - validation `rr_adaptive_regime` is low in current breakdown (`98`).
+    - holdout `rr_adaptive_regime` decreased (`992 -> 638`), no RR-side regression signal.
+    - primary bottleneck moved from risk-gate edge baseline ownership to `second_stage_confirmation`.
+  - next:
+    - calibrate second-stage confirmation margins (`rr_margin`, `edge_margin`) with hostility/quality-aware guardrails, while preserving the improved edge-base counts.
+
 2. Expectancy-first improvement loop
 - Optimize for:
   - `avg_expectancy_krw`,
