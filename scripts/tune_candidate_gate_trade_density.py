@@ -140,6 +140,8 @@ def read_train_eval_holdout_context(path_value: pathlib.Path) -> Dict[str, Any]:
             "avg_total_trades": 0.0,
             "profitable_ratio": 0.0,
             "top_rejection_group": "",
+            "top_risk_gate_component_reason": "",
+            "top_risk_gate_component_count": 0,
             "recommendation": "",
         }
 
@@ -169,6 +171,21 @@ def read_train_eval_holdout_context(path_value: pathlib.Path) -> Dict[str, Any]:
     core_full = (selected.get("core_full") or {}) if isinstance(selected, dict) else {}
     taxonomy = (holdout_stage.get("entry_rejection_taxonomy") or {}) if isinstance(holdout_stage, dict) else {}
     verdict = payload.get("promotion_verdict") or {}
+    holdout_reject_ctx = verdict.get("holdout_core_rejection_context") or {}
+    validation_reject_ctx = verdict.get("validation_core_rejection_context") or {}
+    top_risk_gate_component_reason = str(
+        holdout_reject_ctx.get("top_entry_risk_gate_component_reason")
+        or validation_reject_ctx.get("top_entry_risk_gate_component_reason")
+        or ""
+    )
+    try:
+        top_risk_gate_component_count = int(
+            holdout_reject_ctx.get("top_entry_risk_gate_component_count")
+            or validation_reject_ctx.get("top_entry_risk_gate_component_count")
+            or 0
+        )
+    except (TypeError, ValueError):
+        top_risk_gate_component_count = 0
 
     return {
         "exists": True,
@@ -181,6 +198,8 @@ def read_train_eval_holdout_context(path_value: pathlib.Path) -> Dict[str, Any]:
         "avg_total_trades": float(core_full.get("avg_total_trades", 0.0) or 0.0),
         "profitable_ratio": float(core_full.get("profitable_ratio", 0.0) or 0.0),
         "top_rejection_group": str(taxonomy.get("overall_top_group", "") or ""),
+        "top_risk_gate_component_reason": top_risk_gate_component_reason,
+        "top_risk_gate_component_count": int(top_risk_gate_component_count),
         "recommendation": str(verdict.get("recommendation", "") or ""),
     }
 
@@ -192,10 +211,32 @@ def build_effective_bottleneck_context(
     context = dict(live_context or {})
     top_group_live = str(context.get("top_group", "") or "").strip()
     top_group_holdout = str(holdout_context.get("top_rejection_group", "") or "").strip()
+    holdout_recommendation = str(holdout_context.get("recommendation", "") or "").strip()
+    top_risk_gate_component_reason = str(holdout_context.get("top_risk_gate_component_reason", "") or "").strip()
+    risk_gate_focus = ""
+    if top_risk_gate_component_reason == "blocked_risk_gate_entry_quality":
+        risk_gate_focus = "entry_quality"
+    elif top_risk_gate_component_reason == "blocked_risk_gate_regime":
+        risk_gate_focus = "regime"
+    elif top_risk_gate_component_reason == "blocked_risk_gate_strategy_ev":
+        risk_gate_focus = "strategy_ev"
+    elif top_risk_gate_component_reason == "blocked_second_stage_confirmation":
+        risk_gate_focus = "second_stage_confirmation"
+
     context["top_group_live"] = top_group_live
     context["top_group_holdout"] = top_group_holdout
+    context["holdout_recommendation"] = holdout_recommendation
+    context["top_risk_gate_component_reason"] = top_risk_gate_component_reason
+    context["risk_gate_focus"] = risk_gate_focus
     context["top_group_source"] = "live"
     context["top_group_fallback_applied"] = False
+
+    risk_gate_override = holdout_recommendation.startswith("hold_candidate_calibrate_risk_gate_")
+    if risk_gate_override:
+        context["top_group"] = "risk_gate"
+        context["top_group_source"] = "holdout_recommendation_override"
+        context["top_group_fallback_applied"] = True
+        return context
 
     if top_group_live:
         return context
@@ -221,6 +262,7 @@ def build_effective_bottleneck_context(
 
 def compute_combo_bottleneck_priority_score(combo: Dict[str, Any], context: Dict[str, Any]) -> float:
     top_group = str(context.get("top_group", ""))
+    risk_gate_focus = str(context.get("risk_gate_focus", ""))
     no_trade_bias_active = bool(context.get("no_trade_bias_active", False))
     signal_generation_share = float(context.get("signal_generation_share", 0.0) or 0.0)
     manager_prefilter_share = float(context.get("manager_prefilter_share", 0.0) or 0.0)
@@ -278,6 +320,12 @@ def compute_combo_bottleneck_priority_score(combo: Dict[str, Any], context: Dict
         # valid opportunities while still carrying some quality term.
         boost = 1.0 + min(0.8, signal_generation_share + (manager_prefilter_share * 0.5))
         return round((relax_score * boost * 0.85) + (quality_score * 0.15), 6)
+
+    if top_group == "risk_gate":
+        if risk_gate_focus in {"entry_quality", "second_stage_confirmation"}:
+            # Overfit-safe policy: keep quality-oriented candidates first.
+            return round((quality_score * 0.85) + (relax_score * 0.15), 6)
+        return round((quality_score * 0.75) + (relax_score * 0.25), 6)
 
     # Unknown/neutral bottleneck: keep balance.
     return round((relax_score * 0.45) + (quality_score * 0.55), 6)
@@ -601,6 +649,8 @@ def adapt_combo_specs_for_bottleneck(
 
     if top_group == "position_state":
         family = "position_turnover_quality"
+    elif top_group == "risk_gate":
+        family = "risk_gate_quality_rebalance"
     elif top_group == "manager_prefilter":
         family = "manager_prefilter_relax"
     elif top_group == "signal_generation" or no_trade_bias_active:
@@ -708,6 +758,46 @@ def adapt_combo_specs_for_bottleneck(
             )
             clone["avoid_high_volatility"] = True
             clone["avoid_trending_down"] = True
+
+        elif adapted and family == "risk_gate_quality_rebalance":
+            clone["min_expected_edge_pct"] = round(
+                _clamp(float(clone.get("min_expected_edge_pct", 0.0010)) * 1.10, 0.0007, 0.0019), 4
+            )
+            clone["min_reward_risk"] = round(
+                _clamp(float(clone.get("min_reward_risk", 1.20)) + 0.10, 1.05, 1.90), 2
+            )
+            clone["min_rr_weak_signal"] = round(
+                _clamp(float(clone.get("min_rr_weak_signal", 1.80)) + 0.08, 1.20, 2.30), 2
+            )
+            clone["min_rr_strong_signal"] = round(
+                _clamp(float(clone.get("min_rr_strong_signal", 1.20)) + 0.06, 0.95, 1.70), 2
+            )
+            clone["min_strategy_trades_for_ev"] = int(min(80, int(clone.get("min_strategy_trades_for_ev", 30)) + 8))
+            clone["min_strategy_profit_factor"] = round(
+                _clamp(float(clone.get("min_strategy_profit_factor", 0.95)) + 0.04, 0.90, 1.35), 2
+            )
+            clone["min_strategy_expectancy_krw"] = round(
+                float(clone.get("min_strategy_expectancy_krw", -1.0)) + 0.40, 2
+            )
+            clone["max_new_orders_per_scan"] = int(max(1, int(clone.get("max_new_orders_per_scan", 2)) - 1))
+            clone["scalping_min_signal_strength"] = round(
+                _clamp(float(clone.get("scalping_min_signal_strength", 0.70)) + 0.03, 0.60, 0.92), 2
+            )
+            clone["momentum_min_signal_strength"] = round(
+                _clamp(float(clone.get("momentum_min_signal_strength", 0.72)) + 0.03, 0.60, 0.92), 2
+            )
+            clone["breakout_min_signal_strength"] = round(
+                _clamp(float(clone.get("breakout_min_signal_strength", 0.40)) + 0.02, 0.30, 0.58), 2
+            )
+            clone["mean_reversion_min_signal_strength"] = round(
+                _clamp(float(clone.get("mean_reversion_min_signal_strength", 0.40)) + 0.02, 0.30, 0.58), 2
+            )
+            clone["avoid_high_volatility"] = True
+            clone["avoid_trending_down"] = True
+            clone["hostility_pause_scans"] = int(min(12, int(clone.get("hostility_pause_scans", 4)) + 1))
+            clone["backtest_hostility_pause_candles"] = int(
+                min(180, int(clone.get("backtest_hostility_pause_candles", 36)) + 8)
+            )
 
         if adapted and guardrail_active and family in ("signal_generation_boost", "manager_prefilter_relax"):
             apply_hint_impact_guardrail(
@@ -1940,6 +2030,7 @@ def main(argv=None) -> int:
         f"[TuneCandidate] bottleneck_priority={'on' if bool(args.enable_bottleneck_priority) else 'off'}, "
         f"top_group={bottleneck_context.get('top_group', '')}, "
         f"source={bottleneck_context.get('top_group_source', 'live')}, "
+        f"risk_gate_focus={bottleneck_context.get('risk_gate_focus', '')}, "
         f"no_trade_bias_active={bool(bottleneck_context.get('no_trade_bias_active', False))}"
     )
     print(

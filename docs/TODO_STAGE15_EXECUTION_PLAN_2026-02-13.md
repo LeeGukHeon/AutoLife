@@ -438,6 +438,23 @@ The system must:
     - holdout(3): `avg_profit_factor=0.4753`, `avg_expectancy_krw=-7.9406`, top rejection `blocked_risk_gate_entry_quality`
   - next:
     - calibrate risk-gate entry-quality ownership and dataset-quality policy linkage without loosening global promotion floors.
+- Stage-2.10 update (2026-02-17):
+  - Holdout-driven risk-gate bottleneck routing 강화(과적합 방지 방향):
+    - `scripts/tune_candidate_gate_trade_density.py`에서 train/eval verdict의 holdout rejection context를 읽어
+      `top_risk_gate_component_reason`를 컨텍스트로 승격.
+    - holdout recommendation이 `hold_candidate_calibrate_risk_gate_*` 계열이면
+      live top-group보다 우선해 `top_group=risk_gate`로 라우팅(override).
+    - risk-gate focus 분기 추가:
+      - `entry_quality` / `second_stage_confirmation`는 quality-heavy 우선순위 스코어 적용
+      - 적응 시나리오 family로 `risk_gate_quality_rebalance` 추가
+      - 해당 family는 완화(relax) 대신 quality 강화 파라미터(엣지/RR/전략 PF/신호강도/hostility pause) 중심으로 조정
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - smoke run:
+      - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate`
+      - runtime log:
+        - `top_group=risk_gate`, `source=holdout_recommendation_override`, `risk_gate_focus=entry_quality`
+        - `scenario_family_counts={'risk_gate_quality_rebalance': 1}`
 
 2. Expectancy-first improvement loop
 - Optimize for:
