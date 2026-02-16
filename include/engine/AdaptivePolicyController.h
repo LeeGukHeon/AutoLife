@@ -22,7 +22,7 @@ struct PolicyDecisionRecord {
     std::string market;
     std::string strategy_name;
     bool selected = false;
-    std::string reason; // selected|dropped_low_strength|dropped_small_seed_quality|dropped_small_seed_liqvol|dropped_capacity
+    std::string reason; // selected|dropped_low_strength|dropped_market_duplicate|dropped_capacity
     double base_score = 0.0;
     double policy_score = 0.0;
     double strength = 0.0;

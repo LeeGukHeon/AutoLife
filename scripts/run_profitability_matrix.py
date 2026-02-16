@@ -118,6 +118,23 @@ def run_profile_backtests(
 ) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
 
+    def normalize_reason_counts(raw: Any) -> Dict[str, int]:
+        if not isinstance(raw, dict):
+            return {}
+        normalized: Dict[str, int] = {}
+        for key, value in raw.items():
+            reason = str(key).strip()
+            if not reason:
+                continue
+            try:
+                count = int(value)
+            except Exception:
+                continue
+            if count <= 0:
+                continue
+            normalized[reason] = normalized.get(reason, 0) + count
+        return normalized
+
     def to_row(ds: pathlib.Path, result: Dict[str, Any]) -> Dict[str, Any]:
         profit = float(result.get("total_profit", 0.0))
         profit_factor = float(result.get("profit_factor", 0.0))
@@ -125,6 +142,7 @@ def run_profile_backtests(
         run_max_drawdown_pct = round(float(result.get("max_drawdown", 0.0)) * 100.0, 4)
         total_trades = int(result.get("total_trades", 0))
         win_rate_pct = round(float(result.get("win_rate", 0.0)) * 100.0, 4)
+        rejection_counts = normalize_reason_counts(result.get("entry_rejection_reason_counts", {}))
 
         return {
             "profile_id": str(profile["profile_id"]),
@@ -141,6 +159,9 @@ def run_profile_backtests(
             "total_trades": total_trades,
             "win_rate_pct": win_rate_pct,
             "profitable": profit > 0.0,
+            "entry_rejection_reason_counts_json": json.dumps(
+                rejection_counts, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ),
             "gate_trade_eligible": (
                 total_trades >= min_trades_per_run_for_gate
                 if exclude_low_trade_runs_for_gate
@@ -199,8 +220,203 @@ def safe_avg(values: List[float]) -> float:
     return sum(values) / float(len(values)) if values else 0.0
 
 
+def parse_reason_counts_json(raw: Any) -> Dict[str, int]:
+    if isinstance(raw, dict):
+        payload = raw
+    else:
+        text = str(raw or "").strip()
+        if not text:
+            return {}
+        try:
+            payload = json.loads(text)
+        except Exception:
+            return {}
+
+    out: Dict[str, int] = {}
+    for key, value in payload.items():
+        reason = str(key).strip()
+        if not reason:
+            continue
+        try:
+            count = int(value)
+        except Exception:
+            continue
+        if count <= 0:
+            continue
+        out[reason] = out.get(reason, 0) + count
+    return out
+
+
 def clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
+
+
+def infer_expected_step_ms_from_name(path: pathlib.Path) -> int:
+    name = path.name.lower()
+    if "_240m_" in name:
+        return 14_400_000
+    if "_60m_" in name:
+        return 3_600_000
+    if "_15m_" in name:
+        return 900_000
+    if "_5m_" in name:
+        return 300_000
+    return 60_000
+
+
+def parse_timestamp_ms(value: Any) -> int:
+    try:
+        ts = int(float(value))
+    except Exception:
+        return 0
+    if 0 < ts < 1_000_000_000_000:
+        return ts * 1000
+    return ts
+
+
+def analyze_dataset_quality(dataset_paths: List[pathlib.Path]) -> Dict[str, Any]:
+    details: List[Dict[str, Any]] = []
+    now_ms = int(time.time() * 1000)
+    for path in dataset_paths:
+        timestamps: List[int] = []
+        with path.open("r", encoding="utf-8-sig", newline="") as fh:
+            reader = csv.DictReader(fh)
+            for row in reader:
+                ts = parse_timestamp_ms(row.get("timestamp"))
+                if ts > 0:
+                    timestamps.append(ts)
+
+        if not timestamps:
+            continue
+
+        expected_step_ms = infer_expected_step_ms_from_name(path)
+        sorted_ts = sorted(timestamps)
+        unique_count = len(set(sorted_ts))
+        duplicate_count = max(0, len(sorted_ts) - unique_count)
+        duplicate_ratio = duplicate_count / float(len(sorted_ts))
+
+        deltas = [sorted_ts[i] - sorted_ts[i - 1] for i in range(1, len(sorted_ts)) if sorted_ts[i] > sorted_ts[i - 1]]
+        if deltas:
+            deltas_sorted = sorted(deltas)
+            mid = len(deltas_sorted) // 2
+            if len(deltas_sorted) % 2 == 0:
+                median_delta = int((deltas_sorted[mid - 1] + deltas_sorted[mid]) / 2)
+            else:
+                median_delta = int(deltas_sorted[mid])
+            gap_threshold = max(int(expected_step_ms * 1.5), int(median_delta * 2.0))
+            gap_count = sum(1 for d in deltas if d > gap_threshold)
+            gap_ratio = gap_count / float(len(deltas))
+            max_delta = max(deltas)
+        else:
+            median_delta = 0
+            max_delta = 0
+            gap_count = 0
+            gap_ratio = 0.0
+
+        stale_tail_minutes = 0.0
+        if is_upbit_primary_1m_dataset(path):
+            stale_tail_minutes = max(0.0, (now_ms - sorted_ts[-1]) / 60_000.0)
+
+        quality_score = 0.0
+        quality_score += min(55.0, gap_ratio * 180.0)
+        quality_score += min(30.0, duplicate_ratio * 400.0)
+        if stale_tail_minutes > 180.0:
+            quality_score += min(15.0, ((stale_tail_minutes - 180.0) / 60.0) * 5.0)
+        quality_score = clamp(quality_score, 0.0, 100.0)
+
+        details.append(
+            {
+                "dataset": path.name,
+                "rows": len(sorted_ts),
+                "expected_step_ms": expected_step_ms,
+                "median_delta_ms": median_delta,
+                "max_delta_ms": max_delta,
+                "duplicate_count": duplicate_count,
+                "duplicate_ratio": round(duplicate_ratio, 6),
+                "gap_count": gap_count,
+                "gap_ratio": round(gap_ratio, 6),
+                "stale_tail_minutes": round(stale_tail_minutes, 4),
+                "quality_risk_score": round(quality_score, 4),
+                "quality_pass": (duplicate_ratio <= 0.01 and gap_ratio <= 0.20),
+            }
+        )
+
+    if not details:
+        return {
+            "available": False,
+            "dataset_count": 0,
+            "quality_level": "unknown",
+            "avg_quality_risk_score": 0.0,
+            "failed_quality_share": 0.0,
+            "top_risky_datasets": [],
+        }
+
+    n = float(len(details))
+    avg_score = safe_avg([float(x["quality_risk_score"]) for x in details])
+    failed_share = sum(1 for x in details if not bool(x["quality_pass"])) / n
+    if avg_score >= 45.0 or failed_share >= 0.35:
+        level = "high"
+    elif avg_score >= 25.0 or failed_share >= 0.15:
+        level = "medium"
+    else:
+        level = "low"
+    top_risky = sorted(details, key=lambda x: float(x["quality_risk_score"]), reverse=True)[:8]
+    return {
+        "available": True,
+        "dataset_count": int(len(details)),
+        "quality_level": level,
+        "avg_quality_risk_score": round(avg_score, 4),
+        "failed_quality_share": round(failed_share, 4),
+        "top_risky_datasets": top_risky,
+    }
+
+
+def build_hostility_quality_blend(hostility: Dict[str, Any], quality: Dict[str, Any]) -> Dict[str, Any]:
+    hostility_available = bool(hostility.get("available", False))
+    quality_available = bool(quality.get("available", False))
+    if not hostility_available and not quality_available:
+        return {
+            "available": False,
+            "blended_hostility_level": "unknown",
+            "blended_adversarial_score": 0.0,
+            "hostility_weight": 1.0,
+            "quality_weight": 0.0,
+            "quality_penalty_applied": 0.0,
+        }
+
+    base_score = float(hostility.get("avg_adversarial_score", 0.0)) if hostility_available else 45.0
+    quality_score = float(quality.get("avg_quality_risk_score", 0.0)) if quality_available else 0.0
+    failed_share = float(quality.get("failed_quality_share", 0.0)) if quality_available else 0.0
+
+    hostility_weight = 0.78
+    quality_weight = 0.22
+    blended = (base_score * hostility_weight) + (quality_score * quality_weight)
+    quality_penalty = 0.0
+    if failed_share >= 0.35:
+        quality_penalty += 6.0
+    elif failed_share >= 0.15:
+        quality_penalty += 3.0
+    blended += quality_penalty
+    blended = clamp(blended, 0.0, 100.0)
+
+    if blended >= 60.0:
+        level = "high"
+    elif blended >= 45.0:
+        level = "medium"
+    else:
+        level = "low"
+
+    return {
+        "available": True,
+        "blended_hostility_level": level,
+        "blended_adversarial_score": round(blended, 4),
+        "hostility_weight": hostility_weight,
+        "quality_weight": quality_weight,
+        "quality_penalty_applied": round(quality_penalty, 4),
+        "hostility_score_raw": round(base_score, 4),
+        "quality_risk_score_raw": round(quality_score, 4),
+        "failed_quality_share": round(failed_share, 4),
+    }
 
 
 def analyze_dataset_hostility(dataset_paths: List[pathlib.Path]) -> Dict[str, Any]:
@@ -335,7 +551,12 @@ def analyze_dataset_hostility(dataset_paths: List[pathlib.Path]) -> Dict[str, An
     }
 
 
-def compute_effective_thresholds(args, hostility: Dict[str, Any]) -> Dict[str, Any]:
+def compute_effective_thresholds(
+    args,
+    hostility: Dict[str, Any],
+    quality: Dict[str, Any],
+    blended: Dict[str, Any],
+) -> Dict[str, Any]:
     requested = {
         "min_profit_factor": float(args.min_profit_factor),
         "min_expectancy_krw": float(args.min_expectancy_krw),
@@ -348,18 +569,21 @@ def compute_effective_thresholds(args, hostility: Dict[str, Any]) -> Dict[str, A
     full_mode = bool(args.enable_hostility_adaptive_thresholds)
     trades_only_mode = bool(getattr(args, "enable_hostility_adaptive_trades_only", False))
     adaptive_mode = "full" if full_mode else ("trades_only" if trades_only_mode else "none")
-    if adaptive_mode == "none" or not bool(hostility.get("available", False)):
+    blend_available = bool(blended.get("available", False))
+    if adaptive_mode == "none" or not blend_available:
         return {
             "adaptive_applied": False,
             "adaptive_mode": adaptive_mode,
             "requested": requested,
             "effective": effective,
             "hostility": hostility,
+            "quality": quality,
+            "blended_context": blended,
         }
 
-    avg_score = float(hostility.get("avg_adversarial_score", 0.0))
+    avg_score = float(blended.get("blended_adversarial_score", 0.0))
     relief = clamp((avg_score - 45.0) / 35.0, 0.0, 1.0)
-    level = str(hostility.get("hostility_level", "unknown")).lower()
+    level = str(blended.get("blended_hostility_level", "unknown")).lower()
     high_level = level == "high"
     medium_level = level == "medium"
 
@@ -406,6 +630,8 @@ def compute_effective_thresholds(args, hostility: Dict[str, Any]) -> Dict[str, A
         "requested": requested,
         "effective": effective,
         "hostility": hostility,
+        "quality": quality,
+        "blended_context": blended,
     }
 
 
@@ -427,6 +653,10 @@ def main() -> int:
     )
     parser.add_argument("--output-json", default=r".\build\Release\logs\profitability_gate_report.json")
     parser.add_argument(
+        "--hostility-quality-blend-output-json",
+        default=r".\build\Release\logs\dataset_hostility_quality_blend_report.json",
+    )
+    parser.add_argument(
         "--profile-ids",
         nargs="*",
         default=["legacy_default", "core_bridge_only", "core_policy_risk", "core_full"],
@@ -444,11 +674,30 @@ def main() -> int:
     parser.add_argument("--min-profitable-ratio", type=float, default=0.55)
     parser.add_argument("--min-avg-win-rate-pct", type=float, default=0.0)
     parser.add_argument("--min-avg-trades", type=int, default=10)
-    parser.add_argument("--enable-hostility-adaptive-thresholds", action="store_true")
+    parser.add_argument(
+        "--enable-hostility-adaptive-thresholds",
+        dest="enable_hostility_adaptive_thresholds",
+        action="store_true",
+        default=True,
+        help="Use dataset-hostility adaptive gate thresholds (default: enabled).",
+    )
+    parser.add_argument(
+        "--disable-hostility-adaptive-thresholds",
+        dest="enable_hostility_adaptive_thresholds",
+        action="store_false",
+        help="Disable dataset-hostility adaptive thresholds and use fixed requested thresholds.",
+    )
     parser.add_argument(
         "--enable-hostility-adaptive-trades-only",
+        dest="enable_hostility_adaptive_trades_only",
         action="store_true",
+        default=False,
         help="Adapt only min_avg_trades by hostility while keeping quality thresholds fixed.",
+    )
+    parser.add_argument(
+        "--disable-hostility-adaptive-trades-only",
+        dest="enable_hostility_adaptive_trades_only",
+        action="store_false",
     )
     parser.add_argument("--hostility-min-profit-factor-floor", type=float, default=0.90)
     parser.add_argument("--hostility-min-expectancy-krw-floor", type=float, default=-8.0)
@@ -491,12 +740,14 @@ def main() -> int:
     resolved_output_csv = pathlib.Path(args.output_csv).resolve()
     resolved_output_profile_csv = pathlib.Path(args.output_profile_csv).resolve()
     resolved_output_json = pathlib.Path(args.output_json).resolve()
+    resolved_hostility_quality_blend_output_json = pathlib.Path(args.hostility_quality_blend_output_json).resolve()
     resolved_walk_forward_output_json = pathlib.Path(args.walk_forward_output_json).resolve()
     resolved_lock_path = pathlib.Path(args.verification_lock_path).resolve()
 
     ensure_parent_directory(resolved_output_csv)
     ensure_parent_directory(resolved_output_profile_csv)
     ensure_parent_directory(resolved_output_json)
+    ensure_parent_directory(resolved_hostility_quality_blend_output_json)
     ensure_parent_directory(resolved_walk_forward_output_json)
 
     if not resolved_config_path.exists():
@@ -521,14 +772,30 @@ def main() -> int:
         raise RuntimeError("No datasets configured. Set --dataset-names.")
 
     hostility_context = analyze_dataset_hostility(dataset_paths)
-    threshold_bundle = compute_effective_thresholds(args, hostility_context)
+    quality_context = analyze_dataset_quality(dataset_paths)
+    blended_context = build_hostility_quality_blend(hostility_context, quality_context)
+    threshold_bundle = compute_effective_thresholds(args, hostility_context, quality_context, blended_context)
+    dump_json(
+        resolved_hostility_quality_blend_output_json,
+        {
+            "generated_at": __import__("datetime").datetime.now().astimezone().isoformat(),
+            "datasets": [str(x) for x in dataset_paths],
+            "hostility": hostility_context,
+            "quality": quality_context,
+            "blended_context": blended_context,
+            "thresholds_requested": threshold_bundle.get("requested"),
+            "thresholds_effective": threshold_bundle.get("effective"),
+            "adaptive_applied": bool(threshold_bundle.get("adaptive_applied", False)),
+            "adaptive_mode": str(threshold_bundle.get("adaptive_mode", "none")),
+        },
+    )
     effective_thresholds = dict(threshold_bundle["effective"])
     effective_core_vs_legacy_min_pf_delta = float(args.core_vs_legacy_min_profit_factor_delta)
     effective_core_vs_legacy_min_expectancy_delta_krw = float(args.core_vs_legacy_min_expectancy_delta_krw)
     effective_core_vs_legacy_min_total_profit_delta_krw = float(args.core_vs_legacy_min_total_profit_delta_krw)
     if bool(threshold_bundle.get("adaptive_applied", False)) and str(threshold_bundle.get("adaptive_mode", "none")) == "full":
         relief = float(threshold_bundle.get("relief_ratio", 0.0))
-        hostility_level = str((threshold_bundle.get("hostility") or {}).get("hostility_level", "unknown")).lower()
+        hostility_level = str((threshold_bundle.get("blended_context") or {}).get("blended_hostility_level", "unknown")).lower()
         pf_delta_relax = (0.24 * relief) + (0.08 if hostility_level == "high" else 0.0)
         exp_delta_relax = (1.6 * relief) + (0.8 if hostility_level == "high" else 0.0)
         total_delta_relax = (2500.0 * relief) + (1200.0 if hostility_level == "high" else 0.0)
@@ -547,11 +814,15 @@ def main() -> int:
             "min_delta_total_profit_sum_krw": round(effective_core_vs_legacy_min_total_profit_delta_krw, 4),
         }
     if threshold_bundle.get("adaptive_applied", False):
+        blended = threshold_bundle.get("blended_context") or {}
+        quality = threshold_bundle.get("quality") or {}
         print(
             "[ProfitabilityMatrix] hostility-adaptive thresholds applied: "
             f"mode={threshold_bundle.get('adaptive_mode')}, "
-            f"level={hostility_context.get('hostility_level')}, "
-            f"score={hostility_context.get('avg_adversarial_score')}, "
+            f"level={blended.get('blended_hostility_level', hostility_context.get('hostility_level'))}, "
+            f"score={blended.get('blended_adversarial_score', hostility_context.get('avg_adversarial_score'))}, "
+            f"quality={quality.get('quality_level', 'unknown')} "
+            f"(q_score={quality.get('avg_quality_risk_score', 0.0)}), "
             f"min_avg_trades={effective_thresholds['min_avg_trades']}, "
             f"min_expectancy_krw={effective_thresholds['min_expectancy_krw']}, "
             f"min_profitable_ratio={effective_thresholds['min_profitable_ratio']}"
@@ -641,6 +912,7 @@ def main() -> int:
         writer.writerows(sorted_rows)
 
     profile_summaries: List[Dict[str, Any]] = []
+    entry_rejection_by_profile: Dict[str, Dict[str, int]] = {}
     by_profile: Dict[str, List[Dict[str, Any]]] = {}
     for row in sorted_rows:
         by_profile.setdefault(str(row["profile_id"]), []).append(row)
@@ -660,6 +932,22 @@ def main() -> int:
         peak_drawdown = round(max((float(r["max_drawdown_pct"]) for r in gate_items), default=0.0), 4)
         avg_trades = round(safe_avg([float(r["total_trades"]) for r in gate_items]), 4) if gate_items else 0.0
         sum_profit = round(sum(float(r["total_profit_krw"]) for r in gate_items), 4) if gate_items else 0.0
+        rejection_counts: Dict[str, int] = {}
+        for item in gate_items:
+            parsed = parse_reason_counts_json(item.get("entry_rejection_reason_counts_json"))
+            for reason, count in parsed.items():
+                rejection_counts[reason] = rejection_counts.get(reason, 0) + int(count)
+        entry_rejection_by_profile[profile_id] = dict(
+            sorted(rejection_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        )
+        entry_rejection_total = int(sum(rejection_counts.values()))
+        top_rejection_reason = ""
+        top_rejection_count = 0
+        if rejection_counts:
+            top_rejection_reason, top_rejection_count = max(
+                rejection_counts.items(),
+                key=lambda kv: (kv[1], kv[0]),
+            )
 
         gate_sample_pass = gate_run_count > 0
         gate_profit_factor_pass = avg_profit_factor >= float(effective_thresholds["min_profit_factor"])
@@ -692,6 +980,15 @@ def main() -> int:
                 "peak_max_drawdown_pct": peak_drawdown,
                 "avg_total_trades": avg_trades,
                 "total_profit_sum_krw": sum_profit,
+                "entry_rejection_total": entry_rejection_total,
+                "top_entry_rejection_reason": top_rejection_reason,
+                "top_entry_rejection_count": int(top_rejection_count),
+                "entry_rejection_reason_counts_json": json.dumps(
+                    entry_rejection_by_profile[profile_id],
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
                 "gate_sample_pass": gate_sample_pass,
                 "gate_profit_factor_pass": gate_profit_factor_pass,
                 "gate_expectancy_pass": gate_expectancy_pass,
@@ -817,6 +1114,7 @@ def main() -> int:
         "profile_gate_pass": profile_gate_pass,
         "core_vs_legacy": core_vs_legacy,
         "overall_gate_pass": overall_gate_pass,
+        "entry_rejection_by_profile": entry_rejection_by_profile,
         "profile_summaries": profile_summaries,
         "matrix_rows": sorted_rows,
         "walk_forward": walk_forward if args.include_walk_forward else None,
@@ -827,6 +1125,7 @@ def main() -> int:
     print(f"matrix_csv={resolved_output_csv}")
     print(f"profile_csv={resolved_output_profile_csv}")
     print(f"gate_report={resolved_output_json}")
+    print(f"hostility_quality_blend_report={resolved_hostility_quality_blend_output_json}")
     if args.include_walk_forward:
         print(f"walk_forward_report={resolved_walk_forward_output_json}")
     print(f"overall_gate_pass={overall_gate_pass}")

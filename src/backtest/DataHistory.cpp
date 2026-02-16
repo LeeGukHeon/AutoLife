@@ -136,6 +136,8 @@ std::vector<Candle> DataHistory::loadJSON(const std::string& file_path) {
 std::vector<Candle> DataHistory::filterByDate(const std::vector<Candle>& candles, 
                                             const std::string& start_date, 
                                             const std::string& end_date) {
+    (void)start_date;
+    (void)end_date;
     // Placeholder for date filtering logic
     // This requires converting string dates to timestamps
     return candles;

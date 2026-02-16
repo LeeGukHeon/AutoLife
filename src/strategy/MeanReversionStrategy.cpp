@@ -252,7 +252,6 @@ Signal MeanReversionStrategy::generateSignal(
     // ===== Score-Based Evaluation =====
     double total_score = 0.0;
     
-    // --- (1) ?됯퇏 ?뚭? 遺꾩꽍 (理쒕? 0.40) ---
     MeanReversionSignalMetrics reversion = analyzeMeanReversion(market, metrics, candles_5m, current_price);
     const int entry_key = makeMeanReversionEntryKey(reversion.type, regime.regime);
     const double adaptive_bias = getAdaptiveEntryBias(entry_key);
@@ -283,7 +282,6 @@ Signal MeanReversionStrategy::generateSignal(
     }
     total_score += reversion.strength * 0.40;
     
-    // --- (2) ?좊룞??(理쒕? 0.10) ---
     const double adaptive_liq_floor = computeMeanReversionAdaptiveLiquidityFloor(
         metrics, regime, strategy_cfg.min_liquidity_score);
     const double liq_floor = adaptive_liq_floor * 0.85;
@@ -291,7 +289,6 @@ Signal MeanReversionStrategy::generateSignal(
     else if (metrics.liquidity_score >= liq_floor) total_score += 0.07;
     else if (metrics.liquidity_score >= adaptive_liq_floor * 0.70) total_score += 0.04;
     
-    // --- (3) ?덉쭚 (理쒕? 0.15) ---
     double regime_score = 0.0;
     switch (regime.regime) {
         case analytics::MarketRegime::RANGING: regime_score = 0.20; break;
@@ -302,16 +299,13 @@ Signal MeanReversionStrategy::generateSignal(
     }
     total_score += regime_score;
     
-    // --- (4) RSI ??쟾 ?좏샇 (理쒕? 0.20) ---
     auto prices = analytics::TechnicalIndicators::extractClosePrices(candles_5m);
     double rsi = analytics::TechnicalIndicators::calculateRSI(prices, 14);
     
-    if (rsi < 30) total_score += 0.20;         // 媛뺥븳 怨쇰ℓ??
-    else if (rsi < 40) total_score += 0.12;     // 怨쇰ℓ??
-    else if (rsi < 50) total_score += 0.05;     // ?쎄컙 ??쓬
-    // ?됯퇏 ?뚭???怨쇰ℓ?꾩뿉??留ㅼ닔?섎?濡?RSI ?믪쑝硫??먯닔 ?놁쓬
+    if (rsi < 30) total_score += 0.20;
+    else if (rsi < 40) total_score += 0.12;
+    else if (rsi < 50) total_score += 0.05;
     
-    // --- (5) 嫄곕옒???뺤씤 (理쒕? 0.15) ---
     if (metrics.volume_surge_ratio >= 2.0) total_score += 0.15;
     else if (metrics.volume_surge_ratio >= 1.0) total_score += 0.08;
     else total_score += 0.03;
@@ -326,7 +320,6 @@ Signal MeanReversionStrategy::generateSignal(
         total_score += 0.14;
     }
     
-    // ===== 理쒖쥌 ?먯젙 =====
     if (degraded_5m_mode) {
         total_score *= 0.92;
     }
@@ -353,7 +346,6 @@ Signal MeanReversionStrategy::generateSignal(
         signal.strength = adaptive_strength_floor;
     }
     
-    // ===== ?좏샇 ?앹꽦 =====
     signal.type = SignalType::BUY;
     signal.entry_price = current_price;
     signal.stop_loss = calculateStopLoss(current_price, candles_5m);
@@ -379,7 +371,6 @@ Signal MeanReversionStrategy::generateSignal(
     signal.max_retries = 3;
     signal.retry_wait_ms = 800;
     
-    // ?ъ????ъ씠吏?
     signal.position_size = calculatePositionSize(available_capital, current_price, signal.stop_loss, metrics);
     const double min_size_for_order = (available_capital > 0.0)
         ? (MIN_ORDER_AMOUNT_KRW / available_capital)
@@ -540,7 +531,6 @@ bool MeanReversionStrategy::shouldExit(
 {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     
-    // [?섏젙] position_data_ 留??ъ슜
     if (position_data_.find(market) == position_data_.end()) {
         return false;
     }
@@ -554,28 +544,23 @@ bool MeanReversionStrategy::shouldExit(
         pos_data.highest_price = current_price;
     }
     
-    // ===== 1. ?먯젅 (Stop Loss) =====
-    // pos_data.trailing_stop? 吏꾩엯 ??珥덇린 ?먯젅媛濡??ㅼ젙??
     if (current_price <= pos_data.trailing_stop) {
         spdlog::info("[MeanReversion] Stop Loss / TS - {} | Price: {:.2f} <= {:.2f}", 
                      market, current_price, pos_data.trailing_stop);
-        return true; // [以묒슂] ?ш린??erase ?섏? ?딆쓬 (?붿쭊??updateStatistics ?몄텧 ??泥섎━)
+        return true;
     }
     
-    // ===== 2. Mean ?꾨떖 泥댄겕 (紐⑺몴 ?됯퇏媛 ?뚭?) =====
     double deviation_from_mean = 0.0;
     if (pos_data.target_mean != 0) {
         deviation_from_mean = std::abs(current_price - pos_data.target_mean) / pos_data.target_mean;
     }
     
-    // ?됯퇏媛 洹쇱젒(0.5% ?ㅼ감)?섍퀬 ?섏씡 ?곹깭????
     if (deviation_from_mean < 0.005 && profit_pct > 0.01) {
         spdlog::info("[MeanReversion] Mean Reached - {} | Profit: {:.2f}% | Deviation: {:.2f}%",
                      market, profit_pct * 100, deviation_from_mean * 100);
         return true;
     }
     
-    // ===== 3. ?몃젅?쇰쭅 ?ㅽ깙 ?낅뜲?댄듃 =====
     if (profit_pct >= TRAILING_ACTIVATION) {
         double new_trailing = pos_data.highest_price * (1.0 - TRAILING_DISTANCE);
         if (new_trailing > pos_data.trailing_stop) {
@@ -583,28 +568,23 @@ bool MeanReversionStrategy::shouldExit(
         }
     }
     
-    // ===== 4. ?듭젅 2 (4%) - ?꾨웾 泥?궛 =====
     if (!pos_data.tp2_hit && profit_pct >= BASE_TAKE_PROFIT_2) {
         spdlog::info("[MeanReversion] Take Profit 2 - {} | Profit: {:.2f}%", market, profit_pct * 100);
         return true;
     }
     
-    // ===== 5. ?듭젅 1 (2%) - 遺遺?泥?궛 湲곕줉 (?꾨웾 泥?궛? ?꾨떂) =====
     if (!pos_data.tp1_hit && profit_pct >= BASE_TAKE_PROFIT_1 && holding_minutes > 30.0) {
         pos_data.tp1_hit = true;
         spdlog::info("[MeanReversion] Take Profit 1 Hit - {}", market);
-        // ?ш린??true 由ы꽩 ???꾨웾 泥?궛?섎?濡?false ?좎? (?붿쭊??遺遺꾩껌??泥섎━)
     }
     
-    // ===== 6. ?쒓컙 ?쒗븳 (4?쒓컙) =====
     if (holding_minutes >= MAX_HOLDING_TIME_MINUTES) {
         spdlog::info("[MeanReversion] Max Holding Time - {} | Profit: {:.2f}%", market, profit_pct * 100);
         return true;
     }
     
-    // ===== 7. Breakeven ?대룞 =====
     if (shouldMoveToBreakeven(entry_price, current_price)) {
-        double breakeven_price = entry_price * 1.002; // ?섏닔猷??ы븿
+        double breakeven_price = entry_price * 1.002;
         if (pos_data.trailing_stop < breakeven_price) {
             pos_data.trailing_stop = breakeven_price;
         }
@@ -620,7 +600,6 @@ double MeanReversionStrategy::calculateStopLoss(double entry_price, const std::v
     if (candles.size() < 16) return entry_price * (1.0 - BASE_STOP_LOSS);
 
     std::vector<double> true_ranges;
-    // [?섏젙] 媛??留덉?留??꾩옱) 15媛?罹붾뱾???ㅼ뿉?쒕????묒쓬
     size_t end_idx = candles.size();
     for (size_t i = end_idx - 1; i > end_idx - 15; --i) {
         double high_low = candles[i].high - candles[i].low;
@@ -642,7 +621,7 @@ double MeanReversionStrategy::calculateTakeProfit(
     const std::vector<Candle>& candles)
 {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    (void)candles;  // candles ?뚮씪誘명꽣 誘몄궗??
+    (void)candles;
     return entry_price * (1.0 + BASE_TAKE_PROFIT_2);
 }
 
@@ -655,8 +634,8 @@ double MeanReversionStrategy::calculatePositionSize(
     const analytics::CoinMetrics& metrics)
 {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    (void)capital;  // capital ?뚮씪誘명꽣 誘몄궗??
-    (void)metrics;  // metrics ?뚮씪誘명꽣 誘몄궗??
+    (void)capital;
+    (void)metrics;
     
     double risk_pct = (entry_price - stop_loss) / entry_price;
     
@@ -674,8 +653,7 @@ double MeanReversionStrategy::calculatePositionSize(
     double volatility = calculateVolatility(metrics.candles);
     double vol_adj = adjustForVolatility(half_kelly, volatility);
     
-    // Confidence adjustment (?듦퀎???좊ː??諛섏쁺)
-    double confidence = 0.75;  // 湲곕낯媛?
+    double confidence = 0.75;
     double conf_adj = adjustForConfidence(vol_adj, confidence);
     
     double position_size = std::clamp(conf_adj, 0.05, MAX_POSITION_SIZE);
@@ -706,7 +684,6 @@ IStrategy::Statistics MeanReversionStrategy::getStatistics() const
     return stats_;
 }
 
-// [?섏젙] market ?몄옄 異붽? 諛??ъ???紐⑸줉 ??젣 濡쒖쭅
 void MeanReversionStrategy::updateStatistics(const std::string& market, bool is_win, double profit_loss)
 {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
@@ -718,17 +695,13 @@ void MeanReversionStrategy::updateStatistics(const std::string& market, bool is_
     }
     pending_entry_keys_.erase(market);
     
-    // [以묒슂] ?ъ???紐⑸줉?먯꽌 ?쒓굅 (?ъ쭊???덉슜)
     if (active_positions_.erase(market)) {
-        // active_positions_???덉뿀?ㅻ㈃ position_data_?먮룄 ?덉쓣 寃껋엫
         position_data_.erase(market);
         spdlog::info("[MeanReversion] Position Cleared - {} (Ready for next trade)", market);
     } else {
-        // ?뱀떆 紐⑤Ⅴ??map?먯꽌???뺤씤 ?ъ궡
         position_data_.erase(market);
     }
     
-    // --- ?듦퀎 ?낅뜲?댄듃 (湲곗〈 濡쒖쭅 ?좎?) ---
     stats_.total_signals++;
     
     if (is_win) {
@@ -788,7 +761,7 @@ double MeanReversionStrategy::updateTrailingStop(
     double current_price)
 {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    (void)current_price;  // current_price ?뚮씪誘명꽣 誘몄궗??
+    (void)current_price;
     
     double profit_pct = (highest_price - entry_price) / entry_price;
     
@@ -810,12 +783,6 @@ bool MeanReversionStrategy::shouldMoveToBreakeven(
 }
 
 // ===== Rolling Statistics =====
-
-MeanReversionRollingStatistics MeanReversionStrategy::getRollingStatistics() const
-{
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
-    return rolling_stats_;
-}
 
 double MeanReversionStrategy::getAdaptiveEntryBias(int entry_key) const
 {
@@ -1212,17 +1179,13 @@ StatisticalMetrics MeanReversionStrategy::calculateStatisticalMetrics(
         stats.z_score_100 = calculateZScore(prices.back(), recent_100);
     }
     
-    // 2. Hurst Exponent (?됯퇏?뚭? vs 異붿꽭 ?먮퀎)
     stats.hurst_exponent = calculateHurstExponent(candles);
     
-    // 3. Half-Life (?뚭? ?띾룄)
     stats.half_life = calculateHalfLife(candles);
     
-    // 4. ADF Test (?뺤긽??寃??
     stats.adf_statistic = calculateADFStatistic(prices);
     stats.is_stationary = (stats.adf_statistic < -2.86);  // 5% significance level
     
-    // 5. Autocorrelation (?먭린?곴?)
     stats.autocorrelation = calculateAutocorrelation(prices, 1);
     
     return stats;
@@ -1245,7 +1208,6 @@ double MeanReversionStrategy::calculateZScore(
 double MeanReversionStrategy::calculateHurstExponent(
     const std::vector<Candle>& candles) const
 {
-    // ?곗씠??遺議???湲곕낯媛?(Random Walk)
     if (candles.size() < 100) return 0.5;
     
     std::vector<double> prices = extractPrices(candles, "close");
@@ -1260,24 +1222,20 @@ double MeanReversionStrategy::calculateHurstExponent(
         
         int num_subseries = static_cast<int>(prices.size() / lag);
         std::vector<double> rs_values;
-        rs_values.reserve(num_subseries); // 硫붾え由??덉빟 (?깅뒫 ?μ긽)
+        rs_values.reserve(num_subseries);
         
         for (int i = 0; i < num_subseries; i++) {
-            // ?쒕툕?쒕━利?異붿텧
             auto start_it = prices.begin() + i * lag;
             auto end_it = start_it + lag;
             
-            // 1. ?됯퇏 怨꾩궛 (STL ?ъ슜?쇰줈 理쒖쟻??
             double sum = std::accumulate(start_it, end_it, 0.0);
             double mean = sum / lag;
             
-            // 2. ?쒖??몄감 & Range ?숈떆 怨꾩궛 (猷⑦봽 ?듯빀)
             double sum_sq_diff = 0.0;
             double current_cumsum = 0.0;
-            double max_cumsum = -1e9; // 留ㅼ슦 ?묒? ?섎줈 珥덇린??
-            double min_cumsum = 1e9;  // 留ㅼ슦 ???섎줈 珥덇린??
+            double max_cumsum = -1e9;
+            double min_cumsum = 1e9;
             
-            // R/S 遺꾩꽍?먯꽌???꾩쟻 ?몄감???쒖옉?먯쓣 0?쇰줈 媛꾩＜?섎뒗 寃껋씠 ?뺥솗??
             max_cumsum = std::max(max_cumsum, 0.0); 
             min_cumsum = std::min(min_cumsum, 0.0);
 
@@ -1285,10 +1243,8 @@ double MeanReversionStrategy::calculateHurstExponent(
                 double val = *it;
                 double diff = val - mean;
                 
-                // ?쒖??몄감??
                 sum_sq_diff += diff * diff;
                 
-                // Range??(?꾩쟻 ??
                 current_cumsum += diff;
                 if (current_cumsum > max_cumsum) max_cumsum = current_cumsum;
                 if (current_cumsum < min_cumsum) min_cumsum = current_cumsum;
@@ -1298,7 +1254,6 @@ double MeanReversionStrategy::calculateHurstExponent(
             double std_dev = std::sqrt(variance);
             double range = max_cumsum - min_cumsum;
             
-            // [?덉쟾?μ튂] ?쒖??몄감??Range媛 0??媛源뚯슦硫?臾댁떆 (log(0) 諛⑹?)
             if (std_dev > 1e-9 && range > 1e-9) {
                 rs_values.push_back(range / std_dev);
             }
@@ -1307,7 +1262,6 @@ double MeanReversionStrategy::calculateHurstExponent(
         if (!rs_values.empty()) {
             double avg_rs = calculateMean(rs_values);
             
-            // [?덉쟾?μ튂] 理쒖쥌 ?됯퇏???좏슚???뚮쭔 濡쒓렇 怨꾩궛
             if (avg_rs > 1e-9) {
                 log_rs.push_back(std::log(avg_rs));
                 log_n.push_back(std::log(static_cast<double>(lag)));
@@ -1316,7 +1270,6 @@ double MeanReversionStrategy::calculateHurstExponent(
     }
     
     // Linear regression: log(R/S) = H * log(n) + c
-    // ?먯씠 理쒖냼 3媛쒕뒗 ?덉뼱???좊ː?????덉쓬
     if (log_rs.size() < 3) return 0.5;
     
     double mean_x = calculateMean(log_n);
@@ -1333,12 +1286,10 @@ double MeanReversionStrategy::calculateHurstExponent(
         denominator += dx * dx;
     }
     
-    // 遺꾨え媛 0??寃쎌슦 諛⑹?
     if (std::abs(denominator) < 1e-9) return 0.5;
 
     double hurst = numerator / denominator;
     
-    // 寃곌낵媛??대옩??(0.0 ~ 1.0)
     return std::clamp(hurst, 0.0, 1.0);
 }
 
@@ -1387,7 +1338,6 @@ double MeanReversionStrategy::calculateADFStatistic(
     if (prices.size() < 50) return 0.0;
     
     // Augmented Dickey-Fuller Test
-    // Simplified version: ?y_t = 慣 + 棺*y_{t-1} + 琯_t
     
     std::vector<double> diff;
     std::vector<double> lagged;
@@ -1455,7 +1405,6 @@ BollingerBands MeanReversionStrategy::calculateBollingerBands(const std::vector<
     if (candles.size() < static_cast<size_t>(period)) return bb;
 
     std::vector<double> prices;
-    // [?섏젙] 媛??理쒓렐 'period'留뚰겮??醫낃?瑜?異붿텧
     for (size_t i = candles.size() - period; i < candles.size(); ++i) {
         prices.push_back(candles[i].close);
     }
@@ -1467,7 +1416,6 @@ BollingerBands MeanReversionStrategy::calculateBollingerBands(const std::vector<
     
     if (bb.middle > 0) bb.bandwidth = (bb.upper - bb.lower) / bb.middle;
     
-    // [?섏젙] ?꾩옱媛(媛??理쒖떊) 湲곗??쇰줈 ?꾩튂 ?뚯븙
     double current_price = candles.back().close;
     if (bb.upper != bb.lower) bb.percent_b = (current_price - bb.lower) / (bb.upper - bb.lower);
 
@@ -1589,7 +1537,6 @@ VWAPAnalysis MeanReversionStrategy::calculateVWAPAnalysis(
 MRMarketRegime MeanReversionStrategy::detectMarketRegime(
     const StatisticalMetrics& stats) const
 {
-    // Hurst Exponent 湲곕컲 ?먮퀎
     if (stats.hurst_exponent < HURST_MEAN_REVERTING) {
         return MRMarketRegime::MEAN_REVERTING;
     } else if (stats.hurst_exponent > 0.55) {
@@ -1601,7 +1548,6 @@ MRMarketRegime MeanReversionStrategy::detectMarketRegime(
     return MRMarketRegime::UNKNOWN;
 }
 
-// ===== Mean Reversion Analysis (?듭떖) =====
 
 MeanReversionSignalMetrics MeanReversionStrategy::analyzeMeanReversion(
     const std::string& market,
@@ -1614,10 +1560,8 @@ MeanReversionSignalMetrics MeanReversionStrategy::analyzeMeanReversion(
     // 1. Statistical Metrics 怨꾩궛
     StatisticalMetrics stats = calculateStatisticalMetrics(candles);
     
-    // 2. Market Regime ?먮퀎
     signal.regime = detectMarketRegime(stats);
     
-    // Mean Reverting ?곹깭媛 ?꾨땲硫?嫄곕옒 ?덊븿
     if (signal.regime == MRMarketRegime::UNKNOWN) {
         return signal;
     }
@@ -1634,9 +1578,8 @@ MeanReversionSignalMetrics MeanReversionStrategy::analyzeMeanReversion(
     // 6. Kalman Filter State
     auto& kalman = getKalmanState(market);
     
-    // 7. 怨쇰ℓ???뺤씤 (?щ윭 議곌굔 以??섎굹?쇰룄 留뚯”)
     bool is_bb_oversold = (current_price <= bb.lower);
-    bool is_rsi_oversold = (rsi.oversold_count >= 2);  // 理쒖냼 2媛?湲곌컙?먯꽌 怨쇰ℓ??
+    bool is_rsi_oversold = (rsi.oversold_count >= 2);
     bool is_z_score_extreme = (stats.z_score_20 <= Z_SCORE_EXTREME || 
                                stats.z_score_50 <= Z_SCORE_EXTREME);
     bool is_vwap_oversold = (current_price < vwap.vwap_lower);
@@ -1648,7 +1591,6 @@ MeanReversionSignalMetrics MeanReversionStrategy::analyzeMeanReversion(
                           (is_vwap_oversold ? 1 : 0) + 
                           (is_kalman_oversold ? 1 : 0);
     
-    // 理쒖냼 3媛??댁긽??怨쇰ℓ???좏샇 ?꾩슂
     int min_oversold_signals = 2;
     if (signal.regime == MRMarketRegime::TRENDING) {
         min_oversold_signals = 3;
@@ -1692,7 +1634,6 @@ MeanReversionSignalMetrics MeanReversionStrategy::analyzeMeanReversion(
     signal.time_to_revert = estimateReversionTime(stats.half_life, 
                                                    std::abs(current_price - kalman.estimated_mean) / kalman.estimated_mean);
     
-    // 12. Confidence (?듦퀎???좊ː??
     signal.confidence = 0.0;
     signal.confidence += (stats.is_stationary ? 0.2 : 0.0);
     signal.confidence += (stats.hurst_exponent < 0.4 ? 0.2 : 0.1);
@@ -1737,36 +1678,30 @@ double MeanReversionStrategy::calculateReversionProbability(
 {
     double probability = 0.5;  // Base 50%
     
-    // 1. Hurst Exponent (媛뺥븳 ?됯퇏?뚭??쇱닔濡??뺣쪧 利앷?)
     if (stats.hurst_exponent < 0.40) {
         probability += 0.20;
     } else if (stats.hurst_exponent < 0.45) {
         probability += 0.10;
     }
     
-    // 2. Stationarity (?뺤긽??
     if (stats.is_stationary) {
         probability += 0.10;
     }
     
-    // 3. Half-Life (?곸젙 踰붿쐞)
     if (stats.half_life > 5 && stats.half_life < 50) {
         probability += 0.10;
     }
     
-    // 4. Bollinger Bands (?섎떒 ?뚰뙆)
     if (bb.percent_b < 0.1) {
         probability += 0.15;
     }
     
-    // 5. RSI (?ㅼ쨷 怨쇰ℓ??
     if (rsi.oversold_count >= 3) {
         probability += 0.15;
     } else if (rsi.oversold_count >= 2) {
         probability += 0.10;
     }
     
-    // 6. Z-Score (洹밸떒??怨쇰ℓ??
     if (stats.z_score_50 <= -2.5) {
         probability += 0.15;
     } else if (stats.z_score_50 <= -2.0) {
@@ -1787,7 +1722,6 @@ double MeanReversionStrategy::estimateReversionTarget(
     const VWAPAnalysis& vwap,
     const KalmanFilterState& kalman) const
 {
-    // ?щ윭 ?됯퇏??媛以??됯퇏
     std::vector<double> targets;
     std::vector<double> weights;
     
@@ -1820,7 +1754,7 @@ double MeanReversionStrategy::estimateReversionTime(
     double half_life,
     double current_deviation) const
 {
-    (void)current_deviation;  // current_deviation ?뚮씪誘명꽣 誘몄궗??
+    (void)current_deviation;
     
     if (half_life <= 0 || half_life > 100) {
         return 120.0;  // Default 2 hours
@@ -1905,7 +1839,6 @@ double MeanReversionStrategy::adjustForConfidence(
     double base_size,
     double confidence) const
 {
-    // Confidence媛 ?믪쓣?섎줉 ?ъ???利앷?
     double conf_multiplier = 0.5 + (confidence * 0.5);
     return base_size * conf_multiplier;
 }
@@ -2000,7 +1933,6 @@ double MeanReversionStrategy::calculateVolatility(const std::vector<Candle>& can
     if (candles.size() < 21) return 0.02;
     
     std::vector<double> returns;
-    // [?섏젙] ?곗씠?곗쓽 留????꾩옱) 20媛?援ш컙???섏씡瑜?怨꾩궛
     for (size_t i = candles.size() - 20; i < candles.size(); ++i) {
         double ret = (candles[i].close - candles[i-1].close) / candles[i-1].close;
         returns.push_back(ret);
@@ -2053,8 +1985,8 @@ std::vector<Candle> MeanReversionStrategy::resampleTo5m(const std::vector<Candle
     std::vector<Candle> candles_5m;
     for (size_t i = 0; i + 5 <= candles_1m.size(); i += 5) {
         Candle candle_5m;
-        candle_5m.open = candles_1m[i].open;         // [?섏젙] i媛 媛??怨쇨굅
-        candle_5m.close = candles_1m[i + 4].close;   // [?섏젙] i+4媛 媛??理쒖떊
+        candle_5m.open = candles_1m[i].open;
+        candle_5m.close = candles_1m[i + 4].close;
         candle_5m.high = candles_1m[i].high;
         candle_5m.low = candles_1m[i].low;
         candle_5m.volume = 0;

@@ -17,7 +17,6 @@
 #include "common/PathUtils.h"
 #include "common/TickSizeHelper.h"  // [Phase 3] ???????????? ????????⑤벡苑????遺얘턁????????????
 #include <chrono>
-#include <iostream>
 #include <thread>
 #include <algorithm>
 #include <cctype>
@@ -29,7 +28,6 @@
 #include <map>
 #include <cmath>
 #include <set>
-#include <functional>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -234,6 +232,24 @@ double computeCalibratedExpectedEdgePct(
         default:
             break;
     }
+    if (signal.reason == "alpha_head_fallback_candidate") {
+        if (signal.market_regime == autolife::analytics::MarketRegime::TRENDING_UP) {
+            win_prob += 0.08;
+        } else if (signal.market_regime == autolife::analytics::MarketRegime::RANGING ||
+                   signal.market_regime == autolife::analytics::MarketRegime::UNKNOWN) {
+            win_prob += 0.05;
+        } else {
+            win_prob += 0.01;
+        }
+        if (signal.liquidity_score >= 60.0) {
+            win_prob += 0.03;
+        } else if (signal.liquidity_score > 0.0 && signal.liquidity_score < 50.0) {
+            win_prob -= 0.02;
+        }
+        if (signal.volatility > 0.0 && signal.volatility <= 3.0) {
+            win_prob += 0.02;
+        }
+    }
 
     // Archetype-level priors from loss-cluster diagnostics.
     // Keep it market-agnostic: apply only by strategy/archetype/regime.
@@ -270,7 +286,10 @@ double computeCalibratedExpectedEdgePct(
     win_prob += computeStrategyHistoryWinProbPrior(signal, cfg);
     win_prob = std::clamp(win_prob, 0.12, 0.88);
 
-    const double round_trip_cost_pct = computeEffectiveRoundTripCostPct(signal, cfg);
+    double round_trip_cost_pct = computeEffectiveRoundTripCostPct(signal, cfg);
+    if (signal.reason == "alpha_head_fallback_candidate" && signal.liquidity_score >= 58.0) {
+        round_trip_cost_pct *= 0.88;
+    }
     const double expected_gross_pct = (win_prob * gross_reward_pct) - ((1.0 - win_prob) * gross_risk_pct);
     return expected_gross_pct - round_trip_cost_pct;
 }
@@ -311,6 +330,13 @@ bool passesSecondStageEntryConfirmation(
         signal.liquidity_score >= 62.0) {
         min_rr_margin -= 0.02;
         min_edge_margin -= 0.00003;
+    }
+    if (signal.reason == "alpha_head_fallback_candidate" &&
+        (signal.market_regime == autolife::analytics::MarketRegime::TRENDING_UP ||
+         signal.market_regime == autolife::analytics::MarketRegime::RANGING) &&
+        signal.liquidity_score >= 58.0) {
+        min_rr_margin -= 0.015;
+        min_edge_margin -= 0.00002;
     }
 
     min_rr_margin = std::clamp(min_rr_margin, 0.02, 0.22);
@@ -510,9 +536,95 @@ std::string toLowerCopy(const std::string& s) {
     return out;
 }
 
+std::vector<autolife::Candle> aggregateCandlesByStep(
+    const std::vector<autolife::Candle>& source,
+    size_t step,
+    size_t max_bars = 0
+) {
+    std::vector<autolife::Candle> out;
+    if (step == 0 || source.size() < step) {
+        return out;
+    }
+
+    out.reserve(source.size() / step + 1);
+    for (size_t i = 0; i + step <= source.size(); i += step) {
+        autolife::Candle aggregated;
+        aggregated.open = source[i].open;
+        aggregated.close = source[i + step - 1].close;
+        aggregated.high = source[i].high;
+        aggregated.low = source[i].low;
+        aggregated.volume = 0.0;
+        aggregated.timestamp = source[i].timestamp;
+
+        for (size_t j = i; j < i + step; ++j) {
+            aggregated.high = std::max(aggregated.high, source[j].high);
+            aggregated.low = std::min(aggregated.low, source[j].low);
+            aggregated.volume += source[j].volume;
+        }
+        out.push_back(std::move(aggregated));
+    }
+
+    if (max_bars > 0 && out.size() > max_bars) {
+        out.erase(out.begin(), out.end() - static_cast<std::ptrdiff_t>(max_bars));
+    }
+    return out;
+}
+
+void ensureParityCompanionTimeframes(autolife::analytics::CoinMetrics& metrics) {
+    constexpr size_t kTf15mMaxBars = 120;
+    if (metrics.candles_by_tf.find("15m") != metrics.candles_by_tf.end()) {
+        return;
+    }
+
+    auto tf_1m_it = metrics.candles_by_tf.find("1m");
+    if (tf_1m_it != metrics.candles_by_tf.end() && tf_1m_it->second.size() >= 15) {
+        auto candles_15m = aggregateCandlesByStep(tf_1m_it->second, 15, kTf15mMaxBars);
+        if (!candles_15m.empty()) {
+            metrics.candles_by_tf["15m"] = std::move(candles_15m);
+            return;
+        }
+    }
+
+    auto tf_5m_it = metrics.candles_by_tf.find("5m");
+    if (tf_5m_it != metrics.candles_by_tf.end() && tf_5m_it->second.size() >= 3) {
+        auto candles_15m = aggregateCandlesByStep(tf_5m_it->second, 3, kTf15mMaxBars);
+        if (!candles_15m.empty()) {
+            metrics.candles_by_tf["15m"] = std::move(candles_15m);
+        }
+    }
+}
+
 bool requiresTypedArchetype(const std::string& strategy_name) {
     return strategy_name == "Advanced Scalping" ||
            strategy_name == "Advanced Momentum";
+}
+
+bool isAlphaHeadFallbackCandidate(const autolife::strategy::Signal& signal, bool alpha_head_mode) {
+    return alpha_head_mode && signal.reason == "alpha_head_fallback_candidate";
+}
+
+const char* classifySignalRejectionGroup(const std::string& reason) {
+    if (reason == "no_signal_generated") {
+        return "signal_generation";
+    }
+    if (reason == "skipped_due_to_open_position" || reason == "skipped_due_to_active_order") {
+        return "position_state";
+    }
+    if (reason == "no_candle_data") {
+        return "data_availability";
+    }
+    if (reason == "filtered_out_by_manager" ||
+        reason.rfind("filtered_out_by_manager_", 0) == 0) {
+        return "manager_prefilter";
+    }
+    if (reason == "no_best_signal" ||
+        reason.rfind("no_best_signal_", 0) == 0) {
+        return "best_signal_selection";
+    }
+    if (reason.rfind("blocked_", 0) == 0) {
+        return "risk_or_execution_gate";
+    }
+    return "other";
 }
 
 void appendPolicyDecisionAudit(
@@ -942,20 +1054,86 @@ void TradingEngine::generateSignals() {
     LOG_INFO("===== Generate Signals =====");
 
     pending_signals_.clear();
+    live_signal_funnel_.scan_count++;
+    bool live_no_trade_bias_active = false;
+    double live_signal_generation_share = 0.0;
+    double live_manager_prefilter_share = 0.0;
+    double live_position_state_share = 0.0;
+    std::string live_top_group = "other";
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        long long total_rejections = 0;
+        std::map<std::string, long long> group_counts;
+        for (const auto& kv : live_signal_funnel_.rejection_reason_counts) {
+            const auto* group = classifySignalRejectionGroup(kv.first);
+            group_counts[group] += kv.second;
+            total_rejections += kv.second;
+        }
+        if (total_rejections > 0) {
+            live_signal_generation_share =
+                static_cast<double>(group_counts["signal_generation"]) / static_cast<double>(total_rejections);
+            live_manager_prefilter_share =
+                static_cast<double>(group_counts["manager_prefilter"]) / static_cast<double>(total_rejections);
+            live_position_state_share =
+                static_cast<double>(group_counts["position_state"]) / static_cast<double>(total_rejections);
+            if (live_signal_generation_share >= live_manager_prefilter_share &&
+                live_signal_generation_share >= live_position_state_share) {
+                live_top_group = "signal_generation";
+            } else if (live_manager_prefilter_share >= live_signal_generation_share &&
+                       live_manager_prefilter_share >= live_position_state_share) {
+                live_top_group = "manager_prefilter";
+            } else {
+                live_top_group = "position_state";
+            }
+            live_no_trade_bias_active =
+                live_signal_funnel_.scan_count >= 3 &&
+                total_rejections >= 20 &&
+                live_position_state_share < 0.40 &&
+                (live_signal_generation_share >= 0.55 ||
+                 (live_signal_generation_share + live_manager_prefilter_share) >= 0.75);
+        }
+    }
+    strategy::StrategyManager::LiveSignalBottleneckHint manager_hint;
+    manager_hint.enabled = true;
+    manager_hint.top_group = live_top_group;
+    manager_hint.no_trade_bias_active = live_no_trade_bias_active;
+    manager_hint.signal_generation_share = live_signal_generation_share;
+    manager_hint.manager_prefilter_share = live_manager_prefilter_share;
+    manager_hint.position_state_share = live_position_state_share;
+    strategy_manager_->setLiveSignalBottleneckHint(manager_hint);
+    std::map<std::string, int> last_scan_rejection_counts;
+    std::map<std::string, int> last_scan_hint_adjustment_counts;
+    auto markScanReject = [&](const std::string& reason, int count = 1) {
+        if (reason.empty() || count <= 0) {
+            return;
+        }
+        last_scan_rejection_counts[reason] += count;
+        recordLiveSignalReject(reason, static_cast<long long>(count));
+    };
 
     for (const auto& coin : scanned_markets_) {
+        live_signal_funnel_.markets_considered++;
         if (risk_manager_->getPosition(coin.market) != nullptr) {
+            live_signal_funnel_.skipped_due_to_open_position++;
+            markScanReject("skipped_due_to_open_position");
             continue;
         }
 
         if (order_manager_->hasActiveOrder(coin.market)) {
+            live_signal_funnel_.skipped_due_to_active_order++;
+            markScanReject("skipped_due_to_active_order");
             continue;
         }
 
         try {
-            const auto& candles = coin.candles;
+            analytics::CoinMetrics signal_metrics = coin;
+            ensureParityCompanionTimeframes(signal_metrics);
+
+            const auto& candles = signal_metrics.candles;
             if (candles.empty()) {
                 LOG_INFO("{} - no candle data, skipping", coin.market);
+                live_signal_funnel_.no_candle_data++;
+                markScanReject("no_candle_data");
                 continue;
             }
 
@@ -963,8 +1141,8 @@ void TradingEngine::generateSignals() {
             auto regime = regime_detector_->analyzeRegime(candles);
 
             auto signals = strategy_manager_->collectSignals(
-                coin.market,
-                coin,
+                signal_metrics.market,
+                signal_metrics,
                 candles,
                 current_price,
                 risk_manager_->getRiskMetrics().available_capital,
@@ -972,47 +1150,160 @@ void TradingEngine::generateSignals() {
             );
 
             if (signals.empty()) {
+                live_signal_funnel_.no_signal_generated++;
+                markScanReject("no_signal_generated");
                 continue;
             }
+            live_signal_funnel_.generated_signal_candidates += static_cast<long long>(signals.size());
 
-            double min_strength = 0.40;
-            double min_expected_value = 0.0;
-            if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
-                min_strength = 0.48;
-            } else if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
-                min_strength = 0.52;
-            } else if (regime.regime == analytics::MarketRegime::RANGING) {
-                min_strength = 0.43;
-            }
-
-            auto filtered = strategy_manager_->filterSignals(
-                signals, min_strength, min_expected_value, regime.regime
-            );
-            if (filtered.empty() &&
-                scans_without_new_entry_ >= 6 &&
-                regime.regime != analytics::MarketRegime::TRENDING_DOWN &&
-                regime.regime != analytics::MarketRegime::HIGH_VOLATILITY) {
-                // Entry-frequency floor: relax a little only in non-stress regimes.
-                const double relaxed_strength = std::max(0.35, min_strength - 0.04);
-                const double relaxed_ev = std::max(0.0, min_expected_value - 0.0001);
-                filtered = strategy_manager_->filterSignals(
-                    signals, relaxed_strength, relaxed_ev, regime.regime
+            strategy::Signal best_signal;
+            int candidate_count = static_cast<int>(signals.size());
+            if (config_.use_strategy_alpha_head_mode) {
+                // Alpha-head mode keeps multi-candidate flow, but applies a permissive
+                // manager prefilter so extremely weak/negative-edge signals are dropped early.
+                double alpha_min_strength = 0.34;
+                double alpha_min_expected_value = -0.00015;
+                if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
+                    alpha_min_strength = 0.42;
+                    alpha_min_expected_value = 0.00005;
+                } else if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
+                    alpha_min_strength = 0.45;
+                    alpha_min_expected_value = 0.00008;
+                } else if (regime.regime == analytics::MarketRegime::RANGING) {
+                    alpha_min_strength = 0.36;
+                    alpha_min_expected_value = -0.00008;
+                }
+                if (live_no_trade_bias_active) {
+                    alpha_min_strength = std::max(alpha_min_strength, 0.40);
+                    alpha_min_expected_value = std::max(alpha_min_expected_value, 0.00005);
+                }
+                strategy::StrategyManager::FilterDiagnostics manager_filter_diag;
+                auto alpha_filtered = strategy_manager_->filterSignalsWithDiagnostics(
+                    signals,
+                    alpha_min_strength,
+                    alpha_min_expected_value,
+                    regime.regime,
+                    &manager_filter_diag
                 );
-            }
-            if (filtered.empty()) {
-                continue;
-            }
+                if (alpha_filtered.empty()) {
+                    live_signal_funnel_.filtered_out_by_manager++;
+                    markScanReject("filtered_out_by_manager");
+                    for (const auto& kv : manager_filter_diag.rejection_reason_counts) {
+                        markScanReject(kv.first, kv.second);
+                    }
+                    continue;
+                }
 
-            auto best_signal = strategy_manager_->selectRobustSignal(filtered, regime.regime);
+                int added = 0;
+                for (auto& signal : alpha_filtered) {
+                    if (signal.type == strategy::SignalType::NONE) {
+                        continue;
+                    }
+                    signal.market_regime = regime.regime;
+                    pending_signals_.push_back(std::move(signal));
+                    added++;
+                }
+                total_signals_ += added;
+                live_signal_funnel_.selected_signal_candidates += added;
+                if (added > 0) {
+                    live_signal_funnel_.markets_with_selected_candidate++;
+                } else {
+                    markScanReject("alpha_head_no_effective_candidates");
+                }
+                LOG_INFO(
+                    "Alpha-head candidates collected: market={}, added={}, from_signals={}, after_prefilter={}",
+                    coin.market,
+                    added,
+                    candidate_count,
+                    static_cast<int>(alpha_filtered.size())
+                );
+                continue;
+            } else {
+                double min_strength = 0.40;
+                double min_expected_value = 0.0;
+                if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
+                    min_strength = 0.48;
+                } else if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
+                    min_strength = 0.52;
+                } else if (regime.regime == analytics::MarketRegime::RANGING) {
+                    min_strength = 0.43;
+                }
+                const bool allow_entry_frequency_relaxation =
+                    scans_without_new_entry_ >= 6 &&
+                    regime.regime != analytics::MarketRegime::TRENDING_DOWN &&
+                    regime.regime != analytics::MarketRegime::HIGH_VOLATILITY;
+                if (allow_entry_frequency_relaxation) {
+                    min_strength = std::max(0.35, min_strength - 0.04);
+                    min_expected_value = std::max(-0.0001, min_expected_value - 0.0001);
+                }
+                if (live_no_trade_bias_active &&
+                    regime.regime != analytics::MarketRegime::TRENDING_DOWN &&
+                    regime.regime != analytics::MarketRegime::HIGH_VOLATILITY) {
+                    // Runtime hint parity with tuning loop:
+                    // if signal-generation/prefilter bottleneck dominates, prefer modest
+                    // additional relaxation before manager prefiltering.
+                    min_strength = std::max(0.33, min_strength - 0.03);
+                    min_expected_value = std::max(-0.0002, min_expected_value - 0.0001);
+                }
+
+                strategy::StrategyManager::FilterDiagnostics manager_filter_diag;
+                auto filtered = strategy_manager_->filterSignalsWithDiagnostics(
+                    signals,
+                    min_strength,
+                    min_expected_value,
+                    regime.regime,
+                    &manager_filter_diag
+                );
+                if (filtered.empty()) {
+                    live_signal_funnel_.filtered_out_by_manager++;
+                    markScanReject("filtered_out_by_manager");
+                    for (const auto& kv : manager_filter_diag.rejection_reason_counts) {
+                        markScanReject(kv.first, kv.second);
+                    }
+                    continue;
+                }
+                candidate_count = static_cast<int>(filtered.size());
+                strategy::StrategyManager::SelectionDiagnostics manager_select_diag;
+                best_signal = strategy_manager_->selectRobustSignalWithDiagnostics(
+                    filtered,
+                    regime.regime,
+                    &manager_select_diag
+                );
+                live_signal_funnel_.selection_call_count++;
+                live_signal_funnel_.selection_scored_candidate_count +=
+                    static_cast<long long>(manager_select_diag.scored_candidate_count);
+                live_signal_funnel_.selection_hint_adjusted_candidate_count +=
+                    static_cast<long long>(manager_select_diag.live_hint_adjusted_candidate_count);
+                for (const auto& kv : manager_select_diag.live_hint_adjustment_counts) {
+                    if (kv.second <= 0) {
+                        continue;
+                    }
+                    live_signal_funnel_.selection_hint_adjustment_counts[kv.first] +=
+                        static_cast<long long>(kv.second);
+                    last_scan_hint_adjustment_counts[kv.first] += kv.second;
+                }
+                if (best_signal.type == strategy::SignalType::NONE) {
+                    live_signal_funnel_.no_best_signal++;
+                    markScanReject("no_best_signal");
+                    for (const auto& kv : manager_select_diag.rejection_reason_counts) {
+                        markScanReject(kv.first, kv.second);
+                    }
+                    continue;
+                }
+            }
             if (best_signal.type != strategy::SignalType::NONE) {
                 best_signal.market_regime = regime.regime;
                 pending_signals_.push_back(best_signal);
                 total_signals_++;
+                live_signal_funnel_.selected_signal_candidates++;
+                live_signal_funnel_.markets_with_selected_candidate++;
 
-                LOG_INFO("Signal selected: {} - {} (strength: {:.2f}, tf5m_preloaded={}, tf1h_preloaded={}, fallback={})",
+                LOG_INFO("Signal selected: {} - {} (strength: {:.2f}, candidates={}, alpha_head={}, tf5m_preloaded={}, tf1h_preloaded={}, fallback={})",
                          coin.market,
                          best_signal.type == strategy::SignalType::STRONG_BUY ? "STRONG_BUY" : "BUY",
                          best_signal.strength,
+                         candidate_count,
+                         config_.use_strategy_alpha_head_mode ? "Y" : "N",
                          best_signal.used_preloaded_tf_5m ? "Y" : "N",
                          best_signal.used_preloaded_tf_1h ? "Y" : "N",
                          best_signal.used_resampled_tf_fallback ? "Y" : "N");
@@ -1022,8 +1313,202 @@ void TradingEngine::generateSignals() {
         }
     }
 
+    if (live_no_trade_bias_active) {
+        LOG_INFO(
+            "Live no-trade bias active: signal_gen_share={:.2f}, manager_prefilter_share={:.2f}",
+            live_signal_generation_share,
+            live_manager_prefilter_share
+        );
+    }
     LOG_INFO("Signal generation complete: {} candidates", pending_signals_.size());
+    flushLiveSignalFunnelTaxonomyReport(last_scan_rejection_counts, last_scan_hint_adjustment_counts);
 }
+
+void TradingEngine::recordLiveSignalReject(const std::string& reason, long long count) {
+    if (reason.empty() || count <= 0) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    live_signal_funnel_.rejection_reason_counts[reason] += count;
+}
+
+void TradingEngine::flushLiveSignalFunnelTaxonomyReport(
+    const std::map<std::string, int>& last_scan_rejection_counts,
+    const std::map<std::string, int>& last_scan_hint_adjustment_counts
+) const {
+    LiveSignalFunnelTelemetry snapshot;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        snapshot = live_signal_funnel_;
+    }
+
+    auto buildSortedCounts = [](const auto& counts) {
+        std::vector<std::pair<std::string, long long>> sorted;
+        sorted.reserve(counts.size());
+        for (const auto& kv : counts) {
+            sorted.emplace_back(kv.first, static_cast<long long>(kv.second));
+        }
+        std::sort(sorted.begin(), sorted.end(),
+                  [](const auto& a, const auto& b) {
+                      if (a.second != b.second) {
+                          return a.second > b.second;
+                      }
+                      return a.first < b.first;
+                  });
+        return sorted;
+    };
+
+    auto buildTopList = [](const std::vector<std::pair<std::string, long long>>& sorted, size_t limit) {
+        nlohmann::json arr = nlohmann::json::array();
+        const size_t end = std::min(limit, sorted.size());
+        for (size_t i = 0; i < end; ++i) {
+            nlohmann::json item;
+            item["reason"] = sorted[i].first;
+            item["count"] = sorted[i].second;
+            item["group"] = classifySignalRejectionGroup(sorted[i].first);
+            arr.push_back(std::move(item));
+        }
+        return arr;
+    };
+
+    auto buildTopGroups = [](const std::vector<std::pair<std::string, long long>>& sorted, size_t limit) {
+        nlohmann::json arr = nlohmann::json::array();
+        const size_t end = std::min(limit, sorted.size());
+        for (size_t i = 0; i < end; ++i) {
+            nlohmann::json item;
+            item["group"] = sorted[i].first;
+            item["count"] = sorted[i].second;
+            arr.push_back(std::move(item));
+        }
+        return arr;
+    };
+
+    auto buildTopNamedCounts = [](
+        const std::vector<std::pair<std::string, long long>>& sorted,
+        size_t limit,
+        const char* name_key
+    ) {
+        nlohmann::json arr = nlohmann::json::array();
+        const size_t end = std::min(limit, sorted.size());
+        for (size_t i = 0; i < end; ++i) {
+            nlohmann::json item;
+            item[name_key] = sorted[i].first;
+            item["count"] = sorted[i].second;
+            arr.push_back(std::move(item));
+        }
+        return arr;
+    };
+
+    std::map<std::string, long long> rejection_group_counts;
+    for (const auto& kv : snapshot.rejection_reason_counts) {
+        rejection_group_counts[classifySignalRejectionGroup(kv.first)] += kv.second;
+    }
+
+    long long total_rejections = 0;
+    for (const auto& kv : rejection_group_counts) {
+        total_rejections += kv.second;
+    }
+    const double signal_generation_share =
+        total_rejections > 0 ? static_cast<double>(rejection_group_counts["signal_generation"]) / static_cast<double>(total_rejections) : 0.0;
+    const double manager_prefilter_share =
+        total_rejections > 0 ? static_cast<double>(rejection_group_counts["manager_prefilter"]) / static_cast<double>(total_rejections) : 0.0;
+    const double position_state_share =
+        total_rejections > 0 ? static_cast<double>(rejection_group_counts["position_state"]) / static_cast<double>(total_rejections) : 0.0;
+    const bool no_trade_bias_active =
+        snapshot.scan_count >= 3 &&
+        total_rejections >= 20 &&
+        position_state_share < 0.40 &&
+        (signal_generation_share >= 0.55 || (signal_generation_share + manager_prefilter_share) >= 0.75);
+    const double recommended_trade_floor_scale = no_trade_bias_active ? 0.75 : 1.0;
+
+    std::map<std::string, long long> last_scan_group_counts;
+    for (const auto& kv : last_scan_rejection_counts) {
+        if (kv.second <= 0) {
+            continue;
+        }
+        last_scan_group_counts[classifySignalRejectionGroup(kv.first)] += kv.second;
+    }
+
+    const auto sorted_cumulative_reasons = buildSortedCounts(snapshot.rejection_reason_counts);
+    const auto sorted_last_scan_reasons = buildSortedCounts(last_scan_rejection_counts);
+    const auto sorted_cumulative_groups = buildSortedCounts(rejection_group_counts);
+    const auto sorted_last_scan_groups = buildSortedCounts(last_scan_group_counts);
+    const auto sorted_cumulative_hint_adjustments = buildSortedCounts(snapshot.selection_hint_adjustment_counts);
+    const auto sorted_last_scan_hint_adjustments = buildSortedCounts(last_scan_hint_adjustment_counts);
+    long long total_hint_adjustments = 0;
+    for (const auto& kv : snapshot.selection_hint_adjustment_counts) {
+        total_hint_adjustments += kv.second;
+    }
+    const double selection_hint_adjusted_ratio =
+        snapshot.selection_scored_candidate_count > 0
+            ? static_cast<double>(snapshot.selection_hint_adjusted_candidate_count) /
+                static_cast<double>(snapshot.selection_scored_candidate_count)
+            : 0.0;
+
+    nlohmann::json report;
+    report["updated_at_ms"] = getCurrentTimestampMs();
+    report["scan_count"] = snapshot.scan_count;
+    report["markets_considered"] = snapshot.markets_considered;
+    report["skipped_due_to_open_position"] = snapshot.skipped_due_to_open_position;
+    report["skipped_due_to_active_order"] = snapshot.skipped_due_to_active_order;
+    report["no_candle_data"] = snapshot.no_candle_data;
+    report["no_signal_generated"] = snapshot.no_signal_generated;
+    report["filtered_out_by_manager"] = snapshot.filtered_out_by_manager;
+    report["no_best_signal"] = snapshot.no_best_signal;
+    report["markets_with_selected_candidate"] = snapshot.markets_with_selected_candidate;
+    report["generated_signal_candidates"] = snapshot.generated_signal_candidates;
+    report["selected_signal_candidates"] = snapshot.selected_signal_candidates;
+    report["selection_call_count"] = snapshot.selection_call_count;
+    report["selection_scored_candidate_count"] = snapshot.selection_scored_candidate_count;
+    report["selection_hint_adjusted_candidate_count"] = snapshot.selection_hint_adjusted_candidate_count;
+    report["selection_hint_adjusted_ratio"] = selection_hint_adjusted_ratio;
+    report["selection_hint_adjustment_counts"] = snapshot.selection_hint_adjustment_counts;
+    report["selection_hint_total_adjustments"] = total_hint_adjustments;
+    report["top_selection_hint_adjustments"] =
+        buildTopNamedCounts(sorted_cumulative_hint_adjustments, 8, "adjustment");
+    report["rejection_reason_counts"] = snapshot.rejection_reason_counts;
+    report["rejection_group_counts"] = rejection_group_counts;
+    report["total_rejections"] = total_rejections;
+    report["signal_generation_share"] = signal_generation_share;
+    report["manager_prefilter_share"] = manager_prefilter_share;
+    report["position_state_share"] = position_state_share;
+    report["no_trade_bias_active"] = no_trade_bias_active;
+    report["recommended_trade_floor_scale"] = recommended_trade_floor_scale;
+    report["top_rejections"] = buildTopList(sorted_cumulative_reasons, 12);
+    report["top_rejection_groups"] = buildTopGroups(sorted_cumulative_groups, 8);
+
+    nlohmann::json last_scan;
+    last_scan["rejection_reason_counts"] = last_scan_rejection_counts;
+    last_scan["rejection_group_counts"] = last_scan_group_counts;
+    last_scan["top_rejections"] = buildTopList(sorted_last_scan_reasons, 12);
+    last_scan["top_rejection_groups"] = buildTopGroups(sorted_last_scan_groups, 8);
+    last_scan["selection_hint_adjustment_counts"] = last_scan_hint_adjustment_counts;
+    last_scan["top_selection_hint_adjustments"] =
+        buildTopNamedCounts(sorted_last_scan_hint_adjustments, 8, "adjustment");
+    report["last_scan"] = std::move(last_scan);
+
+    try {
+        auto report_path =
+            autolife::utils::PathUtils::resolveRelativePath("logs/live_signal_funnel_taxonomy_report.json");
+        std::filesystem::create_directories(report_path.parent_path());
+
+        std::ofstream out(report_path.string(), std::ios::out | std::ios::trunc);
+        if (!out.is_open()) {
+            LOG_ERROR("Failed to open live signal funnel taxonomy report: {}", report_path.string());
+            return;
+        }
+        out << report.dump(2);
+        out.close();
+
+        if (!out) {
+            LOG_ERROR("Failed to write live signal funnel taxonomy report: {}", report_path.string());
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("Failed to flush live signal funnel taxonomy report: {}", e.what());
+    }
+}
+
 void TradingEngine::executeSignals() {
     if (pending_signals_.empty()) {
         return;
@@ -1035,12 +1520,37 @@ void TradingEngine::executeSignals() {
         const double loss_pct = risk_manager_->getDailyLossPct();
         LOG_ERROR("Daily loss limit exceeded: {:.2f}% >= {:.2f}% (skip new entries)",
                   loss_pct * 100.0, config_.max_daily_loss_pct * 100.0);
+        {
+            nlohmann::json payload;
+            payload["reason"] = "daily_loss_limit_exceeded";
+            payload["daily_loss_pct"] = loss_pct;
+            payload["max_daily_loss_pct"] = config_.max_daily_loss_pct;
+            payload["pending_candidates"] = pending_signals_.size();
+            appendJournalEvent(
+                core::JournalEventType::NO_TRADE,
+                "MULTI",
+                "risk_guard",
+                payload
+            );
+        }
         pending_signals_.clear();
         return;
     }
     if (risk_manager_->isDrawdownExceeded()) {
         LOG_ERROR("Max drawdown exceeded (limit {:.2f}%), skip new entries",
                   config_.max_drawdown * 100.0);
+        {
+            nlohmann::json payload;
+            payload["reason"] = "max_drawdown_exceeded";
+            payload["max_drawdown_limit"] = config_.max_drawdown;
+            payload["pending_candidates"] = pending_signals_.size();
+            appendJournalEvent(
+                core::JournalEventType::NO_TRADE,
+                "MULTI",
+                "risk_guard",
+                payload
+            );
+        }
         pending_signals_.clear();
         return;
     }
@@ -1280,21 +1790,51 @@ void TradingEngine::executeSignals() {
             market_hostility_score,
             market_hostility_ewma_
         );
+        {
+            nlohmann::json payload;
+            payload["reason"] = "hostility_pause_active";
+            payload["remaining_scans"] = hostile_pause_scans_remaining_;
+            payload["hostility_now"] = market_hostility_score;
+            payload["hostility_ewma"] = market_hostility_ewma_;
+            payload["dominant_regime"] = regimeToString(dominant_regime);
+            payload["recent_expectancy_krw"] = recent_expectancy_krw;
+            payload["recent_win_rate"] = recent_win_rate;
+            payload["pending_candidates"] = pending_signals_.size();
+            appendJournalEvent(
+                core::JournalEventType::NO_TRADE,
+                "MULTI",
+                "hostility_guard",
+                payload
+            );
+        }
         scans_without_new_entry_ = std::min(scans_without_new_entry_ + 1, 100);
         pending_signals_.clear();
         return;
     }
 
     if (strategy_manager_) {
-        strategy_manager_->refreshStrategyStatesFromHistory(
-            risk_manager_->getTradeHistory(),
-            dominant_regime,
-            config_.avoid_high_volatility,
-            config_.avoid_trending_down,
-            config_.min_strategy_trades_for_ev,
-            config_.min_strategy_expectancy_krw,
-            config_.min_strategy_profit_factor
-        );
+        if (config_.use_strategy_alpha_head_mode) {
+            // Alpha-head mode keeps strategy modules as feature/signal generators.
+            // Do not disable strategies here by historical EV/performance gate.
+            auto strategies = strategy_manager_->getStrategies();
+            for (auto& strategy_ptr : strategies) {
+                if (strategy_ptr && !strategy_ptr->isEnabled()) {
+                    strategy_ptr->setEnabled(true);
+                    LOG_INFO("Alpha-head mode: strategy re-enabled: {}",
+                             strategy_ptr->getInfo().name);
+                }
+            }
+        } else {
+            strategy_manager_->refreshStrategyStatesFromHistory(
+                risk_manager_->getTradeHistory(),
+                dominant_regime,
+                config_.avoid_high_volatility,
+                config_.avoid_trending_down,
+                config_.min_strategy_trades_for_ev,
+                config_.min_strategy_expectancy_krw,
+                config_.min_strategy_profit_factor
+            );
+        }
     }
 
     std::vector<strategy::Signal> execution_candidates = pending_signals_;
@@ -1368,6 +1908,24 @@ void TradingEngine::executeSignals() {
         }
     }
 
+    if (execution_candidates.empty()) {
+        nlohmann::json payload;
+        payload["reason"] = "policy_selected_zero_candidates";
+        payload["input_candidates"] = pending_signals_.size();
+        payload["dominant_regime"] = regimeToString(dominant_regime);
+        payload["small_seed_mode"] = small_seed_mode;
+        payload["max_new_orders_per_scan"] = per_scan_buy_limit;
+        appendJournalEvent(
+            core::JournalEventType::NO_TRADE,
+            "MULTI",
+            "policy_guard",
+            payload
+        );
+        scans_without_new_entry_ = std::min(scans_without_new_entry_ + 1, 100);
+        pending_signals_.clear();
+        return;
+    }
+
     int executed = 0;
     int filtered_out = 0;
     int executed_buys_this_scan = 0;
@@ -1402,10 +1960,29 @@ void TradingEngine::executeSignals() {
             continue;
         }
 
+        const bool alpha_head_fallback_candidate =
+            isAlphaHeadFallbackCandidate(signal, config_.use_strategy_alpha_head_mode);
+        const double history_penalty_scale = alpha_head_fallback_candidate ? 0.45 : 1.0;
         double required_signal_strength = adaptive_filter_floor;
+        if (alpha_head_fallback_candidate) {
+            required_signal_strength = std::min(required_signal_strength, 0.58);
+        }
         double regime_rr_add = 0.0;
         double regime_edge_add = 0.0;
         bool regime_pattern_block = false;
+        auto markPatternBlockOrSoften = [&](int trades, double exp_krw, double wr, double pf) {
+            if (!alpha_head_fallback_candidate) {
+                regime_pattern_block = true;
+                return;
+            }
+            if (trades >= 18 && exp_krw <= -28.0 && wr <= 0.18 && pf <= 0.70) {
+                regime_pattern_block = true;
+                return;
+            }
+            required_signal_strength = std::max(required_signal_strength, 0.60);
+            regime_rr_add += 0.10;
+            regime_edge_add += 0.00015;
+        };
         auto regime_edge_it = strategy_regime_edge.find(
             makeStrategyRegimeKey(signal.strategy_name, signal.market_regime)
         );
@@ -1418,38 +1995,38 @@ void TradingEngine::executeSignals() {
 
                 if (stat.trades >= 10 &&
                     (exp_krw < -20.0 || (wr < 0.30 && pf < 0.78))) {
-                    regime_pattern_block = true;
+                    markPatternBlockOrSoften(stat.trades, exp_krw, wr, pf);
                 }
                 if (stat.trades >= 12 &&
                     exp_krw < -15.0 &&
                     (wr < 0.40 || pf < 0.90)) {
                     required_signal_strength = std::max(required_signal_strength, 0.62);
-                    regime_rr_add += 0.20;
-                    regime_edge_add += 0.0003;
+                    regime_rr_add += (0.20 * history_penalty_scale);
+                    regime_edge_add += (0.0003 * history_penalty_scale);
                 }
                 if (stat.trades >= 18 &&
                     exp_krw < -22.0 &&
                     wr < 0.20) {
-                    regime_pattern_block = true;
+                    markPatternBlockOrSoften(stat.trades, exp_krw, wr, pf);
                 }
                 if (exp_krw < 0.0) {
-                    required_signal_strength += std::clamp((-exp_krw) / 2500.0, 0.0, 0.08);
-                    regime_rr_add += std::clamp((-exp_krw) / 1800.0, 0.0, 0.20);
-                    regime_edge_add += std::clamp((-exp_krw) / 200000.0, 0.0, 0.0004);
+                    required_signal_strength += std::clamp((-exp_krw) / 2500.0, 0.0, 0.08) * history_penalty_scale;
+                    regime_rr_add += std::clamp((-exp_krw) / 1800.0, 0.0, 0.20) * history_penalty_scale;
+                    regime_edge_add += std::clamp((-exp_krw) / 200000.0, 0.0, 0.0004) * history_penalty_scale;
                 } else if (exp_krw > 8.0 && wr >= 0.58 && pf >= 1.15) {
                     required_signal_strength -= 0.02;
                     regime_rr_add -= 0.08;
                     regime_edge_add -= 0.00015;
                 }
                 if (wr < 0.42) {
-                    required_signal_strength += 0.03;
-                    regime_rr_add += 0.10;
-                    regime_edge_add += 0.0002;
+                    required_signal_strength += (0.03 * history_penalty_scale);
+                    regime_rr_add += (0.10 * history_penalty_scale);
+                    regime_edge_add += (0.0002 * history_penalty_scale);
                 }
                 if (pf < 0.95) {
-                    required_signal_strength += 0.02;
-                    regime_rr_add += 0.08;
-                    regime_edge_add += 0.0002;
+                    required_signal_strength += (0.02 * history_penalty_scale);
+                    regime_rr_add += (0.08 * history_penalty_scale);
+                    regime_edge_add += (0.0002 * history_penalty_scale);
                 }
             }
         }
@@ -1469,16 +2046,16 @@ void TradingEngine::executeSignals() {
 
                 if (stat.trades >= 6 &&
                     exp_krw < -40.0 && wr < 0.25 && pf < 0.75) {
-                    regime_pattern_block = true;
+                    markPatternBlockOrSoften(stat.trades, exp_krw, wr, pf);
                 }
                 if (exp_krw < -20.0 && wr < 0.35 && pf < 0.85) {
-                    required_signal_strength += 0.05;
-                    regime_rr_add += 0.15;
-                    regime_edge_add += 0.0003;
+                    required_signal_strength += (0.05 * history_penalty_scale);
+                    regime_rr_add += (0.15 * history_penalty_scale);
+                    regime_edge_add += (0.0003 * history_penalty_scale);
                 } else if (exp_krw < -10.0) {
-                    required_signal_strength += 0.02;
-                    regime_rr_add += 0.08;
-                    regime_edge_add += 0.00015;
+                    required_signal_strength += (0.02 * history_penalty_scale);
+                    regime_rr_add += (0.08 * history_penalty_scale);
+                    regime_edge_add += (0.00015 * history_penalty_scale);
                 } else if (exp_krw > 10.0 && wr >= 0.60 && pf >= 1.20) {
                     required_signal_strength -= 0.02;
                     regime_rr_add -= 0.06;
@@ -1493,7 +2070,14 @@ void TradingEngine::executeSignals() {
             regime_edge_add,
             regime_pattern_block
         );
-        required_signal_strength = std::clamp(required_signal_strength, 0.35, 0.92);
+        if (alpha_head_fallback_candidate) {
+            required_signal_strength = std::max(0.46, required_signal_strength - 0.05);
+        }
+        required_signal_strength = std::clamp(
+            required_signal_strength,
+            alpha_head_fallback_candidate ? 0.34 : 0.35,
+            alpha_head_fallback_candidate ? 0.78 : 0.92
+        );
         signal.signal_filter = required_signal_strength;
         const bool core_risk_gate_enabled =
             config_.enable_core_plane_bridge && config_.enable_core_risk_plane;
@@ -1515,13 +2099,19 @@ void TradingEngine::executeSignals() {
                          signal.market, signal.strategy_name, signal.strength, signal.expected_value);
             }
         }
+        const bool alpha_head_quality_override =
+            alpha_head_fallback_candidate &&
+            !regime_pattern_block &&
+            signal.expected_value >= 0.0007 &&
+            signal.liquidity_score >= 58.0 &&
+            signal.strength >= (required_signal_strength - 0.03);
         if (regime_pattern_block) {
             LOG_INFO("{} skipped by regime-pattern gate [{}]: severe negative pattern history",
                      signal.market, signal.strategy_name);
             filtered_out++;
             continue;
         }
-        if (signal.strength < required_signal_strength) {
+        if (signal.strength < required_signal_strength && !alpha_head_quality_override) {
             LOG_INFO("{} filtered out by dynamic filter (strength {:.3f} < filter {:.3f})",
                      signal.market, signal.strength, required_signal_strength);
             filtered_out++;
@@ -1536,15 +2126,21 @@ void TradingEngine::executeSignals() {
                 const double pf = stat.profitFactor();
                 if (exp_krw < config_.min_strategy_expectancy_krw ||
                     pf < config_.min_strategy_profit_factor) {
-                    required_signal_strength += 0.04;
-                    regime_rr_add += 0.12;
-                    regime_edge_add += 0.00025;
+                    required_signal_strength += (0.04 * history_penalty_scale);
+                    regime_rr_add += (0.12 * history_penalty_scale);
+                    regime_edge_add += (0.00025 * history_penalty_scale);
                     if (exp_krw < (config_.min_strategy_expectancy_krw - 15.0) &&
                         pf < std::max(0.75, config_.min_strategy_profit_factor - 0.20)) {
-                        LOG_INFO("{} skipped by severe strategy EV gate [{}]: exp {:.2f}, PF {:.2f}",
-                                 signal.market, signal.strategy_name, exp_krw, pf);
-                        filtered_out++;
-                        continue;
+                        if (alpha_head_fallback_candidate) {
+                            required_signal_strength = std::max(required_signal_strength, 0.62);
+                            regime_rr_add += 0.08;
+                            regime_edge_add += 0.00012;
+                        } else {
+                            LOG_INFO("{} skipped by severe strategy EV gate [{}]: exp {:.2f}, PF {:.2f}",
+                                     signal.market, signal.strategy_name, exp_krw, pf);
+                            filtered_out++;
+                            continue;
+                        }
                     }
                 }
             }
@@ -1645,6 +2241,19 @@ void TradingEngine::executeSignals() {
         }
         adaptive_rr_gate += regime_rr_add;
         adaptive_edge_gate += regime_edge_add;
+        if (alpha_head_fallback_candidate) {
+            const bool hostile_or_thin =
+                signal.market_regime == analytics::MarketRegime::HIGH_VOLATILITY ||
+                signal.market_regime == analytics::MarketRegime::TRENDING_DOWN ||
+                (signal.liquidity_score > 0.0 && signal.liquidity_score < 50.0);
+            const double rr_relax = hostile_or_thin ? 0.06 : 0.16;
+            const double edge_relax = hostile_or_thin ? 0.00035 : 0.00100;
+            adaptive_rr_gate = std::max(1.03, adaptive_rr_gate - rr_relax);
+            adaptive_edge_gate = std::max(
+                std::max(0.00035, config_.min_expected_edge_pct * 0.35),
+                adaptive_edge_gate - edge_relax
+            );
+        }
         adaptive_rr_gate = std::clamp(adaptive_rr_gate, config_.min_reward_risk, config_.min_reward_risk + 0.45);
         adaptive_edge_gate = std::clamp(adaptive_edge_gate, config_.min_expected_edge_pct, config_.min_expected_edge_pct + 0.0012);
         if (scans_without_new_entry_ >= 6 &&
@@ -1813,6 +2422,20 @@ void TradingEngine::executeSignals() {
     if (executed_buys_this_scan > 0) {
         scans_without_new_entry_ = 0;
     } else {
+        nlohmann::json payload;
+        payload["reason"] = "all_candidates_rejected_by_execution_gates";
+        payload["execution_candidates"] = execution_candidates.size();
+        payload["filtered_out"] = filtered_out;
+        payload["dominant_regime"] = regimeToString(dominant_regime);
+        payload["small_seed_mode"] = small_seed_mode;
+        payload["hostility_ewma"] = market_hostility_ewma_;
+        payload["hostility_now"] = market_hostility_score;
+        appendJournalEvent(
+            core::JournalEventType::NO_TRADE,
+            "MULTI",
+            "execution_guard",
+            payload
+        );
         scans_without_new_entry_ = std::min(scans_without_new_entry_ + 1, 100);
     }
     pending_signals_.clear();
@@ -3503,7 +4126,7 @@ void TradingEngine::saveLearningState() {
         }
 
         core::LearningStateSnapshot snapshot;
-        snapshot.schema_version = 1;
+        snapshot.schema_version = core::LearningStateStoreJson::kCurrentSchemaVersion;
         snapshot.saved_at_ms = getCurrentTimestampMs();
         snapshot.policy_params = nlohmann::json::object();
         snapshot.policy_params["dynamic_filter_value"] = dynamic_filter_value_;
@@ -3518,6 +4141,7 @@ void TradingEngine::saveLearningState() {
                 row["strategy_name"] = key.strategy_name;
                 row["regime"] = static_cast<int>(key.regime);
                 row["liquidity_bucket"] = key.liquidity_bucket;
+                row["entry_archetype"] = key.entry_archetype;
                 row["trades"] = stats.trades;
                 row["wins"] = stats.wins;
                 row["gross_profit"] = stats.gross_profit;

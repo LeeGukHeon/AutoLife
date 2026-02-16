@@ -21,7 +21,8 @@ enum class JournalEventType {
     POSITION_OPENED,
     POSITION_REDUCED,
     POSITION_CLOSED,
-    POLICY_CHANGED
+    POLICY_CHANGED,
+    NO_TRADE
 };
 
 struct JournalEvent {

@@ -224,9 +224,6 @@ public:
         const std::vector<Candle>& recent_candles
     );
     
-    // 롤링 통계 조회
-    RollingStatistics getRollingStatistics() const;
-    
 private:
         // 포지션 상태 업데이트
         void updateState(const std::string& market, double current_price) override;

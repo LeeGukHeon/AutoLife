@@ -2,10 +2,11 @@
 import argparse
 import json
 import pathlib
-import shutil
 import subprocess
 import sys
 from typing import Any, Dict, List
+
+from _script_common import verification_lock
 
 
 def ensure_directory(path_value: pathlib.Path) -> None:
@@ -54,6 +55,42 @@ def get_dataset_files(dirs: List[pathlib.Path], only_real_data: bool, require_hi
     return uniq
 
 
+def resolve_explicit_dataset_files(
+    dataset_names: List[str],
+    default_dirs: List[pathlib.Path],
+    require_higher_tf: bool,
+    only_real_data: bool,
+) -> List[pathlib.Path]:
+    resolved: List[pathlib.Path] = []
+    search_dirs = [pathlib.Path.cwd().resolve(), *default_dirs]
+    for raw in dataset_names:
+        token = str(raw).strip()
+        if not token:
+            continue
+        cand = pathlib.Path(token)
+        found = None
+        if cand.is_absolute() and cand.exists():
+            found = cand.resolve()
+        else:
+            for base in search_dirs:
+                probe = (base / cand).resolve()
+                if probe.exists():
+                    found = probe
+                    break
+        if found is None:
+            raise FileNotFoundError(f"Dataset not found: {token}")
+        is_real = "backtest_real" in str(found.parent).lower() or "_1m_" in found.name.lower()
+        if only_real_data and not is_real:
+            continue
+        if is_real and "_1m_" not in found.name.lower():
+            continue
+        if require_higher_tf and is_real and not has_higher_tf_companions(found):
+            raise RuntimeError(f"Missing higher TF companions for dataset: {found}")
+        resolved.append(found)
+    uniq = sorted(set(resolved), key=lambda x: str(x).lower())
+    return uniq
+
+
 def run_fetch_script(
     fetch_script: pathlib.Path,
     market: str,
@@ -86,6 +123,14 @@ def run_fetch_script(
 
 def derive_variant_path(base_path: pathlib.Path, variant: str) -> pathlib.Path:
     return base_path.with_name(f"{base_path.stem}_{variant}{base_path.suffix}")
+
+
+def remove_deprecated_variant_artifacts(*base_paths: pathlib.Path) -> None:
+    for base_path in base_paths:
+        for variant in ("strict", "adaptive"):
+            stale = derive_variant_path(base_path, variant)
+            if stale.exists():
+                stale.unlink(missing_ok=True)
 
 
 def run_profitability_matrix(
@@ -145,12 +190,44 @@ def run_profitability_matrix(
     return json.loads(output_report_json.read_text(encoding="utf-8-sig"))
 
 
+def run_parity_invariant_report(
+    parity_script: pathlib.Path,
+    datasets: List[pathlib.Path],
+    output_json: pathlib.Path,
+    fail_on_invariant: bool,
+) -> Dict[str, Any]:
+    ensure_directory(output_json.parent)
+    cmd = [
+        sys.executable,
+        str(parity_script),
+        "--dataset-names",
+        *[str(x) for x in datasets],
+        "--output-json",
+        str(output_json),
+    ]
+    if fail_on_invariant:
+        cmd.append("--fail-on-invariant")
+    proc = subprocess.run(cmd)
+    if proc.returncode != 0:
+        raise RuntimeError(f"generate_parity_invariant_report.py failed (exit={proc.returncode})")
+    return json.loads(output_json.read_text(encoding="utf-8-sig"))
+
+
 def print_report_snapshot(prefix: str, report: Dict[str, Any]) -> None:
     core_full = next((x for x in report.get("profile_summaries", []) if x.get("profile_id") == "core_full"), None)
     if core_full is not None:
         print(f"[RealDataLoop] {prefix}.core_full.avg_profit_factor={core_full.get('avg_profit_factor')}")
         print(f"[RealDataLoop] {prefix}.core_full.avg_total_trades={core_full.get('avg_total_trades')}")
         print(f"[RealDataLoop] {prefix}.core_full.avg_expectancy_krw={core_full.get('avg_expectancy_krw')}")
+        print(
+            f"[RealDataLoop] {prefix}.core_full.entry_rejection_top="
+            f"{core_full.get('top_entry_rejection_reason')}:"
+            f"{core_full.get('top_entry_rejection_count')}"
+        )
+        print(
+            f"[RealDataLoop] {prefix}.core_full.entry_rejection_total="
+            f"{core_full.get('entry_rejection_total')}"
+        )
 
     threshold_info = report.get("thresholds", {})
     hostility_bundle = threshold_info.get("hostility_adaptive", {})
@@ -165,10 +242,14 @@ def print_report_snapshot(prefix: str, report: Dict[str, Any]) -> None:
             f"min_trades:{effective.get('min_avg_trades')}"
         )
         hostility = hostility_bundle.get("hostility", {})
+        quality = hostility_bundle.get("quality", {})
+        blended = hostility_bundle.get("blended_context", {})
         print(
             f"[RealDataLoop] {prefix}.hostility="
-            f"{hostility.get('hostility_level')} "
-            f"(score={hostility.get('avg_adversarial_score')})"
+            f"{blended.get('blended_hostility_level', hostility.get('hostility_level'))} "
+            f"(score={blended.get('blended_adversarial_score', hostility.get('avg_adversarial_score'))}, "
+            f"quality={quality.get('quality_level', 'unknown')}, "
+            f"q_score={quality.get('avg_quality_risk_score', 0.0)})"
         )
     core_vs_legacy = report.get("core_vs_legacy") or {}
     if core_vs_legacy:
@@ -185,6 +266,26 @@ def main(argv=None) -> int:
     parser.add_argument("--fetch-script", "-FetchScript", default=r".\scripts\fetch_upbit_historical_candles.py")
     parser.add_argument("--matrix-script", "-MatrixScript", default=r".\scripts\run_profitability_matrix.py")
     parser.add_argument("--tune-script", "-TuneScript", default=r".\scripts\tune_candidate_gate_trade_density.py")
+    parser.add_argument(
+        "--entry-rejection-script",
+        "-EntryRejectionScript",
+        default=r".\scripts\analyze_entry_rejections.py",
+    )
+    parser.add_argument(
+        "--parity-invariant-script",
+        "-ParityInvariantScript",
+        default=r".\scripts\generate_parity_invariant_report.py",
+    )
+    parser.add_argument(
+        "--strategy-rejection-taxonomy-script",
+        "-StrategyRejectionTaxonomyScript",
+        default=r".\scripts\generate_strategy_rejection_taxonomy_report.py",
+    )
+    parser.add_argument(
+        "--loss-contributor-script",
+        "-LossContributorScript",
+        default=r".\scripts\analyze_loss_contributors.py",
+    )
     parser.add_argument("--real-data-dir", "-RealDataDir", default=r".\data\backtest_real")
     parser.add_argument("--backtest-data-dir", "-BacktestDataDir", default=r".\data\backtest")
     parser.add_argument("--curated-data-dir", "-CuratedDataDir", default=r".\data\backtest_curated")
@@ -207,6 +308,47 @@ def main(argv=None) -> int:
     parser.add_argument("--output-matrix-csv", "-OutputMatrixCsv", default=r".\build\Release\logs\profitability_matrix_realdata.csv")
     parser.add_argument("--output-profile-csv", "-OutputProfileCsv", default=r".\build\Release\logs\profitability_profile_summary_realdata.csv")
     parser.add_argument("--output-report-json", "-OutputReportJson", default=r".\build\Release\logs\profitability_gate_report_realdata.json")
+    parser.add_argument(
+        "--entry-rejection-output-json",
+        "-EntryRejectionOutputJson",
+        default=r".\build\Release\logs\entry_rejection_summary_realdata.json",
+    )
+    parser.add_argument(
+        "--entry-rejection-profile-csv",
+        "-EntryRejectionProfileCsv",
+        default=r".\build\Release\logs\entry_rejection_by_profile_realdata.csv",
+    )
+    parser.add_argument(
+        "--entry-rejection-dataset-csv",
+        "-EntryRejectionDatasetCsv",
+        default=r".\build\Release\logs\entry_rejection_by_dataset_realdata.csv",
+    )
+    parser.add_argument(
+        "--strategy-rejection-taxonomy-output-json",
+        "-StrategyRejectionTaxonomyOutputJson",
+        default=r".\build\Release\logs\strategy_rejection_taxonomy_report.json",
+    )
+    parser.add_argument(
+        "--live-signal-funnel-taxonomy-json",
+        "-LiveSignalFunnelTaxonomyJson",
+        default=r".\build\Release\logs\live_signal_funnel_taxonomy_report.json",
+    )
+    parser.add_argument(
+        "--parity-invariant-output-json",
+        "-ParityInvariantOutputJson",
+        default=r".\build\Release\logs\parity_invariant_report.json",
+    )
+    parser.add_argument(
+        "--loss-contributor-market-csv",
+        "-LossContributorMarketCsv",
+        default=r".\build\Release\logs\loss_contributor_by_market.csv",
+    )
+    parser.add_argument(
+        "--loss-contributor-strategy-csv",
+        "-LossContributorStrategyCsv",
+        default=r".\build\Release\logs\loss_contributor_by_strategy.csv",
+    )
+    parser.add_argument("--loss-contributor-max-workers", "-LossContributorMaxWorkers", type=int, default=1)
     parser.add_argument("--gate-min-avg-trades", "-GateMinAvgTrades", type=int, default=8)
     parser.add_argument("--matrix-max-workers", "-MatrixMaxWorkers", type=int, default=1)
     parser.add_argument("--matrix-backtest-retry-count", "-MatrixBacktestRetryCount", type=int, default=2)
@@ -237,7 +379,19 @@ def main(argv=None) -> int:
     parser.add_argument("--skip-fetch", "-SkipFetch", action="store_true")
     parser.add_argument("--skip-higher-tf-fetch", "-SkipHigherTfFetch", action="store_true")
     parser.add_argument("--skip-tune", "-SkipTune", action="store_true")
+    parser.add_argument("--skip-entry-rejection-analysis", "-SkipEntryRejectionAnalysis", action="store_true")
+    parser.add_argument("--skip-strategy-rejection-taxonomy", "-SkipStrategyRejectionTaxonomy", action="store_true")
+    parser.add_argument("--skip-loss-contributor-analysis", "-SkipLossContributorAnalysis", action="store_true")
+    parser.add_argument("--skip-parity-invariant", "-SkipParityInvariant", action="store_true")
+    parser.add_argument("--fail-on-parity-invariant", "-FailOnParityInvariant", action="store_true")
     parser.add_argument("--real-data-only", "-RealDataOnly", action="store_true")
+    parser.add_argument(
+        "--dataset-names",
+        "-DatasetNames",
+        nargs="*",
+        default=[],
+        help="Explicit primary datasets (.csv). When provided, auto-discovery is bypassed.",
+    )
     parser.add_argument(
         "--require-higher-tf-companions",
         "-RequireHigherTfCompanions",
@@ -250,7 +404,12 @@ def main(argv=None) -> int:
         dest="require_higher_tf_companions",
         action="store_false",
     )
-    parser.add_argument("--run-both-hostility-modes", "-RunBothHostilityModes", action="store_true")
+    parser.add_argument(
+        "--run-both-hostility-modes",
+        "-RunBothHostilityModes",
+        action="store_true",
+        help="Deprecated compatibility flag. Strict/adaptive split is removed; a single hostility-driven gate run is used.",
+    )
     parser.add_argument(
         "--skip-core-vs-legacy-gate",
         "-SkipCoreVsLegacyGate",
@@ -263,17 +422,32 @@ def main(argv=None) -> int:
         action="store_true",
         help="Enable adaptive strategy state I/O during matrix backtests.",
     )
+    parser.add_argument("--verification-lock-path", "-VerificationLockPath", default=r".\build\Release\logs\verification_run.lock")
+    parser.add_argument("--verification-lock-timeout-sec", "-VerificationLockTimeoutSec", type=int, default=1800)
+    parser.add_argument("--verification-lock-stale-sec", "-VerificationLockStaleSec", type=int, default=14400)
     args = parser.parse_args(argv)
 
     fetch_script = pathlib.Path(args.fetch_script).resolve()
     matrix_script = pathlib.Path(args.matrix_script).resolve()
     tune_script = pathlib.Path(args.tune_script).resolve()
+    entry_rejection_script = pathlib.Path(args.entry_rejection_script).resolve()
+    parity_invariant_script = pathlib.Path(args.parity_invariant_script).resolve()
+    strategy_rejection_taxonomy_script = pathlib.Path(args.strategy_rejection_taxonomy_script).resolve()
+    loss_contributor_script = pathlib.Path(args.loss_contributor_script).resolve()
     real_data_dir = pathlib.Path(args.real_data_dir).resolve()
     backtest_data_dir = pathlib.Path(args.backtest_data_dir).resolve()
     curated_data_dir = pathlib.Path(args.curated_data_dir).resolve()
     output_matrix_csv = pathlib.Path(args.output_matrix_csv).resolve()
     output_profile_csv = pathlib.Path(args.output_profile_csv).resolve()
     output_report_json = pathlib.Path(args.output_report_json).resolve()
+    entry_rejection_output_json = pathlib.Path(args.entry_rejection_output_json).resolve()
+    entry_rejection_profile_csv = pathlib.Path(args.entry_rejection_profile_csv).resolve()
+    entry_rejection_dataset_csv = pathlib.Path(args.entry_rejection_dataset_csv).resolve()
+    strategy_rejection_taxonomy_output_json = pathlib.Path(args.strategy_rejection_taxonomy_output_json).resolve()
+    live_signal_funnel_taxonomy_json = pathlib.Path(args.live_signal_funnel_taxonomy_json).resolve()
+    parity_invariant_output_json = pathlib.Path(args.parity_invariant_output_json).resolve()
+    loss_contributor_market_csv = pathlib.Path(args.loss_contributor_market_csv).resolve()
+    loss_contributor_strategy_csv = pathlib.Path(args.loss_contributor_strategy_csv).resolve()
 
     ensure_directory(real_data_dir)
 
@@ -299,7 +473,15 @@ def main(argv=None) -> int:
                 run_fetch_script(fetch_script, market, "240", args.candles4h, args.chunk_size, args.sleep_ms, target_4h)
 
     dataset_dirs = [real_data_dir] if args.real_data_only else [backtest_data_dir, curated_data_dir, real_data_dir]
-    datasets = get_dataset_files(dataset_dirs, args.real_data_only, args.require_higher_tf_companions)
+    if args.dataset_names:
+        datasets = resolve_explicit_dataset_files(
+            dataset_names=list(args.dataset_names),
+            default_dirs=dataset_dirs,
+            require_higher_tf=bool(args.require_higher_tf_companions),
+            only_real_data=bool(args.real_data_only),
+        )
+    else:
+        datasets = get_dataset_files(dataset_dirs, args.real_data_only, args.require_higher_tf_companions)
     if not datasets:
         raise RuntimeError("No datasets found after fetch step.")
 
@@ -308,66 +490,31 @@ def main(argv=None) -> int:
         f"require_higher_tf={bool(args.require_higher_tf_companions)}, dataset_count={len(datasets)}"
     )
 
-    print(f"[RealDataLoop] Running profitability matrix with datasets={len(datasets)}")
-    if args.run_both_hostility_modes:
-        strict_matrix_csv = derive_variant_path(output_matrix_csv, "strict")
-        strict_profile_csv = derive_variant_path(output_profile_csv, "strict")
-        strict_report_json = derive_variant_path(output_report_json, "strict")
-        adaptive_matrix_csv = derive_variant_path(output_matrix_csv, "adaptive")
-        adaptive_profile_csv = derive_variant_path(output_profile_csv, "adaptive")
-        adaptive_report_json = derive_variant_path(output_report_json, "adaptive")
+    def run_verification_pipeline() -> None:
+        if not args.skip_parity_invariant:
+            print(f"[RealDataLoop] Running parity invariant report with datasets={len(datasets)}")
+            parity_report = run_parity_invariant_report(
+                parity_script=parity_invariant_script,
+                datasets=datasets,
+                output_json=parity_invariant_output_json,
+                fail_on_invariant=bool(args.fail_on_parity_invariant),
+            )
+            summary = parity_report.get("summary") or {}
+            print(
+                f"[RealDataLoop] parity_invariant="
+                f"overall_pass={summary.get('overall_invariant_pass')}, "
+                f"fail_count={summary.get('invariant_fail_count')}"
+            )
 
-        strict_report = run_profitability_matrix(
-            matrix_script=matrix_script,
-            datasets=datasets,
-            gate_min_avg_trades=args.gate_min_avg_trades,
-            output_matrix_csv=strict_matrix_csv,
-            output_profile_csv=strict_profile_csv,
-            output_report_json=strict_report_json,
-            matrix_max_workers=args.matrix_max_workers,
-            matrix_backtest_retry_count=args.matrix_backtest_retry_count,
-            enable_hostility_adaptive_thresholds=False,
-            enable_hostility_adaptive_trades_only=bool(args.enable_hostility_adaptive_trades_only),
-            require_higher_tf_companions=args.require_higher_tf_companions,
-            enable_adaptive_state_io=bool(args.enable_adaptive_state_io),
-            skip_core_vs_legacy_gate=bool(args.skip_core_vs_legacy_gate),
-        )
-        print_report_snapshot("strict", strict_report)
+        print(f"[RealDataLoop] Running profitability matrix with datasets={len(datasets)}")
+        if args.run_both_hostility_modes:
+            print(
+                "[RealDataLoop] run_both_hostility_modes is deprecated. "
+                "Using a single hostility-driven gate run."
+            )
 
-        adaptive_report = run_profitability_matrix(
-            matrix_script=matrix_script,
-            datasets=datasets,
-            gate_min_avg_trades=args.gate_min_avg_trades,
-            output_matrix_csv=adaptive_matrix_csv,
-            output_profile_csv=adaptive_profile_csv,
-            output_report_json=adaptive_report_json,
-            matrix_max_workers=args.matrix_max_workers,
-            matrix_backtest_retry_count=args.matrix_backtest_retry_count,
-            enable_hostility_adaptive_thresholds=True,
-            enable_hostility_adaptive_trades_only=False,
-            require_higher_tf_companions=args.require_higher_tf_companions,
-            enable_adaptive_state_io=bool(args.enable_adaptive_state_io),
-            skip_core_vs_legacy_gate=bool(args.skip_core_vs_legacy_gate),
-        )
-        print_report_snapshot("adaptive", adaptive_report)
+        remove_deprecated_variant_artifacts(output_matrix_csv, output_profile_csv, output_report_json)
 
-        selected_adaptive = bool(args.enable_hostility_adaptive_thresholds)
-        selected_mode = "adaptive" if selected_adaptive else "strict"
-        selected_report = adaptive_report if selected_adaptive else strict_report
-        selected_matrix_csv = adaptive_matrix_csv if selected_adaptive else strict_matrix_csv
-        selected_profile_csv = adaptive_profile_csv if selected_adaptive else strict_profile_csv
-        selected_report_json = adaptive_report_json if selected_adaptive else strict_report_json
-
-        if selected_matrix_csv != output_matrix_csv:
-            shutil.copy2(selected_matrix_csv, output_matrix_csv)
-        if selected_profile_csv != output_profile_csv:
-            shutil.copy2(selected_profile_csv, output_profile_csv)
-        if selected_report_json != output_report_json:
-            shutil.copy2(selected_report_json, output_report_json)
-        print(f"[RealDataLoop] selected_mode={selected_mode}")
-        print_report_snapshot("selected", selected_report)
-        report = selected_report
-    else:
         selected_adaptive = bool(args.enable_hostility_adaptive_thresholds)
         selected_trades_only = (not selected_adaptive) and bool(args.enable_hostility_adaptive_trades_only)
         report = run_profitability_matrix(
@@ -387,44 +534,125 @@ def main(argv=None) -> int:
         )
         print_report_snapshot("selected", report)
 
-    if not args.skip_tune:
-        print("[RealDataLoop] Running candidate trade-density tuning with real datasets included")
-        tune_cmd = [
-            sys.executable,
-            str(tune_script),
-            "--data-dir",
-            str(backtest_data_dir),
-            "--curated-data-dir",
-            str(curated_data_dir),
-            "--extra-data-dirs",
-            str(real_data_dir),
-            "--matrix-max-workers",
-            str(max(1, int(args.matrix_max_workers))),
-            "--matrix-backtest-retry-count",
-            str(max(1, int(args.matrix_backtest_retry_count))),
-        ]
-        if args.real_data_only:
-            tune_cmd.append("--real-data-only")
-        if args.require_higher_tf_companions:
-            tune_cmd.append("--require-higher-tf-companions")
-        else:
-            tune_cmd.append("--allow-missing-higher-tf-companions")
-        if args.enable_hostility_adaptive_thresholds:
-            tune_cmd.append("--enable-hostility-adaptive-thresholds")
-        else:
-            tune_cmd.append("--disable-hostility-adaptive-thresholds")
-        if args.enable_hostility_adaptive_trades_only:
-            tune_cmd.append("--enable-hostility-adaptive-trades-only")
-        else:
-            tune_cmd.append("--disable-hostility-adaptive-trades-only")
-        if args.skip_core_vs_legacy_gate:
-            tune_cmd.append("--skip-core-vs-legacy-gate")
-        tune_proc = subprocess.run(tune_cmd)
-        if tune_proc.returncode != 0:
-            raise RuntimeError(f"tune_candidate_gate_trade_density.py failed (exit={tune_proc.returncode})")
+        if not args.skip_entry_rejection_analysis:
+            print("[RealDataLoop] Analyzing entry rejection reasons from matrix report")
+            rejection_cmd = [
+                sys.executable,
+                str(entry_rejection_script),
+                "--report-json",
+                str(output_report_json),
+                "--output-json",
+                str(entry_rejection_output_json),
+                "--output-profile-csv",
+                str(entry_rejection_profile_csv),
+                "--output-dataset-csv",
+                str(entry_rejection_dataset_csv),
+            ]
+            rej_proc = subprocess.run(rejection_cmd)
+            if rej_proc.returncode != 0:
+                raise RuntimeError(f"analyze_entry_rejections.py failed (exit={rej_proc.returncode})")
+
+        if not args.skip_strategy_rejection_taxonomy:
+            if args.skip_entry_rejection_analysis and not entry_rejection_output_json.exists():
+                raise RuntimeError(
+                    "strategy rejection taxonomy requested but entry rejection summary is missing: "
+                    f"{entry_rejection_output_json}"
+                )
+            taxonomy_cmd = [
+                sys.executable,
+                str(strategy_rejection_taxonomy_script),
+                "--entry-rejection-summary-json",
+                str(entry_rejection_output_json),
+                "--output-json",
+                str(strategy_rejection_taxonomy_output_json),
+                "--live-signal-funnel-taxonomy-json",
+                str(live_signal_funnel_taxonomy_json),
+            ]
+            tax_proc = subprocess.run(taxonomy_cmd)
+            if tax_proc.returncode != 0:
+                raise RuntimeError(
+                    f"generate_strategy_rejection_taxonomy_report.py failed (exit={tax_proc.returncode})"
+                )
+
+        if not args.skip_loss_contributor_analysis:
+            print("[RealDataLoop] Analyzing loss contributors by market/strategy")
+            loss_cmd = [
+                sys.executable,
+                str(loss_contributor_script),
+                "--gate-report-json",
+                str(output_report_json),
+                "--data-dirs",
+                str(backtest_data_dir),
+                str(curated_data_dir),
+                str(real_data_dir),
+                "--output-market-csv",
+                str(loss_contributor_market_csv),
+                "--output-strategy-csv",
+                str(loss_contributor_strategy_csv),
+                "--max-workers",
+                str(max(1, int(args.loss_contributor_max_workers))),
+            ]
+            loss_proc = subprocess.run(loss_cmd)
+            if loss_proc.returncode != 0:
+                raise RuntimeError(f"analyze_loss_contributors.py failed (exit={loss_proc.returncode})")
+
+        if not args.skip_tune:
+            print("[RealDataLoop] Running candidate trade-density tuning with real datasets included")
+            tune_cmd = [
+                sys.executable,
+                str(tune_script),
+                "--data-dir",
+                str(backtest_data_dir),
+                "--curated-data-dir",
+                str(curated_data_dir),
+                "--extra-data-dirs",
+                str(real_data_dir),
+                "--matrix-max-workers",
+                str(max(1, int(args.matrix_max_workers))),
+                "--matrix-backtest-retry-count",
+                str(max(1, int(args.matrix_backtest_retry_count))),
+            ]
+            if args.real_data_only:
+                tune_cmd.append("--real-data-only")
+            if args.dataset_names:
+                tune_cmd.extend(["--dataset-names", *[str(x) for x in datasets]])
+            if args.require_higher_tf_companions:
+                tune_cmd.append("--require-higher-tf-companions")
+            else:
+                tune_cmd.append("--allow-missing-higher-tf-companions")
+            if args.enable_hostility_adaptive_thresholds:
+                tune_cmd.append("--enable-hostility-adaptive-thresholds")
+            else:
+                tune_cmd.append("--disable-hostility-adaptive-thresholds")
+            if args.enable_hostility_adaptive_trades_only:
+                tune_cmd.append("--enable-hostility-adaptive-trades-only")
+            else:
+                tune_cmd.append("--disable-hostility-adaptive-trades-only")
+            if args.skip_core_vs_legacy_gate:
+                tune_cmd.append("--skip-core-vs-legacy-gate")
+            tune_proc = subprocess.run(tune_cmd)
+            if tune_proc.returncode != 0:
+                raise RuntimeError(f"tune_candidate_gate_trade_density.py failed (exit={tune_proc.returncode})")
+
+    lock_path = pathlib.Path(args.verification_lock_path).resolve()
+    with verification_lock(
+        lock_path,
+        timeout_sec=int(args.verification_lock_timeout_sec),
+        stale_sec=int(args.verification_lock_stale_sec),
+    ):
+        run_verification_pipeline()
 
     print("[RealDataLoop] Completed")
     print(f"gate_report={output_report_json}")
+    if not args.skip_entry_rejection_analysis:
+        print(f"entry_rejection_report={entry_rejection_output_json}")
+    if not args.skip_strategy_rejection_taxonomy:
+        print(f"strategy_rejection_taxonomy_report={strategy_rejection_taxonomy_output_json}")
+    if not args.skip_loss_contributor_analysis:
+        print(f"loss_contributor_market_csv={loss_contributor_market_csv}")
+        print(f"loss_contributor_strategy_csv={loss_contributor_strategy_csv}")
+    if not args.skip_parity_invariant:
+        print(f"parity_invariant_report={parity_invariant_output_json}")
     return 0
 
 

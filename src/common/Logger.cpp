@@ -48,7 +48,7 @@ void Logger::initialize(const std::string& log_dir) {
         main_logger_->info("Log directory: {}", logs_path.string());
         
     } catch (const std::exception& ex) {
-        throw std::runtime_error("Log init failed");
+        throw std::runtime_error(std::string("Log init failed: ") + ex.what());
     }
 }
 

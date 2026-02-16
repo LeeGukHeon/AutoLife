@@ -11,7 +11,8 @@
         "min_strategy_expectancy_krw": -1.0,
         "min_strategy_profit_factor": 1.0,
         "avoid_high_volatility": true,
-        "avoid_trending_down": true
+        "avoid_trending_down": true,
+        "use_strategy_alpha_head_mode": true
     },
     "strategies": {
         "scalping": {

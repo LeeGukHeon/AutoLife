@@ -708,6 +708,7 @@ double RiskManager::calculateKellyPositionSize(
     double avg_win,
     double avg_loss
 ) {
+    (void)capital;
     if (avg_loss < 0.0001) return 0.05; // Fallback
     
     // Kelly Criterion: f = (p * b - q) / b
@@ -733,6 +734,7 @@ double RiskManager::calculateFeeAwarePositionSize(
     double take_profit,
     double fee_rate
 ) {
+    (void)capital;
     // Risk/Reward ??節뚮쳮雅?(??筌뚯슜鍮???袁⑸즵???
     double risk = std::abs(entry_price - stop_loss) / entry_price;
     double reward = std::abs(take_profit - entry_price) / entry_price;
@@ -1226,7 +1228,9 @@ void RiskManager::resetDailyCountIfNeeded() {
     // UTC ??れ삀?? ???モ???좊읈? ?袁⑸즴?????獒???筌믨퀣?????癰궽살쐿 ??癰??????源놁벁 9??筌믨퀡?????덊렡.
     
     time_t now = time(nullptr);
-    struct tm* tm_now = gmtime(&now); // UTC ??れ삀?? ????깼???삳읁?(POSIX ?嶺뚮ㅏ援??
+    struct tm tm_now_buf{};
+    gmtime_s(&tm_now_buf, &now);
+    const struct tm* tm_now = &tm_now_buf; // UTC 기준
     
     // ????몄툜 ???モ????嶺뚮Ĳ???띿뒙??怨뚮뼚???(YYYYMMDD)
     long long current_day = (tm_now->tm_year + 1900) * 10000 + (tm_now->tm_mon + 1) * 100 + tm_now->tm_mday;
@@ -1245,7 +1249,9 @@ void RiskManager::resetDailyCountIfNeeded() {
 
 void RiskManager::resetDailyLossIfNeeded() {
     time_t now = time(nullptr);
-    struct tm* tm_now = gmtime(&now);
+    struct tm tm_now_buf{};
+    gmtime_s(&tm_now_buf, &now);
+    const struct tm* tm_now = &tm_now_buf;
     long long current_day = (tm_now->tm_year + 1900) * 10000 + (tm_now->tm_mon + 1) * 100 + tm_now->tm_mday;
 
     if (daily_start_date_ == 0) {
