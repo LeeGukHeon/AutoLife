@@ -68,6 +68,11 @@ public:
             int blocked_pattern_gate = 0;
             int blocked_rr_rebalance = 0;
             int blocked_risk_gate = 0;
+            int blocked_risk_gate_strategy_ev = 0;
+            int blocked_risk_gate_regime = 0;
+            int blocked_risk_gate_entry_quality = 0;
+            int blocked_risk_gate_other = 0;
+            int blocked_second_stage_confirmation = 0;
             int blocked_risk_manager = 0;
             int blocked_min_order_or_capital = 0;
             int blocked_order_sizing = 0;

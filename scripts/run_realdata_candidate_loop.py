@@ -13,6 +13,31 @@ def ensure_directory(path_value: pathlib.Path) -> None:
     path_value.mkdir(parents=True, exist_ok=True)
 
 
+def parse_reason_counts_json(value: Any) -> Dict[str, int]:
+    payload: Any = {}
+    if isinstance(value, dict):
+        payload = value
+    elif isinstance(value, str):
+        text = value.strip()
+        if text:
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError:
+                payload = {}
+    if not isinstance(payload, dict):
+        return {}
+    out: Dict[str, int] = {}
+    for key, raw in payload.items():
+        name = str(key)
+        if not name:
+            continue
+        try:
+            out[name] = int(raw or 0)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def build_realdata_file_path(output_dir: pathlib.Path, market: str, tf_unit: str, row_count: int) -> pathlib.Path:
     safe_market = market.replace("-", "_")
     return output_dir / f"upbit_{safe_market}_{tf_unit}m_{row_count}.csv"
@@ -228,6 +253,25 @@ def print_report_snapshot(prefix: str, report: Dict[str, Any]) -> None:
             f"[RealDataLoop] {prefix}.core_full.entry_rejection_total="
             f"{core_full.get('entry_rejection_total')}"
         )
+        top_risk_reason = str(core_full.get("top_entry_risk_gate_component_reason") or "")
+        top_risk_count = int(core_full.get("top_entry_risk_gate_component_count") or 0)
+        if not top_risk_reason:
+            risk_breakdown = parse_reason_counts_json(core_full.get("entry_risk_gate_breakdown_json"))
+            risk_components = {
+                k: int(v)
+                for k, v in risk_breakdown.items()
+                if str(k) != "blocked_risk_gate_total"
+            }
+            if risk_components:
+                top_risk_reason, top_risk_count = max(
+                    risk_components.items(),
+                    key=lambda kv: (kv[1], kv[0]),
+                )
+        if top_risk_reason:
+            print(
+                f"[RealDataLoop] {prefix}.core_full.risk_gate_component_top="
+                f"{top_risk_reason}:{top_risk_count}"
+            )
 
     threshold_info = report.get("thresholds", {})
     hostility_bundle = threshold_info.get("hostility_adaptive", {})

@@ -143,6 +143,15 @@ def run_profile_backtests(
         total_trades = int(result.get("total_trades", 0))
         win_rate_pct = round(float(result.get("win_rate", 0.0)) * 100.0, 4)
         rejection_counts = normalize_reason_counts(result.get("entry_rejection_reason_counts", {}))
+        entry_funnel = result.get("entry_funnel") if isinstance(result.get("entry_funnel"), dict) else {}
+        risk_gate_breakdown = {
+            "blocked_risk_gate_total": int(entry_funnel.get("blocked_risk_gate", 0) or 0),
+            "blocked_risk_gate_strategy_ev": int(entry_funnel.get("blocked_risk_gate_strategy_ev", 0) or 0),
+            "blocked_risk_gate_regime": int(entry_funnel.get("blocked_risk_gate_regime", 0) or 0),
+            "blocked_risk_gate_entry_quality": int(entry_funnel.get("blocked_risk_gate_entry_quality", 0) or 0),
+            "blocked_risk_gate_other": int(entry_funnel.get("blocked_risk_gate_other", 0) or 0),
+            "blocked_second_stage_confirmation": int(entry_funnel.get("blocked_second_stage_confirmation", 0) or 0),
+        }
 
         return {
             "profile_id": str(profile["profile_id"]),
@@ -161,6 +170,9 @@ def run_profile_backtests(
             "profitable": profit > 0.0,
             "entry_rejection_reason_counts_json": json.dumps(
                 rejection_counts, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ),
+            "entry_risk_gate_breakdown_json": json.dumps(
+                risk_gate_breakdown, ensure_ascii=False, sort_keys=True, separators=(",", ":")
             ),
             "gate_trade_eligible": (
                 total_trades >= min_trades_per_run_for_gate
@@ -933,10 +945,14 @@ def main() -> int:
         avg_trades = round(safe_avg([float(r["total_trades"]) for r in gate_items]), 4) if gate_items else 0.0
         sum_profit = round(sum(float(r["total_profit_krw"]) for r in gate_items), 4) if gate_items else 0.0
         rejection_counts: Dict[str, int] = {}
+        risk_gate_counts: Dict[str, int] = {}
         for item in gate_items:
             parsed = parse_reason_counts_json(item.get("entry_rejection_reason_counts_json"))
             for reason, count in parsed.items():
                 rejection_counts[reason] = rejection_counts.get(reason, 0) + int(count)
+            parsed_risk = parse_reason_counts_json(item.get("entry_risk_gate_breakdown_json"))
+            for reason, count in parsed_risk.items():
+                risk_gate_counts[reason] = risk_gate_counts.get(reason, 0) + int(count)
         entry_rejection_by_profile[profile_id] = dict(
             sorted(rejection_counts.items(), key=lambda kv: (-kv[1], kv[0]))
         )
@@ -946,6 +962,25 @@ def main() -> int:
         if rejection_counts:
             top_rejection_reason, top_rejection_count = max(
                 rejection_counts.items(),
+                key=lambda kv: (kv[1], kv[0]),
+            )
+        top_risk_gate_reason = ""
+        top_risk_gate_count = 0
+        if risk_gate_counts:
+            top_risk_gate_reason, top_risk_gate_count = max(
+                risk_gate_counts.items(),
+                key=lambda kv: (kv[1], kv[0]),
+            )
+        risk_gate_component_counts = {
+            k: int(v)
+            for k, v in risk_gate_counts.items()
+            if str(k) != "blocked_risk_gate_total"
+        }
+        top_risk_gate_component_reason = ""
+        top_risk_gate_component_count = 0
+        if risk_gate_component_counts:
+            top_risk_gate_component_reason, top_risk_gate_component_count = max(
+                risk_gate_component_counts.items(),
                 key=lambda kv: (kv[1], kv[0]),
             )
 
@@ -989,6 +1024,16 @@ def main() -> int:
                     sort_keys=True,
                     separators=(",", ":"),
                 ),
+                "entry_risk_gate_breakdown_json": json.dumps(
+                    dict(sorted(risk_gate_counts.items(), key=lambda kv: (-kv[1], kv[0]))),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "top_entry_risk_gate_reason": top_risk_gate_reason,
+                "top_entry_risk_gate_count": int(top_risk_gate_count),
+                "top_entry_risk_gate_component_reason": top_risk_gate_component_reason,
+                "top_entry_risk_gate_component_count": int(top_risk_gate_component_count),
                 "gate_sample_pass": gate_sample_pass,
                 "gate_profit_factor_pass": gate_profit_factor_pass,
                 "gate_expectancy_pass": gate_expectancy_pass,

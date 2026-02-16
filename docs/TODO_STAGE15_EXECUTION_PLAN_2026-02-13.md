@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-16 (retention override applied + final delete executed)
+Last updated: 2026-02-17 (overfit guard maintained + risk-gate diagnostics expanded)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -403,6 +403,41 @@ The system must:
       - `base_promotion_gate_pass`
       - `generalization_guard_pass`
       - `generalization_checks[]`
+- Stage-2.9 update (2026-02-17):
+  - Overfit-prevention principle kept as hard rule:
+    - no promotion when `generalization_guard_pass=false`
+    - no temporary runtime threshold relaxation while holdout quality is unstable
+  - Risk-gate ownership diagnostics decomposition (runtime behavior intent unchanged):
+    - backtest funnel counters/reasons expanded:
+      - `blocked_risk_gate_strategy_ev`
+      - `blocked_risk_gate_regime`
+      - `blocked_risk_gate_entry_quality`
+      - `blocked_risk_gate_other`
+      - `blocked_second_stage_confirmation`
+    - changed files:
+      - `include/runtime/BacktestRuntime.h`
+      - `src/runtime/BacktestRuntime.cpp`
+      - `src/main.cpp`
+      - `scripts/generate_strategy_rejection_taxonomy_report.py`
+  - Artifact chain propagation for split diagnostics:
+    - `scripts/run_profitability_matrix.py` now emits:
+      - `entry_risk_gate_breakdown_json`
+      - `top_entry_risk_gate_component_reason`
+      - `top_entry_risk_gate_component_count`
+    - `scripts/run_realdata_candidate_loop.py` console snapshot now prints top risk-gate component reason.
+    - `scripts/run_candidate_train_eval_cycle.py` now ingests core-profile risk-gate component context and routes recommendation codes for risk-gate ownership classes.
+  - verification:
+    - `python -m py_compile scripts/run_profitability_matrix.py scripts/generate_strategy_rejection_taxonomy_report.py scripts/run_candidate_train_eval_cycle.py` PASS
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+  - latest split readout (`core_full`):
+    - train(7): `avg_profit_factor=0.5095`, `avg_expectancy_krw=-8.9636`, top rejection `no_signal_generated`
+    - validation(2): `avg_profit_factor=0.5352`, `avg_expectancy_krw=-6.7473`, top rejection `blocked_risk_gate_entry_quality`
+    - holdout(3): `avg_profit_factor=0.4753`, `avg_expectancy_krw=-7.9406`, top rejection `blocked_risk_gate_entry_quality`
+  - next:
+    - calibrate risk-gate entry-quality ownership and dataset-quality policy linkage without loosening global promotion floors.
 
 2. Expectancy-first improvement loop
 - Optimize for:

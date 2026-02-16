@@ -2099,12 +2099,18 @@ void BacktestEngine::processCandle(const Candle& candle) {
 
             normalizeSignalStopLossByRegime(best_signal, best_signal.market_regime);
             const bool rr_rebalance_ok = rebalanceSignalRiskReward(best_signal, tuned_cfg);
+            const bool regime_gate_ok =
+                !core_risk_enabled ||
+                passesRegimeGate(best_signal.market_regime, engine_config_);
+            const bool entry_quality_gate_ok =
+                !core_risk_enabled ||
+                passesEntryQualityGate(best_signal, tuned_cfg);
             const bool risk_gate_ok =
                 !core_risk_enabled ||
                 (strategy_ev_ok &&
                  pattern_strength_ok &&
-                 passesRegimeGate(best_signal.market_regime, engine_config_) &&
-                 passesEntryQualityGate(best_signal, tuned_cfg));
+                 regime_gate_ok &&
+                 entry_quality_gate_ok);
             const double entry_price = best_signal.entry_price;
             const double take_profit_price =
                 (best_signal.take_profit_2 > 0.0) ? best_signal.take_profit_2 : best_signal.take_profit_1;
@@ -2139,8 +2145,21 @@ void BacktestEngine::processCandle(const Candle& candle) {
             } else if (!risk_gate_ok || !second_stage_ok) {
                 entry_funnel_.blocked_risk_gate++;
                 if (!risk_gate_ok) {
-                    markEntryReject("blocked_risk_gate");
+                    if (!strategy_ev_ok) {
+                        entry_funnel_.blocked_risk_gate_strategy_ev++;
+                        markEntryReject("blocked_risk_gate_strategy_ev");
+                    } else if (!regime_gate_ok) {
+                        entry_funnel_.blocked_risk_gate_regime++;
+                        markEntryReject("blocked_risk_gate_regime");
+                    } else if (!entry_quality_gate_ok) {
+                        entry_funnel_.blocked_risk_gate_entry_quality++;
+                        markEntryReject("blocked_risk_gate_entry_quality");
+                    } else {
+                        entry_funnel_.blocked_risk_gate_other++;
+                        markEntryReject("blocked_risk_gate_other");
+                    }
                 } else {
+                    entry_funnel_.blocked_second_stage_confirmation++;
                     markEntryReject("blocked_second_stage_confirmation");
                 }
             } else if (pattern_strength_ok && rr_rebalance_ok && risk_gate_ok && second_stage_ok) {
@@ -2676,4 +2695,3 @@ void BacktestEngine::updateDynamicFilter() {
 
 } // namespace backtest
 } // namespace autolife
-

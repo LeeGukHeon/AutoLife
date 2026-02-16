@@ -444,6 +444,11 @@ int main(int argc, char* argv[]) {
                         {"blocked_pattern_gate", result.entry_funnel.blocked_pattern_gate},
                         {"blocked_rr_rebalance", result.entry_funnel.blocked_rr_rebalance},
                         {"blocked_risk_gate", result.entry_funnel.blocked_risk_gate},
+                        {"blocked_risk_gate_strategy_ev", result.entry_funnel.blocked_risk_gate_strategy_ev},
+                        {"blocked_risk_gate_regime", result.entry_funnel.blocked_risk_gate_regime},
+                        {"blocked_risk_gate_entry_quality", result.entry_funnel.blocked_risk_gate_entry_quality},
+                        {"blocked_risk_gate_other", result.entry_funnel.blocked_risk_gate_other},
+                        {"blocked_second_stage_confirmation", result.entry_funnel.blocked_second_stage_confirmation},
                         {"blocked_risk_manager", result.entry_funnel.blocked_risk_manager},
                         {"blocked_min_order_or_capital", result.entry_funnel.blocked_min_order_or_capital},
                         {"blocked_order_sizing", result.entry_funnel.blocked_order_sizing},
@@ -519,6 +524,12 @@ int main(int argc, char* argv[]) {
                           << ", pattern_drop=" << result.entry_funnel.blocked_pattern_gate
                           << ", rr_drop=" << result.entry_funnel.blocked_rr_rebalance
                           << ", risk_drop=" << result.entry_funnel.blocked_risk_gate
+                          << " [ev=" << result.entry_funnel.blocked_risk_gate_strategy_ev
+                          << ", regime=" << result.entry_funnel.blocked_risk_gate_regime
+                          << ", quality=" << result.entry_funnel.blocked_risk_gate_entry_quality
+                          << ", other=" << result.entry_funnel.blocked_risk_gate_other
+                          << ", second_stage=" << result.entry_funnel.blocked_second_stage_confirmation
+                          << "]"
                           << ", risk_manager_drop=" << result.entry_funnel.blocked_risk_manager
                           << ", capital_drop=" << result.entry_funnel.blocked_min_order_or_capital
                           << ", sizing_drop=" << result.entry_funnel.blocked_order_sizing
@@ -674,6 +685,12 @@ int main(int argc, char* argv[]) {
                       << ", pattern_drop=" << result.entry_funnel.blocked_pattern_gate
                       << ", rr_drop=" << result.entry_funnel.blocked_rr_rebalance
                       << ", risk_drop=" << result.entry_funnel.blocked_risk_gate
+                      << " [ev=" << result.entry_funnel.blocked_risk_gate_strategy_ev
+                      << ", regime=" << result.entry_funnel.blocked_risk_gate_regime
+                      << ", quality=" << result.entry_funnel.blocked_risk_gate_entry_quality
+                      << ", other=" << result.entry_funnel.blocked_risk_gate_other
+                      << ", second_stage=" << result.entry_funnel.blocked_second_stage_confirmation
+                      << "]"
                       << ", risk_manager_drop=" << result.entry_funnel.blocked_risk_manager
                       << ", capital_drop=" << result.entry_funnel.blocked_min_order_or_capital
                       << ", sizing_drop=" << result.entry_funnel.blocked_order_sizing

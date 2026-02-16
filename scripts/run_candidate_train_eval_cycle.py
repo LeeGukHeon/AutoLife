@@ -170,6 +170,38 @@ def write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def parse_reason_counts_json(value: Any) -> Dict[str, int]:
+    payload: Any = {}
+    if isinstance(value, dict):
+        payload = value
+    elif isinstance(value, str):
+        text = value.strip()
+        if text:
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError:
+                payload = {}
+    if not isinstance(payload, dict):
+        return {}
+    out: Dict[str, int] = {}
+    for key, raw in payload.items():
+        name = str(key)
+        if not name:
+            continue
+        try:
+            out[name] = int(raw or 0)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def parse_int_or_default(value: Any, default: int = 0) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return int(default)
+
+
 def read_entry_rejection_snapshot(summary_json_path: Path, profile_id: str = "core_full") -> Dict[str, Any]:
     if not summary_json_path.exists():
         return {
@@ -341,6 +373,19 @@ def snapshot_state_dir(state_dir: Path, snapshot_root: Path) -> Path:
 def read_gate_snapshot(report_path: Path) -> Dict[str, Any]:
     report = json.loads(report_path.read_text(encoding="utf-8-sig"))
     core_full = next((x for x in report.get("profile_summaries", []) if x.get("profile_id") == "core_full"), {})
+    risk_gate_breakdown = parse_reason_counts_json(core_full.get("entry_risk_gate_breakdown_json"))
+    risk_gate_component_breakdown = {
+        k: int(v)
+        for k, v in risk_gate_breakdown.items()
+        if str(k) != "blocked_risk_gate_total"
+    }
+    top_risk_gate_component_reason = ""
+    top_risk_gate_component_count = 0
+    if risk_gate_component_breakdown:
+        top_risk_gate_component_reason, top_risk_gate_component_count = max(
+            risk_gate_component_breakdown.items(),
+            key=lambda kv: (kv[1], kv[0]),
+        )
     return {
         "overall_gate_pass": bool(report.get("overall_gate_pass")),
         "core_full": {
@@ -348,6 +393,19 @@ def read_gate_snapshot(report_path: Path) -> Dict[str, Any]:
             "avg_total_trades": core_full.get("avg_total_trades"),
             "avg_expectancy_krw": core_full.get("avg_expectancy_krw"),
             "profitable_ratio": core_full.get("profitable_ratio"),
+            "top_entry_rejection_reason": str(core_full.get("top_entry_rejection_reason", "") or ""),
+            "top_entry_rejection_count": parse_int_or_default(core_full.get("top_entry_rejection_count"), 0),
+            "entry_rejection_total": parse_int_or_default(core_full.get("entry_rejection_total"), 0),
+            "top_entry_risk_gate_reason": str(core_full.get("top_entry_risk_gate_reason", "") or ""),
+            "top_entry_risk_gate_count": parse_int_or_default(core_full.get("top_entry_risk_gate_count"), 0),
+            "top_entry_risk_gate_component_reason": str(
+                core_full.get("top_entry_risk_gate_component_reason", top_risk_gate_component_reason) or ""
+            ),
+            "top_entry_risk_gate_component_count": parse_int_or_default(
+                core_full.get("top_entry_risk_gate_component_count", top_risk_gate_component_count),
+                top_risk_gate_component_count,
+            ),
+            "entry_risk_gate_breakdown": risk_gate_breakdown,
         },
     }
 
@@ -730,9 +788,30 @@ def build_promotion_verdict(
         exp = float(core_full.get("avg_expectancy_krw", 0.0) or 0.0)
         return pf, exp
 
+    def _core_rejection_context(bundle: Dict[str, Any] | None) -> Dict[str, Any]:
+        selected = (bundle or {}).get("selected") or {}
+        core_full = selected.get("core_full") or {}
+        return {
+            "top_entry_rejection_reason": str(core_full.get("top_entry_rejection_reason", "") or ""),
+            "top_entry_rejection_count": parse_int_or_default(core_full.get("top_entry_rejection_count"), 0),
+            "entry_rejection_total": parse_int_or_default(core_full.get("entry_rejection_total"), 0),
+            "top_entry_risk_gate_reason": str(core_full.get("top_entry_risk_gate_reason", "") or ""),
+            "top_entry_risk_gate_count": parse_int_or_default(core_full.get("top_entry_risk_gate_count"), 0),
+            "top_entry_risk_gate_component_reason": str(
+                core_full.get("top_entry_risk_gate_component_reason", "") or ""
+            ),
+            "top_entry_risk_gate_component_count": parse_int_or_default(
+                core_full.get("top_entry_risk_gate_component_count"),
+                0,
+            ),
+            "entry_risk_gate_breakdown": core_full.get("entry_risk_gate_breakdown") or {},
+        }
+
     train_pf, train_exp = _core_metrics(train_snapshot_bundle)
     val_pf, val_exp = _core_metrics(validation_snapshot_bundle)
     holdout_pf, holdout_exp = _core_metrics(holdout_snapshot_bundle)
+    val_core_reject_ctx = _core_rejection_context(validation_snapshot_bundle)
+    holdout_core_reject_ctx = _core_rejection_context(holdout_snapshot_bundle)
 
     # Overfit guard: reject promotions that look good on train but fail to
     # generalize to validation/holdout by a wide margin.
@@ -784,6 +863,23 @@ def build_promotion_verdict(
         recommendation = "promote_candidate"
     elif base_promote and (not generalization_guard_pass):
         recommendation = "hold_candidate_avoid_overfit_generalization_gap"
+    elif (not val_pass) and (
+        str(val_core_reject_ctx.get("top_entry_rejection_reason", "")).startswith("blocked_risk_gate")
+        or str(val_core_reject_ctx.get("top_entry_rejection_reason", "")) == "blocked_second_stage_confirmation"
+        or str(val_core_reject_ctx.get("top_entry_risk_gate_component_reason", "")).startswith("blocked_risk_gate")
+        or str(val_core_reject_ctx.get("top_entry_risk_gate_component_reason", "")) == "blocked_second_stage_confirmation"
+    ):
+        risk_component = str(val_core_reject_ctx.get("top_entry_risk_gate_component_reason", ""))
+        if risk_component == "blocked_risk_gate_entry_quality":
+            recommendation = "hold_candidate_calibrate_risk_gate_entry_quality_ownership"
+        elif risk_component == "blocked_risk_gate_regime":
+            recommendation = "hold_candidate_calibrate_risk_gate_regime_alignment"
+        elif risk_component == "blocked_risk_gate_strategy_ev":
+            recommendation = "hold_candidate_calibrate_risk_gate_strategy_ev_alignment"
+        elif risk_component == "blocked_second_stage_confirmation":
+            recommendation = "hold_candidate_calibrate_second_stage_confirmation_consistency"
+        else:
+            recommendation = "hold_candidate_investigate_risk_gate_breakdown"
     elif (not val_pass) and bool(val_live_ctx.get("no_trade_bias_active", False)):
         recommendation = "hold_candidate_improve_signal_generation_or_dataset_quality"
     elif val_pass and not holdout_pass:
@@ -816,6 +912,8 @@ def build_promotion_verdict(
         "generalization_checks": generalization_checks,
         "promotion_gate_pass": bool(promote),
         "recommendation": recommendation,
+        "validation_core_rejection_context": val_core_reject_ctx,
+        "holdout_core_rejection_context": holdout_core_reject_ctx,
         "validation_live_signal_funnel_context": val_live_ctx,
         "holdout_live_signal_funnel_context": holdout_live_ctx,
         "live_no_trade_bias_any": bool(

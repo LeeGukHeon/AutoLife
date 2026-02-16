@@ -37,6 +37,10 @@ EXPECTED_REASON_CODES: List[str] = [
     "blocked_pattern_strength_or_regime",
     "blocked_rr_rebalance",
     "blocked_risk_gate",
+    "blocked_risk_gate_strategy_ev",
+    "blocked_risk_gate_regime",
+    "blocked_risk_gate_entry_quality",
+    "blocked_risk_gate_other",
     "blocked_second_stage_confirmation",
     "blocked_min_order_or_capital",
     "blocked_risk_manager",
@@ -97,7 +101,9 @@ def classify_reason_group(reason: str) -> str:
         return "position_state"
     if reason.startswith("blocked_pattern_") or reason == "blocked_pattern_gate":
         return "pattern_gate"
-    if reason in ("blocked_risk_gate", "blocked_rr_rebalance", "blocked_risk_manager"):
+    if reason == "blocked_risk_gate" or reason.startswith("blocked_risk_gate_"):
+        return "risk_gate"
+    if reason in ("blocked_rr_rebalance", "blocked_risk_manager"):
         return "risk_gate"
     if reason in ("blocked_second_stage_confirmation", "blocked_min_order_or_capital", "blocked_order_sizing"):
         return "execution_constraints"
