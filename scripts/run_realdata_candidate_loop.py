@@ -260,7 +260,7 @@ def print_report_snapshot(prefix: str, report: Dict[str, Any]) -> None:
             risk_components = {
                 k: int(v)
                 for k, v in risk_breakdown.items()
-                if str(k) != "blocked_risk_gate_total"
+                if str(k) not in {"blocked_risk_gate_total", "blocked_risk_gate_entry_quality"}
             }
             if risk_components:
                 top_risk_reason, top_risk_count = max(

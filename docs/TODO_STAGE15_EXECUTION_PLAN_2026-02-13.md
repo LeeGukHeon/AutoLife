@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-17 (overfit guard maintained + risk-gate diagnostics expanded)
+Last updated: 2026-02-17 (overfit guard maintained + entry-quality gate ownership decomposition)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -477,6 +477,37 @@ The system must:
   - next:
     - tune parameter exploration보다 먼저 `entry_quality` 게이트 자체의 ownership/feature 정의를 구조적으로 정리하고,
       이후 동일 split에서 재평가.
+
+- Stage-2.12 update (2026-02-17):
+  - Entry-quality gate ownership decomposition implemented:
+    - backtest runtime now classifies `blocked_risk_gate_entry_quality` into:
+      - `blocked_risk_gate_entry_quality_rr`
+      - `blocked_risk_gate_entry_quality_edge`
+      - `blocked_risk_gate_entry_quality_rr_edge`
+      - `blocked_risk_gate_entry_quality_invalid_levels`
+    - changed files:
+      - `include/runtime/BacktestRuntime.h`
+      - `src/runtime/BacktestRuntime.cpp`
+      - `src/main.cpp`
+      - `scripts/run_profitability_matrix.py`
+      - `scripts/run_realdata_candidate_loop.py`
+      - `scripts/generate_strategy_rejection_taxonomy_report.py`
+      - `scripts/run_candidate_train_eval_cycle.py`
+      - `scripts/tune_candidate_gate_trade_density.py`
+  - verification:
+    - `python -m py_compile scripts/generate_strategy_rejection_taxonomy_report.py scripts/run_profitability_matrix.py scripts/run_realdata_candidate_loop.py scripts/run_candidate_train_eval_cycle.py scripts/tune_candidate_gate_trade_density.py` PASS
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest split readout (`core_full`):
+    - train(7) risk top component: `blocked_risk_gate_entry_quality_rr:14174`
+    - validation(2) risk top component: `blocked_risk_gate_entry_quality_rr:7655`
+    - holdout(3) risk top component: `blocked_risk_gate_entry_quality_rr:7999`
+    - promotion recommendation: `hold_candidate_calibrate_risk_gate_entry_quality_rr`
+  - next:
+    - tighten ownership around RR threshold construction (`min_reward_risk` baseline vs adaptive adders) before any new relaxation experiments.
 
 2. Expectancy-first improvement loop
 - Optimize for:

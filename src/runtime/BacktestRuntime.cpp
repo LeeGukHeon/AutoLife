@@ -833,24 +833,71 @@ void normalizeSignalStopLossByRegime(strategy::Signal& signal, analytics::Market
     signal.stop_loss = signal.entry_price * (1.0 - risk_pct);
 }
 
-bool passesEntryQualityGate(const strategy::Signal& signal, const engine::EngineConfig& cfg) {
+struct EntryQualityGateSnapshot {
+    enum class FailureKind {
+        None,
+        InvalidPriceLevels,
+        RewardRisk,
+        ExpectedEdge,
+        RewardRiskAndExpectedEdge,
+    };
+
+    bool pass = false;
+    FailureKind failure = FailureKind::None;
+    double reward_risk_ratio = 0.0;
+    double calibrated_expected_edge_pct = std::numeric_limits<double>::lowest();
+};
+
+EntryQualityGateSnapshot evaluateEntryQualityGate(
+    const strategy::Signal& signal,
+    const engine::EngineConfig& cfg
+) {
+    EntryQualityGateSnapshot snapshot;
     const double entry_price = signal.entry_price;
-    const double take_profit_price = (signal.take_profit_2 > 0.0) ? signal.take_profit_2 : signal.take_profit_1;
+    const double take_profit_price =
+        (signal.take_profit_2 > 0.0) ? signal.take_profit_2 : signal.take_profit_1;
     const double stop_loss_price = signal.stop_loss;
 
     if (entry_price <= 0.0 || take_profit_price <= 0.0 || stop_loss_price <= 0.0 ||
         take_profit_price <= entry_price || stop_loss_price >= entry_price) {
-        return false;
+        snapshot.failure = EntryQualityGateSnapshot::FailureKind::InvalidPriceLevels;
+        return snapshot;
     }
 
     const double gross_reward_pct = (take_profit_price - entry_price) / entry_price;
     const double gross_risk_pct = (entry_price - stop_loss_price) / entry_price;
-    const double reward_risk_ratio = (gross_risk_pct > 1e-8) ? (gross_reward_pct / gross_risk_pct) : 0.0;
+    snapshot.reward_risk_ratio = (gross_risk_pct > 1e-8) ? (gross_reward_pct / gross_risk_pct) : 0.0;
+    snapshot.calibrated_expected_edge_pct = computeCalibratedExpectedEdgePct(signal, cfg);
 
-    const double calibrated_expected_edge_pct = computeCalibratedExpectedEdgePct(signal, cfg);
+    const bool rr_ok = snapshot.reward_risk_ratio >= cfg.min_reward_risk;
+    const bool edge_ok = snapshot.calibrated_expected_edge_pct >= cfg.min_expected_edge_pct;
+    snapshot.pass = rr_ok && edge_ok;
+    if (snapshot.pass) {
+        snapshot.failure = EntryQualityGateSnapshot::FailureKind::None;
+    } else if (!rr_ok && !edge_ok) {
+        snapshot.failure = EntryQualityGateSnapshot::FailureKind::RewardRiskAndExpectedEdge;
+    } else if (!rr_ok) {
+        snapshot.failure = EntryQualityGateSnapshot::FailureKind::RewardRisk;
+    } else {
+        snapshot.failure = EntryQualityGateSnapshot::FailureKind::ExpectedEdge;
+    }
+    return snapshot;
+}
 
-    return reward_risk_ratio >= cfg.min_reward_risk &&
-           calibrated_expected_edge_pct >= cfg.min_expected_edge_pct;
+const char* entryQualityFailureReasonCode(EntryQualityGateSnapshot::FailureKind failure) {
+    switch (failure) {
+        case EntryQualityGateSnapshot::FailureKind::InvalidPriceLevels:
+            return "blocked_risk_gate_entry_quality_invalid_levels";
+        case EntryQualityGateSnapshot::FailureKind::RewardRisk:
+            return "blocked_risk_gate_entry_quality_rr";
+        case EntryQualityGateSnapshot::FailureKind::ExpectedEdge:
+            return "blocked_risk_gate_entry_quality_edge";
+        case EntryQualityGateSnapshot::FailureKind::RewardRiskAndExpectedEdge:
+            return "blocked_risk_gate_entry_quality_rr_edge";
+        case EntryQualityGateSnapshot::FailureKind::None:
+        default:
+            return "blocked_risk_gate_entry_quality";
+    }
 }
 
 bool passesSecondStageEntryConfirmation(
@@ -2102,26 +2149,21 @@ void BacktestEngine::processCandle(const Candle& candle) {
             const bool regime_gate_ok =
                 !core_risk_enabled ||
                 passesRegimeGate(best_signal.market_regime, engine_config_);
+            const EntryQualityGateSnapshot entry_quality_eval =
+                core_risk_enabled
+                ? evaluateEntryQualityGate(best_signal, tuned_cfg)
+                : EntryQualityGateSnapshot{};
             const bool entry_quality_gate_ok =
                 !core_risk_enabled ||
-                passesEntryQualityGate(best_signal, tuned_cfg);
+                entry_quality_eval.pass;
             const bool risk_gate_ok =
                 !core_risk_enabled ||
                 (strategy_ev_ok &&
                  pattern_strength_ok &&
                  regime_gate_ok &&
                  entry_quality_gate_ok);
-            const double entry_price = best_signal.entry_price;
-            const double take_profit_price =
-                (best_signal.take_profit_2 > 0.0) ? best_signal.take_profit_2 : best_signal.take_profit_1;
-            const double stop_loss_price = best_signal.stop_loss;
-            const double gross_reward_pct =
-                (entry_price > 0.0) ? (take_profit_price - entry_price) / entry_price : 0.0;
-            const double gross_risk_pct =
-                (entry_price > 0.0) ? (entry_price - stop_loss_price) / entry_price : 0.0;
-            const double reward_risk_ratio =
-                (gross_risk_pct > 1e-8) ? (gross_reward_pct / gross_risk_pct) : 0.0;
-            const double calibrated_expected_edge_pct = computeCalibratedExpectedEdgePct(best_signal, tuned_cfg);
+            const double reward_risk_ratio = entry_quality_eval.reward_risk_ratio;
+            const double calibrated_expected_edge_pct = entry_quality_eval.calibrated_expected_edge_pct;
             const bool second_stage_ok =
                 !core_risk_enabled ||
                 (rr_rebalance_ok &&
@@ -2153,7 +2195,24 @@ void BacktestEngine::processCandle(const Candle& candle) {
                         markEntryReject("blocked_risk_gate_regime");
                     } else if (!entry_quality_gate_ok) {
                         entry_funnel_.blocked_risk_gate_entry_quality++;
-                        markEntryReject("blocked_risk_gate_entry_quality");
+                        switch (entry_quality_eval.failure) {
+                            case EntryQualityGateSnapshot::FailureKind::InvalidPriceLevels:
+                                entry_funnel_.blocked_risk_gate_entry_quality_invalid_levels++;
+                                break;
+                            case EntryQualityGateSnapshot::FailureKind::RewardRisk:
+                                entry_funnel_.blocked_risk_gate_entry_quality_rr++;
+                                break;
+                            case EntryQualityGateSnapshot::FailureKind::ExpectedEdge:
+                                entry_funnel_.blocked_risk_gate_entry_quality_edge++;
+                                break;
+                            case EntryQualityGateSnapshot::FailureKind::RewardRiskAndExpectedEdge:
+                                entry_funnel_.blocked_risk_gate_entry_quality_rr_edge++;
+                                break;
+                            case EntryQualityGateSnapshot::FailureKind::None:
+                            default:
+                                break;
+                        }
+                        markEntryReject(entryQualityFailureReasonCode(entry_quality_eval.failure));
                     } else {
                         entry_funnel_.blocked_risk_gate_other++;
                         markEntryReject("blocked_risk_gate_other");

@@ -149,6 +149,12 @@ def run_profile_backtests(
             "blocked_risk_gate_strategy_ev": int(entry_funnel.get("blocked_risk_gate_strategy_ev", 0) or 0),
             "blocked_risk_gate_regime": int(entry_funnel.get("blocked_risk_gate_regime", 0) or 0),
             "blocked_risk_gate_entry_quality": int(entry_funnel.get("blocked_risk_gate_entry_quality", 0) or 0),
+            "blocked_risk_gate_entry_quality_rr": int(entry_funnel.get("blocked_risk_gate_entry_quality_rr", 0) or 0),
+            "blocked_risk_gate_entry_quality_edge": int(entry_funnel.get("blocked_risk_gate_entry_quality_edge", 0) or 0),
+            "blocked_risk_gate_entry_quality_rr_edge": int(entry_funnel.get("blocked_risk_gate_entry_quality_rr_edge", 0) or 0),
+            "blocked_risk_gate_entry_quality_invalid_levels": int(
+                entry_funnel.get("blocked_risk_gate_entry_quality_invalid_levels", 0) or 0
+            ),
             "blocked_risk_gate_other": int(entry_funnel.get("blocked_risk_gate_other", 0) or 0),
             "blocked_second_stage_confirmation": int(entry_funnel.get("blocked_second_stage_confirmation", 0) or 0),
         }
@@ -974,7 +980,7 @@ def main() -> int:
         risk_gate_component_counts = {
             k: int(v)
             for k, v in risk_gate_counts.items()
-            if str(k) != "blocked_risk_gate_total"
+            if str(k) not in {"blocked_risk_gate_total", "blocked_risk_gate_entry_quality"}
         }
         top_risk_gate_component_reason = ""
         top_risk_gate_component_count = 0

@@ -377,7 +377,7 @@ def read_gate_snapshot(report_path: Path) -> Dict[str, Any]:
     risk_gate_component_breakdown = {
         k: int(v)
         for k, v in risk_gate_breakdown.items()
-        if str(k) != "blocked_risk_gate_total"
+        if str(k) not in {"blocked_risk_gate_total", "blocked_risk_gate_entry_quality"}
     }
     top_risk_gate_component_reason = ""
     top_risk_gate_component_count = 0
@@ -870,7 +870,18 @@ def build_promotion_verdict(
         or str(val_core_reject_ctx.get("top_entry_risk_gate_component_reason", "")) == "blocked_second_stage_confirmation"
     ):
         risk_component = str(val_core_reject_ctx.get("top_entry_risk_gate_component_reason", ""))
-        if risk_component == "blocked_risk_gate_entry_quality":
+        if risk_component.startswith("blocked_risk_gate_entry_quality"):
+            if risk_component == "blocked_risk_gate_entry_quality_rr":
+                recommendation = "hold_candidate_calibrate_risk_gate_entry_quality_rr"
+            elif risk_component == "blocked_risk_gate_entry_quality_edge":
+                recommendation = "hold_candidate_calibrate_risk_gate_entry_quality_edge"
+            elif risk_component == "blocked_risk_gate_entry_quality_rr_edge":
+                recommendation = "hold_candidate_calibrate_risk_gate_entry_quality_rr_edge"
+            elif risk_component == "blocked_risk_gate_entry_quality_invalid_levels":
+                recommendation = "hold_candidate_fix_entry_quality_price_level_consistency"
+            else:
+                recommendation = "hold_candidate_calibrate_risk_gate_entry_quality_ownership"
+        elif risk_component == "blocked_risk_gate_entry_quality":
             recommendation = "hold_candidate_calibrate_risk_gate_entry_quality_ownership"
         elif risk_component == "blocked_risk_gate_regime":
             recommendation = "hold_candidate_calibrate_risk_gate_regime_alignment"
