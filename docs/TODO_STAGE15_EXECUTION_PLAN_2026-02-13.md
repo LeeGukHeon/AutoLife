@@ -15,6 +15,7 @@ The system must:
 - Keep legacy fallback until core path is fully proven.
 - Prefer robust logic changes over narrow parameter overfitting.
 - If market data is hostile, do not force trade count.
+- Never accept train-only gains: promotion requires validation/holdout generalization evidence.
 
 ## Execution Discipline (Context Handoff)
 - Every completed subtask must update this TODO immediately with:
@@ -387,6 +388,21 @@ The system must:
     - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
     - `./build/Release/AutoLifeV2ShadowParityTest.exe` PASS
     - `./build/Release/AutoLifeV2EngineBacktestSmokeTest.exe` PASS
+- Stage-2.8 update (2026-02-16):
+  - Overfit-guard hardening:
+    - updated promotion verdict logic in `scripts/run_candidate_train_eval_cycle.py`:
+      - added explicit generalization checks (`validation_vs_train`, `holdout_vs_train`, `holdout_vs_validation`)
+      - added `base_promotion_gate_pass` vs `generalization_guard_pass` separation
+      - added overfit-block recommendation code: `hold_candidate_avoid_overfit_generalization_gap`
+  - execution note:
+    - temporary risk-gate relaxation experiment was rejected and rolled back (no runtime behavior change retained) because holdout quality did not improve consistently.
+  - verification:
+    - `python -m py_compile scripts/run_candidate_train_eval_cycle.py` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - promotion verdict artifact now includes:
+      - `base_promotion_gate_pass`
+      - `generalization_guard_pass`
+      - `generalization_checks[]`
 
 2. Expectancy-first improvement loop
 - Optimize for:

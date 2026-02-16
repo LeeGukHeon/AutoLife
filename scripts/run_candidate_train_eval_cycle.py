@@ -696,6 +696,7 @@ def build_live_signal_funnel_context(snapshot: Dict[str, Any] | None) -> Dict[st
 
 
 def build_promotion_verdict(
+    train_snapshot_bundle: Dict[str, Any] | None,
     validation_snapshot_bundle: Dict[str, Any],
     holdout_snapshot_bundle: Dict[str, Any] | None,
     wf_validation: Dict[str, Any],
@@ -722,9 +723,67 @@ def build_promotion_verdict(
         else None
     )
 
-    promote = bool(val_pass and holdout_pass and wf_validation_pass and wf_holdout_pass)
+    def _core_metrics(bundle: Dict[str, Any] | None) -> Tuple[float, float]:
+        selected = (bundle or {}).get("selected") or {}
+        core_full = selected.get("core_full") or {}
+        pf = float(core_full.get("avg_profit_factor", 0.0) or 0.0)
+        exp = float(core_full.get("avg_expectancy_krw", 0.0) or 0.0)
+        return pf, exp
+
+    train_pf, train_exp = _core_metrics(train_snapshot_bundle)
+    val_pf, val_exp = _core_metrics(validation_snapshot_bundle)
+    holdout_pf, holdout_exp = _core_metrics(holdout_snapshot_bundle)
+
+    # Overfit guard: reject promotions that look good on train but fail to
+    # generalize to validation/holdout by a wide margin.
+    generalization_checks: List[Dict[str, Any]] = []
+    if train_snapshot_bundle is not None:
+        generalization_checks.append(
+            {
+                "name": "validation_vs_train",
+                "pass": bool((val_pf >= (train_pf - 0.08)) and (val_exp >= (train_exp - 3.0))),
+                "validation_pf": val_pf,
+                "validation_expectancy_krw": val_exp,
+                "train_pf": train_pf,
+                "train_expectancy_krw": train_exp,
+                "max_pf_drop": 0.08,
+                "max_expectancy_drop_krw": 3.0,
+            }
+        )
+        if holdout_snapshot_bundle is not None:
+            generalization_checks.append(
+                {
+                    "name": "holdout_vs_train",
+                    "pass": bool((holdout_pf >= (train_pf - 0.10)) and (holdout_exp >= (train_exp - 3.5))),
+                    "holdout_pf": holdout_pf,
+                    "holdout_expectancy_krw": holdout_exp,
+                    "train_pf": train_pf,
+                    "train_expectancy_krw": train_exp,
+                    "max_pf_drop": 0.10,
+                    "max_expectancy_drop_krw": 3.5,
+                }
+            )
+    if holdout_snapshot_bundle is not None:
+        generalization_checks.append(
+            {
+                "name": "holdout_vs_validation",
+                "pass": bool((holdout_pf >= (val_pf - 0.08)) and (holdout_exp >= (val_exp - 2.5))),
+                "holdout_pf": holdout_pf,
+                "holdout_expectancy_krw": holdout_exp,
+                "validation_pf": val_pf,
+                "validation_expectancy_krw": val_exp,
+                "max_pf_drop": 0.08,
+                "max_expectancy_drop_krw": 2.5,
+            }
+        )
+
+    generalization_guard_pass = all(bool(x.get("pass", False)) for x in generalization_checks)
+    base_promote = bool(val_pass and holdout_pass and wf_validation_pass and wf_holdout_pass)
+    promote = bool(base_promote and generalization_guard_pass)
     if promote:
         recommendation = "promote_candidate"
+    elif base_promote and (not generalization_guard_pass):
+        recommendation = "hold_candidate_avoid_overfit_generalization_gap"
     elif (not val_pass) and bool(val_live_ctx.get("no_trade_bias_active", False)):
         recommendation = "hold_candidate_improve_signal_generation_or_dataset_quality"
     elif val_pass and not holdout_pass:
@@ -752,6 +811,9 @@ def build_promotion_verdict(
         "holdout_adaptive_gate_pass": holdout_adaptive_pass,
         "walk_forward_validation_gate_pass": bool(wf_validation_pass),
         "walk_forward_holdout_gate_pass": bool(wf_holdout_pass),
+        "base_promotion_gate_pass": bool(base_promote),
+        "generalization_guard_pass": bool(generalization_guard_pass),
+        "generalization_checks": generalization_checks,
         "promotion_gate_pass": bool(promote),
         "recommendation": recommendation,
         "validation_live_signal_funnel_context": val_live_ctx,
@@ -827,6 +889,7 @@ def main(argv=None) -> int:
         summary["state_cleared_before_train"] = removed
         print(f"[TrainEval] Cleared state files before training: {removed}")
 
+    latest_train_snapshot = None
     for i in range(1, max(1, int(args.train_iterations)) + 1):
         print(f"[TrainEval] Training iteration {i}/{args.train_iterations} (adaptive-state=ON)")
         snap = run_loop_once(
@@ -838,6 +901,7 @@ def main(argv=None) -> int:
             skip_tune=bool(args.skip_tune),
             entry_rejection_output_root=entry_rejection_output_root,
         )
+        latest_train_snapshot = snap
         entry_rejection_snapshot = read_entry_rejection_snapshot(
             entry_rejection_paths_for_stage(entry_rejection_output_root, f"train_{i}")["summary_json"]
         )
@@ -1022,6 +1086,7 @@ def main(argv=None) -> int:
     summary["walk_forward_validation"] = wf_validation
     summary["walk_forward_holdout"] = wf_holdout
     summary["promotion_verdict"] = build_promotion_verdict(
+        train_snapshot_bundle=latest_train_snapshot,
         validation_snapshot_bundle=eval_validation_det,
         holdout_snapshot_bundle=eval_holdout_det,
         wf_validation=wf_validation,
