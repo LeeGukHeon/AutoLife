@@ -450,10 +450,16 @@ int main(int argc, char* argv[]) {
                         {"blocked_risk_gate_entry_quality_rr", result.entry_funnel.blocked_risk_gate_entry_quality_rr},
                         {"blocked_risk_gate_entry_quality_rr_base", result.entry_funnel.blocked_risk_gate_entry_quality_rr_base},
                         {"blocked_risk_gate_entry_quality_rr_adaptive", result.entry_funnel.blocked_risk_gate_entry_quality_rr_adaptive},
+                        {"blocked_risk_gate_entry_quality_rr_adaptive_history", result.entry_funnel.blocked_risk_gate_entry_quality_rr_adaptive_history},
+                        {"blocked_risk_gate_entry_quality_rr_adaptive_regime", result.entry_funnel.blocked_risk_gate_entry_quality_rr_adaptive_regime},
+                        {"blocked_risk_gate_entry_quality_rr_adaptive_mixed", result.entry_funnel.blocked_risk_gate_entry_quality_rr_adaptive_mixed},
                         {"blocked_risk_gate_entry_quality_edge", result.entry_funnel.blocked_risk_gate_entry_quality_edge},
                         {"blocked_risk_gate_entry_quality_rr_edge", result.entry_funnel.blocked_risk_gate_entry_quality_rr_edge},
                         {"blocked_risk_gate_entry_quality_rr_edge_base", result.entry_funnel.blocked_risk_gate_entry_quality_rr_edge_base},
                         {"blocked_risk_gate_entry_quality_rr_edge_adaptive", result.entry_funnel.blocked_risk_gate_entry_quality_rr_edge_adaptive},
+                        {"blocked_risk_gate_entry_quality_rr_edge_adaptive_history", result.entry_funnel.blocked_risk_gate_entry_quality_rr_edge_adaptive_history},
+                        {"blocked_risk_gate_entry_quality_rr_edge_adaptive_regime", result.entry_funnel.blocked_risk_gate_entry_quality_rr_edge_adaptive_regime},
+                        {"blocked_risk_gate_entry_quality_rr_edge_adaptive_mixed", result.entry_funnel.blocked_risk_gate_entry_quality_rr_edge_adaptive_mixed},
                         {"blocked_risk_gate_entry_quality_invalid_levels", result.entry_funnel.blocked_risk_gate_entry_quality_invalid_levels},
                         {"blocked_risk_gate_other", result.entry_funnel.blocked_risk_gate_other},
                         {"blocked_second_stage_confirmation", result.entry_funnel.blocked_second_stage_confirmation},
@@ -538,11 +544,19 @@ int main(int argc, char* argv[]) {
                           << " {rr=" << result.entry_funnel.blocked_risk_gate_entry_quality_rr
                           << " [base=" << result.entry_funnel.blocked_risk_gate_entry_quality_rr_base
                           << ", adaptive=" << result.entry_funnel.blocked_risk_gate_entry_quality_rr_adaptive
+                          << " {history=" << result.entry_funnel.blocked_risk_gate_entry_quality_rr_adaptive_history
+                          << ", regime=" << result.entry_funnel.blocked_risk_gate_entry_quality_rr_adaptive_regime
+                          << ", mixed=" << result.entry_funnel.blocked_risk_gate_entry_quality_rr_adaptive_mixed
+                          << "}"
                           << "]"
                           << ", edge=" << result.entry_funnel.blocked_risk_gate_entry_quality_edge
                           << ", rr_edge=" << result.entry_funnel.blocked_risk_gate_entry_quality_rr_edge
                           << " [base=" << result.entry_funnel.blocked_risk_gate_entry_quality_rr_edge_base
                           << ", adaptive=" << result.entry_funnel.blocked_risk_gate_entry_quality_rr_edge_adaptive
+                          << " {history=" << result.entry_funnel.blocked_risk_gate_entry_quality_rr_edge_adaptive_history
+                          << ", regime=" << result.entry_funnel.blocked_risk_gate_entry_quality_rr_edge_adaptive_regime
+                          << ", mixed=" << result.entry_funnel.blocked_risk_gate_entry_quality_rr_edge_adaptive_mixed
+                          << "}"
                           << "]"
                           << ", invalid=" << result.entry_funnel.blocked_risk_gate_entry_quality_invalid_levels
                           << "}"
@@ -710,11 +724,19 @@ int main(int argc, char* argv[]) {
                       << " {rr=" << result.entry_funnel.blocked_risk_gate_entry_quality_rr
                       << " [base=" << result.entry_funnel.blocked_risk_gate_entry_quality_rr_base
                       << ", adaptive=" << result.entry_funnel.blocked_risk_gate_entry_quality_rr_adaptive
+                      << " {history=" << result.entry_funnel.blocked_risk_gate_entry_quality_rr_adaptive_history
+                      << ", regime=" << result.entry_funnel.blocked_risk_gate_entry_quality_rr_adaptive_regime
+                      << ", mixed=" << result.entry_funnel.blocked_risk_gate_entry_quality_rr_adaptive_mixed
+                      << "}"
                       << "]"
                       << ", edge=" << result.entry_funnel.blocked_risk_gate_entry_quality_edge
                       << ", rr_edge=" << result.entry_funnel.blocked_risk_gate_entry_quality_rr_edge
                       << " [base=" << result.entry_funnel.blocked_risk_gate_entry_quality_rr_edge_base
                       << ", adaptive=" << result.entry_funnel.blocked_risk_gate_entry_quality_rr_edge_adaptive
+                      << " {history=" << result.entry_funnel.blocked_risk_gate_entry_quality_rr_edge_adaptive_history
+                      << ", regime=" << result.entry_funnel.blocked_risk_gate_entry_quality_rr_edge_adaptive_regime
+                      << ", mixed=" << result.entry_funnel.blocked_risk_gate_entry_quality_rr_edge_adaptive_mixed
+                      << "}"
                       << "]"
                       << ", invalid=" << result.entry_funnel.blocked_risk_gate_entry_quality_invalid_levels
                       << "}"

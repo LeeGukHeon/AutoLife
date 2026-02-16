@@ -156,6 +156,15 @@ def run_profile_backtests(
             "blocked_risk_gate_entry_quality_rr_adaptive": int(
                 entry_funnel.get("blocked_risk_gate_entry_quality_rr_adaptive", 0) or 0
             ),
+            "blocked_risk_gate_entry_quality_rr_adaptive_history": int(
+                entry_funnel.get("blocked_risk_gate_entry_quality_rr_adaptive_history", 0) or 0
+            ),
+            "blocked_risk_gate_entry_quality_rr_adaptive_regime": int(
+                entry_funnel.get("blocked_risk_gate_entry_quality_rr_adaptive_regime", 0) or 0
+            ),
+            "blocked_risk_gate_entry_quality_rr_adaptive_mixed": int(
+                entry_funnel.get("blocked_risk_gate_entry_quality_rr_adaptive_mixed", 0) or 0
+            ),
             "blocked_risk_gate_entry_quality_edge": int(entry_funnel.get("blocked_risk_gate_entry_quality_edge", 0) or 0),
             "blocked_risk_gate_entry_quality_rr_edge": int(entry_funnel.get("blocked_risk_gate_entry_quality_rr_edge", 0) or 0),
             "blocked_risk_gate_entry_quality_rr_edge_base": int(
@@ -163,6 +172,15 @@ def run_profile_backtests(
             ),
             "blocked_risk_gate_entry_quality_rr_edge_adaptive": int(
                 entry_funnel.get("blocked_risk_gate_entry_quality_rr_edge_adaptive", 0) or 0
+            ),
+            "blocked_risk_gate_entry_quality_rr_edge_adaptive_history": int(
+                entry_funnel.get("blocked_risk_gate_entry_quality_rr_edge_adaptive_history", 0) or 0
+            ),
+            "blocked_risk_gate_entry_quality_rr_edge_adaptive_regime": int(
+                entry_funnel.get("blocked_risk_gate_entry_quality_rr_edge_adaptive_regime", 0) or 0
+            ),
+            "blocked_risk_gate_entry_quality_rr_edge_adaptive_mixed": int(
+                entry_funnel.get("blocked_risk_gate_entry_quality_rr_edge_adaptive_mixed", 0) or 0
             ),
             "blocked_risk_gate_entry_quality_invalid_levels": int(
                 entry_funnel.get("blocked_risk_gate_entry_quality_invalid_levels", 0) or 0
@@ -997,7 +1015,9 @@ def main() -> int:
                 "blocked_risk_gate_total",
                 "blocked_risk_gate_entry_quality",
                 "blocked_risk_gate_entry_quality_rr",
+                "blocked_risk_gate_entry_quality_rr_adaptive",
                 "blocked_risk_gate_entry_quality_rr_edge",
+                "blocked_risk_gate_entry_quality_rr_edge_adaptive",
             }
         }
         top_risk_gate_component_reason = ""

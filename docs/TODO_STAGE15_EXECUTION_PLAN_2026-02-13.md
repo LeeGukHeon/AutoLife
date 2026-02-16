@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-17 (overfit guard maintained + RR base/adaptive ownership split)
+Last updated: 2026-02-16 (overfit guard maintained + RR adaptive source ownership split)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -544,6 +544,81 @@ The system must:
     - holdout top risk component: `blocked_risk_gate_entry_quality_rr_adaptive:7116`
   - next:
     - calibrate adaptive RR adders by source (history/regime/hostility/no-entry recovery) before touching base RR floor.
+
+- Stage-2.14 update (2026-02-17):
+  - RR ownership split refined and validated:
+    - new detailed codes wired end-to-end:
+      - `blocked_risk_gate_entry_quality_rr_base`
+      - `blocked_risk_gate_entry_quality_rr_adaptive`
+      - `blocked_risk_gate_entry_quality_rr_edge_base`
+      - `blocked_risk_gate_entry_quality_rr_edge_adaptive`
+    - matrix/routing now excludes aggregate nodes when choosing top component:
+      - excludes `blocked_risk_gate_entry_quality_rr` and `blocked_risk_gate_entry_quality_rr_edge` from top-component tie-break.
+  - recommendation + tuner routing sync:
+    - recommendation mapping added:
+      - `hold_candidate_calibrate_risk_gate_rr_baseline_floor`
+      - `hold_candidate_calibrate_risk_gate_rr_adaptive_adders`
+    - tuner risk focus updated:
+      - `entry_quality_rr_base` / `entry_quality_rr_adaptive` / `entry_quality_rr_edge_base` / `entry_quality_rr_edge_adaptive`
+    - adaptive-focused family added:
+      - `risk_gate_adaptive_rebalance`
+  - verification:
+    - `python -m py_compile scripts/generate_strategy_rejection_taxonomy_report.py scripts/run_profitability_matrix.py scripts/run_realdata_candidate_loop.py scripts/run_candidate_train_eval_cycle.py scripts/tune_candidate_gate_trade_density.py` PASS
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full`, holdout):
+    - top rejection: `blocked_risk_gate_entry_quality_rr_adaptive:7116`
+    - RR split: `rr_adaptive=7116`, `rr_base=883`
+    - promotion recommendation: `hold_candidate_calibrate_risk_gate_rr_adaptive_adders`
+  - next:
+    - split `adaptive_rr_add` source contributions into explicit buckets (history/regime/hostility/no-entry recovery) and expose per-bucket counters.
+
+- Stage-2.15 update (2026-02-16):
+  - adaptive RR source ownership split implemented:
+    - `adaptive_rr_add` is now tracked by source buckets in runtime:
+      - `history`
+      - `regime` (regime+archetype)
+    - adaptive RR failure reason codes now expose source detail:
+      - `blocked_risk_gate_entry_quality_rr_adaptive_history`
+      - `blocked_risk_gate_entry_quality_rr_adaptive_regime`
+      - `blocked_risk_gate_entry_quality_rr_adaptive_mixed`
+      - `blocked_risk_gate_entry_quality_rr_edge_adaptive_history`
+      - `blocked_risk_gate_entry_quality_rr_edge_adaptive_regime`
+      - `blocked_risk_gate_entry_quality_rr_edge_adaptive_mixed`
+    - source classification uses effective RR lift after clamp/relax allocation, not raw pre-clamp adds.
+  - reporting/routing sync:
+    - `entry_funnel` JSON and console output include new source counters.
+    - matrix top-component selection now excludes adaptive aggregate nodes:
+      - `blocked_risk_gate_entry_quality_rr_adaptive`
+      - `blocked_risk_gate_entry_quality_rr_edge_adaptive`
+    - promotion recommendation mapping added:
+      - `hold_candidate_calibrate_risk_gate_rr_adaptive_history_adders`
+      - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - `hold_candidate_calibrate_risk_gate_rr_adaptive_mixed_adders`
+    - tuner risk focus mapping added:
+      - `entry_quality_rr_adaptive_history`
+      - `entry_quality_rr_adaptive_regime`
+      - `entry_quality_rr_adaptive_mixed`
+      - `entry_quality_rr_edge_adaptive_history`
+      - `entry_quality_rr_edge_adaptive_regime`
+      - `entry_quality_rr_edge_adaptive_mixed`
+  - verification:
+    - `python -m py_compile scripts/generate_strategy_rejection_taxonomy_report.py scripts/run_profitability_matrix.py scripts/run_realdata_candidate_loop.py scripts/run_candidate_train_eval_cycle.py scripts/tune_candidate_gate_trade_density.py` PASS
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full`):
+    - train top risk component: `blocked_risk_gate_entry_quality_rr_adaptive_history:9029`
+    - validation top risk component: `blocked_risk_gate_entry_quality_rr_adaptive_history:6480`
+    - holdout top risk component: `blocked_risk_gate_entry_quality_rr_adaptive_history:3697`
+    - promotion recommendation: `hold_candidate_calibrate_risk_gate_rr_adaptive_history_adders`
+  - next:
+    - calibrate history adaptive RR adders first (tiered by expectancy/win-rate/profit-factor bands), then rebalance regime/archetype adders with holdout guard.
 
 2. Expectancy-first improvement loop
 - Optimize for:

@@ -843,9 +843,16 @@ struct EntryQualityGateSnapshot {
         RewardRiskAndExpectedEdgeBase,
         RewardRiskAndExpectedEdgeAdaptive,
     };
+    enum class AdaptiveSource {
+        Unknown,
+        History,
+        Regime,
+        Mixed,
+    };
 
     bool pass = false;
     FailureKind failure = FailureKind::None;
+    AdaptiveSource adaptive_rr_source = AdaptiveSource::Unknown;
     double reward_risk_ratio = 0.0;
     double calibrated_expected_edge_pct = std::numeric_limits<double>::lowest();
     double reward_risk_gate_base = 0.0;
@@ -858,7 +865,9 @@ EntryQualityGateSnapshot evaluateEntryQualityGate(
     const strategy::Signal& signal,
     const engine::EngineConfig& cfg,
     double rr_gate_base,
-    double edge_gate_base
+    double edge_gate_base,
+    double rr_adder_history,
+    double rr_adder_regime
 ) {
     EntryQualityGateSnapshot snapshot;
     snapshot.reward_risk_gate_base = rr_gate_base;
@@ -898,23 +907,57 @@ EntryQualityGateSnapshot evaluateEntryQualityGate(
     } else {
         snapshot.failure = EntryQualityGateSnapshot::FailureKind::ExpectedEdge;
     }
+    if (snapshot.failure == EntryQualityGateSnapshot::FailureKind::RewardRiskAdaptive ||
+        snapshot.failure == EntryQualityGateSnapshot::FailureKind::RewardRiskAndExpectedEdgeAdaptive) {
+        const double history_add = std::max(0.0, rr_adder_history);
+        const double regime_add = std::max(0.0, rr_adder_regime);
+        if (history_add <= 1e-9 && regime_add <= 1e-9) {
+            snapshot.adaptive_rr_source = EntryQualityGateSnapshot::AdaptiveSource::Unknown;
+        } else if (history_add >= (regime_add * 1.2)) {
+            snapshot.adaptive_rr_source = EntryQualityGateSnapshot::AdaptiveSource::History;
+        } else if (regime_add >= (history_add * 1.2)) {
+            snapshot.adaptive_rr_source = EntryQualityGateSnapshot::AdaptiveSource::Regime;
+        } else {
+            snapshot.adaptive_rr_source = EntryQualityGateSnapshot::AdaptiveSource::Mixed;
+        }
+    }
     return snapshot;
 }
 
-const char* entryQualityFailureReasonCode(EntryQualityGateSnapshot::FailureKind failure) {
-    switch (failure) {
+const char* entryQualityFailureReasonCode(const EntryQualityGateSnapshot& snapshot) {
+    switch (snapshot.failure) {
         case EntryQualityGateSnapshot::FailureKind::InvalidPriceLevels:
             return "blocked_risk_gate_entry_quality_invalid_levels";
         case EntryQualityGateSnapshot::FailureKind::RewardRiskBase:
             return "blocked_risk_gate_entry_quality_rr_base";
         case EntryQualityGateSnapshot::FailureKind::RewardRiskAdaptive:
-            return "blocked_risk_gate_entry_quality_rr_adaptive";
+            switch (snapshot.adaptive_rr_source) {
+                case EntryQualityGateSnapshot::AdaptiveSource::History:
+                    return "blocked_risk_gate_entry_quality_rr_adaptive_history";
+                case EntryQualityGateSnapshot::AdaptiveSource::Regime:
+                    return "blocked_risk_gate_entry_quality_rr_adaptive_regime";
+                case EntryQualityGateSnapshot::AdaptiveSource::Mixed:
+                    return "blocked_risk_gate_entry_quality_rr_adaptive_mixed";
+                case EntryQualityGateSnapshot::AdaptiveSource::Unknown:
+                default:
+                    return "blocked_risk_gate_entry_quality_rr_adaptive";
+            }
         case EntryQualityGateSnapshot::FailureKind::ExpectedEdge:
             return "blocked_risk_gate_entry_quality_edge";
         case EntryQualityGateSnapshot::FailureKind::RewardRiskAndExpectedEdgeBase:
             return "blocked_risk_gate_entry_quality_rr_edge_base";
         case EntryQualityGateSnapshot::FailureKind::RewardRiskAndExpectedEdgeAdaptive:
-            return "blocked_risk_gate_entry_quality_rr_edge_adaptive";
+            switch (snapshot.adaptive_rr_source) {
+                case EntryQualityGateSnapshot::AdaptiveSource::History:
+                    return "blocked_risk_gate_entry_quality_rr_edge_adaptive_history";
+                case EntryQualityGateSnapshot::AdaptiveSource::Regime:
+                    return "blocked_risk_gate_entry_quality_rr_edge_adaptive_regime";
+                case EntryQualityGateSnapshot::AdaptiveSource::Mixed:
+                    return "blocked_risk_gate_entry_quality_rr_edge_adaptive_mixed";
+                case EntryQualityGateSnapshot::AdaptiveSource::Unknown:
+                default:
+                    return "blocked_risk_gate_entry_quality_rr_edge_adaptive";
+            }
         case EntryQualityGateSnapshot::FailureKind::None:
         default:
             return "blocked_risk_gate_entry_quality";
@@ -1921,8 +1964,18 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 isAlphaHeadFallbackCandidate(best_signal, alpha_head_mode);
             const double history_penalty_scale = alpha_head_fallback_candidate ? 0.45 : 1.0;
             bool strategy_ev_ok = true;
-            double adaptive_rr_add = 0.0;
-            double adaptive_edge_add = 0.0;
+            double adaptive_rr_add_history = 0.0;
+            double adaptive_rr_add_regime = 0.0;
+            double adaptive_edge_add_history = 0.0;
+            double adaptive_edge_add_regime = 0.0;
+            auto addAdaptiveHistory = [&](double rr_add, double edge_add) {
+                adaptive_rr_add_history += rr_add;
+                adaptive_edge_add_history += edge_add;
+            };
+            auto addAdaptiveRegime = [&](double rr_add, double edge_add) {
+                adaptive_rr_add_regime += rr_add;
+                adaptive_edge_add_regime += edge_add;
+            };
             double required_strength_floor = filter_threshold;
             if (alpha_head_fallback_candidate) {
                 required_strength_floor = std::min(required_strength_floor, 0.58);
@@ -1939,8 +1992,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     return;
                 }
                 required_strength_floor = std::max(required_strength_floor, 0.60);
-                adaptive_rr_add += 0.10;
-                adaptive_edge_add += 0.00015;
+                addAdaptiveRegime(0.10, 0.00015);
             };
             auto stat_it = strategy_edge.find(best_signal.strategy_name);
             if (core_risk_enabled && stat_it != strategy_edge.end()) {
@@ -1951,14 +2003,15 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     if (exp_krw < engine_config_.min_strategy_expectancy_krw ||
                         pf < engine_config_.min_strategy_profit_factor) {
                         required_strength_floor += (0.04 * history_penalty_scale);
-                        adaptive_rr_add += (0.12 * history_penalty_scale);
-                        adaptive_edge_add += (0.00025 * history_penalty_scale);
+                        addAdaptiveHistory(
+                            (0.12 * history_penalty_scale),
+                            (0.00025 * history_penalty_scale)
+                        );
                         if (exp_krw < (engine_config_.min_strategy_expectancy_krw - 15.0) &&
                             pf < std::max(0.75, engine_config_.min_strategy_profit_factor - 0.20)) {
                             if (alpha_head_fallback_candidate) {
                                 required_strength_floor = std::max(required_strength_floor, 0.62);
-                                adaptive_rr_add += 0.08;
-                                adaptive_edge_add += 0.00012;
+                                addAdaptiveHistory(0.08, 0.00012);
                             } else {
                                 strategy_ev_ok = false;
                             }
@@ -1970,22 +2023,32 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     const double pf = stat.profitFactor();
                     const double exp_krw = stat.expectancy();
                     if (wr < 0.42) {
-                        adaptive_rr_add += (0.35 * history_penalty_scale);
-                        adaptive_edge_add += (0.0006 * history_penalty_scale);
+                        addAdaptiveHistory(
+                            (0.35 * history_penalty_scale),
+                            (0.0006 * history_penalty_scale)
+                        );
                     } else if (wr < 0.48) {
-                        adaptive_rr_add += (0.20 * history_penalty_scale);
-                        adaptive_edge_add += (0.0003 * history_penalty_scale);
+                        addAdaptiveHistory(
+                            (0.20 * history_penalty_scale),
+                            (0.0003 * history_penalty_scale)
+                        );
                     }
                     if (pf < 0.90) {
-                        adaptive_rr_add += (0.25 * history_penalty_scale);
-                        adaptive_edge_add += (0.0005 * history_penalty_scale);
+                        addAdaptiveHistory(
+                            (0.25 * history_penalty_scale),
+                            (0.0005 * history_penalty_scale)
+                        );
                     } else if (pf < 1.00) {
-                        adaptive_rr_add += (0.12 * history_penalty_scale);
-                        adaptive_edge_add += (0.0002 * history_penalty_scale);
+                        addAdaptiveHistory(
+                            (0.12 * history_penalty_scale),
+                            (0.0002 * history_penalty_scale)
+                        );
                     }
                     if (exp_krw < 0.0) {
-                        adaptive_rr_add += std::clamp((-exp_krw) / 1000.0, 0.0, 0.25) * history_penalty_scale;
-                        adaptive_edge_add += std::clamp((-exp_krw) / 80000.0, 0.0, 0.0004) * history_penalty_scale;
+                        addAdaptiveHistory(
+                            std::clamp((-exp_krw) / 1000.0, 0.0, 0.25) * history_penalty_scale,
+                            std::clamp((-exp_krw) / 80000.0, 0.0, 0.0004) * history_penalty_scale
+                        );
                     }
                 }
             }
@@ -2005,8 +2068,10 @@ void BacktestEngine::processCandle(const Candle& candle) {
                         exp_krw < -15.0 &&
                         (wr < 0.40 || pf < 0.90)) {
                         required_strength_floor = std::max(required_strength_floor, 0.62);
-                        adaptive_rr_add += (0.20 * history_penalty_scale);
-                        adaptive_edge_add += (0.0003 * history_penalty_scale);
+                        addAdaptiveRegime(
+                            (0.20 * history_penalty_scale),
+                            (0.0003 * history_penalty_scale)
+                        );
                     }
                     if (stat.trades >= 18 &&
                         exp_krw < -22.0 &&
@@ -2015,22 +2080,27 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     }
                     if (exp_krw < 0.0) {
                         required_strength_floor += std::clamp((-exp_krw) / 2500.0, 0.0, 0.08) * history_penalty_scale;
-                        adaptive_rr_add += std::clamp((-exp_krw) / 1800.0, 0.0, 0.20) * history_penalty_scale;
-                        adaptive_edge_add += std::clamp((-exp_krw) / 200000.0, 0.0, 0.0004) * history_penalty_scale;
+                        addAdaptiveRegime(
+                            std::clamp((-exp_krw) / 1800.0, 0.0, 0.20) * history_penalty_scale,
+                            std::clamp((-exp_krw) / 200000.0, 0.0, 0.0004) * history_penalty_scale
+                        );
                     } else if (exp_krw > 8.0 && wr >= 0.58 && pf >= 1.15) {
                         required_strength_floor -= 0.02;
-                        adaptive_rr_add -= 0.08;
-                        adaptive_edge_add -= 0.00015;
+                        addAdaptiveRegime(-0.08, -0.00015);
                     }
                     if (wr < 0.42) {
                         required_strength_floor += (0.03 * history_penalty_scale);
-                        adaptive_rr_add += (0.10 * history_penalty_scale);
-                        adaptive_edge_add += (0.0002 * history_penalty_scale);
+                        addAdaptiveRegime(
+                            (0.10 * history_penalty_scale),
+                            (0.0002 * history_penalty_scale)
+                        );
                     }
                     if (pf < 0.95) {
                         required_strength_floor += (0.02 * history_penalty_scale);
-                        adaptive_rr_add += (0.08 * history_penalty_scale);
-                        adaptive_edge_add += (0.0002 * history_penalty_scale);
+                        addAdaptiveRegime(
+                            (0.08 * history_penalty_scale),
+                            (0.0002 * history_penalty_scale)
+                        );
                     }
                 }
             }
@@ -2053,24 +2123,27 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     }
                     if (exp_krw < -20.0 && wr < 0.35 && pf < 0.85) {
                         required_strength_floor += (0.05 * history_penalty_scale);
-                        adaptive_rr_add += (0.15 * history_penalty_scale);
-                        adaptive_edge_add += (0.0003 * history_penalty_scale);
+                        addAdaptiveRegime(
+                            (0.15 * history_penalty_scale),
+                            (0.0003 * history_penalty_scale)
+                        );
                     } else if (exp_krw < -10.0) {
                         required_strength_floor += (0.02 * history_penalty_scale);
-                        adaptive_rr_add += (0.08 * history_penalty_scale);
-                        adaptive_edge_add += (0.00015 * history_penalty_scale);
+                        addAdaptiveRegime(
+                            (0.08 * history_penalty_scale),
+                            (0.00015 * history_penalty_scale)
+                        );
                     } else if (exp_krw > 10.0 && wr >= 0.60 && pf >= 1.20) {
                         required_strength_floor -= 0.02;
-                        adaptive_rr_add -= 0.06;
-                        adaptive_edge_add -= 0.0001;
+                        addAdaptiveRegime(-0.06, -0.0001);
                     }
                 }
             }
             applyArchetypeRiskAdjustments(
                 best_signal,
                 required_strength_floor,
-                adaptive_rr_add,
-                adaptive_edge_add,
+                adaptive_rr_add_regime,
+                adaptive_edge_add_regime,
                 regime_pattern_block
             );
             if (alpha_head_fallback_candidate) {
@@ -2128,6 +2201,8 @@ void BacktestEngine::processCandle(const Candle& candle) {
             const double rr_gate_base = tuned_cfg.min_reward_risk;
             const double edge_gate_base = tuned_cfg.min_expected_edge_pct;
             if (core_risk_enabled) {
+                const double adaptive_rr_add = adaptive_rr_add_history + adaptive_rr_add_regime;
+                const double adaptive_edge_add = adaptive_edge_add_history + adaptive_edge_add_regime;
                 tuned_cfg.min_reward_risk = std::clamp(
                     tuned_cfg.min_reward_risk + adaptive_rr_add,
                     tuned_cfg.min_reward_risk,
@@ -2166,6 +2241,18 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     tuned_cfg.min_expected_edge_pct * 0.82
                 );
             }
+            double effective_rr_adder_history = 0.0;
+            double effective_rr_adder_regime = 0.0;
+            if (core_risk_enabled) {
+                const double effective_rr_raise = std::max(0.0, tuned_cfg.min_reward_risk - rr_gate_base);
+                const double history_positive = std::max(0.0, adaptive_rr_add_history);
+                const double regime_positive = std::max(0.0, adaptive_rr_add_regime);
+                const double positive_sum = history_positive + regime_positive;
+                if (effective_rr_raise > 1e-9 && positive_sum > 1e-9) {
+                    effective_rr_adder_history = effective_rr_raise * (history_positive / positive_sum);
+                    effective_rr_adder_regime = effective_rr_raise * (regime_positive / positive_sum);
+                }
+            }
 
             normalizeSignalStopLossByRegime(best_signal, best_signal.market_regime);
             const bool rr_rebalance_ok = rebalanceSignalRiskReward(best_signal, tuned_cfg);
@@ -2174,7 +2261,14 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 passesRegimeGate(best_signal.market_regime, engine_config_);
             const EntryQualityGateSnapshot entry_quality_eval =
                 core_risk_enabled
-                ? evaluateEntryQualityGate(best_signal, tuned_cfg, rr_gate_base, edge_gate_base)
+                ? evaluateEntryQualityGate(
+                    best_signal,
+                    tuned_cfg,
+                    rr_gate_base,
+                    edge_gate_base,
+                    effective_rr_adder_history,
+                    effective_rr_adder_regime
+                )
                 : EntryQualityGateSnapshot{};
             const bool entry_quality_gate_ok =
                 !core_risk_enabled ||
@@ -2229,6 +2323,20 @@ void BacktestEngine::processCandle(const Candle& candle) {
                             case EntryQualityGateSnapshot::FailureKind::RewardRiskAdaptive:
                                 entry_funnel_.blocked_risk_gate_entry_quality_rr++;
                                 entry_funnel_.blocked_risk_gate_entry_quality_rr_adaptive++;
+                                switch (entry_quality_eval.adaptive_rr_source) {
+                                    case EntryQualityGateSnapshot::AdaptiveSource::History:
+                                        entry_funnel_.blocked_risk_gate_entry_quality_rr_adaptive_history++;
+                                        break;
+                                    case EntryQualityGateSnapshot::AdaptiveSource::Regime:
+                                        entry_funnel_.blocked_risk_gate_entry_quality_rr_adaptive_regime++;
+                                        break;
+                                    case EntryQualityGateSnapshot::AdaptiveSource::Mixed:
+                                        entry_funnel_.blocked_risk_gate_entry_quality_rr_adaptive_mixed++;
+                                        break;
+                                    case EntryQualityGateSnapshot::AdaptiveSource::Unknown:
+                                    default:
+                                        break;
+                                }
                                 break;
                             case EntryQualityGateSnapshot::FailureKind::ExpectedEdge:
                                 entry_funnel_.blocked_risk_gate_entry_quality_edge++;
@@ -2240,12 +2348,26 @@ void BacktestEngine::processCandle(const Candle& candle) {
                             case EntryQualityGateSnapshot::FailureKind::RewardRiskAndExpectedEdgeAdaptive:
                                 entry_funnel_.blocked_risk_gate_entry_quality_rr_edge++;
                                 entry_funnel_.blocked_risk_gate_entry_quality_rr_edge_adaptive++;
+                                switch (entry_quality_eval.adaptive_rr_source) {
+                                    case EntryQualityGateSnapshot::AdaptiveSource::History:
+                                        entry_funnel_.blocked_risk_gate_entry_quality_rr_edge_adaptive_history++;
+                                        break;
+                                    case EntryQualityGateSnapshot::AdaptiveSource::Regime:
+                                        entry_funnel_.blocked_risk_gate_entry_quality_rr_edge_adaptive_regime++;
+                                        break;
+                                    case EntryQualityGateSnapshot::AdaptiveSource::Mixed:
+                                        entry_funnel_.blocked_risk_gate_entry_quality_rr_edge_adaptive_mixed++;
+                                        break;
+                                    case EntryQualityGateSnapshot::AdaptiveSource::Unknown:
+                                    default:
+                                        break;
+                                }
                                 break;
                             case EntryQualityGateSnapshot::FailureKind::None:
                             default:
                                 break;
                         }
-                        markEntryReject(entryQualityFailureReasonCode(entry_quality_eval.failure));
+                        markEntryReject(entryQualityFailureReasonCode(entry_quality_eval));
                     } else {
                         entry_funnel_.blocked_risk_gate_other++;
                         markEntryReject("blocked_risk_gate_other");
