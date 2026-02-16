@@ -455,6 +455,28 @@ The system must:
       - runtime log:
         - `top_group=risk_gate`, `source=holdout_recommendation_override`, `risk_gate_focus=entry_quality`
         - `scenario_family_counts={'risk_gate_quality_rebalance': 1}`
+- Stage-2.11 update (2026-02-17):
+  - Realdata quality-focus 재실행으로 새 라우팅 효과 검증:
+    - command:
+      - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions`
+    - key result:
+      - `dataset_quality_gate`: passed `8`, failed `4` (gap ratio invariant fail)
+      - `bottleneck context`: `top_group=risk_gate`, `source=holdout_recommendation_override`, `risk_gate_focus=entry_quality`
+      - all adapted families: `risk_gate_quality_rebalance` (6/6)
+      - `best_combo=scenario_quality_focus_002` (but `overall_gate_pass=false`, `profile_gate_pass=false` persisted)
+  - split cycle consistency re-check:
+    - command:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+    - promotion verdict:
+      - `base_promotion_gate_pass=false`
+      - `generalization_guard_pass=true`
+      - `promotion_gate_pass=false`
+      - `recommendation=hold_candidate_calibrate_risk_gate_entry_quality_ownership`
+    - holdout/validation core top rejection remains:
+      - `blocked_risk_gate_entry_quality`
+  - next:
+    - tune parameter exploration보다 먼저 `entry_quality` 게이트 자체의 ownership/feature 정의를 구조적으로 정리하고,
+      이후 동일 split에서 재평가.
 
 2. Expectancy-first improvement loop
 - Optimize for:
