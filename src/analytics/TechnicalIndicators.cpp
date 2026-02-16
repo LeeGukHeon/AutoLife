@@ -135,7 +135,6 @@ double TechnicalIndicators::calculateATR(const std::vector<Candle>& candles, int
     }
     
     // 초기 TR 평균 (SMA 방식)
-    double tr_sum = 0.0;
     std::vector<double> tr_values;
     tr_values.reserve(candles.size());
     
@@ -319,7 +318,8 @@ TechnicalIndicators::StochasticResult TechnicalIndicators::calculateStochastic(
     int k_period,
     int d_period  // <- 여기
 ) {
-   StochasticResult result;
+    (void)d_period;
+    StochasticResult result;
     if (candles.size() < static_cast<size_t>(k_period)) return result;
     
     // 1. 최신 k_period 동안의 최고가/최저가

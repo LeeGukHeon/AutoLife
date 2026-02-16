@@ -110,6 +110,7 @@ std::string EventJournalJsonl::toString(JournalEventType type) {
         case JournalEventType::POSITION_REDUCED: return "POSITION_REDUCED";
         case JournalEventType::POSITION_CLOSED: return "POSITION_CLOSED";
         case JournalEventType::POLICY_CHANGED: return "POLICY_CHANGED";
+        case JournalEventType::NO_TRADE: return "NO_TRADE";
     }
     return "ORDER_UPDATED";
 }
@@ -122,6 +123,7 @@ JournalEventType EventJournalJsonl::fromString(const std::string& value) {
     if (value == "POSITION_REDUCED") return JournalEventType::POSITION_REDUCED;
     if (value == "POSITION_CLOSED") return JournalEventType::POSITION_CLOSED;
     if (value == "POLICY_CHANGED") return JournalEventType::POLICY_CHANGED;
+    if (value == "NO_TRADE") return JournalEventType::NO_TRADE;
     return JournalEventType::ORDER_UPDATED;
 }
 

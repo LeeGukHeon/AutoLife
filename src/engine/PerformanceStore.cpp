@@ -42,6 +42,7 @@ void PerformanceStore::rebuild(const std::vector<risk::TradeHistory>& history) {
         key.strategy_name = strategy_name;
         key.regime = trade.market_regime;
         key.liquidity_bucket = liquidityBucket(trade.liquidity_score);
+        key.entry_archetype = trade.entry_archetype.empty() ? "UNSPECIFIED" : trade.entry_archetype;
         accumulateStats(by_bucket_[key], trade);
     }
 }

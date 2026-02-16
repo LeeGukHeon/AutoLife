@@ -2159,6 +2159,63 @@ The system must:
     - `build/Release/logs/loss_contributor_by_strategy.csv`
     - `build/Release/logs/profitability_gate_report_realdata.json`
 
+60. P1 step-3 continued: 손실 기여 리포트 체인 자동화 + 검증 락 안정화 (2026-02-16)
+- What changed:
+  - `scripts/run_realdata_candidate_loop.py`
+    - 실검증 파이프라인에 손실 기여 분석 단계를 기본 연동:
+      - `scripts/analyze_loss_contributors.py` 자동 실행
+      - 출력 아티팩트:
+        - `build/Release/logs/loss_contributor_by_market.csv`
+        - `build/Release/logs/loss_contributor_by_strategy.csv`
+    - 병렬 검증 충돌 방지를 위해 verification lock 체인 유지.
+    - 신규 옵션:
+      - `--loss-contributor-script`
+      - `--loss-contributor-market-csv`
+      - `--loss-contributor-strategy-csv`
+      - `--loss-contributor-max-workers`
+      - `--skip-loss-contributor-analysis`
+  - `scripts/analyze_loss_contributors.py`
+    - `config/config.json` 직접 수정 로직 제거(검증 간섭 최소화).
+    - verification lock 연동 및 기본 worker를 보수적으로 `1`로 변경.
+    - lock 옵션 추가:
+      - `--verification-lock-path`
+      - `--verification-lock-timeout-sec`
+      - `--verification-lock-stale-sec`
+  - 인코딩/주석 안정화:
+    - `src/strategy/BreakoutStrategy.cpp` 인코딩 손상 이슈는 원본 상태로 복구 완료.
+    - UTF-8 strict 유효성 확인 완료.
+
+- Verification:
+  - 문법:
+    - `python -m py_compile scripts/run_realdata_candidate_loop.py scripts/analyze_loss_contributors.py` PASS
+  - 빌드:
+    - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release -j 6` PASS
+  - 실검증:
+    - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions -LossContributorMaxWorkers 1` PASS
+    - `core_full`:
+      - `avg_profit_factor=0.5439`
+      - `avg_total_trades=121.1667`
+      - `avg_expectancy_krw=-7.1500`
+      - `profitable_ratio=0.0`
+      - `overall_gate_pass=false`
+    - parity:
+      - `overall_invariant_pass=false`, `invariant_fail_count=4`
+    - loss contributors (core_full loss rows):
+      - strategy top2:
+        - `Advanced Momentum` (`loss_share_pct=38.0252`)
+        - `Breakout Strategy` (`loss_share_pct=36.4014`)
+      - market top3:
+        - `KRW-DOGE`, `KRW-AVAX`, `KRW-SUI`
+
+- Next subtask:
+  - 손실 기여 상위 2개 전략(`Advanced Momentum`, `Breakout Strategy`)에 대해
+    아키타입/레짐별 손실 꼬리 분해를 먼저 수행하고,
+    하드 필터 강화 대신 포지션 크기/청산 규칙을 소폭 보정하는 실험군을 분리 적용.
+  - target artifacts:
+    - `build/Release/logs/loss_contributor_by_strategy.csv`
+    - `build/Release/logs/entry_rejection_summary_realdata.json`
+    - `build/Release/logs/profitability_gate_report_realdata.json`
+
 ## P0 (Must do first)
 1. Upbit compliance hardening
 - Enforce shared rate budget across scanner/live/backtest fetch tools.

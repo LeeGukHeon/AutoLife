@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+﻿cmake_minimum_required(VERSION 3.20)
 
 if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
     if(DEFINED ENV{VCPKG_ROOT} AND EXISTS "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
@@ -28,8 +28,8 @@ find_package(Boost REQUIRED COMPONENTS system thread)
 
 include_directories(${CMAKE_SOURCE_DIR}/include)
 
-# 소스 파일 명시
-# 소스 파일 명시 (Main 제외)
+# Source files (shared library objects, excluding main entrypoint)
+# Keep this list as the single compilation source of truth
 set(LIB_SOURCES
     src/common/Logger.cpp
     src/common/Config.cpp
@@ -53,7 +53,6 @@ set(LIB_SOURCES
     src/engine/PerformanceStore.cpp
     src/core/adapters/LegacyExecutionPlaneAdapter.cpp
     src/core/adapters/LegacyPolicyLearningPlaneAdapter.cpp
-    src/core/adapters/LegacyRiskCompliancePlaneAdapter.cpp
     src/core/adapters/UpbitComplianceAdapter.cpp
     src/core/execution/OrderLifecycleStateMachine.cpp
     src/core/orchestration/TradingCycleCoordinator.cpp
@@ -81,6 +80,16 @@ add_executable(
     src/execution/OrderManager.cpp
     src/execution/OrderStateMapper.cpp
     src/core/execution/OrderLifecycleStateMachine.cpp
+)
+add_executable(
+    AutoLifeLiveQuotationProbe
+    src/tools/LiveQuotationProbe.cpp
+    src/common/Config.cpp
+    src/common/PathUtils.cpp
+    src/common/Logger.cpp
+    src/network/JwtGenerator.cpp
+    src/network/UpbitHttpClient.cpp
+    src/execution/RateLimiter.cpp
 )
 
 # [Test] Config Unit Test
@@ -121,6 +130,10 @@ target_compile_definitions(AutoLifeLiveExecutionProbe PRIVATE
     _WIN32_WINNT=0x0A00
     NOMINMAX
 )
+target_compile_definitions(AutoLifeLiveQuotationProbe PRIVATE
+    _WIN32_WINNT=0x0A00
+    NOMINMAX
+)
 
 target_link_libraries(AutoLifeCancelOrder PRIVATE
     CURL::libcurl
@@ -138,9 +151,17 @@ target_link_libraries(AutoLifeLiveExecutionProbe PRIVATE
     Boost::system
     Boost::thread
 )
+target_link_libraries(AutoLifeLiveQuotationProbe PRIVATE
+    CURL::libcurl
+    OpenSSL::SSL
+    OpenSSL::Crypto
+    nlohmann_json::nlohmann_json
+    spdlog::spdlog
+)
 if(WIN32)
     target_link_libraries(AutoLifeCancelOrder PRIVATE ws2_32 wsock32)
     target_link_libraries(AutoLifeLiveExecutionProbe PRIVATE ws2_32 wsock32)
+    target_link_libraries(AutoLifeLiveQuotationProbe PRIVATE ws2_32 wsock32)
 endif()
 
 if(WIN32)
@@ -148,10 +169,10 @@ if(WIN32)
 endif()
 
 # ========================================
-# 빌드 후 리소스 파일 자동 복사
+# Post-build asset copy
 # ========================================
 
-# config 폴더 복사
+# Copy config directory
 add_custom_command(TARGET AutoLifeTrading POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
     ${CMAKE_SOURCE_DIR}/config
@@ -159,14 +180,14 @@ add_custom_command(TARGET AutoLifeTrading POST_BUILD
     COMMENT "Copying config files to build directory"
 )
 
-# logs 폴더 생성
+# Create logs directory
 add_custom_command(TARGET AutoLifeTrading POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory
     $<TARGET_FILE_DIR:AutoLifeTrading>/logs
     COMMENT "Creating logs directory"
 )
 
-# README 복사 (선택)
+# Copy README (optional)
 if(EXISTS ${CMAKE_SOURCE_DIR}/README.md)
     add_custom_command(TARGET AutoLifeTrading POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy
@@ -193,3 +214,16 @@ add_executable(
     src/core/execution/OrderLifecycleStateMachine.cpp
 )
 target_link_libraries(AutoLifeExecutionStateTest PRIVATE nlohmann_json::nlohmann_json)
+
+add_executable(
+    AutoLifeRateLimiterComplianceTest
+    tests/TestRateLimiterComplianceTelemetry.cpp
+    src/execution/RateLimiter.cpp
+    src/common/PathUtils.cpp
+    src/common/Logger.cpp
+)
+target_link_libraries(AutoLifeRateLimiterComplianceTest PRIVATE nlohmann_json::nlohmann_json spdlog::spdlog)
+target_compile_definitions(AutoLifeRateLimiterComplianceTest PRIVATE
+    _WIN32_WINNT=0x0A00
+    NOMINMAX
+)

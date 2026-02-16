@@ -12,6 +12,7 @@
 #include <atomic>
 #include <thread>
 #include <mutex>
+#include <map>
 
 #include "engine/EngineConfig.h"
 #include "engine/AdaptivePolicyController.h"
@@ -216,6 +217,11 @@ private:
     // [NEW] Prometheus HTTP ?쒕쾭 (硫뷀듃由??몄텧)
     // /metrics ?붾뱶?ъ씤?몃줈 Prometheus ?뺤떇 硫뷀듃由??쒓났
     void runPrometheusHttpServer(int port = 8080);
+    void recordLiveSignalReject(const std::string& reason, long long count = 1);
+    void flushLiveSignalFunnelTaxonomyReport(
+        const std::map<std::string, int>& last_scan_rejection_counts,
+        const std::map<std::string, int>& last_scan_hint_adjustment_counts
+    ) const;
     
     // ===== 硫ㅻ쾭 蹂??=====
     
@@ -276,6 +282,25 @@ private:
         int active_strategies_count = 0;
         double last_update_timestamp = 0.0;
     } prometheus_metrics_;
+
+    struct LiveSignalFunnelTelemetry {
+        long long scan_count = 0;
+        long long markets_considered = 0;
+        long long skipped_due_to_open_position = 0;
+        long long skipped_due_to_active_order = 0;
+        long long no_candle_data = 0;
+        long long no_signal_generated = 0;
+        long long filtered_out_by_manager = 0;
+        long long no_best_signal = 0;
+        long long markets_with_selected_candidate = 0;
+        long long generated_signal_candidates = 0;
+        long long selected_signal_candidates = 0;
+        long long selection_call_count = 0;
+        long long selection_scored_candidate_count = 0;
+        long long selection_hint_adjusted_candidate_count = 0;
+        std::map<std::string, long long> selection_hint_adjustment_counts;
+        std::map<std::string, long long> rejection_reason_counts;
+    } live_signal_funnel_;
     
     // [NEW] Prometheus HTTP ?쒕쾭 愿??
     int prometheus_server_port_ = 8080;  // HTTP ?쒕쾭 ?ы듃 (湲곕낯媛? 8080)

@@ -42,6 +42,695 @@ TUNABLE_STRATEGY_KEYS = {
 }
 
 
+def read_live_signal_funnel_snapshot(path_value: pathlib.Path) -> Dict[str, Any]:
+    if not path_value.exists():
+        return {
+            "exists": False,
+            "funnel_json": str(path_value),
+            "scan_count": 0,
+            "top_group": "",
+            "top_group_count": 0,
+            "total_rejections": 0,
+            "signal_generation_share": 0.0,
+            "manager_prefilter_share": 0.0,
+            "position_state_share": 0.0,
+            "no_trade_bias_active": False,
+            "selection_call_count": 0,
+            "selection_scored_candidate_count": 0,
+            "selection_hint_adjusted_candidate_count": 0,
+            "selection_hint_adjusted_ratio": 0.0,
+            "selection_hint_adjustment_counts": {},
+            "top_selection_hint_adjustment": "",
+        }
+
+    payload = json.loads(path_value.read_text(encoding="utf-8-sig"))
+    group_counts_raw = payload.get("rejection_group_counts") or {}
+    group_counts: Dict[str, int] = {}
+    if isinstance(group_counts_raw, dict):
+        for key, value in group_counts_raw.items():
+            try:
+                group_counts[str(key)] = int(value or 0)
+            except (TypeError, ValueError):
+                continue
+
+    total_rejections = int(sum(max(0, v) for v in group_counts.values()))
+    top_group = ""
+    top_group_count = 0
+    if group_counts:
+        sorted_groups = sorted(group_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        top_group = str(sorted_groups[0][0])
+        top_group_count = int(sorted_groups[0][1])
+
+    def _share(name: str) -> float:
+        if total_rejections <= 0:
+            return 0.0
+        return float(max(0, group_counts.get(name, 0))) / float(total_rejections)
+
+    signal_generation_share = float(_share("signal_generation"))
+    manager_prefilter_share = float(_share("manager_prefilter"))
+    position_state_share = float(_share("position_state"))
+    scan_count = int(payload.get("scan_count", 0) or 0)
+    no_trade_bias_active = bool(
+        scan_count >= 3
+        and total_rejections >= 20
+        and position_state_share < 0.40
+        and (
+            signal_generation_share >= 0.55
+            or (signal_generation_share + manager_prefilter_share) >= 0.75
+        )
+    )
+
+    return {
+        "exists": True,
+        "funnel_json": str(path_value),
+        "scan_count": scan_count,
+        "top_group": top_group,
+        "top_group_count": top_group_count,
+        "total_rejections": total_rejections,
+        "signal_generation_share": signal_generation_share,
+        "manager_prefilter_share": manager_prefilter_share,
+        "position_state_share": position_state_share,
+        "no_trade_bias_active": no_trade_bias_active,
+        "selection_call_count": int(payload.get("selection_call_count", 0) or 0),
+        "selection_scored_candidate_count": int(payload.get("selection_scored_candidate_count", 0) or 0),
+        "selection_hint_adjusted_candidate_count": int(
+            payload.get("selection_hint_adjusted_candidate_count", 0) or 0
+        ),
+        "selection_hint_adjusted_ratio": float(payload.get("selection_hint_adjusted_ratio", 0.0) or 0.0),
+        "selection_hint_adjustment_counts": payload.get("selection_hint_adjustment_counts") or {},
+        "top_selection_hint_adjustment": str(
+            ((payload.get("top_selection_hint_adjustments") or [{}])[0]).get("adjustment", "")
+            if isinstance(payload.get("top_selection_hint_adjustments"), list)
+            and (payload.get("top_selection_hint_adjustments") or [])
+            else ""
+        ),
+    }
+
+
+def read_train_eval_holdout_context(path_value: pathlib.Path) -> Dict[str, Any]:
+    if not path_value.exists():
+        return {
+            "exists": False,
+            "summary_json": str(path_value),
+            "holdout_found": False,
+            "stage_name": "",
+            "overall_gate_pass": False,
+            "avg_profit_factor": 0.0,
+            "avg_expectancy_krw": 0.0,
+            "avg_total_trades": 0.0,
+            "profitable_ratio": 0.0,
+            "top_rejection_group": "",
+            "recommendation": "",
+        }
+
+    payload = json.loads(path_value.read_text(encoding="utf-8-sig"))
+    stages = payload.get("stages") or []
+    holdout_stage: Dict[str, Any] = {}
+    if isinstance(stages, list):
+        candidates: List[Dict[str, Any]] = []
+        for row in stages:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("split", "")).strip().lower() == "holdout":
+                candidates.append(row)
+        if candidates:
+            # Prefer deterministic holdout snapshot for suppression logic.
+            holdout_stage = next(
+                (
+                    row
+                    for row in candidates
+                    if "deterministic" in str(row.get("stage", "")).lower()
+                ),
+                candidates[0],
+            )
+
+    snapshot = (holdout_stage.get("snapshot") or {}) if isinstance(holdout_stage, dict) else {}
+    selected = (snapshot.get("selected") or {}) if isinstance(snapshot, dict) else {}
+    core_full = (selected.get("core_full") or {}) if isinstance(selected, dict) else {}
+    taxonomy = (holdout_stage.get("entry_rejection_taxonomy") or {}) if isinstance(holdout_stage, dict) else {}
+    verdict = payload.get("promotion_verdict") or {}
+
+    return {
+        "exists": True,
+        "summary_json": str(path_value),
+        "holdout_found": bool(holdout_stage),
+        "stage_name": str(holdout_stage.get("stage", "") if isinstance(holdout_stage, dict) else ""),
+        "overall_gate_pass": bool(selected.get("overall_gate_pass", False)),
+        "avg_profit_factor": float(core_full.get("avg_profit_factor", 0.0) or 0.0),
+        "avg_expectancy_krw": float(core_full.get("avg_expectancy_krw", 0.0) or 0.0),
+        "avg_total_trades": float(core_full.get("avg_total_trades", 0.0) or 0.0),
+        "profitable_ratio": float(core_full.get("profitable_ratio", 0.0) or 0.0),
+        "top_rejection_group": str(taxonomy.get("overall_top_group", "") or ""),
+        "recommendation": str(verdict.get("recommendation", "") or ""),
+    }
+
+
+def build_effective_bottleneck_context(
+    live_context: Dict[str, Any],
+    holdout_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    context = dict(live_context or {})
+    top_group_live = str(context.get("top_group", "") or "").strip()
+    top_group_holdout = str(holdout_context.get("top_rejection_group", "") or "").strip()
+    context["top_group_live"] = top_group_live
+    context["top_group_holdout"] = top_group_holdout
+    context["top_group_source"] = "live"
+    context["top_group_fallback_applied"] = False
+
+    if top_group_live:
+        return context
+
+    if top_group_holdout in {"signal_generation", "manager_prefilter", "position_state", "risk_gate"}:
+        context["top_group"] = top_group_holdout
+        context["top_group_source"] = "holdout_fallback"
+        context["top_group_fallback_applied"] = True
+        # When live funnel top-group is unavailable, inject a conservative synthetic
+        # share to avoid neutral-only family routing during holdout-driven failures.
+        if top_group_holdout == "signal_generation":
+            context["signal_generation_share"] = max(
+                float(context.get("signal_generation_share", 0.0) or 0.0),
+                0.70,
+            )
+        elif top_group_holdout == "manager_prefilter":
+            context["manager_prefilter_share"] = max(
+                float(context.get("manager_prefilter_share", 0.0) or 0.0),
+                0.60,
+            )
+    return context
+
+
+def compute_combo_bottleneck_priority_score(combo: Dict[str, Any], context: Dict[str, Any]) -> float:
+    top_group = str(context.get("top_group", ""))
+    no_trade_bias_active = bool(context.get("no_trade_bias_active", False))
+    signal_generation_share = float(context.get("signal_generation_share", 0.0) or 0.0)
+    manager_prefilter_share = float(context.get("manager_prefilter_share", 0.0) or 0.0)
+    position_state_share = float(context.get("position_state_share", 0.0) or 0.0)
+
+    min_expected_edge_pct = float(combo.get("min_expected_edge_pct", 0.0010))
+    min_reward_risk = float(combo.get("min_reward_risk", 1.20))
+    avg_strength = (
+        float(combo.get("scalping_min_signal_strength", 0.70))
+        + float(combo.get("momentum_min_signal_strength", 0.72))
+        + float(combo.get("breakout_min_signal_strength", 0.40))
+        + float(combo.get("mean_reversion_min_signal_strength", 0.40))
+    ) / 4.0
+    max_new_orders = int(combo.get("max_new_orders_per_scan", 2))
+    avoid_high_vol = bool(combo.get("avoid_high_volatility", True))
+    avoid_down = bool(combo.get("avoid_trending_down", True))
+    min_strategy_pf = float(combo.get("min_strategy_profit_factor", 0.95))
+    min_strategy_ev = float(combo.get("min_strategy_expectancy_krw", -1.0))
+
+    # Relaxation affinity: higher means easier to generate entries.
+    relax_score = 0.0
+    relax_score += max(0.0, (0.0018 - min_expected_edge_pct) * 12000.0)
+    relax_score += max(0.0, (1.55 - min_reward_risk) * 55.0)
+    relax_score += max(0.0, (0.80 - avg_strength) * 90.0)
+    relax_score += max(0, max_new_orders - 1) * 8.0
+    if not avoid_high_vol:
+        relax_score += 6.0
+    if not avoid_down:
+        relax_score += 5.0
+    relax_score += max(0.0, (1.15 - min_strategy_pf) * 40.0)
+    relax_score += max(0.0, (0.0 - min_strategy_ev) * 2.0)
+
+    # Quality affinity: higher means tighter quality preference.
+    quality_score = 0.0
+    quality_score += max(0.0, (min_expected_edge_pct - 0.0006) * 12000.0)
+    quality_score += max(0.0, (min_reward_risk - 1.00) * 65.0)
+    quality_score += max(0.0, (avg_strength - 0.60) * 80.0)
+    quality_score += max(0.0, (min_strategy_pf - 0.90) * 55.0)
+    quality_score += max(0.0, min_strategy_ev) * 2.0
+    if avoid_high_vol:
+        quality_score += 3.0
+    if avoid_down:
+        quality_score += 3.0
+
+    if top_group == "position_state" and position_state_share >= 0.40:
+        # Entries already happen; prioritize quality-preserving candidates.
+        return round(quality_score, 6)
+
+    if top_group == "manager_prefilter":
+        # Emphasize modest relaxation around prefilter bottlenecks.
+        return round((relax_score * 0.70) + (quality_score * 0.30), 6)
+
+    if top_group == "signal_generation" or no_trade_bias_active:
+        # Signal-generation bottleneck: prioritize candidates that can create more
+        # valid opportunities while still carrying some quality term.
+        boost = 1.0 + min(0.8, signal_generation_share + (manager_prefilter_share * 0.5))
+        return round((relax_score * boost * 0.85) + (quality_score * 0.15), 6)
+
+    # Unknown/neutral bottleneck: keep balance.
+    return round((relax_score * 0.45) + (quality_score * 0.55), 6)
+
+
+def prioritize_combo_specs_for_bottleneck(
+    combos: List[Dict[str, Any]],
+    context: Dict[str, Any],
+) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    scored: List[Tuple[float, int, Dict[str, Any]]] = []
+    for index, combo in enumerate(combos):
+        score = compute_combo_bottleneck_priority_score(combo, context)
+        scored.append((score, index, combo))
+
+    scored_sorted = sorted(scored, key=lambda x: (x[0], -x[1]), reverse=True)
+    ordered = [x[2] for x in scored_sorted]
+    meta: Dict[str, Dict[str, Any]] = {}
+    for rank, (score, _idx, combo) in enumerate(scored_sorted, start=1):
+        combo_id = str(combo.get("combo_id", ""))
+        meta[combo_id] = {
+            "priority_rank": int(rank),
+            "priority_score": float(score),
+            "top_group": str(context.get("top_group", "")),
+            "no_trade_bias_active": bool(context.get("no_trade_bias_active", False)),
+        }
+    return ordered, meta
+
+
+def _clamp(value: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, value))
+
+
+def apply_hint_impact_guardrail(
+    combo: Dict[str, Any],
+    baseline: Dict[str, Any],
+    tighten_scale: float,
+) -> None:
+    scale = _clamp(float(tighten_scale), 0.0, 1.0)
+    if scale <= 0.0:
+        return
+
+    base_edge = float(baseline.get("min_expected_edge_pct", combo.get("min_expected_edge_pct", 0.0010)))
+    base_rr = float(baseline.get("min_reward_risk", combo.get("min_reward_risk", 1.20)))
+    base_pf = float(baseline.get("min_strategy_profit_factor", combo.get("min_strategy_profit_factor", 0.95)))
+    base_ev = float(baseline.get("min_strategy_expectancy_krw", combo.get("min_strategy_expectancy_krw", -1.0)))
+    base_orders = int(baseline.get("max_new_orders_per_scan", combo.get("max_new_orders_per_scan", 2)))
+
+    cur_edge = float(combo.get("min_expected_edge_pct", base_edge))
+    cur_rr = float(combo.get("min_reward_risk", base_rr))
+    cur_pf = float(combo.get("min_strategy_profit_factor", base_pf))
+    cur_ev = float(combo.get("min_strategy_expectancy_krw", base_ev))
+    cur_orders = int(combo.get("max_new_orders_per_scan", base_orders))
+
+    combo["min_expected_edge_pct"] = round(
+        _clamp(cur_edge + (base_edge - cur_edge) * scale, 0.0005, 0.0019), 4
+    )
+    combo["min_reward_risk"] = round(
+        _clamp(cur_rr + (base_rr - cur_rr) * scale, 1.00, 1.80), 2
+    )
+    combo["min_strategy_profit_factor"] = round(
+        _clamp(cur_pf + (base_pf - cur_pf) * scale, 0.85, 1.30), 2
+    )
+    combo["min_strategy_expectancy_krw"] = round(cur_ev + (base_ev - cur_ev) * scale, 2)
+    combo["max_new_orders_per_scan"] = int(
+        max(1, min(4, round(cur_orders + (base_orders - cur_orders) * scale)))
+    )
+
+    for key, lo, hi in (
+        ("scalping_min_signal_strength", 0.58, 0.90),
+        ("momentum_min_signal_strength", 0.58, 0.90),
+        ("breakout_min_signal_strength", 0.30, 0.55),
+        ("mean_reversion_min_signal_strength", 0.30, 0.55),
+    ):
+        base_v = float(baseline.get(key, combo.get(key, lo)))
+        cur_v = float(combo.get(key, base_v))
+        combo[key] = round(_clamp(cur_v + (base_v - cur_v) * scale, lo, hi), 2)
+
+    if bool(baseline.get("avoid_high_volatility", True)) and scale >= 0.34:
+        combo["avoid_high_volatility"] = True
+    if bool(baseline.get("avoid_trending_down", True)) and scale >= 0.66:
+        combo["avoid_trending_down"] = True
+
+
+def apply_holdout_failure_family_suppression(
+    combos: List[Dict[str, Any]],
+    live_context: Dict[str, Any],
+    holdout_context: Dict[str, Any],
+    enabled: bool,
+    hint_ratio_threshold: float,
+    require_both_pf_exp_fail: bool,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    base_meta: Dict[str, Any] = {
+        "enabled": bool(enabled),
+        "active": False,
+        "reason": "",
+        "hint_ratio_threshold": float(hint_ratio_threshold),
+        "live_hint_adjusted_ratio": float(live_context.get("selection_hint_adjusted_ratio", 0.0) or 0.0),
+        "require_both_pf_exp_fail": bool(require_both_pf_exp_fail),
+        "holdout_context": holdout_context,
+        "suppressed_families": [],
+        "suppressed_combo_count": 0,
+        "kept_combo_count": len(combos),
+        "fallback_retained_combo_id": "",
+        "fail_open_all_suppressed": False,
+    }
+    for combo in combos:
+        combo["holdout_failure_suppression_active"] = False
+        combo["holdout_failure_suppressed_family"] = False
+        combo["holdout_failure_suppression_reason"] = ""
+
+    if not bool(enabled):
+        base_meta["reason"] = "disabled"
+        return combos, base_meta
+    if not bool(holdout_context.get("exists", False)):
+        base_meta["reason"] = "missing_train_eval_summary"
+        return combos, base_meta
+    if not bool(holdout_context.get("holdout_found", False)):
+        base_meta["reason"] = "holdout_stage_not_found"
+        return combos, base_meta
+
+    hint_ratio = float(base_meta["live_hint_adjusted_ratio"])
+    if hint_ratio < float(hint_ratio_threshold):
+        base_meta["reason"] = "hint_ratio_below_threshold"
+        return combos, base_meta
+
+    holdout_pf = float(holdout_context.get("avg_profit_factor", 0.0) or 0.0)
+    holdout_exp = float(holdout_context.get("avg_expectancy_krw", 0.0) or 0.0)
+    pf_fail = holdout_pf < 1.0
+    exp_fail = holdout_exp < 0.0
+    quality_fail = (pf_fail and exp_fail) if bool(require_both_pf_exp_fail) else (pf_fail or exp_fail)
+    if not quality_fail:
+        base_meta["reason"] = "holdout_quality_not_failed"
+        return combos, base_meta
+
+    holdout_top_group = str(holdout_context.get("top_rejection_group", "") or "")
+    if holdout_top_group not in {"signal_generation", "risk_gate"}:
+        base_meta["reason"] = "holdout_group_not_targeted"
+        return combos, base_meta
+
+    suppressed_families = {"signal_generation_boost", "manager_prefilter_relax"}
+    kept: List[Dict[str, Any]] = []
+    suppressed: List[Dict[str, Any]] = []
+    for combo in combos:
+        family = str(combo.get("bottleneck_scenario_family", ""))
+        suppress = bool(family in suppressed_families and str(combo.get("combo_id", "")) != "baseline_current")
+        if suppress:
+            combo["holdout_failure_suppression_active"] = True
+            combo["holdout_failure_suppressed_family"] = True
+            combo["holdout_failure_suppression_reason"] = (
+                f"holdout_{holdout_top_group}_quality_fail_high_hint_ratio"
+            )
+            suppressed.append(combo)
+        else:
+            combo["holdout_failure_suppression_active"] = True
+            combo["holdout_failure_suppressed_family"] = False
+            combo["holdout_failure_suppression_reason"] = "active_not_suppressed"
+            kept.append(combo)
+
+    fallback_retained_combo_id = ""
+    fail_open_all_suppressed = False
+    if not kept and suppressed:
+        fail_open_all_suppressed = True
+        retained = deepcopy(suppressed[0])
+        retained["holdout_failure_suppressed_family"] = False
+        retained["holdout_failure_suppression_reason"] = "fallback_retain_single_combo_after_suppression"
+        if retained.get("bottleneck_scenario_family") in suppressed_families:
+            apply_hint_impact_guardrail(
+                combo=retained,
+                baseline=retained,
+                tighten_scale=0.85,
+            )
+        kept = [retained]
+        fallback_retained_combo_id = str(retained.get("combo_id", ""))
+
+    base_meta.update(
+        {
+            "active": True,
+            "reason": f"activated_by_holdout_{holdout_top_group}_quality_fail",
+            "suppressed_families": sorted(suppressed_families),
+            "suppressed_combo_count": len(suppressed),
+            "kept_combo_count": len(kept),
+            "fallback_retained_combo_id": fallback_retained_combo_id,
+            "fail_open_all_suppressed": bool(fail_open_all_suppressed),
+        }
+    )
+    return kept, base_meta
+
+
+def expand_post_suppression_quality_exit_candidates(
+    combos: List[Dict[str, Any]],
+    suppression_meta: Dict[str, Any],
+    context: Dict[str, Any],
+    enabled: bool,
+    min_combo_count: int,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    min_count = max(1, int(min_combo_count))
+    meta: Dict[str, Any] = {
+        "enabled": bool(enabled),
+        "applied": False,
+        "reason": "",
+        "target_min_combo_count": int(min_count),
+        "input_combo_count": len(combos),
+        "output_combo_count": len(combos),
+        "injected_combo_count": 0,
+        "injected_combo_ids": [],
+    }
+    if not bool(enabled):
+        meta["reason"] = "disabled"
+        return combos, meta
+    if len(combos) >= min_count:
+        meta["reason"] = "already_enough_combos"
+        return combos, meta
+    if not bool((suppression_meta or {}).get("active", False)):
+        meta["reason"] = "suppression_inactive"
+        return combos, meta
+    suppressed_combo_count = int((suppression_meta or {}).get("suppressed_combo_count", 0) or 0)
+    fail_open_all_suppressed = bool((suppression_meta or {}).get("fail_open_all_suppressed", False))
+    if suppressed_combo_count <= 0 and not fail_open_all_suppressed:
+        meta["reason"] = "suppression_not_effective"
+        return combos, meta
+    if not combos:
+        meta["reason"] = "no_kept_combo_for_expansion"
+        return combos, meta
+
+    out = [deepcopy(x) for x in combos]
+    base = deepcopy(out[0])
+    base_id = str(base.get("combo_id", "combo"))
+    top_group = str(context.get("top_group", "") or "")
+    needed = max(0, min_count - len(out))
+    injected_ids: List[str] = []
+
+    for idx in range(1, needed + 1):
+        clone = deepcopy(base)
+        clone["combo_id"] = f"{base_id}_quality_exit_{idx:02d}"
+        edge = float(base.get("min_expected_edge_pct", 0.0010))
+        rr = float(base.get("min_reward_risk", 1.20))
+        rr_weak = float(base.get("min_rr_weak_signal", 1.80))
+        rr_strong = float(base.get("min_rr_strong_signal", 1.20))
+        min_pf = float(base.get("min_strategy_profit_factor", 0.95))
+        min_ev = float(base.get("min_strategy_expectancy_krw", -1.0))
+        orders = int(base.get("max_new_orders_per_scan", 2))
+
+        clone["min_expected_edge_pct"] = round(_clamp(edge * (1.0 + (0.12 * idx)), 0.0006, 0.0020), 4)
+        clone["min_reward_risk"] = round(_clamp(rr + (0.10 * idx), 1.05, 1.90), 2)
+        clone["min_rr_weak_signal"] = round(_clamp(rr_weak + (0.16 * idx), 1.20, 2.60), 2)
+        clone["min_rr_strong_signal"] = round(_clamp(rr_strong + (0.10 * idx), 0.95, 1.95), 2)
+        clone["min_strategy_profit_factor"] = round(_clamp(min_pf + (0.04 * idx), 0.90, 1.35), 2)
+        clone["min_strategy_expectancy_krw"] = round(min_ev + (0.80 * idx), 2)
+        clone["max_new_orders_per_scan"] = int(max(1, min(4, orders - idx)))
+
+        clone["scalping_min_signal_strength"] = round(
+            _clamp(float(base.get("scalping_min_signal_strength", 0.70)) + (0.03 * idx), 0.60, 0.92), 2
+        )
+        clone["momentum_min_signal_strength"] = round(
+            _clamp(float(base.get("momentum_min_signal_strength", 0.72)) + (0.03 * idx), 0.60, 0.92), 2
+        )
+        clone["breakout_min_signal_strength"] = round(
+            _clamp(float(base.get("breakout_min_signal_strength", 0.40)) + (0.02 * idx), 0.30, 0.60), 2
+        )
+        clone["mean_reversion_min_signal_strength"] = round(
+            _clamp(float(base.get("mean_reversion_min_signal_strength", 0.40)) + (0.02 * idx), 0.30, 0.60), 2
+        )
+        clone["avoid_high_volatility"] = True
+        clone["avoid_trending_down"] = True
+
+        clone["bottleneck_scenario_family"] = "quality_exit_rebalance"
+        clone["bottleneck_scenario_family_source_group"] = top_group
+        clone["bottleneck_scenario_family_adapted"] = True
+        clone["bottleneck_hint_guardrail_active"] = False
+
+        clone["holdout_failure_suppression_active"] = bool((suppression_meta or {}).get("active", False))
+        clone["holdout_failure_suppressed_family"] = False
+        clone["holdout_failure_suppression_reason"] = "post_suppression_quality_exit_injected"
+
+        out.append(clone)
+        injected_ids.append(str(clone["combo_id"]))
+
+    meta.update(
+        {
+            "applied": bool(injected_ids),
+            "reason": "expanded_quality_exit_after_effective_suppression" if injected_ids else "no_injection_needed",
+            "output_combo_count": len(out),
+            "injected_combo_count": len(injected_ids),
+            "injected_combo_ids": injected_ids,
+        }
+    )
+    return out, meta
+
+
+def adapt_combo_specs_for_bottleneck(
+    combos: List[Dict[str, Any]],
+    context: Dict[str, Any],
+    scenario_mode: str,
+    enable_hint_impact_guardrail: bool,
+    hint_impact_guardrail_ratio: float,
+    hint_impact_guardrail_tighten_scale: float,
+) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+    top_group = str(context.get("top_group", ""))
+    no_trade_bias_active = bool(context.get("no_trade_bias_active", False))
+    signal_generation_share = float(context.get("signal_generation_share", 0.0) or 0.0)
+    selection_hint_adjusted_ratio = float(context.get("selection_hint_adjusted_ratio", 0.0) or 0.0)
+    guardrail_active = bool(enable_hint_impact_guardrail) and (
+        selection_hint_adjusted_ratio >= float(hint_impact_guardrail_ratio)
+    )
+
+    if scenario_mode == "legacy_only":
+        out: List[Dict[str, Any]] = []
+        family_counts: Dict[str, int] = {}
+        for combo in combos:
+            clone = deepcopy(combo)
+            clone["bottleneck_scenario_family"] = "legacy_baseline"
+            clone["bottleneck_scenario_family_source_group"] = top_group
+            clone["bottleneck_scenario_family_adapted"] = False
+            clone["bottleneck_hint_guardrail_active"] = False
+            clone["bottleneck_hint_guardrail_ratio"] = round(selection_hint_adjusted_ratio, 6)
+            clone["bottleneck_hint_guardrail_threshold"] = float(hint_impact_guardrail_ratio)
+            clone["bottleneck_hint_guardrail_tighten_scale"] = float(hint_impact_guardrail_tighten_scale)
+            out.append(clone)
+            family_counts["legacy_baseline"] = family_counts.get("legacy_baseline", 0) + 1
+        return out, family_counts
+
+    if top_group == "position_state":
+        family = "position_turnover_quality"
+    elif top_group == "manager_prefilter":
+        family = "manager_prefilter_relax"
+    elif top_group == "signal_generation" or no_trade_bias_active:
+        family = "signal_generation_boost"
+    else:
+        family = "neutral_balance"
+
+    out: List[Dict[str, Any]] = []
+    family_counts: Dict[str, int] = {}
+    for combo in combos:
+        clone = deepcopy(combo)
+        combo_id = str(clone.get("combo_id", ""))
+        adapted = combo_id != "baseline_current"
+        guardrail_applied = False
+
+        if adapted and family == "signal_generation_boost":
+            clone["min_expected_edge_pct"] = round(
+                _clamp(float(clone.get("min_expected_edge_pct", 0.0010)) * 0.88, 0.0005, 0.0016), 4
+            )
+            clone["min_reward_risk"] = round(
+                _clamp(float(clone.get("min_reward_risk", 1.20)) - 0.08, 1.00, 1.60), 2
+            )
+            clone["min_rr_weak_signal"] = round(
+                _clamp(float(clone.get("min_rr_weak_signal", 1.80)) - 0.15, 1.10, 2.20), 2
+            )
+            clone["min_rr_strong_signal"] = round(
+                _clamp(float(clone.get("min_rr_strong_signal", 1.20)) - 0.08, 0.85, 1.60), 2
+            )
+            clone["min_strategy_trades_for_ev"] = int(
+                max(10, round(float(clone.get("min_strategy_trades_for_ev", 30)) * 0.80))
+            )
+            clone["min_strategy_profit_factor"] = round(
+                _clamp(float(clone.get("min_strategy_profit_factor", 0.95)) - 0.03, 0.85, 1.20), 2
+            )
+            clone["min_strategy_expectancy_krw"] = round(
+                float(clone.get("min_strategy_expectancy_krw", -1.0)) - 0.50, 2
+            )
+            clone["max_new_orders_per_scan"] = int(max(1, min(4, int(clone.get("max_new_orders_per_scan", 2)) + 1)))
+            clone["scalping_min_signal_strength"] = round(
+                _clamp(float(clone.get("scalping_min_signal_strength", 0.70)) - 0.04, 0.58, 0.84), 2
+            )
+            clone["momentum_min_signal_strength"] = round(
+                _clamp(float(clone.get("momentum_min_signal_strength", 0.72)) - 0.05, 0.58, 0.84), 2
+            )
+            clone["breakout_min_signal_strength"] = round(
+                _clamp(float(clone.get("breakout_min_signal_strength", 0.40)) - 0.02, 0.30, 0.52), 2
+            )
+            clone["mean_reversion_min_signal_strength"] = round(
+                _clamp(float(clone.get("mean_reversion_min_signal_strength", 0.40)) - 0.02, 0.30, 0.52), 2
+            )
+            clone["hostility_pause_scans"] = int(max(1, int(clone.get("hostility_pause_scans", 4)) - 1))
+            clone["backtest_hostility_pause_candles"] = int(
+                max(8, int(clone.get("backtest_hostility_pause_candles", 36)) - 6)
+            )
+            if no_trade_bias_active and signal_generation_share >= 0.60:
+                clone["avoid_high_volatility"] = False
+
+        elif adapted and family == "manager_prefilter_relax":
+            clone["min_expected_edge_pct"] = round(
+                _clamp(float(clone.get("min_expected_edge_pct", 0.0010)) * 0.93, 0.0006, 0.0017), 4
+            )
+            clone["min_reward_risk"] = round(
+                _clamp(float(clone.get("min_reward_risk", 1.20)) - 0.05, 1.00, 1.70), 2
+            )
+            clone["min_strategy_trades_for_ev"] = int(max(12, int(clone.get("min_strategy_trades_for_ev", 30)) - 5))
+            clone["min_strategy_profit_factor"] = round(
+                _clamp(float(clone.get("min_strategy_profit_factor", 0.95)) - 0.02, 0.88, 1.20), 2
+            )
+            clone["scalping_min_signal_strength"] = round(
+                _clamp(float(clone.get("scalping_min_signal_strength", 0.70)) - 0.03, 0.60, 0.84), 2
+            )
+            clone["momentum_min_signal_strength"] = round(
+                _clamp(float(clone.get("momentum_min_signal_strength", 0.72)) - 0.03, 0.60, 0.84), 2
+            )
+            clone["breakout_min_signal_strength"] = round(
+                _clamp(float(clone.get("breakout_min_signal_strength", 0.40)) - 0.02, 0.30, 0.52), 2
+            )
+            clone["mean_reversion_min_signal_strength"] = round(
+                _clamp(float(clone.get("mean_reversion_min_signal_strength", 0.40)) - 0.02, 0.30, 0.52), 2
+            )
+
+        elif adapted and family == "position_turnover_quality":
+            clone["min_expected_edge_pct"] = round(
+                _clamp(float(clone.get("min_expected_edge_pct", 0.0010)) * 1.08, 0.0007, 0.0018), 4
+            )
+            clone["min_reward_risk"] = round(
+                _clamp(float(clone.get("min_reward_risk", 1.20)) + 0.07, 1.05, 1.80), 2
+            )
+            clone["min_strategy_trades_for_ev"] = int(min(70, int(clone.get("min_strategy_trades_for_ev", 30)) + 5))
+            clone["min_strategy_profit_factor"] = round(
+                _clamp(float(clone.get("min_strategy_profit_factor", 0.95)) + 0.03, 0.90, 1.30), 2
+            )
+            clone["max_new_orders_per_scan"] = int(max(1, int(clone.get("max_new_orders_per_scan", 2)) - 1))
+            clone["scalping_min_signal_strength"] = round(
+                _clamp(float(clone.get("scalping_min_signal_strength", 0.70)) + 0.02, 0.60, 0.90), 2
+            )
+            clone["momentum_min_signal_strength"] = round(
+                _clamp(float(clone.get("momentum_min_signal_strength", 0.72)) + 0.02, 0.60, 0.90), 2
+            )
+            clone["breakout_min_signal_strength"] = round(
+                _clamp(float(clone.get("breakout_min_signal_strength", 0.40)) + 0.01, 0.30, 0.55), 2
+            )
+            clone["mean_reversion_min_signal_strength"] = round(
+                _clamp(float(clone.get("mean_reversion_min_signal_strength", 0.40)) + 0.01, 0.30, 0.55), 2
+            )
+            clone["avoid_high_volatility"] = True
+            clone["avoid_trending_down"] = True
+
+        if adapted and guardrail_active and family in ("signal_generation_boost", "manager_prefilter_relax"):
+            apply_hint_impact_guardrail(
+                combo=clone,
+                baseline=combo,
+                tighten_scale=hint_impact_guardrail_tighten_scale,
+            )
+            guardrail_applied = True
+
+        clone["bottleneck_scenario_family"] = family
+        clone["bottleneck_scenario_family_source_group"] = top_group
+        clone["bottleneck_scenario_family_adapted"] = bool(adapted and family != "neutral_balance")
+        clone["bottleneck_hint_guardrail_active"] = bool(guardrail_applied)
+        clone["bottleneck_hint_guardrail_ratio"] = round(selection_hint_adjusted_ratio, 6)
+        clone["bottleneck_hint_guardrail_threshold"] = float(hint_impact_guardrail_ratio)
+        clone["bottleneck_hint_guardrail_tighten_scale"] = float(hint_impact_guardrail_tighten_scale)
+        out.append(clone)
+        fam = str(clone.get("bottleneck_scenario_family", "unknown"))
+        family_counts[fam] = family_counts.get(fam, 0) + 1
+
+    return out, family_counts
+
+
 def resolve_or_throw(path_value: str, label: str) -> pathlib.Path:
     p = pathlib.Path(path_value)
     if not p.is_absolute():
@@ -134,6 +823,105 @@ def get_dataset_list(dirs: List[pathlib.Path], only_real_data: bool, require_hig
                 continue
             all_items.append(f.resolve())
     return sorted(set(all_items), key=lambda x: str(x).lower())
+
+
+def resolve_explicit_dataset_list(
+    dataset_names: List[str],
+    dirs: List[pathlib.Path],
+    only_real_data: bool,
+    require_higher_tf: bool,
+) -> List[pathlib.Path]:
+    search_dirs = [pathlib.Path.cwd().resolve(), *dirs]
+    resolved: List[pathlib.Path] = []
+    for raw in dataset_names:
+        token = str(raw).strip()
+        if not token:
+            continue
+        cand = pathlib.Path(token)
+        found = None
+        if cand.is_absolute() and cand.exists():
+            found = cand.resolve()
+        else:
+            for base in search_dirs:
+                probe = (base / cand).resolve()
+                if probe.exists():
+                    found = probe
+                    break
+        if found is None:
+            raise FileNotFoundError(f"Dataset not found: {token}")
+
+        is_real = "backtest_real" in str(found.parent).lower() or "_1m_" in found.name.lower()
+        if only_real_data and not is_real:
+            continue
+        if is_real and "_1m_" not in found.name.lower():
+            continue
+        if require_higher_tf and is_real and not has_higher_tf_companions(found):
+            raise RuntimeError(f"Missing higher TF companions for dataset: {found}")
+        resolved.append(found)
+
+    return sorted(set(resolved), key=lambda x: str(x).lower())
+
+
+def run_dataset_quality_gate(
+    parity_script: pathlib.Path,
+    datasets: List[pathlib.Path],
+    output_json: pathlib.Path,
+) -> Dict[str, Any]:
+    ensure_parent_directory(output_json)
+    cmd = [
+        sys.executable,
+        str(parity_script),
+        "--dataset-names",
+        *[str(x) for x in datasets],
+        "--output-json",
+        str(output_json),
+    ]
+    proc = subprocess.run(cmd)
+    if proc.returncode != 0:
+        raise RuntimeError(f"generate_parity_invariant_report.py failed (exit={proc.returncode})")
+
+    report = json.loads(output_json.read_text(encoding="utf-8-sig"))
+    rows = report.get("datasets") or []
+    row_map: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        path = str(pathlib.Path(str(row.get("dataset", ""))).resolve())
+        row_map[path.lower()] = row
+
+    passed: List[pathlib.Path] = []
+    failed: List[pathlib.Path] = []
+    failed_reasons: List[Dict[str, Any]] = []
+    for ds in datasets:
+        key = str(ds.resolve()).lower()
+        row = row_map.get(key)
+        if row is None:
+            failed.append(ds)
+            failed_reasons.append(
+                {
+                    "dataset": str(ds),
+                    "reason": "missing_from_parity_report",
+                }
+            )
+            continue
+        if bool(row.get("invariant_pass", False)):
+            passed.append(ds)
+            continue
+        failed.append(ds)
+        checks = row.get("checks") or {}
+        failed_reasons.append(
+            {
+                "dataset": str(ds),
+                "reason": "invariant_fail",
+                "failed_checks": [k for k, v in checks.items() if not bool(v)],
+            }
+        )
+
+    return {
+        "report_path": str(output_json),
+        "summary": report.get("summary") or {},
+        "passed_datasets": [str(x) for x in passed],
+        "failed_datasets": [str(x) for x in failed],
+        "failed_reasons": failed_reasons,
+    }
 
 
 def new_combo_variant(base: Dict[str, Any], combo_id: str, description: str, overrides: Dict[str, Any]) -> Dict[str, Any]:
@@ -625,7 +1413,7 @@ def evaluate_combo(
     base_config_hash: str,
     datasets_sig_hash: str,
 ) -> Dict[str, Any]:
-    cache_schema_version = 3
+    cache_schema_version = 4
     cache_material = {
         "cache_schema_version": cache_schema_version,
         "base_config_hash": base_config_hash,
@@ -705,6 +1493,8 @@ def evaluate_combo(
     effective_thresholds = threshold_bundle.get("effective") or {}
     requested_thresholds = threshold_bundle.get("requested") or report_thresholds
     hostility = threshold_bundle.get("hostility") or {}
+    quality = threshold_bundle.get("quality") or {}
+    blended = threshold_bundle.get("blended_context") or {}
 
     row = {
         "combo_id": combo["combo_id"],
@@ -741,6 +1531,14 @@ def evaluate_combo(
         ),
         "hostility_level": str(hostility.get("hostility_level", "unknown")),
         "hostility_avg_score": float(hostility.get("avg_adversarial_score", 0.0)),
+        "quality_level": str(quality.get("quality_level", "unknown")),
+        "quality_avg_score": float(quality.get("avg_quality_risk_score", 0.0)),
+        "hostility_blended_level": str(
+            blended.get("blended_hostility_level", hostility.get("hostility_level", "unknown"))
+        ),
+        "hostility_blended_score": float(
+            blended.get("blended_adversarial_score", hostility.get("avg_adversarial_score", 0.0))
+        ),
         "report_json": str(report_json_rel.resolve()),
         "profile_csv": str(profile_csv_rel.resolve()),
         "matrix_csv": str(matrix_csv_rel.resolve()),
@@ -754,10 +1552,22 @@ def evaluate_combo(
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--matrix-script", "-MatrixScript", default=r".\scripts\run_profitability_matrix.py")
+    parser.add_argument(
+        "--parity-invariant-script",
+        "-ParityInvariantScript",
+        default=r".\scripts\generate_parity_invariant_report.py",
+    )
     parser.add_argument("--build-config-path", "-BuildConfigPath", default=r".\build\Release\config\config.json")
     parser.add_argument("--data-dir", "-DataDir", default=r".\data\backtest")
     parser.add_argument("--curated-data-dir", "-CuratedDataDir", default=r".\data\backtest_curated")
     parser.add_argument("--extra-data-dirs", "-ExtraDataDirs", nargs="*", default=[r".\data\backtest_real"])
+    parser.add_argument(
+        "--dataset-names",
+        "-DatasetNames",
+        nargs="*",
+        default=[],
+        help="Explicit primary datasets (.csv). When provided, auto-discovery is bypassed.",
+    )
     parser.add_argument("--output-dir", "-OutputDir", default=r".\build\Release\logs")
     parser.add_argument("--summary-csv", "-SummaryCsv", default=r".\build\Release\logs\candidate_trade_density_tuning_summary.csv")
     parser.add_argument("--summary-json", "-SummaryJson", default=r".\build\Release\logs\candidate_trade_density_tuning_summary.json")
@@ -781,6 +1591,29 @@ def main(argv=None) -> int:
         "--allow-missing-higher-tf-companions",
         dest="require_higher_tf_companions",
         action="store_false",
+    )
+    parser.add_argument(
+        "--enable-dataset-quality-gate",
+        "-EnableDatasetQualityGate",
+        dest="enable_dataset_quality_gate",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--disable-dataset-quality-gate",
+        dest="enable_dataset_quality_gate",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--dataset-quality-report-json",
+        "-DatasetQualityReportJson",
+        default=r".\build\Release\logs\dataset_quality_gate_summary.json",
+    )
+    parser.add_argument(
+        "--dataset-quality-gate-fail-closed",
+        "-DatasetQualityGateFailClosed",
+        action="store_true",
+        help="If quality gate excludes all datasets, fail instead of fail-open fallback.",
     )
     parser.add_argument("--screen-dataset-limit", "-ScreenDatasetLimit", type=int, default=8)
     parser.add_argument("--screen-top-k", "-ScreenTopK", type=int, default=6)
@@ -814,7 +1647,7 @@ def main(argv=None) -> int:
         "-EnableHostilityAdaptiveTradesOnly",
         dest="enable_hostility_adaptive_trades_only",
         action="store_true",
-        default=True,
+        default=False,
     )
     parser.add_argument(
         "--disable-hostility-adaptive-trades-only",
@@ -835,6 +1668,112 @@ def main(argv=None) -> int:
     )
     parser.add_argument("--eval-cache-json", "-EvalCacheJson", default=r".\build\Release\logs\candidate_trade_density_tuning_cache.json")
     parser.add_argument("--disable-eval-cache", "-DisableEvalCache", action="store_true")
+    parser.add_argument(
+        "--live-signal-funnel-taxonomy-json",
+        "-LiveSignalFunnelTaxonomyJson",
+        default=r".\build\Release\logs\live_signal_funnel_taxonomy_report.json",
+    )
+    parser.add_argument(
+        "--train-eval-summary-json",
+        "-TrainEvalSummaryJson",
+        default=r".\build\Release\logs\candidate_train_eval_cycle_summary.json",
+    )
+    parser.add_argument(
+        "--enable-bottleneck-priority",
+        "-EnableBottleneckPriority",
+        dest="enable_bottleneck_priority",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--disable-bottleneck-priority",
+        dest="enable_bottleneck_priority",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--enable-bottleneck-adapted-scenarios",
+        "-EnableBottleneckAdaptedScenarios",
+        dest="enable_bottleneck_adapted_scenarios",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--disable-bottleneck-adapted-scenarios",
+        dest="enable_bottleneck_adapted_scenarios",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--enable-hint-impact-guardrail",
+        "-EnableHintImpactGuardrail",
+        dest="enable_hint_impact_guardrail",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--disable-hint-impact-guardrail",
+        dest="enable_hint_impact_guardrail",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--enable-holdout-failure-family-suppression",
+        "-EnableHoldoutFailureFamilySuppression",
+        dest="enable_holdout_failure_family_suppression",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--disable-holdout-failure-family-suppression",
+        dest="enable_holdout_failure_family_suppression",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--holdout-suppression-hint-ratio-threshold",
+        "-HoldoutSuppressionHintRatioThreshold",
+        type=float,
+        default=0.60,
+    )
+    parser.add_argument(
+        "--holdout-suppression-require-both-pf-exp-fail",
+        "-HoldoutSuppressionRequireBothPfExpFail",
+        dest="holdout_suppression_require_both_pf_exp_fail",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--holdout-suppression-allow-either-pf-or-exp-fail",
+        dest="holdout_suppression_require_both_pf_exp_fail",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--enable-post-suppression-quality-expansion",
+        "-EnablePostSuppressionQualityExpansion",
+        dest="enable_post_suppression_quality_expansion",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--disable-post-suppression-quality-expansion",
+        dest="enable_post_suppression_quality_expansion",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--post-suppression-min-combo-count",
+        "-PostSuppressionMinComboCount",
+        type=int,
+        default=3,
+    )
+    parser.add_argument(
+        "--hint-impact-guardrail-ratio",
+        "-HintImpactGuardrailRatio",
+        type=float,
+        default=0.65,
+    )
+    parser.add_argument(
+        "--hint-impact-guardrail-tighten-scale",
+        "-HintImpactGuardrailTightenScale",
+        type=float,
+        default=0.55,
+    )
     parser.add_argument("--matrix-max-workers", "-MatrixMaxWorkers", type=int, default=1)
     parser.add_argument("--matrix-backtest-retry-count", "-MatrixBacktestRetryCount", type=int, default=2)
     parser.add_argument(
@@ -849,34 +1788,187 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     matrix_script = resolve_or_throw(args.matrix_script, "Matrix script")
+    parity_invariant_script = resolve_or_throw(args.parity_invariant_script, "Parity invariant script")
     build_config = resolve_or_throw(args.build_config_path, "Build config")
     output_dir = pathlib.Path(args.output_dir).resolve()
     summary_csv = pathlib.Path(args.summary_csv).resolve()
     summary_json = pathlib.Path(args.summary_json).resolve()
+    dataset_quality_report_json = pathlib.Path(args.dataset_quality_report_json).resolve()
     eval_cache_json = pathlib.Path(args.eval_cache_json).resolve()
+    live_signal_funnel_taxonomy_json = pathlib.Path(args.live_signal_funnel_taxonomy_json).resolve()
+    train_eval_summary_json = pathlib.Path(args.train_eval_summary_json).resolve()
     lock_path = pathlib.Path(args.verification_lock_path).resolve()
     cache_enabled = not bool(args.disable_eval_cache)
     ensure_parent_directory(summary_csv)
     ensure_parent_directory(summary_json)
+    ensure_parent_directory(dataset_quality_report_json)
     ensure_parent_directory(eval_cache_json)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     scan_dirs = [pathlib.Path(args.data_dir), pathlib.Path(args.curated_data_dir)]
     scan_dirs.extend(pathlib.Path(x) for x in args.extra_data_dirs if x and x.strip())
     scan_dirs = [p.resolve() for p in scan_dirs]
-    datasets = get_dataset_list(scan_dirs, args.real_data_only, args.require_higher_tf_companions)
+    if args.dataset_names:
+        datasets = resolve_explicit_dataset_list(
+            dataset_names=list(args.dataset_names),
+            dirs=scan_dirs,
+            only_real_data=bool(args.real_data_only),
+            require_higher_tf=bool(args.require_higher_tf_companions),
+        )
+    else:
+        datasets = get_dataset_list(scan_dirs, args.real_data_only, args.require_higher_tf_companions)
     if not datasets:
         raise RuntimeError("No datasets found under DataDir/CuratedDataDir/ExtraDataDirs with current filters.")
+
+    dataset_quality_gate: Dict[str, Any] = {
+        "enabled": bool(args.enable_dataset_quality_gate),
+        "fail_closed": bool(args.dataset_quality_gate_fail_closed),
+        "report_json": str(dataset_quality_report_json),
+        "input_dataset_count": len(datasets),
+        "input_datasets": [str(x) for x in datasets],
+    }
+    if bool(args.enable_dataset_quality_gate):
+        quality = run_dataset_quality_gate(
+            parity_script=parity_invariant_script,
+            datasets=datasets,
+            output_json=dataset_quality_report_json,
+        )
+        passed = [pathlib.Path(x).resolve() for x in (quality.get("passed_datasets") or [])]
+        failed = [pathlib.Path(x).resolve() for x in (quality.get("failed_datasets") or [])]
+        dataset_quality_gate.update(
+            {
+                "summary": quality.get("summary") or {},
+                "passed_dataset_count": len(passed),
+                "failed_dataset_count": len(failed),
+                "failed_reasons": quality.get("failed_reasons") or [],
+            }
+        )
+        if passed:
+            datasets = sorted(set(passed), key=lambda x: str(x).lower())
+            dataset_quality_gate["status"] = "pass"
+            dataset_quality_gate["effective_dataset_count"] = len(datasets)
+        else:
+            if bool(args.dataset_quality_gate_fail_closed):
+                raise RuntimeError("Dataset quality gate excluded all datasets (fail-closed).")
+            dataset_quality_gate["status"] = "fail_open_no_passed_dataset"
+            dataset_quality_gate["effective_dataset_count"] = len(datasets)
+    else:
+        dataset_quality_gate["status"] = "disabled"
+        dataset_quality_gate["effective_dataset_count"] = len(datasets)
 
     print(
         f"[TuneCandidate] dataset_mode={'realdata_only' if args.real_data_only else 'mixed'}, "
         f"require_higher_tf={bool(args.require_higher_tf_companions)}, dataset_count={len(datasets)}"
     )
+    if bool(args.enable_dataset_quality_gate):
+        print(
+            f"[TuneCandidate] dataset_quality_gate="
+            f"status={dataset_quality_gate.get('status')}, "
+            f"passed={dataset_quality_gate.get('passed_dataset_count')}, "
+            f"failed={dataset_quality_gate.get('failed_dataset_count')}"
+        )
 
     combo_specs = build_combo_specs(args.scenario_mode, args.include_legacy_scenarios, args.max_scenarios)
+    live_bottleneck_context = read_live_signal_funnel_snapshot(live_signal_funnel_taxonomy_json)
+    holdout_context = read_train_eval_holdout_context(train_eval_summary_json)
+    bottleneck_context = build_effective_bottleneck_context(live_bottleneck_context, holdout_context)
+    scenario_family_counts: Dict[str, int] = {}
+    if bool(args.enable_bottleneck_adapted_scenarios):
+        combo_specs, scenario_family_counts = adapt_combo_specs_for_bottleneck(
+            combos=combo_specs,
+            context=bottleneck_context,
+            scenario_mode=str(args.scenario_mode),
+            enable_hint_impact_guardrail=bool(args.enable_hint_impact_guardrail),
+            hint_impact_guardrail_ratio=float(args.hint_impact_guardrail_ratio),
+            hint_impact_guardrail_tighten_scale=float(args.hint_impact_guardrail_tighten_scale),
+        )
+        combo_specs = dedupe_combos(combo_specs)
+    else:
+        for combo in combo_specs:
+            combo["bottleneck_scenario_family"] = "base_unadapted"
+            combo["bottleneck_scenario_family_source_group"] = str(bottleneck_context.get("top_group", ""))
+            combo["bottleneck_scenario_family_adapted"] = False
+            combo["bottleneck_hint_guardrail_active"] = False
+            combo["bottleneck_hint_guardrail_ratio"] = float(
+                bottleneck_context.get("selection_hint_adjusted_ratio", 0.0) or 0.0
+            )
+            combo["bottleneck_hint_guardrail_threshold"] = float(args.hint_impact_guardrail_ratio)
+            combo["bottleneck_hint_guardrail_tighten_scale"] = float(args.hint_impact_guardrail_tighten_scale)
+            fam = str(combo["bottleneck_scenario_family"])
+            scenario_family_counts[fam] = scenario_family_counts.get(fam, 0) + 1
+
+    combo_specs, holdout_family_suppression_meta = apply_holdout_failure_family_suppression(
+        combos=combo_specs,
+        live_context=bottleneck_context,
+        holdout_context=holdout_context,
+        enabled=bool(args.enable_holdout_failure_family_suppression),
+        hint_ratio_threshold=float(args.holdout_suppression_hint_ratio_threshold),
+        require_both_pf_exp_fail=bool(args.holdout_suppression_require_both_pf_exp_fail),
+    )
+    combo_specs, post_suppression_quality_expansion_meta = expand_post_suppression_quality_exit_candidates(
+        combos=combo_specs,
+        suppression_meta=holdout_family_suppression_meta,
+        context=bottleneck_context,
+        enabled=bool(args.enable_post_suppression_quality_expansion),
+        min_combo_count=int(args.post_suppression_min_combo_count),
+    )
+    combo_specs = dedupe_combos(combo_specs)
+    if not combo_specs:
+        raise RuntimeError("No tuning combos left after holdout family suppression.")
+
+    bottleneck_priority_meta: Dict[str, Dict[str, Any]] = {}
+    if bool(args.enable_bottleneck_priority):
+        combo_specs, bottleneck_priority_meta = prioritize_combo_specs_for_bottleneck(combo_specs, bottleneck_context)
+    else:
+        for rank, combo in enumerate(combo_specs, start=1):
+            combo_id = str(combo.get("combo_id", ""))
+            bottleneck_priority_meta[combo_id] = {
+                "priority_rank": int(rank),
+                "priority_score": 0.0,
+                "top_group": str(bottleneck_context.get("top_group", "")),
+                "no_trade_bias_active": bool(bottleneck_context.get("no_trade_bias_active", False)),
+            }
+    scenario_family_counts = {}
+    for combo in combo_specs:
+        fam = str(combo.get("bottleneck_scenario_family", "unknown"))
+        scenario_family_counts[fam] = scenario_family_counts.get(fam, 0) + 1
+
     if args.scenario_mode == "legacy_only":
         print("[TuneCandidate] scenario_mode=legacy_only (rollback/comparison mode)")
     print(f"[TuneCandidate] scenario_mode={args.scenario_mode}, combo_count={len(combo_specs)}")
+    print(
+        f"[TuneCandidate] bottleneck_priority={'on' if bool(args.enable_bottleneck_priority) else 'off'}, "
+        f"top_group={bottleneck_context.get('top_group', '')}, "
+        f"source={bottleneck_context.get('top_group_source', 'live')}, "
+        f"no_trade_bias_active={bool(bottleneck_context.get('no_trade_bias_active', False))}"
+    )
+    print(
+        f"[TuneCandidate] bottleneck_adapted_scenarios="
+        f"{'on' if bool(args.enable_bottleneck_adapted_scenarios) else 'off'}, "
+        f"scenario_family_counts={scenario_family_counts}"
+    )
+    print(
+        f"[TuneCandidate] holdout_family_suppression="
+        f"{'on' if bool(args.enable_holdout_failure_family_suppression) else 'off'}, "
+        f"active={bool(holdout_family_suppression_meta.get('active', False))}, "
+        f"reason={holdout_family_suppression_meta.get('reason', '')}, "
+        f"kept={holdout_family_suppression_meta.get('kept_combo_count', len(combo_specs))}, "
+        f"suppressed={holdout_family_suppression_meta.get('suppressed_combo_count', 0)}"
+    )
+    print(
+        f"[TuneCandidate] post_suppression_quality_expansion="
+        f"{'on' if bool(args.enable_post_suppression_quality_expansion) else 'off'}, "
+        f"applied={bool(post_suppression_quality_expansion_meta.get('applied', False))}, "
+        f"reason={post_suppression_quality_expansion_meta.get('reason', '')}, "
+        f"injected={post_suppression_quality_expansion_meta.get('injected_combo_count', 0)}, "
+        f"combo_count={len(combo_specs)}"
+    )
+    print(
+        f"[TuneCandidate] hint_impact_guardrail={'on' if bool(args.enable_hint_impact_guardrail) else 'off'}, "
+        f"ratio={float(bottleneck_context.get('selection_hint_adjusted_ratio', 0.0) or 0.0):.4f}, "
+        f"threshold={float(args.hint_impact_guardrail_ratio):.4f}, "
+        f"tighten_scale={float(args.hint_impact_guardrail_tighten_scale):.2f}"
+    )
 
     original_build_raw = build_config.read_text(encoding="utf-8-sig")
     base_config_hash = stable_base_config_hash(original_build_raw)
@@ -947,6 +2039,35 @@ def main(argv=None) -> int:
                 screen_row["objective_effective_min_profitable_ratio"] = float(screen_effective["min_profitable_ratio"])
                 screen_row["objective_effective_min_avg_win_rate_pct"] = float(screen_effective["min_avg_win_rate_pct"])
                 screen_row["objective_effective_min_expectancy_krw"] = float(screen_effective["min_expectancy_krw"])
+                combo_meta = bottleneck_priority_meta.get(str(combo["combo_id"]), {})
+                screen_row["bottleneck_priority_rank"] = int(combo_meta.get("priority_rank", 0) or 0)
+                screen_row["bottleneck_priority_score"] = float(combo_meta.get("priority_score", 0.0) or 0.0)
+                screen_row["bottleneck_top_group"] = str(combo_meta.get("top_group", ""))
+                screen_row["bottleneck_no_trade_bias_active"] = bool(
+                    combo_meta.get("no_trade_bias_active", False)
+                )
+                screen_row["bottleneck_scenario_family"] = str(combo.get("bottleneck_scenario_family", ""))
+                screen_row["bottleneck_scenario_family_adapted"] = bool(
+                    combo.get("bottleneck_scenario_family_adapted", False)
+                )
+                screen_row["holdout_failure_suppression_active"] = bool(
+                    combo.get("holdout_failure_suppression_active", False)
+                )
+                screen_row["holdout_failure_suppressed_family"] = bool(
+                    combo.get("holdout_failure_suppressed_family", False)
+                )
+                screen_row["holdout_failure_suppression_reason"] = str(
+                    combo.get("holdout_failure_suppression_reason", "")
+                )
+                screen_row["bottleneck_hint_guardrail_active"] = bool(
+                    combo.get("bottleneck_hint_guardrail_active", False)
+                )
+                screen_row["bottleneck_hint_guardrail_ratio"] = float(
+                    combo.get("bottleneck_hint_guardrail_ratio", 0.0) or 0.0
+                )
+                screen_row["bottleneck_hint_guardrail_threshold"] = float(
+                    combo.get("bottleneck_hint_guardrail_threshold", 0.0) or 0.0
+                )
                 screen_row["constraint_pass"] = (
                     float(screen_row.get("avg_total_trades", 0.0)) >= float(screen_effective["min_avg_trades"])
                     and float(screen_row.get("profitable_ratio", 0.0)) >= float(screen_effective["min_profitable_ratio"])
@@ -1020,6 +2141,35 @@ def main(argv=None) -> int:
                 final_row["screen_avg_total_trades"] = float(linked_screen.get("avg_total_trades", 0.0))
                 final_row["screen_profitable_ratio"] = float(linked_screen.get("profitable_ratio", 0.0))
                 final_row["screen_avg_win_rate_pct"] = float(linked_screen.get("avg_win_rate_pct", 0.0))
+                combo_meta = bottleneck_priority_meta.get(str(combo["combo_id"]), {})
+                final_row["bottleneck_priority_rank"] = int(combo_meta.get("priority_rank", 0) or 0)
+                final_row["bottleneck_priority_score"] = float(combo_meta.get("priority_score", 0.0) or 0.0)
+                final_row["bottleneck_top_group"] = str(combo_meta.get("top_group", ""))
+                final_row["bottleneck_no_trade_bias_active"] = bool(
+                    combo_meta.get("no_trade_bias_active", False)
+                )
+                final_row["bottleneck_scenario_family"] = str(combo.get("bottleneck_scenario_family", ""))
+                final_row["bottleneck_scenario_family_adapted"] = bool(
+                    combo.get("bottleneck_scenario_family_adapted", False)
+                )
+                final_row["holdout_failure_suppression_active"] = bool(
+                    combo.get("holdout_failure_suppression_active", False)
+                )
+                final_row["holdout_failure_suppressed_family"] = bool(
+                    combo.get("holdout_failure_suppressed_family", False)
+                )
+                final_row["holdout_failure_suppression_reason"] = str(
+                    combo.get("holdout_failure_suppression_reason", "")
+                )
+                final_row["bottleneck_hint_guardrail_active"] = bool(
+                    combo.get("bottleneck_hint_guardrail_active", False)
+                )
+                final_row["bottleneck_hint_guardrail_ratio"] = float(
+                    combo.get("bottleneck_hint_guardrail_ratio", 0.0) or 0.0
+                )
+                final_row["bottleneck_hint_guardrail_threshold"] = float(
+                    combo.get("bottleneck_hint_guardrail_threshold", 0.0) or 0.0
+                )
                 rows.append(final_row)
         finally:
             build_config.write_text(original_build_raw, encoding="utf-8", newline="\n")
@@ -1048,6 +2198,7 @@ def main(argv=None) -> int:
         "generated_at": __import__("datetime").datetime.now().astimezone().isoformat(),
         "dataset_mode": "realdata_only" if args.real_data_only else "mixed",
         "require_higher_tf_companions": bool(args.require_higher_tf_companions),
+        "dataset_quality_gate": dataset_quality_gate,
         "dataset_dirs": [str(x) for x in scan_dirs],
         "dataset_count": len(datasets),
         "datasets": [str(x) for x in datasets],
@@ -1070,6 +2221,47 @@ def main(argv=None) -> int:
             "enable_hostility_adaptive_trades_only": bool(args.enable_hostility_adaptive_trades_only),
             "skip_core_vs_legacy_gate": bool(args.skip_core_vs_legacy_gate),
             "use_effective_thresholds_for_objective": bool(args.use_effective_thresholds_for_objective),
+            "enable_bottleneck_adapted_scenarios": bool(args.enable_bottleneck_adapted_scenarios),
+            "enable_hint_impact_guardrail": bool(args.enable_hint_impact_guardrail),
+            "hint_impact_guardrail_ratio": float(args.hint_impact_guardrail_ratio),
+            "hint_impact_guardrail_tighten_scale": float(args.hint_impact_guardrail_tighten_scale),
+            "enable_holdout_failure_family_suppression": bool(args.enable_holdout_failure_family_suppression),
+            "holdout_suppression_hint_ratio_threshold": float(args.holdout_suppression_hint_ratio_threshold),
+            "holdout_suppression_require_both_pf_exp_fail": bool(
+                args.holdout_suppression_require_both_pf_exp_fail
+            ),
+            "enable_post_suppression_quality_expansion": bool(args.enable_post_suppression_quality_expansion),
+            "post_suppression_min_combo_count": int(max(1, int(args.post_suppression_min_combo_count))),
+            "train_eval_summary_json": str(train_eval_summary_json),
+        },
+        "bottleneck_priority": {
+            "enabled": bool(args.enable_bottleneck_priority),
+            "live_signal_funnel_taxonomy_json": str(live_signal_funnel_taxonomy_json),
+            "live_context_raw": live_bottleneck_context,
+            "context": bottleneck_context,
+            "scenario_family_counts": scenario_family_counts,
+            "holdout_failure_suppression": holdout_family_suppression_meta,
+            "post_suppression_quality_expansion": post_suppression_quality_expansion_meta,
+            "hint_impact_guardrail": {
+                "enabled": bool(args.enable_hint_impact_guardrail),
+                "ratio": float(args.hint_impact_guardrail_ratio),
+                "tighten_scale": float(args.hint_impact_guardrail_tighten_scale),
+            },
+            "combo_priority_order": [
+                {
+                    "combo_id": str(c.get("combo_id", "")),
+                    "priority_rank": int((bottleneck_priority_meta.get(str(c.get("combo_id", "")), {}) or {}).get("priority_rank", 0)),
+                    "priority_score": float((bottleneck_priority_meta.get(str(c.get("combo_id", "")), {}) or {}).get("priority_score", 0.0)),
+                    "scenario_family": str(c.get("bottleneck_scenario_family", "")),
+                    "scenario_family_adapted": bool(c.get("bottleneck_scenario_family_adapted", False)),
+                    "holdout_failure_suppression_active": bool(c.get("holdout_failure_suppression_active", False)),
+                    "holdout_failure_suppressed_family": bool(c.get("holdout_failure_suppressed_family", False)),
+                    "holdout_failure_suppression_reason": str(c.get("holdout_failure_suppression_reason", "")),
+                    "hint_guardrail_active": bool(c.get("bottleneck_hint_guardrail_active", False)),
+                    "hint_guardrail_ratio": float(c.get("bottleneck_hint_guardrail_ratio", 0.0) or 0.0),
+                }
+                for c in combo_specs
+            ],
         },
         "combos": combo_specs,
         "screen_summary": screen_rows,
