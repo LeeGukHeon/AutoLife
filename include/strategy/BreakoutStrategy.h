@@ -201,8 +201,6 @@ public:
         double entry_price,
         double current_price
     );
-    
-    BreakoutRollingStatistics getRollingStatistics() const;
 
 private:
     std::shared_ptr<network::UpbitHttpClient> client_;

@@ -1046,12 +1046,6 @@ bool BreakoutStrategy::shouldMoveToBreakeven(
 
 // ===== Rolling Statistics =====
 
-BreakoutRollingStatistics BreakoutStrategy::getRollingStatistics() const
-{
-    std::lock_guard<std::mutex> lock(mutex_);
-    return rolling_stats_;
-}
-
 double BreakoutStrategy::getAdaptiveEntryBias(int entry_key) const
 {
     auto it = adaptive_entry_stats_.find(entry_key);
@@ -1392,7 +1386,6 @@ BreakoutSignalMetrics BreakoutStrategy::analyzeBreakout(
     // 1. Donchian Channel 계산
     DonchianChannel channel = calculateDonchianChannel(candles, DONCHIAN_PERIOD);
     
-    // 가격이 상단 돌파?
     if (current_price <= channel.upper) {
         return signal;
     }

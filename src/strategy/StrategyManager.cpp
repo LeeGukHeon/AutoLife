@@ -1,4 +1,4 @@
-﻿#include "strategy/StrategyManager.h"
+#include "strategy/StrategyManager.h"
 #include "common/Logger.h"
 #include "common/Config.h"
 #include "risk/RiskManager.h"
@@ -164,6 +164,122 @@ double computeExpectedValueTighteningForManager(
 
 bool alphaHeadModeEnabledForManager() {
     return Config::getInstance().getEngineConfig().use_strategy_alpha_head_mode;
+}
+
+bool coreSignalOwnershipEnabledForManager() {
+    const auto& cfg = Config::getInstance().getEngineConfig();
+    return cfg.enable_core_plane_bridge && cfg.enable_core_risk_plane;
+}
+
+double computeCoreRescueStrength(
+    const analytics::CoinMetrics& metrics,
+    analytics::MarketRegime regime
+) {
+    double strength = 0.44;
+    strength += std::clamp((metrics.liquidity_score - 55.0) / 220.0, -0.06, 0.10);
+    strength += std::clamp((metrics.volume_surge_ratio - 1.0) * 0.05, -0.03, 0.08);
+    strength += std::clamp(metrics.order_book_imbalance * 0.07, -0.05, 0.06);
+
+    switch (regime) {
+        case analytics::MarketRegime::TRENDING_UP:
+            strength += 0.05;
+            break;
+        case analytics::MarketRegime::RANGING:
+            strength += 0.02;
+            break;
+        case analytics::MarketRegime::TRENDING_DOWN:
+            strength -= 0.04;
+            break;
+        case analytics::MarketRegime::HIGH_VOLATILITY:
+            strength -= 0.02;
+            break;
+        default:
+            break;
+    }
+
+    return std::clamp(strength, 0.36, 0.78);
+}
+
+Signal buildCoreRescueCandidate(
+    const std::shared_ptr<IStrategy>& strategy,
+    const std::string& market,
+    const analytics::CoinMetrics& metrics,
+    const std::vector<Candle>& candles,
+    double current_price,
+    double available_capital,
+    const analytics::RegimeAnalysis& regime
+) {
+    Signal out;
+    if (!strategy || candles.size() < 20 || current_price <= 0.0 || available_capital <= 0.0) {
+        return out;
+    }
+
+    if (!strategy->shouldEnter(market, metrics, candles, current_price, regime)) {
+        return out;
+    }
+
+    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()
+    ).count();
+    if (!candles.empty() && candles.back().timestamp > 0) {
+        now_ms = candles.back().timestamp;
+    }
+
+    const auto info = strategy->getInfo();
+    const double entry_price = current_price;
+    double stop_loss = strategy->calculateStopLoss(entry_price, candles);
+    if (!(stop_loss > 0.0) || stop_loss >= entry_price) {
+        stop_loss = entry_price * 0.992;
+    }
+
+    double take_profit_2 = strategy->calculateTakeProfit(entry_price, candles);
+    if (!(take_profit_2 > entry_price)) {
+        take_profit_2 = entry_price * 1.012;
+    }
+    double take_profit_1 = entry_price + ((take_profit_2 - entry_price) * 0.55);
+    if (!(take_profit_1 > entry_price) || take_profit_1 > take_profit_2) {
+        take_profit_1 = entry_price + ((take_profit_2 - entry_price) * 0.45);
+    }
+
+    double position_size = strategy->calculatePositionSize(
+        available_capital,
+        entry_price,
+        stop_loss,
+        metrics
+    );
+    if (!(position_size > 0.0)) {
+        const double min_lot = 5000.0 / std::max(1.0, available_capital);
+        position_size = std::clamp(min_lot, 0.01, 0.06);
+    }
+    position_size = std::clamp(position_size, 0.0, 1.0);
+
+    out.type = SignalType::BUY;
+    out.market = market;
+    out.strategy_name = info.name;
+    out.timestamp = now_ms;
+    out.strength = computeCoreRescueStrength(metrics, regime.regime);
+    out.signal_filter = out.strength;
+    out.entry_price = entry_price;
+    out.stop_loss = stop_loss;
+    out.take_profit_1 = take_profit_1;
+    out.take_profit_2 = take_profit_2;
+    out.position_size = position_size;
+    out.buy_order_type = OrderTypePolicy::LIMIT_WITH_FALLBACK;
+    out.sell_order_type = OrderTypePolicy::LIMIT_WITH_FALLBACK;
+    out.max_retries = 2;
+    out.retry_wait_ms = 700;
+    out.market_regime = regime.regime;
+    out.entry_archetype = "CORE_RESCUE_SHOULD_ENTER";
+    out.reason = "core_rescue_candidate";
+    out.used_preloaded_tf_5m =
+        (metrics.candles_by_tf.find("5m") != metrics.candles_by_tf.end() &&
+         metrics.candles_by_tf.at("5m").size() >= 20);
+    out.used_preloaded_tf_1h =
+        (metrics.candles_by_tf.find("1h") != metrics.candles_by_tf.end() &&
+         metrics.candles_by_tf.at("1h").size() >= 10);
+    out.used_resampled_tf_fallback = !out.used_preloaded_tf_5m;
+
+    return out;
 }
 
 void incrementRejectionReason(std::map<std::string, int>* bucket, const char* reason) {
@@ -420,7 +536,19 @@ Signal StrategyManager::processStrategySignal(
             return Signal();
         }
 
+        const bool core_signal_ownership = coreSignalOwnershipEnabledForManager();
         auto signal = strategy->generateSignal(market, metrics, candles, current_price, available_capital, regime);
+        if (signal.type == SignalType::NONE && core_signal_ownership) {
+            signal = buildCoreRescueCandidate(
+                strategy,
+                market,
+                metrics,
+                candles,
+                current_price,
+                available_capital,
+                regime
+            );
+        }
         if (signal.type == SignalType::NONE && alphaHeadModeEnabledForManager()) {
             signal = buildAlphaHeadFallbackSignal(
                 strategy->getInfo().name,
@@ -464,6 +592,9 @@ Signal StrategyManager::processStrategySignal(
             signal.score = calculateSignalScore(signal);
             if (signal.reason == "alpha_head_fallback_candidate") {
                 LOG_INFO("{} - {} fallback candidate generated (strength {:.2f}, archetype {})",
+                         market, signal.strategy_name, signal.strength, signal.entry_archetype);
+            } else if (signal.reason == "core_rescue_candidate") {
+                LOG_INFO("{} - {} core rescue candidate generated (strength {:.2f}, archetype {})",
                          market, signal.strategy_name, signal.strength, signal.entry_archetype);
             }
 
@@ -530,13 +661,6 @@ Signal StrategyManager::selectBestSignal(const std::vector<Signal>& signals) {
     return *best;
 }
 
-Signal StrategyManager::selectRobustSignal(
-    const std::vector<Signal>& signals,
-    analytics::MarketRegime regime
-) {
-    return selectRobustSignalWithDiagnostics(signals, regime, nullptr);
-}
-
 Signal StrategyManager::selectRobustSignalWithDiagnostics(
     const std::vector<Signal>& signals,
     analytics::MarketRegime regime,
@@ -556,6 +680,7 @@ Signal StrategyManager::selectRobustSignalWithDiagnostics(
     }
 
     const LiveSignalBottleneckHint live_hint = getLiveSignalBottleneckHint();
+    const bool core_signal_ownership = coreSignalOwnershipEnabledForManager();
 
     std::map<int, int> direction_votes;
     std::map<StrategyRole, int> role_votes;
@@ -603,11 +728,18 @@ Signal StrategyManager::selectRobustSignalWithDiagnostics(
         static_cast<int>(directional_candidates.size()) == 1) {
         const auto& only = directional_candidates.front();
         if (only.strength < 0.78 || only.expected_value < 0.0008) {
-            incrementRejectionReason(
-                diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
-                "no_best_signal_high_stress_single_candidate"
-            );
-            return Signal();
+            if (core_signal_ownership) {
+                incrementRejectionReason(
+                    diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                    "softened_high_stress_single_candidate_core_mode"
+                );
+            } else {
+                incrementRejectionReason(
+                    diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                    "no_best_signal_high_stress_single_candidate"
+                );
+                return Signal();
+            }
         }
     }
 
@@ -618,11 +750,18 @@ Signal StrategyManager::selectRobustSignalWithDiagnostics(
             (only.expected_value < 0.00010 || (rr_ratio > 0.0 && rr_ratio < 1.15)) &&
             only.strength < 0.70;
         if (weak_quality_single) {
-            incrementRejectionReason(
-                diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
-                "no_best_signal_single_candidate_quality_floor"
-            );
-            return Signal();
+            if (core_signal_ownership) {
+                incrementRejectionReason(
+                    diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                    "softened_single_candidate_quality_floor_core_mode"
+                );
+            } else {
+                incrementRejectionReason(
+                    diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                    "no_best_signal_single_candidate_quality_floor"
+                );
+                return Signal();
+            }
         }
     }
 
@@ -631,12 +770,20 @@ Signal StrategyManager::selectRobustSignalWithDiagnostics(
     for (const auto& signal : directional_candidates) {
         const StrategyRole role = detectStrategyRole(signal.strategy_name);
         const RegimePolicy policy = getRegimePolicy(role, regime);
+        RegimePolicy effective_policy = policy;
+        if (policy == RegimePolicy::BLOCK && core_signal_ownership) {
+            incrementRejectionReason(
+                diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                "softened_policy_block_core_mode"
+            );
+            effective_policy = RegimePolicy::HOLD;
+        }
         const double reward_risk_ratio = computeRewardRiskRatioForManager(signal);
         const bool trend_role = (role == StrategyRole::MOMENTUM || role == StrategyRole::BREAKOUT);
         const bool off_trend_regime =
             trend_role &&
             regime != analytics::MarketRegime::TRENDING_UP;
-        if (policy == RegimePolicy::BLOCK) {
+        if (effective_policy == RegimePolicy::BLOCK) {
             incrementRejectionReason(
                 diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
                 "no_best_signal_policy_block"
@@ -645,10 +792,13 @@ Signal StrategyManager::selectRobustSignalWithDiagnostics(
         }
 
         double score = calculateSignalScore(signal);
+        if (policy == RegimePolicy::BLOCK && core_signal_ownership) {
+            score *= 0.78;
+        }
 
-        if (policy == RegimePolicy::ALLOW) {
+        if (effective_policy == RegimePolicy::ALLOW) {
             score *= 1.08;
-        } else if (policy == RegimePolicy::HOLD) {
+        } else if (effective_policy == RegimePolicy::HOLD) {
             score *= 0.92;
         }
 
@@ -805,21 +955,6 @@ Signal StrategyManager::selectRobustSignalWithDiagnostics(
     return best_signal;
 }
 
-std::vector<Signal> StrategyManager::filterSignals(
-    const std::vector<Signal>& signals,
-    double min_strength,
-    double min_expected_value,
-    analytics::MarketRegime regime
-) {
-    return filterSignalsWithDiagnostics(
-        signals,
-        min_strength,
-        min_expected_value,
-        regime,
-        nullptr
-    );
-}
-
 std::vector<Signal> StrategyManager::filterSignalsWithDiagnostics(
     const std::vector<Signal>& signals,
     double min_strength,
@@ -828,6 +963,7 @@ std::vector<Signal> StrategyManager::filterSignalsWithDiagnostics(
     FilterDiagnostics* diagnostics
 ) {
     std::vector<Signal> filtered;
+    const bool core_signal_ownership = coreSignalOwnershipEnabledForManager();
     if (diagnostics != nullptr) {
         diagnostics->input_count = static_cast<int>(signals.size());
         diagnostics->output_count = 0;
@@ -837,12 +973,20 @@ std::vector<Signal> StrategyManager::filterSignalsWithDiagnostics(
     for (const auto& signal : signals) {
         const StrategyRole role = detectStrategyRole(signal.strategy_name);
         const RegimePolicy policy = getRegimePolicy(role, regime);
+        RegimePolicy effective_policy = policy;
+        if (policy == RegimePolicy::BLOCK && core_signal_ownership) {
+            incrementRejectionReason(
+                diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                "softened_filtered_policy_block_core_mode"
+            );
+            effective_policy = RegimePolicy::HOLD;
+        }
         const double reward_risk_ratio = computeRewardRiskRatioForManager(signal);
         const bool trend_role = (role == StrategyRole::MOMENTUM || role == StrategyRole::BREAKOUT);
         const bool off_trend_regime =
             trend_role &&
             regime != analytics::MarketRegime::TRENDING_UP;
-        if (policy == RegimePolicy::BLOCK) {
+        if (effective_policy == RegimePolicy::BLOCK) {
             incrementRejectionReason(
                 diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
                 "filtered_out_by_manager_policy_block"
@@ -853,7 +997,12 @@ std::vector<Signal> StrategyManager::filterSignalsWithDiagnostics(
         double required_strength = min_strength;
         double required_expected_value = min_expected_value;
 
-        if (policy == RegimePolicy::HOLD) {
+        if (policy == RegimePolicy::BLOCK && core_signal_ownership) {
+            required_strength = std::min(0.95, required_strength + 0.09);
+            required_expected_value += 0.00025;
+        }
+
+        if (effective_policy == RegimePolicy::HOLD) {
             required_strength = std::min(0.95, required_strength + 0.07);
             required_expected_value += 0.0002;
             if (signal.strategy_trade_count > 0 && signal.strategy_trade_count < 15) {
@@ -924,71 +1073,6 @@ std::vector<Signal> StrategyManager::filterSignalsWithDiagnostics(
     return filtered;
 }
 
-Signal StrategyManager::synthesizeSignals(const std::vector<Signal>& signals) {
-    if (signals.empty()) {
-        return Signal();
-    }
-
-    Signal synthesized;
-
-    int buy_count = 0;
-    int sell_count = 0;
-    double total_strength = 0.0;
-
-    for (const auto& signal : signals) {
-        if (signal.type == SignalType::BUY || signal.type == SignalType::STRONG_BUY) {
-            buy_count++;
-        } else if (signal.type == SignalType::SELL || signal.type == SignalType::STRONG_SELL) {
-            sell_count++;
-        }
-        total_strength += signal.strength;
-    }
-
-    if (buy_count > sell_count) {
-        synthesized.type = buy_count > sell_count * 2 ? SignalType::STRONG_BUY : SignalType::BUY;
-    } else if (sell_count > buy_count) {
-        synthesized.type = sell_count > buy_count * 2 ? SignalType::STRONG_SELL : SignalType::SELL;
-    } else {
-        synthesized.type = SignalType::HOLD;
-    }
-
-    synthesized.strength = total_strength / signals.size();
-
-    std::vector<double> entry_prices;
-    std::vector<double> stop_losses;
-    std::vector<double> take_profit1s;
-    std::vector<double> take_profit2s;
-    for (const auto& signal : signals) {
-        if (signal.entry_price > 0) entry_prices.push_back(signal.entry_price);
-        if (signal.stop_loss > 0) stop_losses.push_back(signal.stop_loss);
-        if (signal.take_profit_1 > 0) take_profit1s.push_back(signal.take_profit_1);
-        if (signal.take_profit_2 > 0) take_profit2s.push_back(signal.take_profit_2);
-    }
-
-    if (!entry_prices.empty()) {
-        std::sort(entry_prices.begin(), entry_prices.end());
-        synthesized.entry_price = entry_prices[entry_prices.size() / 2];
-    }
-
-    if (!stop_losses.empty()) {
-        std::sort(stop_losses.begin(), stop_losses.end());
-        synthesized.stop_loss = stop_losses[stop_losses.size() / 2];
-    }
-
-    if (!take_profit2s.empty()) {
-        std::sort(take_profit2s.begin(), take_profit2s.end());
-        synthesized.take_profit_2 = take_profit2s[take_profit2s.size() / 2];
-    }
-    if (!take_profit1s.empty()) {
-        std::sort(take_profit1s.begin(), take_profit1s.end());
-        synthesized.take_profit_1 = take_profit1s[take_profit1s.size() / 2];
-    }
-
-    synthesized.reason = "Synthesized from " + std::to_string(signals.size()) + " strategies";
-
-    return synthesized;
-}
-
 std::map<std::string, IStrategy::Statistics> StrategyManager::getAllStatistics() const {
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -998,30 +1082,6 @@ std::map<std::string, IStrategy::Statistics> StrategyManager::getAllStatistics()
         stats_map[info.name] = strategy->getStatistics();
     }
     return stats_map;
-}
-
-void StrategyManager::enableStrategy(const std::string& name, bool enabled) {
-    std::lock_guard<std::mutex> lock(mutex_);
-
-    for (auto& strategy : strategies_) {
-        if (strategy->getInfo().name == name) {
-            strategy->setEnabled(enabled);
-            LOG_INFO("Strategy {}: {}", name, enabled ? "enabled" : "disabled");
-            return;
-        }
-    }
-}
-
-std::vector<std::string> StrategyManager::getActiveStrategies() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-
-    std::vector<std::string> active;
-    for (const auto& strategy : strategies_) {
-        if (strategy->isEnabled()) {
-            active.push_back(strategy->getInfo().name);
-        }
-    }
-    return active;
 }
 
 std::vector<std::shared_ptr<IStrategy>> StrategyManager::getStrategies() const {
@@ -1101,22 +1161,6 @@ void StrategyManager::refreshStrategyStatesFromHistory(
                      strategy_name, enable ? "ON" : "OFF");
         }
     }
-}
-
-double StrategyManager::getOverallWinRate() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-
-    int total_trades = 0;
-    int total_wins = 0;
-
-    for (const auto& strategy : strategies_) {
-        auto stats = strategy->getStatistics();
-        total_trades += stats.winning_trades + stats.losing_trades;
-        total_wins += stats.winning_trades;
-    }
-
-    if (total_trades == 0) return 0.0;
-    return static_cast<double>(total_wins) / total_trades;
 }
 
 double StrategyManager::calculateSignalScore(const Signal& signal) const {

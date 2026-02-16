@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "strategy/IStrategy.h"
 #include "network/UpbitHttpClient.h"
@@ -56,22 +56,12 @@ public:
     );
 
     Signal selectBestSignal(const std::vector<Signal>& signals);
-    Signal selectRobustSignal(
-        const std::vector<Signal>& signals,
-        analytics::MarketRegime regime
-    );
     Signal selectRobustSignalWithDiagnostics(
         const std::vector<Signal>& signals,
         analytics::MarketRegime regime,
         SelectionDiagnostics* diagnostics
     );
 
-    std::vector<Signal> filterSignals(
-        const std::vector<Signal>& signals,
-        double min_strength = 0.6,
-        double min_expected_value = 0.0,
-        analytics::MarketRegime regime = analytics::MarketRegime::UNKNOWN
-    );
     std::vector<Signal> filterSignalsWithDiagnostics(
         const std::vector<Signal>& signals,
         double min_strength,
@@ -80,12 +70,7 @@ public:
         FilterDiagnostics* diagnostics
     );
 
-    Signal synthesizeSignals(const std::vector<Signal>& signals);
-
     std::map<std::string, IStrategy::Statistics> getAllStatistics() const;
-    void enableStrategy(const std::string& name, bool enabled);
-    std::vector<std::string> getActiveStrategies() const;
-    double getOverallWinRate() const;
     std::vector<std::shared_ptr<IStrategy>> getStrategies() const;
     void setLiveSignalBottleneckHint(const LiveSignalBottleneckHint& hint);
     LiveSignalBottleneckHint getLiveSignalBottleneckHint() const;

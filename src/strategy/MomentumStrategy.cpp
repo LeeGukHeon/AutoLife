@@ -563,13 +563,12 @@ Signal MomentumStrategy::generateSignal(
     
     // MACD score (0.00 ~ 0.12)
     double macd_score = 0.0;
-    if (macd.macd > 0 && macd.histogram > 0) macd_score = 0.12;       // 媛뺥븳 ?곸듅
-    else if (macd.macd > 0) macd_score = 0.06;                         // MACD ?묒닔
-    else if (macd.histogram > 0) macd_score = 0.04;                    // ?덉뒪?좉렇???꾪솚 以?
+    if (macd.macd > 0 && macd.histogram > 0) macd_score = 0.12;
+    else if (macd.macd > 0) macd_score = 0.06;
+    else if (macd.histogram > 0) macd_score = 0.04;
     else macd_score = 0.00;
     total_score += macd_score;
     
-    // 媛寃?紐⑤찘? ?먯닔 (0.00 ~ 0.08)
     double momentum_score = 0.0;
     if (metrics.price_change_rate >= 2.0) momentum_score = 0.08;
     else if (metrics.price_change_rate >= 0.5) momentum_score = 0.06;
@@ -577,8 +576,6 @@ Signal MomentumStrategy::generateSignal(
     else momentum_score = 0.00;
     total_score += momentum_score;
     
-    // --- (2) 異붿꽭 ?뺤씤 (理쒕? 0.20) ---
-    // 理쒓렐 3罹붾뱾 ?묐큺 鍮꾩쑉
     int bullish_count = 0;
     size_t n = candles.size();
     size_t start = (n >= 3) ? n - 3 : 0;
@@ -592,7 +589,6 @@ Signal MomentumStrategy::generateSignal(
     else if (bullish_count >= 1) trend_score = 0.03;
     total_score += trend_score;
     
-    // ?몃? ?덉쭚 湲곕컲 ?먯닔 (?대? detectMarketRegime ?쒓굅!)
     double regime_score = 0.0;
     switch (regime.regime) {
         case analytics::MarketRegime::TRENDING_UP:
@@ -608,7 +604,6 @@ Signal MomentumStrategy::generateSignal(
     }
     total_score += regime_score;
     
-    // --- (3) 嫄곕옒??(理쒕? 0.15) ---
     double volume_score = 0.0;
     bool volume_significant = isVolumeSurgeSignificant(metrics, candles);
     if (volume_significant && metrics.volume_surge_ratio >= 3.0) volume_score = 0.15;
@@ -617,7 +612,6 @@ Signal MomentumStrategy::generateSignal(
     else volume_score = 0.02;
     total_score += volume_score;
     
-    // --- (4) MTF & Order Flow (理쒕? 0.20) ---
     auto mtf_signal = analyzeMultiTimeframe(metrics, candles);
     double mtf_score = mtf_signal.alignment_score * 0.10;
     total_score += mtf_score;
@@ -627,7 +621,7 @@ Signal MomentumStrategy::generateSignal(
     if (order_flow.microstructure_score > 0.6) of_score = 0.10;
     else if (order_flow.microstructure_score > 0.3) of_score = 0.06;
     else if (order_flow.microstructure_score > 0.0) of_score = 0.03;
-    else of_score = 0.02; // ?멸? ?놁뼱??理쒖냼 ?먯닔
+    else of_score = 0.02;
     total_score += of_score;
 
     // Reject when microstructure is clearly one-sided against long entries.
@@ -871,13 +865,11 @@ Signal MomentumStrategy::generateSignal(
     signal.max_retries = 3;
     signal.retry_wait_ms = 500;
     
-    // ?섏씡??泥댄겕 (soft gate)
     double expected_return = (signal.take_profit_2 - signal.entry_price) / signal.entry_price;
     if (expected_return < 0.002) {
         signal.strength *= 0.7;
     }
     
-    // ?ъ????ъ씠吏?
     auto pos_metrics = calculateAdvancedPositionSize(
         available_capital, signal.entry_price, signal.stop_loss, metrics, candles
     );
@@ -1043,7 +1035,16 @@ bool MomentumStrategy::shouldEnter(
     }
     
     auto macd = analytics::TechnicalIndicators::calculateMACD(prices, 12, 26, 9);
-    if (macd.macd <= 0 || macd.histogram <= 0) {
+    double prev_histogram = macd.histogram;
+    if (prices.size() >= 3) {
+        std::vector<double> prev_prices(prices.begin(), prices.end() - 1);
+        auto prev_macd = analytics::TechnicalIndicators::calculateMACD(prev_prices, 12, 26, 9);
+        prev_histogram = prev_macd.histogram;
+    }
+    // 양수 MACD 또는 히스토그램 개선(상승 전환) 중 하나면 통과시켜 신호 기회를 보존한다.
+    const bool macd_positive = (macd.macd > 0.0 && macd.histogram > 0.0);
+    const bool macd_rising = macd.histogram > prev_histogram;
+    if (!macd_positive && !macd_rising) {
         return false;
     }
     
@@ -1062,8 +1063,9 @@ bool MomentumStrategy::shouldEnter(
         return false;
     }
     
-    if (metrics.price_change_rate < 0.5) {
-        LOG_INFO("{} - insufficient momentum {:.2f}% (target: 0.5%+)",
+    // 미세 추세 구간까지 포착하기 위해 모멘텀 최소치를 0.2%로 완화한다.
+    if (metrics.price_change_rate < 0.2) {
+        LOG_INFO("{} - insufficient momentum {:.2f}% (target: 0.2%+)",
              market, metrics.price_change_rate);
         return false;
     }
@@ -1307,15 +1309,10 @@ bool MomentumStrategy::shouldExit(
         return true;
     }
     
-    // 1. ?쒓컙 泥?궛 (蹂댁쑀 ?쒓컙???덈Т 湲몄뼱吏硫?紐⑤찘? ?곸떎濡?媛꾩＜)
-    if (holding_time_seconds >= MAX_HOLDING_TIME) { // 2?쒓컙
+    if (holding_time_seconds >= MAX_HOLDING_TIME) {
         return true;
     }
     
-    // 2. 異붿꽭 諛섏쟾 ?뺤씤 (Trend Reversal) logic???꾩슂??
-    // ?섏?留??꾩옱 ?⑥닔 ?몄옄濡쒕뒗 罹붾뱾 ?곗씠?곗뿉 ?묎렐?????놁쓬.
-    // ?곕씪???ш린?쒕뒗 '?쒓컙 泥?궛'留??대떦?섍퀬, 
-    // 湲곗닠??吏?쒖뿉 ?섑븳 泥?궛? RiskManager??Trailing Stop??留↔린??寃껋씠 ?덉쟾??
     
     return false;
 }
@@ -1479,11 +1476,6 @@ double MomentumStrategy::updateTrailingStop(
     }
     
     return trailing_stop;
-}
-
-RollingStatistics MomentumStrategy::getRollingStatistics() const {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
-    return rolling_stats_;
 }
 
 double MomentumStrategy::getArchetypeQualityBias(
@@ -1661,9 +1653,7 @@ MarketRegime MomentumStrategy::detectMarketRegime(
     double strong_up = regime_model_.current_prob[static_cast<int>(MarketRegime::STRONG_UPTREND)];
     double weak_up = regime_model_.current_prob[static_cast<int>(MarketRegime::WEAK_UPTREND)];
     
-    // [?듭떖] ???곸듅 ?뺣쪧???⑹씠 ?〓낫 ?뺣쪧蹂대떎 ?ш굅?? 40%瑜??섏쑝硫??곸듅?쇰줈 ?먯젙
     if ((strong_up + weak_up) > 0.40) {
-        // ???섏씠 媛뺥븳 履쎌쓣 諛섑솚?섍굅?? 紐⑤찘? ?꾨왂?대씪硫?WEAK留??섏뼱??吏꾩엯 ?덉슜
         return (strong_up > weak_up) ? MarketRegime::STRONG_UPTREND : MarketRegime::WEAK_UPTREND;
     }
 
@@ -1687,18 +1677,11 @@ void MomentumStrategy::updateRegimeModel(
     if (candles.size() < 20) return;
     
     std::vector<double> returns;
-    // [???듭떖 ?섏젙] 
-    // ?곗씠?곌? [怨쇨굅 -> ?꾩옱] ?쒖꽌?대?濡? 
-    // 媛????back)??理쒖떊 ?곗씠?곗엯?덈떎. 
-    // ?곕씪???ㅼ뿉?쒕????욎쑝濡?媛硫댁꽌 怨꾩궛?댁빞 "理쒖떊 ?섏씡瑜????살뒿?덈떎.
     
     size_t end_idx = candles.size() - 1;
     size_t start_idx = (candles.size() > 20) ? (candles.size() - 20) : 0;
 
-    // ??理쒖떊)?먯꽌遺??怨쇨굅濡?媛硫댁꽌 猷⑦봽
     for (size_t i = end_idx; i > start_idx; --i) {
-        // 怨듭떇: (?꾩옱媛寃?- ?꾧?寃? / ?꾧?寃?
-        // candles[i]媛 ?꾩옱, candles[i-1]??怨쇨굅
         double ret = (candles[i].close - candles[i-1].close) / candles[i-1].close;
         
         returns.push_back(ret);
@@ -1706,27 +1689,21 @@ void MomentumStrategy::updateRegimeModel(
     
     double mean_return = calculateMean(returns);
     double volatility = calculateStdDev(returns, mean_return);
-    // 理쒖냼 蹂?숈꽦 ?섑븳??(蹂?숈꽦??洹밸룄濡???쓣 ???몄씠利덉뿉 ???寃?諛⑹?)
     double active_vol = std::max(volatility, 0.0005);
     std::array<double, 5> observation_prob;
     
-    // 1. STRONG_UP: ?섏씡瑜좎씠 蹂?숈꽦??1.5諛??댁긽 (媛뺥븳 ?뚰뙆)
     if (mean_return > active_vol * 1.5) {
         observation_prob = {0.70, 0.20, 0.05, 0.03, 0.02};
     } 
-    // 2. WEAK_UP: ?섏씡瑜좎씠 蹂?숈꽦??0.5諛??댁긽 (?꾨쭔???곸듅)
     else if (mean_return > active_vol * 0.5) {
         observation_prob = {0.20, 0.65, 0.10, 0.03, 0.02};
     } 
-    // 3. SIDEWAYS: ?섏씡瑜좎씠 蹂?숈꽦??+-0.5諛??대궡 (諛뺤뒪沅?
     else if (std::abs(mean_return) <= active_vol * 0.5) {
         observation_prob = {0.10, 0.15, 0.55, 0.15, 0.05};
     } 
-    // 4. WEAK_DOWN: ?섏씡瑜좎씠 -0.5諛?誘몃쭔
     else if (mean_return < -active_vol * 0.5 && mean_return >= -active_vol * 1.5) {
         observation_prob = {0.05, 0.05, 0.15, 0.60, 0.15};
     } 
-    // 5. STRONG_DOWN: ?섏씡瑜좎씠 -1.5諛?誘몃쭔
     else {
         observation_prob = {0.02, 0.03, 0.05, 0.20, 0.70};
     }
@@ -1735,7 +1712,6 @@ void MomentumStrategy::updateRegimeModel(
     for (int i = 0; i < 5; ++i) {
         model.current_prob[i] *= observation_prob[i];
 
-        //?뱀젙 ?곹깭媛 怨좎궗(Dead)?섎뒗 寃껋쓣 諛⑹??섏뿬 諛섏쓳???좎?
         if (model.current_prob[i] < 0.0001) model.current_prob[i] = 0.0001;
 
         total += model.current_prob[i];
@@ -1754,38 +1730,28 @@ bool MomentumStrategy::isVolumeSurgeSignificant(
     const analytics::CoinMetrics& metrics,
     const std::vector<Candle>& candles
 ) const {
-    // 1. 理쒖냼 ?곗씠???뺣낫 (?꾩옱 1媛?+ 怨쇨굅 30媛?= 31媛?
-        (void)metrics;  // ?꾩옱 誘몄궗??
+        (void)metrics;
     if (candles.size() < 31) return false;
     
-    // 2. [?섏젙] ?꾩껜 31媛??곗씠???섏쭛 (怨쇨굅 30媛?+ ?꾩옱 1媛?
     std::vector<double> volumes;
     volumes.reserve(31);
     
-    // ?뺣젹??candles???ㅼ뿉??31踰덉㎏遺???앷퉴吏
     for (size_t i = candles.size() - 31; i < candles.size(); ++i) {
         volumes.push_back(candles[i].volume);
     }
 
-    // 3. Z-Score 怨꾩궛 (?꾩옱媛?vs 怨쇨굅 30媛??됯퇏)
     double current_volume = volumes.back();
-    // history: volumes??泥섏쓬遺???ㅼ뿉????踰덉㎏源뚯? (留덉?留??쒖쇅)
     std::vector<double> history(volumes.begin(), volumes.end() - 1);
     
     double z_score = calculateZScore(current_volume, history);
     
-    // [以묒슂] Z-Score ?꾪꽣留?(?꾨씫?섏뿀??遺遺?蹂듦뎄!)
-    // 1.96? 95% ?좊ː援ш컙???섎?. 利? ?곸쐞 2.5% ?섏???湲됰벑留??몄젙
     if (z_score < 1.64) {
         return false;
     }
     
-    // 4. T-Test: 理쒓렐 5媛??꾩옱 ?ы븿) vs 洹??댁쟾 26媛?
-    // volumes 踰≫꽣 ?댁뿉??遺꾨━
     std::vector<double> recent_5(volumes.end() - 5, volumes.end());
     std::vector<double> past_26(volumes.begin(), volumes.end() - 5);
     
-    // ?좎쓽?섏? 0.05 (5%)
     return isTTestSignificant(recent_5, past_26, 0.05);
 }
 
@@ -1809,7 +1775,7 @@ bool MomentumStrategy::isTTestSignificant(
     double alpha
 ) const {
     if (sample1.size() < 2 || sample2.size() < 2) return false;
-        (void)alpha;  // 怨좎젙 t_critical 媛??ъ슜
+        (void)alpha;
     
     double mean1 = calculateMean(sample1);
     double mean2 = calculateMean(sample2);
@@ -1877,7 +1843,6 @@ MultiTimeframeSignal MomentumStrategy::analyzeMultiTimeframe(
         return signal;
     }
     
-    // 1. 1遺꾨큺 遺꾩꽍 (?곗씠??異⑸텇)
     signal.tf_1m_bullish = isBullishOnTimeframe(candles_1m, signal.tf_1m);
     
     // 2. 5분봉 분석: scanner preloaded TF 우선, 없으면 1m 리샘플 fallback
@@ -1897,12 +1862,11 @@ MultiTimeframeSignal MomentumStrategy::analyzeMultiTimeframe(
     if (candles_15m.size() < 26 && candles_5m.size() >= 78) {
         candles_15m = aggregateCandles(candles_5m, 3);
     }
-    bool is_15m_valid = false; // 15遺꾨큺???먯닔 怨꾩궛???ｌ쓣吏 ?щ?
+    bool is_15m_valid = false;
 
-    // [?듭떖] 吏??怨꾩궛???꾩슂??理쒖냼 媛쒖닔(MACD 湲곗? 26媛?媛 ?덈뒗吏 ?뺤씤
     if (candles_15m.size() >= 26) {
         signal.tf_15m_bullish = isBullishOnTimeframe(candles_15m, signal.tf_15m);
-        is_15m_valid = true; // ?곗씠?곌? 異⑸텇?섎?濡??먯닔?먯뿉 ?쇱썙以?
+        is_15m_valid = true;
     }
     
     // 4. 1시간봉 보조 확인 (있을 때만 반영)
@@ -1927,7 +1891,6 @@ MultiTimeframeSignal MomentumStrategy::analyzeMultiTimeframe(
     max_possible_score += 1.0;
     if (signal.tf_5m_bullish) total_score += 1.0;
 
-    // 15遺꾨큺 諛섏쁺 (?곗씠?곌? 異⑸텇???뚮쭔 遺꾨え/遺꾩옄???ы븿)
     if (is_15m_valid) {
         max_possible_score += 1.0;
         if (signal.tf_15m_bullish) total_score += 1.0;
@@ -1952,8 +1915,8 @@ std::vector<Candle> MomentumStrategy::resampleTo5m(const std::vector<Candle>& ca
     std::vector<Candle> candles_5m;
     for (size_t i = 0; i + 5 <= candles_1m.size(); i += 5) {
         Candle candle_5m;
-        candle_5m.open = candles_1m[i].open;         // [?섏젙] i媛 媛??怨쇨굅
-        candle_5m.close = candles_1m[i + 4].close;   // [?섏젙] i+4媛 媛??理쒖떊
+        candle_5m.open = candles_1m[i].open;
+        candle_5m.close = candles_1m[i + 4].close;
         candle_5m.high = candles_1m[i].high;
         candle_5m.low = candles_1m[i].low;
         candle_5m.volume = 0;
@@ -2004,12 +1967,11 @@ bool MomentumStrategy::isBullishOnTimeframe(const std::vector<Candle>& candles, 
     auto macd = analytics::TechnicalIndicators::calculateMACD(prices, 12, 26, 9);
     metrics.macd_histogram = macd.histogram;
 
-    // [?섏젙] EMA20怨?3遊???媛寃⑹쓣 鍮꾧탳?섏뿬 ?꾩옱 異붿꽭 痢≪젙
     double ema_20 = analytics::TechnicalIndicators::calculateEMA(prices, 20);
     double current_price = prices.back();
     metrics.trend_strength = (current_price - ema_20) / ema_20;
 
-    bool rsi_bullish = metrics.rsi >= 50.0 && metrics.rsi <= 75.0; // ?곷떒 踰붿쐞 ?뺤옣
+    bool rsi_bullish = metrics.rsi >= 50.0 && metrics.rsi <= 75.0;
     bool macd_bullish = metrics.macd_histogram > 0;
     bool trend_bullish = metrics.trend_strength > 0;
 
@@ -2022,7 +1984,7 @@ AdvancedOrderFlowMetrics MomentumStrategy::analyzeAdvancedOrderFlow(
     const analytics::CoinMetrics& metrics,
     double current_price
 ) const {
-    (void)current_price;  // current_price ?뚮씪誘명꽣 誘몄궗??
+    (void)current_price;
     
     AdvancedOrderFlowMetrics flow;
     nlohmann::json units;
@@ -2092,12 +2054,10 @@ AdvancedOrderFlowMetrics MomentumStrategy::analyzeAdvancedOrderFlow(
         else if (flow.bid_ask_spread < 0.10) score += 0.20;
         else score += 0.10;
         
-        // Order Book Pressure (30%) ?섏젙
         if (flow.order_book_pressure > 0.1) score += 0.30;       // 0.3 -> 0.1
-        else if (flow.order_book_pressure > -0.1) score += 0.20; // 洹좏삎留??대쨪???먯닔
+        else if (flow.order_book_pressure > -0.1) score += 0.20;
         else if (flow.order_book_pressure > -0.3) score += 0.10;
 
-        // Large Order Imbalance (20%) ?섏젙
         if (flow.large_order_imbalance > 0.1) score += 0.20;     // 0.2 -> 0.1
         else if (flow.large_order_imbalance > -0.1) score += 0.10;
         
@@ -2238,7 +2198,6 @@ PositionMetrics MomentumStrategy::calculateAdvancedPositionSize(
     pos_metrics.kelly_fraction = calculateKellyFraction(win_rate, avg_win, avg_loss);
     pos_metrics.half_kelly = pos_metrics.kelly_fraction * HALF_KELLY_FRACTION;
     
-    // 2. 蹂?숈꽦 議곗젙
     double volatility = 0.02;  // 湲곕낯 2%
     if (!candles.empty()) {
         volatility = calculateVolatility(candles);
@@ -2246,34 +2205,27 @@ PositionMetrics MomentumStrategy::calculateAdvancedPositionSize(
     
     pos_metrics.volatility_adjusted = adjustForVolatility(pos_metrics.half_kelly, volatility);
     
-    // 3. ?좊룞??議곗젙
     double liquidity_factor = metrics.liquidity_score / 100.0;
     pos_metrics.final_position_size = pos_metrics.volatility_adjusted * liquidity_factor;
     
-    // 4. ?ъ????쒗븳 諛?理쒖냼 湲덉븸 蹂댁젙 (理쒖쥌 ?섏젙蹂?
 
-    // (1) ?쇰떒 ?ㅼ젙??理쒕? 鍮꾩쨷 ?쒗븳??癒쇱? 寃곷땲??
     pos_metrics.final_position_size = std::min(pos_metrics.final_position_size, MAX_POSITION_SIZE);
     
-    // (2) ???꾩껜 ?먯궛蹂대떎 留롮씠 ???섎뒗 ?놁쑝誘濡?理쒖쥌 諛⑹뼱??
     if (pos_metrics.final_position_size > 1.0) {
         pos_metrics.final_position_size = 1.0;
     }
     
-    // (3) ?낅퉬??理쒖냼 二쇰Ц 湲덉븸 ?섎쭔 ?좎슚
     const double min_order_krw = std::max(5000.0, Config::getInstance().getEngineConfig().min_order_krw);
     if (capital < min_order_krw) {
         pos_metrics.final_position_size = 0.0;
     }
     
-    // 5. ?덉긽 Sharpe Ratio
     double risk = std::abs(entry_price - stop_loss) / entry_price;
     if (risk > 0.0001) {
         double reward = BASE_TAKE_PROFIT;
         pos_metrics.expected_sharpe = (reward - risk) / (volatility * std::sqrt(252));
     }
     
-    // 6. 理쒕? ?먯떎 湲덉븸
     pos_metrics.max_loss_amount = capital * pos_metrics.final_position_size * risk;
     
     return pos_metrics;
@@ -2328,19 +2280,14 @@ DynamicStops MomentumStrategy::calculateDynamicStops(
         return stops;
     }
     
-    // 1. ATR 湲곕컲 ?먯젅
     double atr_stop = calculateATRBasedStop(entry_price, candles, 2.0);
     
-    // 2. Support 湲곕컲 ?먯젅
     double support_stop = findNearestSupport(entry_price, candles);
     
-    // 3. Hard Stop (理쒖냼 ?먯젅)
     double hard_stop = entry_price * (1.0 - BASE_STOP_LOSS);
     
-    // 媛???믪? ?먯젅???좏깮 (媛??蹂댁닔??
     stops.stop_loss = std::max({hard_stop, atr_stop, support_stop});
     
-    // 吏꾩엯媛蹂대떎 ?믪쑝硫??덈맖
     if (stops.stop_loss >= entry_price) {
         stops.stop_loss = hard_stop;
     }
@@ -2355,7 +2302,6 @@ DynamicStops MomentumStrategy::calculateDynamicStops(
     // 5. Trailing Start
     stops.trailing_start = entry_price + (risk * reward_ratio * 0.3);
     
-    // 6. Chandelier Exit & Parabolic SAR (李멸퀬??
     double atr = analytics::TechnicalIndicators::calculateATR(candles, 14);
     stops.chandelier_exit = calculateChandelierExit(entry_price, atr, 3.0);
     stops.parabolic_sar = calculateParabolicSAR(candles, 0.02, 0.20);
@@ -2429,36 +2375,29 @@ double MomentumStrategy::calculateParabolicSAR(
     double acceleration,
     double max_af
 ) const {
-    // 1. 理쒖냼 ?곗씠???뺣낫 (異⑸텇???꾩쟻???꾪빐 30媛?異붿쿇)
     if (candles.size() < 30) {
-        return candles.back().low * 0.99; // ?곗씠??遺議????꾩옱媛蹂대떎 ?댁쭩 ?꾨옒
+        return candles.back().low * 0.99;
     }
     
-    // 2. [?섏젙] ?쒖옉 吏???ㅼ젙 (理쒓렐 30媛??꾩쓽 ?곗씠?곕? 珥덇린媛믪쑝濡??ъ슜)
     size_t lookback = 30;
     size_t start_idx = candles.size() - lookback;
     
-    double sar = candles[start_idx].low;  // ?쒖옉?먯쓽 ?媛
-    double ep = candles[start_idx].high;  // ?쒖옉?먯쓽 理쒓퀬媛(Extreme Point)
-    double af = acceleration;             // 媛?띾룄 珥덇린??
+    double sar = candles[start_idx].low;
+    double ep = candles[start_idx].high;
+    double af = acceleration;
     
-    // 3. [?섏젙] ?뺣갑??猷⑦봽 (start_idx遺??留덉?留됯퉴吏)
-    // 怨쇨굅?먯꽌 ?꾩옱濡??ㅻ㈃??媛?띾룄瑜?遺숈뿬???⑸땲??
     for (size_t i = start_idx + 1; i < candles.size(); ++i) {
-        // SAR 怨듭떇 ?곸슜
         sar = sar + af * (ep - sar);
         
-        // ?덈줈??怨좉? 寃쎌떊 ??EP ?낅뜲?댄듃 諛?媛?띾룄 利앷?
         if (candles[i].high > ep) {
             ep = candles[i].high;
             af = std::min(af + acceleration, max_af);
         }
         
-        // ?곸듅?μ씪 ??SAR? ?꾩씪/?꾩쟾???媛蹂대떎 ?믪쓣 ???놁쓬 (?덉쟾?μ튂)
         sar = std::min(sar, std::min(candles[i-1].low, candles[i].low));
     }
     
-    return sar; // 理쒖쥌 寃곌낵媛 ?꾩옱 ?쒖젏??SAR 媛?
+    return sar;
 }
 
 // ===== 7. Trade Cost Analysis =====
@@ -2530,7 +2469,6 @@ double MomentumStrategy::calculateSignalStrength(
     else if (metrics.price_change_rate >= 1.5) strength += 0.07;  // 3.0 -> 1.5
     else strength += 0.03;
 
-    // 7. ?щ━?쇱? ?⑤꼸??(理쒕? -10%)
     double expected_slip = calculateExpectedSlippage(metrics);
     if (expected_slip > EXPECTED_SLIPPAGE) {
         double penalty = (expected_slip - EXPECTED_SLIPPAGE) / (EXPECTED_SLIPPAGE * 2.0);
@@ -2731,16 +2669,12 @@ WalkForwardResult MomentumStrategy::validateStrategy(
 ) const {
     WalkForwardResult result;
     
-    // 媛꾨떒??援ы쁽: ?꾨컲遺 In-Sample, ?꾨컲遺 Out-of-Sample
     if (historical_data.size() < 100) {
         return result;
     }
     
     [[maybe_unused]] size_t split_point = historical_data.size() / 2;
     
-    // In-Sample Sharpe (?꾨컲遺)
-    // Out-of-Sample Sharpe (?꾨컲遺)
-    // ?ㅼ젣濡쒕뒗 諛깊뀒?ㅽ똿 ?붿쭊 ?꾩슂
     
     result.in_sample_sharpe = 1.5;
     result.out_sample_sharpe = 1.2;
@@ -2838,7 +2772,6 @@ double MomentumStrategy::calculateVolatility(const std::vector<Candle>& candles)
     if (candles.size() < 2) return 0.0;
     std::vector<double> returns;
     for (size_t i = 1; i < candles.size(); ++i) {
-        // [?섏젙] ?뺣갑???섏씡瑜?
         double ret = (candles[i].close - candles[i-1].close) / candles[i-1].close;
         returns.push_back(ret);
     }
@@ -2867,16 +2800,12 @@ bool MomentumStrategy::shouldGenerateSignal(
     return true;
 }
 
-// ===== ?ъ????곹깭 ?낅뜲?댄듃 (紐⑤땲?곕쭅 以? =====
 
 void MomentumStrategy::updateState(const std::string& market, double current_price) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     (void)market;
     (void)current_price;
     
-    // MomentumStrategy??異붿꽭 異붿쥌?대?濡?
-    // ?꾩옱 異붿꽭媛 ?좎??섎뒗吏 紐⑤땲?곕쭅 媛??
-    // ?섏?留?TradingEngine?먯꽌 ?먯젅/?듭젅??泥섎━?섎?濡??ш린?쒕뒗 ?⑥뒪
 }
 
 } // namespace strategy

@@ -1,4 +1,4 @@
-﻿# Stage 15 Execution TODO (Active)
+# Stage 15 Execution TODO (Active)
 
 Last updated: 2026-02-16 (build/generated outputs + unused warnings cleanup executed)
 
@@ -2277,6 +2277,79 @@ The system must:
   - `use_strategy_alpha_head_mode` added (strategy prefilter minimization, final gating in engine/core).
   - `NO_TRADE` journal event added for hostile/policy/execution rejection visibility.
   - Alpha-head mode now bypasses strategy auto-disable by historical EV gate in live loop.
+- Stage-2.1 update (2026-02-16):
+  - Structural contradiction fix in `ScalpingStrategy`:
+    - removed unconditional `RANGING/UNKNOWN` early exits that made lower regime-quality logic unreachable,
+    - aligned `shouldEnter` with the same `ranging/unknown` quality gates used by `generateSignal`.
+  - Regime ownership fix in `GridTradingStrategy`:
+    - `shouldEnter` no longer ignores regime,
+    - both `generateSignal` and `shouldEnter` now block weak `TRENDING_DOWN` entries and allow `TRENDING_UP` only under stronger liquidity/volume conditions,
+    - `generateSignal` now also enforces `shouldGenerateGridSignal(...)` so invalid/non-profitable grid opportunities cannot bypass through score-only path.
+  - Entry gate consistency fix in `MomentumStrategy`:
+    - `shouldEnter` MACD gate relaxed from strict positive-only to `positive OR histogram-rising`,
+    - minimum momentum floor aligned to exploratory candidate generation (`0.2%+`).
+  - verification:
+    - build PASS:
+      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release`
+    - runtime PASS:
+      - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions`
+  - current bottleneck remains:
+    - `entry_rejection_top_reason=no_signal_generated` still dominant, so next step is manager/engine-side candidate recovery and gate ownership cleanup.
+- Stage-2.2 update (2026-02-16):
+  - Strategy-manager ownership refactor:
+    - `StrategyManager` now supports `core_rescue_candidate` path:
+      - if strategy `generateSignal(...)` returns `NONE` but `shouldEnter(...)` is true, manager builds a recoverable candidate for core-layer final gating,
+      - preserves strategy-specific stop/take-profit/position sizing calls while moving final reject authority to engine core gates.
+    - manager hard policy block is softened in core mode:
+      - `selectRobustSignalWithDiagnostics(...)` no longer hard-drops `BLOCK` roles when core bridge+risk plane is active,
+      - `filterSignalsWithDiagnostics(...)` also softens `BLOCK` to stricter `HOLD`-like requirements in core mode.
+  - Code cleanup (unused API removal):
+    - removed unused `StrategyManager::synthesizeSignals(...)` declaration/definition,
+    - removed unused `StrategyManager::getOverallWinRate()` declaration/definition.
+  - verification:
+    - build PASS:
+      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release`
+    - runtime PASS:
+      - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions`
+- Stage-2.3 update (2026-02-16):
+  - Additional unused-code cleanup in `StrategyManager`:
+    - removed unused wrapper APIs:
+      - `selectRobustSignal(...)`
+      - `filterSignals(...)`
+    - removed unused strategy state toggling/read APIs:
+      - `enableStrategy(...)`
+      - `getActiveStrategies()`
+  - cleanup principle:
+    - remove only functions with repo-wide reference count `0` (declaration/definition only),
+    - preserve active interfaces used by engine/backtest (`collectSignals`, `filterSignalsWithDiagnostics`, `selectRobustSignalWithDiagnostics`, `getStrategy`, `getStrategies`).
+  - verification:
+    - build PASS:
+      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release`
+- Stage-2.4 update (2026-02-16):
+  - Strategy API surface cleanup (unused accessor removal):
+    - removed `getRollingStatistics()` declaration/definition from:
+      - `ScalpingStrategy`
+      - `MomentumStrategy`
+      - `BreakoutStrategy`
+      - `MeanReversionStrategy`
+      - `GridTradingStrategy`
+  - cleanup basis:
+    - repo-wide search showed no production/test call sites for these methods.
+  - verification:
+    - build PASS (`Release`)
+    - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions` PASS
+- Stage-2.5 update (2026-02-16):
+  - Comment/encoding stabilization for strategy refactor files:
+    - restored strategy files to clean baseline and reapplied only intended logic changes,
+    - removed accidental text-noise churn from previous bulk rewrite attempt,
+    - added Korean context comments around newly relaxed/realigned regime-entry gates.
+  - verification:
+    - build PASS:
+      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release`
+    - runtime PASS:
+      - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions`
+  - current readout (same bottleneck class):
+    - `entry_rejection_top_reason=no_signal_generated` remains dominant.
 
 2. Expectancy-first improvement loop
 - Optimize for:
