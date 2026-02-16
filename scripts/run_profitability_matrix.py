@@ -202,6 +202,15 @@ def run_profile_backtests(
             ),
             "blocked_risk_gate_other": int(entry_funnel.get("blocked_risk_gate_other", 0) or 0),
             "blocked_second_stage_confirmation": int(entry_funnel.get("blocked_second_stage_confirmation", 0) or 0),
+            "blocked_second_stage_confirmation_rr_margin": int(
+                entry_funnel.get("blocked_second_stage_confirmation_rr_margin", 0) or 0
+            ),
+            "blocked_second_stage_confirmation_edge_margin": int(
+                entry_funnel.get("blocked_second_stage_confirmation_edge_margin", 0) or 0
+            ),
+            "blocked_second_stage_confirmation_hostile_safety_adders": int(
+                entry_funnel.get("blocked_second_stage_confirmation_hostile_safety_adders", 0) or 0
+            ),
         }
 
         return {
@@ -1022,20 +1031,30 @@ def main() -> int:
                 risk_gate_counts.items(),
                 key=lambda kv: (kv[1], kv[0]),
             )
+        second_stage_component_keys = {
+            "blocked_second_stage_confirmation_rr_margin",
+            "blocked_second_stage_confirmation_edge_margin",
+            "blocked_second_stage_confirmation_hostile_safety_adders",
+        }
+        exclude_component_keys = {
+            "blocked_risk_gate_total",
+            "blocked_risk_gate_entry_quality",
+            "blocked_risk_gate_entry_quality_rr",
+            "blocked_risk_gate_entry_quality_rr_adaptive",
+            "blocked_risk_gate_entry_quality_edge",
+            "blocked_risk_gate_entry_quality_edge_adaptive",
+            "blocked_risk_gate_entry_quality_rr_edge",
+            "blocked_risk_gate_entry_quality_rr_edge_adaptive",
+        }
+        has_second_stage_split = any(
+            int(risk_gate_counts.get(k, 0)) > 0 for k in second_stage_component_keys
+        )
+        if has_second_stage_split:
+            exclude_component_keys.add("blocked_second_stage_confirmation")
         risk_gate_component_counts = {
             k: int(v)
             for k, v in risk_gate_counts.items()
-            if str(k)
-            not in {
-                "blocked_risk_gate_total",
-                "blocked_risk_gate_entry_quality",
-                "blocked_risk_gate_entry_quality_rr",
-                "blocked_risk_gate_entry_quality_rr_adaptive",
-                "blocked_risk_gate_entry_quality_edge",
-                "blocked_risk_gate_entry_quality_edge_adaptive",
-                "blocked_risk_gate_entry_quality_rr_edge",
-                "blocked_risk_gate_entry_quality_rr_edge_adaptive",
-            }
+            if str(k) not in exclude_component_keys
         }
         top_risk_gate_component_reason = ""
         top_risk_gate_component_count = 0

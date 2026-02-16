@@ -991,14 +991,25 @@ const char* entryQualityFailureReasonCode(const EntryQualityGateSnapshot& snapsh
     }
 }
 
+enum class SecondStageConfirmationFailureKind {
+    None,
+    RRMarginShortfall,
+    EdgeMarginShortfall,
+    HostileSafetyAdders,
+};
+
 bool passesSecondStageEntryConfirmation(
     const strategy::Signal& signal,
     const engine::EngineConfig& cfg,
     double reward_risk_ratio,
     double rr_gate,
     double calibrated_expected_edge_pct,
-    double edge_gate
+    double edge_gate,
+    SecondStageConfirmationFailureKind* out_failure = nullptr
 ) {
+    if (out_failure != nullptr) {
+        *out_failure = SecondStageConfirmationFailureKind::None;
+    }
     if (!(reward_risk_ratio >= rr_gate && calibrated_expected_edge_pct >= edge_gate)) {
         return false;
     }
@@ -1006,21 +1017,29 @@ bool passesSecondStageEntryConfirmation(
     const double round_trip_cost_pct = computeEffectiveRoundTripCostPct(signal, cfg);
     double min_rr_margin = 0.045;
     double min_edge_margin = std::max(0.00007, round_trip_cost_pct * 0.11);
+    double safety_rr_add = 0.0;
+    double safety_edge_add = 0.0;
 
     if (signal.market_regime == analytics::MarketRegime::HIGH_VOLATILITY ||
         signal.market_regime == analytics::MarketRegime::TRENDING_DOWN) {
         min_rr_margin += 0.07;
         min_edge_margin += 0.00012;
+        safety_rr_add += 0.07;
+        safety_edge_add += 0.00012;
     }
     if (signal.liquidity_score > 0.0 && signal.liquidity_score < 55.0) {
         min_rr_margin += 0.04;
         min_edge_margin += 0.00008;
+        safety_rr_add += 0.04;
+        safety_edge_add += 0.00008;
     }
     if (signal.strategy_trade_count >= std::max(8, cfg.min_strategy_trades_for_ev / 2) &&
         (signal.strategy_win_rate < 0.45 ||
          (signal.strategy_profit_factor > 0.0 && signal.strategy_profit_factor < 0.95))) {
         min_rr_margin += 0.03;
         min_edge_margin += 0.00006;
+        safety_rr_add += 0.03;
+        safety_edge_add += 0.00006;
     }
     if (signal.market_regime == analytics::MarketRegime::TRENDING_UP &&
         signal.strength >= 0.74 &&
@@ -1102,8 +1121,12 @@ bool passesSecondStageEntryConfirmation(
     }
     relief_scale = std::clamp(relief_scale, 0.0, 1.0);
 
-    min_rr_margin += (0.050 * tighten_scale);
-    min_edge_margin += (0.00010 * tighten_scale);
+    const double dynamic_safety_rr_add = 0.050 * tighten_scale;
+    const double dynamic_safety_edge_add = 0.00010 * tighten_scale;
+    min_rr_margin += dynamic_safety_rr_add;
+    min_edge_margin += dynamic_safety_edge_add;
+    safety_rr_add += dynamic_safety_rr_add;
+    safety_edge_add += dynamic_safety_edge_add;
     min_rr_margin -= (0.028 * relief_scale);
     min_edge_margin -= (0.000045 * relief_scale);
 
@@ -1125,7 +1148,43 @@ bool passesSecondStageEntryConfirmation(
 
     const double rr_margin = reward_risk_ratio - rr_gate;
     const double edge_margin = calibrated_expected_edge_pct - edge_gate;
-    return rr_margin >= min_rr_margin && edge_margin >= min_edge_margin;
+    const bool rr_failed = rr_margin < min_rr_margin;
+    const bool edge_failed = edge_margin < min_edge_margin;
+    if (!rr_failed && !edge_failed) {
+        return true;
+    }
+
+    SecondStageConfirmationFailureKind failure = SecondStageConfirmationFailureKind::None;
+    const double rr_relaxed_threshold = std::max(0.0, min_rr_margin - safety_rr_add);
+    const double edge_relaxed_threshold = std::max(0.0, min_edge_margin - safety_edge_add);
+    const bool rr_safety_only =
+        rr_failed &&
+        safety_rr_add > 1e-9 &&
+        rr_margin >= rr_relaxed_threshold;
+    const bool edge_safety_only =
+        edge_failed &&
+        safety_edge_add > 1e-12 &&
+        edge_margin >= edge_relaxed_threshold;
+    if (rr_safety_only || edge_safety_only) {
+        failure = SecondStageConfirmationFailureKind::HostileSafetyAdders;
+    } else if (rr_failed && !edge_failed) {
+        failure = SecondStageConfirmationFailureKind::RRMarginShortfall;
+    } else if (edge_failed && !rr_failed) {
+        failure = SecondStageConfirmationFailureKind::EdgeMarginShortfall;
+    } else {
+        const double rr_gap = std::max(0.0, min_rr_margin - rr_margin);
+        const double edge_gap = std::max(0.0, min_edge_margin - edge_margin);
+        const double rr_norm = rr_gap / std::max(min_rr_margin, 1e-6);
+        const double edge_norm = edge_gap / std::max(min_edge_margin, 1e-9);
+        failure = (rr_norm >= edge_norm)
+            ? SecondStageConfirmationFailureKind::RRMarginShortfall
+            : SecondStageConfirmationFailureKind::EdgeMarginShortfall;
+    }
+
+    if (out_failure != nullptr) {
+        *out_failure = failure;
+    }
+    return false;
 }
 
 void applyArchetypeRiskAdjustments(
@@ -2729,6 +2788,8 @@ void BacktestEngine::processCandle(const Candle& candle) {
                  entry_quality_gate_ok);
             const double reward_risk_ratio = entry_quality_eval.reward_risk_ratio;
             const double calibrated_expected_edge_pct = entry_quality_eval.calibrated_expected_edge_pct;
+            SecondStageConfirmationFailureKind second_stage_failure =
+                SecondStageConfirmationFailureKind::None;
             const bool second_stage_ok =
                 !core_risk_enabled ||
                 (rr_rebalance_ok &&
@@ -2738,7 +2799,8 @@ void BacktestEngine::processCandle(const Candle& candle) {
                      reward_risk_ratio,
                      tuned_cfg.min_reward_risk,
                      calibrated_expected_edge_pct,
-                     tuned_cfg.min_expected_edge_pct));
+                     tuned_cfg.min_expected_edge_pct,
+                     &second_stage_failure));
             if (!pattern_strength_ok) {
                 entry_funnel_.blocked_pattern_gate++;
                 if (!archetype_ready) {
@@ -2841,6 +2903,20 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     }
                 } else {
                     entry_funnel_.blocked_second_stage_confirmation++;
+                    switch (second_stage_failure) {
+                        case SecondStageConfirmationFailureKind::RRMarginShortfall:
+                            entry_funnel_.blocked_second_stage_confirmation_rr_margin++;
+                            break;
+                        case SecondStageConfirmationFailureKind::EdgeMarginShortfall:
+                            entry_funnel_.blocked_second_stage_confirmation_edge_margin++;
+                            break;
+                        case SecondStageConfirmationFailureKind::HostileSafetyAdders:
+                            entry_funnel_.blocked_second_stage_confirmation_hostile_safety_adders++;
+                            break;
+                        case SecondStageConfirmationFailureKind::None:
+                        default:
+                            break;
+                    }
                     markEntryReject("blocked_second_stage_confirmation");
                 }
             } else if (pattern_strength_ok && rr_rebalance_ok && risk_gate_ok && second_stage_ok) {

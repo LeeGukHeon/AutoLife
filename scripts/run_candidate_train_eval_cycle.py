@@ -877,7 +877,9 @@ def build_promotion_verdict(
         str(val_core_reject_ctx.get("top_entry_rejection_reason", "")).startswith("blocked_risk_gate")
         or str(val_core_reject_ctx.get("top_entry_rejection_reason", "")) == "blocked_second_stage_confirmation"
         or str(val_core_reject_ctx.get("top_entry_risk_gate_component_reason", "")).startswith("blocked_risk_gate")
-        or str(val_core_reject_ctx.get("top_entry_risk_gate_component_reason", "")) == "blocked_second_stage_confirmation"
+        or str(val_core_reject_ctx.get("top_entry_risk_gate_component_reason", "")).startswith(
+            "blocked_second_stage_confirmation"
+        )
     ):
         risk_component = str(val_core_reject_ctx.get("top_entry_risk_gate_component_reason", ""))
         if risk_component.startswith("blocked_risk_gate_entry_quality"):
@@ -927,7 +929,7 @@ def build_promotion_verdict(
             recommendation = "hold_candidate_calibrate_risk_gate_regime_alignment"
         elif risk_component == "blocked_risk_gate_strategy_ev":
             recommendation = "hold_candidate_calibrate_risk_gate_strategy_ev_alignment"
-        elif risk_component == "blocked_second_stage_confirmation":
+        elif risk_component.startswith("blocked_second_stage_confirmation"):
             recommendation = "hold_candidate_calibrate_second_stage_confirmation_consistency"
         else:
             recommendation = "hold_candidate_investigate_risk_gate_breakdown"

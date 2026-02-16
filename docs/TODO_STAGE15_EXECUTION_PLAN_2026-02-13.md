@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-17 (second-stage confirmation consistency calibration)
+Last updated: 2026-02-17 (second-stage confirmation ownership split instrumentation)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -890,6 +890,45 @@ The system must:
     - edge-base and adaptive-rr regime counts remain lower than pre-2.23 baseline, so regression pressure stayed contained.
   - next:
     - split second-stage confirmation ownership into explicit reason buckets (RR margin shortfall vs edge margin shortfall vs hostile safety adders) before additional threshold movement.
+
+- Stage-2.25 update (2026-02-17):
+  - second-stage confirmation ownership split implemented:
+    - runtime instrumentation and reporting updates:
+      - `include/runtime/BacktestRuntime.h`
+      - `src/runtime/BacktestRuntime.cpp`
+      - `src/runtime/LiveTradingRuntime.cpp`
+      - `src/main.cpp`
+    - matrix/recommendation routing sync:
+      - `scripts/run_profitability_matrix.py`
+      - `scripts/run_candidate_train_eval_cycle.py`
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - new second-stage buckets added (while preserving legacy aggregate key):
+      - `blocked_second_stage_confirmation_rr_margin`
+      - `blocked_second_stage_confirmation_edge_margin`
+      - `blocked_second_stage_confirmation_hostile_safety_adders`
+    - classification behavior:
+      - if rejection disappears after removing safety adders, classify as `hostile_safety_adders`
+      - otherwise classify by dominant margin gap (`rr_margin` vs `edge_margin`)
+      - aggregate `blocked_second_stage_confirmation` counter and reason code remain unchanged for compatibility
+  - verification:
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full`):
+    - train: `pf=0.7289`, `trades=132.0`, `exp=-7.94`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1601`
+    - validation: `pf=0.5028`, `trades=172.0`, `exp=-7.6628`, top risk=`blocked_second_stage_confirmation_hostile_safety_adders:885`
+    - holdout: `pf=0.4557`, `trades=149.3333`, `exp=-7.8552`, top risk=`blocked_second_stage_confirmation_hostile_safety_adders:1463`
+    - promotion recommendation: `hold_candidate_calibrate_second_stage_confirmation_consistency`
+  - second-stage breakdown snapshot:
+    - validation: `total=1180`, `rr_margin=214`, `edge_margin=81`, `hostile_safety_adders=885` (`75.0%`)
+    - holdout: `total=1715`, `rr_margin=166`, `edge_margin=86`, `hostile_safety_adders=1463` (`85.3%`)
+  - effect:
+    - ownership is now explicit: dominant pressure is not raw RR/edge shortage, but hostile safety adders.
+    - next tuning can target hostile-safety contribution directly without blind RR/edge floor movement.
+  - next:
+    - introduce bounded hostile-safety attenuation experiments (high-quality favorable contexts only) and keep overfit guards unchanged.
 
 2. Expectancy-first improvement loop
 - Optimize for:

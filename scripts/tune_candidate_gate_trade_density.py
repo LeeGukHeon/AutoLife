@@ -258,7 +258,7 @@ def build_effective_bottleneck_context(
         risk_gate_focus = "regime"
     elif top_risk_gate_component_reason == "blocked_risk_gate_strategy_ev":
         risk_gate_focus = "strategy_ev"
-    elif top_risk_gate_component_reason == "blocked_second_stage_confirmation":
+    elif top_risk_gate_component_reason.startswith("blocked_second_stage_confirmation"):
         risk_gate_focus = "second_stage_confirmation"
 
     recommendation_focus_map = {

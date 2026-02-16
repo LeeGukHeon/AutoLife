@@ -296,14 +296,39 @@ double computeCalibratedExpectedEdgePct(
     return expected_gross_pct - round_trip_cost_pct;
 }
 
+enum class SecondStageConfirmationFailureKind {
+    None,
+    RRMarginShortfall,
+    EdgeMarginShortfall,
+    HostileSafetyAdders,
+};
+
+const char* secondStageFailureReasonCode(SecondStageConfirmationFailureKind failure) {
+    switch (failure) {
+        case SecondStageConfirmationFailureKind::RRMarginShortfall:
+            return "rr_margin";
+        case SecondStageConfirmationFailureKind::EdgeMarginShortfall:
+            return "edge_margin";
+        case SecondStageConfirmationFailureKind::HostileSafetyAdders:
+            return "hostile_safety_adders";
+        case SecondStageConfirmationFailureKind::None:
+        default:
+            return "none";
+    }
+}
+
 bool passesSecondStageEntryConfirmation(
     const autolife::strategy::Signal& signal,
     const autolife::engine::EngineConfig& cfg,
     double reward_risk_ratio,
     double rr_gate,
     double calibrated_expected_edge_pct,
-    double edge_gate
+    double edge_gate,
+    SecondStageConfirmationFailureKind* out_failure = nullptr
 ) {
+    if (out_failure != nullptr) {
+        *out_failure = SecondStageConfirmationFailureKind::None;
+    }
     if (!(reward_risk_ratio >= rr_gate && calibrated_expected_edge_pct >= edge_gate)) {
         return false;
     }
@@ -311,21 +336,29 @@ bool passesSecondStageEntryConfirmation(
     const double round_trip_cost_pct = computeEffectiveRoundTripCostPct(signal, cfg);
     double min_rr_margin = 0.045;
     double min_edge_margin = std::max(0.00007, round_trip_cost_pct * 0.11);
+    double safety_rr_add = 0.0;
+    double safety_edge_add = 0.0;
 
     if (signal.market_regime == autolife::analytics::MarketRegime::HIGH_VOLATILITY ||
         signal.market_regime == autolife::analytics::MarketRegime::TRENDING_DOWN) {
         min_rr_margin += 0.07;
         min_edge_margin += 0.00012;
+        safety_rr_add += 0.07;
+        safety_edge_add += 0.00012;
     }
     if (signal.liquidity_score > 0.0 && signal.liquidity_score < 55.0) {
         min_rr_margin += 0.04;
         min_edge_margin += 0.00008;
+        safety_rr_add += 0.04;
+        safety_edge_add += 0.00008;
     }
     if (signal.strategy_trade_count >= std::max(8, cfg.min_strategy_trades_for_ev / 2) &&
         (signal.strategy_win_rate < 0.45 ||
          (signal.strategy_profit_factor > 0.0 && signal.strategy_profit_factor < 0.95))) {
         min_rr_margin += 0.03;
         min_edge_margin += 0.00006;
+        safety_rr_add += 0.03;
+        safety_edge_add += 0.00006;
     }
     if (signal.market_regime == autolife::analytics::MarketRegime::TRENDING_UP &&
         signal.strength >= 0.74 &&
@@ -405,8 +438,12 @@ bool passesSecondStageEntryConfirmation(
     }
     relief_scale = std::clamp(relief_scale, 0.0, 1.0);
 
-    min_rr_margin += (0.050 * tighten_scale);
-    min_edge_margin += (0.00010 * tighten_scale);
+    const double dynamic_safety_rr_add = 0.050 * tighten_scale;
+    const double dynamic_safety_edge_add = 0.00010 * tighten_scale;
+    min_rr_margin += dynamic_safety_rr_add;
+    min_edge_margin += dynamic_safety_edge_add;
+    safety_rr_add += dynamic_safety_rr_add;
+    safety_edge_add += dynamic_safety_edge_add;
     min_rr_margin -= (0.028 * relief_scale);
     min_edge_margin -= (0.000045 * relief_scale);
 
@@ -428,7 +465,43 @@ bool passesSecondStageEntryConfirmation(
 
     const double rr_margin = reward_risk_ratio - rr_gate;
     const double edge_margin = calibrated_expected_edge_pct - edge_gate;
-    return rr_margin >= min_rr_margin && edge_margin >= min_edge_margin;
+    const bool rr_failed = rr_margin < min_rr_margin;
+    const bool edge_failed = edge_margin < min_edge_margin;
+    if (!rr_failed && !edge_failed) {
+        return true;
+    }
+
+    SecondStageConfirmationFailureKind failure = SecondStageConfirmationFailureKind::None;
+    const double rr_relaxed_threshold = std::max(0.0, min_rr_margin - safety_rr_add);
+    const double edge_relaxed_threshold = std::max(0.0, min_edge_margin - safety_edge_add);
+    const bool rr_safety_only =
+        rr_failed &&
+        safety_rr_add > 1e-9 &&
+        rr_margin >= rr_relaxed_threshold;
+    const bool edge_safety_only =
+        edge_failed &&
+        safety_edge_add > 1e-12 &&
+        edge_margin >= edge_relaxed_threshold;
+    if (rr_safety_only || edge_safety_only) {
+        failure = SecondStageConfirmationFailureKind::HostileSafetyAdders;
+    } else if (rr_failed && !edge_failed) {
+        failure = SecondStageConfirmationFailureKind::RRMarginShortfall;
+    } else if (edge_failed && !rr_failed) {
+        failure = SecondStageConfirmationFailureKind::EdgeMarginShortfall;
+    } else {
+        const double rr_gap = std::max(0.0, min_rr_margin - rr_margin);
+        const double edge_gap = std::max(0.0, min_edge_margin - edge_margin);
+        const double rr_norm = rr_gap / std::max(min_rr_margin, 1e-6);
+        const double edge_norm = edge_gap / std::max(min_edge_margin, 1e-9);
+        failure = (rr_norm >= edge_norm)
+            ? SecondStageConfirmationFailureKind::RRMarginShortfall
+            : SecondStageConfirmationFailureKind::EdgeMarginShortfall;
+    }
+
+    if (out_failure != nullptr) {
+        *out_failure = failure;
+    }
+    return false;
 }
 
 void applyArchetypeRiskAdjustments(
@@ -2720,15 +2793,21 @@ void TradingEngine::executeSignals() {
             continue;
         }
 
+        SecondStageConfirmationFailureKind second_stage_failure =
+            SecondStageConfirmationFailureKind::None;
         if (!passesSecondStageEntryConfirmation(
                 signal,
                 config_,
                 reward_risk_ratio,
                 adaptive_rr_gate,
                 calibrated_expected_edge_pct,
-                adaptive_edge_gate)) {
-            LOG_INFO("{} skipped by second-stage confirmation: rr {:.2f}, edge {:.3f}%",
-                     signal.market, reward_risk_ratio, calibrated_expected_edge_pct * 100.0);
+                adaptive_edge_gate,
+                &second_stage_failure)) {
+            LOG_INFO("{} skipped by second-stage confirmation ({}): rr {:.2f}, edge {:.3f}%",
+                     signal.market,
+                     secondStageFailureReasonCode(second_stage_failure),
+                     reward_risk_ratio,
+                     calibrated_expected_edge_pct * 100.0);
             filtered_out++;
             continue;
         }
@@ -5666,5 +5745,3 @@ void TradingEngine::runPrometheusHttpServer(int port) {
 
 } // namespace engine
 } // namespace autolife
-
-

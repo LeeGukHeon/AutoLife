@@ -468,6 +468,9 @@ int main(int argc, char* argv[]) {
                         {"blocked_risk_gate_entry_quality_invalid_levels", result.entry_funnel.blocked_risk_gate_entry_quality_invalid_levels},
                         {"blocked_risk_gate_other", result.entry_funnel.blocked_risk_gate_other},
                         {"blocked_second_stage_confirmation", result.entry_funnel.blocked_second_stage_confirmation},
+                        {"blocked_second_stage_confirmation_rr_margin", result.entry_funnel.blocked_second_stage_confirmation_rr_margin},
+                        {"blocked_second_stage_confirmation_edge_margin", result.entry_funnel.blocked_second_stage_confirmation_edge_margin},
+                        {"blocked_second_stage_confirmation_hostile_safety_adders", result.entry_funnel.blocked_second_stage_confirmation_hostile_safety_adders},
                         {"blocked_risk_manager", result.entry_funnel.blocked_risk_manager},
                         {"blocked_min_order_or_capital", result.entry_funnel.blocked_min_order_or_capital},
                         {"blocked_order_sizing", result.entry_funnel.blocked_order_sizing},
@@ -574,6 +577,10 @@ int main(int argc, char* argv[]) {
                           << "}"
                           << ", other=" << result.entry_funnel.blocked_risk_gate_other
                           << ", second_stage=" << result.entry_funnel.blocked_second_stage_confirmation
+                          << " {rr_margin=" << result.entry_funnel.blocked_second_stage_confirmation_rr_margin
+                          << ", edge_margin=" << result.entry_funnel.blocked_second_stage_confirmation_edge_margin
+                          << ", hostile_safety_adders=" << result.entry_funnel.blocked_second_stage_confirmation_hostile_safety_adders
+                          << "}"
                           << "]"
                           << ", risk_manager_drop=" << result.entry_funnel.blocked_risk_manager
                           << ", capital_drop=" << result.entry_funnel.blocked_min_order_or_capital
@@ -761,6 +768,10 @@ int main(int argc, char* argv[]) {
                       << "}"
                       << ", other=" << result.entry_funnel.blocked_risk_gate_other
                       << ", second_stage=" << result.entry_funnel.blocked_second_stage_confirmation
+                      << " {rr_margin=" << result.entry_funnel.blocked_second_stage_confirmation_rr_margin
+                      << ", edge_margin=" << result.entry_funnel.blocked_second_stage_confirmation_edge_margin
+                      << ", hostile_safety_adders=" << result.entry_funnel.blocked_second_stage_confirmation_hostile_safety_adders
+                      << "}"
                       << "]"
                       << ", risk_manager_drop=" << result.entry_funnel.blocked_risk_manager
                       << ", capital_drop=" << result.entry_funnel.blocked_min_order_or_capital
