@@ -311,7 +311,7 @@
 - CI strict live 게이트에서 경보 리포트까지 생성
 
 3) 문서 마감
-- docs/NEXT_CONTEXT_DIRECTION_2026-02-13.md
+- docs/TODO_STAGE15_EXECUTION_PLAN_2026-02-13.md
 - docs/TARGET_ARCHITECTURE.md
 - Stage 9 운영 절차/실패 대응(runbook) 반영
 

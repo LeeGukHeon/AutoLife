@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <tuple>
+#include <unordered_set>
 
 namespace autolife {
 namespace engine {
@@ -34,6 +35,10 @@ int liquidityBucket(double liquidity_score) {
     return 3;
 }
 
+std::string normalizedArchetype(const std::string& archetype) {
+    return archetype.empty() ? "UNSPECIFIED" : archetype;
+}
+
 double strategyPerformanceModifier(
     const strategy::Signal& s,
     const PolicyInput& input,
@@ -64,15 +69,12 @@ double strategyPerformanceModifier(
         return 0.0;
     }
 
-    const double wr_score = std::clamp((win_rate - 0.50) / 0.20, -1.0, 1.0) * 0.10;
-    const double pf_score = std::clamp((pf - 1.0) / 0.60, -1.0, 1.0) * 0.08;
-    const double ex_score = std::clamp(expectancy / 1500.0, -1.0, 1.0) * 0.05;
-    double total = wr_score + pf_score + ex_score;
-
-    if (trades >= 10 && (win_rate < 0.45 || pf < 0.85)) {
-        total -= 0.12;
-    }
-    return total;
+    // Keep policy conservative: use historical stats for mild bonus only.
+    // Heavy penalties are handled in execution/risk layers.
+    const double wr_bonus = std::clamp((win_rate - 0.50) / 0.20, 0.0, 1.0) * 0.06;
+    const double pf_bonus = std::clamp((pf - 1.0) / 0.60, 0.0, 1.0) * 0.05;
+    const double ex_bonus = std::clamp(expectancy / 1500.0, 0.0, 1.0) * 0.03;
+    return wr_bonus + pf_bonus + ex_bonus;
 }
 
 double bucketPerformanceModifier(const strategy::Signal& s, const PolicyInput& input) {
@@ -84,7 +86,12 @@ double bucketPerformanceModifier(const strategy::Signal& s, const PolicyInput& i
     key.strategy_name = s.strategy_name;
     key.regime = s.market_regime;
     key.liquidity_bucket = liquidityBucket(s.liquidity_score);
-    const auto it = input.bucket_stats->find(key);
+    key.entry_archetype = normalizedArchetype(s.entry_archetype);
+    auto it = input.bucket_stats->find(key);
+    if (it == input.bucket_stats->end() && key.entry_archetype != "UNSPECIFIED") {
+        key.entry_archetype = "UNSPECIFIED";
+        it = input.bucket_stats->find(key);
+    }
     if (it == input.bucket_stats->end()) {
         return 0.0;
     }
@@ -94,26 +101,27 @@ double bucketPerformanceModifier(const strategy::Signal& s, const PolicyInput& i
         return 0.0;
     }
 
-    const double wr_score = std::clamp((stats.winRate() - 0.50) / 0.20, -1.0, 1.0) * 0.07;
-    const double pf_score = std::clamp((stats.profitFactor() - 1.0) / 0.60, -1.0, 1.0) * 0.05;
-    return wr_score + pf_score;
+    // Archetype bucket is used as a mild ranking hint only.
+    const double wr_bonus = std::clamp((stats.winRate() - 0.50) / 0.20, 0.0, 1.0) * 0.04;
+    const double pf_bonus = std::clamp((stats.profitFactor() - 1.0) / 0.60, 0.0, 1.0) * 0.04;
+    return wr_bonus + pf_bonus;
 }
 
 double computePolicyScore(const strategy::Signal& s, const PolicyInput& input) {
     const double base = (s.score > 0.0) ? s.score : s.strength;
-    const double liq_bonus = std::clamp((s.liquidity_score - 50.0) / 40.0, -1.0, 1.0) * 0.08;
-    const double vol_penalty = std::clamp((s.volatility - 2.5) / 6.0, 0.0, 1.0) * 0.08;
-    const double ev_bonus = std::clamp(s.expected_value / 0.0035, -1.0, 1.0) * 0.10;
+    const double liq_bonus = std::clamp((s.liquidity_score - 50.0) / 40.0, -1.0, 1.0) * 0.06;
+    const double vol_penalty = std::clamp((s.volatility - 2.5) / 6.0, 0.0, 1.0) * 0.05;
+    const double ev_bonus = std::clamp(s.expected_value / 0.0035, -1.0, 1.0) * 0.08;
     const double stress = regimeStress(input.dominant_regime);
 
     double score = base + liq_bonus - vol_penalty + ev_bonus;
-    score += (s.strength - 0.5) * (0.08 + (0.04 * stress));
+    score += (s.strength - 0.5) * (0.06 + (0.03 * stress));
     score += strategyPerformanceModifier(s, input, nullptr, nullptr, nullptr);
     score += bucketPerformanceModifier(s, input);
 
     if (input.small_seed_mode) {
-        const double small_seed_liq_penalty = std::clamp((62.0 - s.liquidity_score) / 30.0, 0.0, 1.0) * 0.10;
-        const double small_seed_vol_penalty = std::clamp((s.volatility - 3.0) / 5.0, 0.0, 1.0) * 0.08;
+        const double small_seed_liq_penalty = std::clamp((60.0 - s.liquidity_score) / 35.0, 0.0, 1.0) * 0.04;
+        const double small_seed_vol_penalty = std::clamp((s.volatility - 3.0) / 6.0, 0.0, 1.0) * 0.03;
         score -= (small_seed_liq_penalty + small_seed_vol_penalty);
     }
 
@@ -162,29 +170,13 @@ PolicyOutput AdaptivePolicyController::selectCandidates(const PolicyInput& input
         (void)strategyPerformanceModifier(s, input, &hist_trades, &hist_wr, &hist_pf);
 
         const double stress = regimeStress(input.dominant_regime);
-        const double min_strength_under_stress = 0.36 + (0.10 * stress);
+        const double min_strength_under_stress = 0.28 + (0.05 * stress);
         if (s.strength < min_strength_under_stress) {
             out.dropped_by_policy++;
             out.decisions.push_back(makeDecisionRecord(
                 s,
                 false,
                 "dropped_low_strength",
-                (s.score > 0.0 ? s.score : s.strength),
-                0.0,
-                hist_trades,
-                hist_wr,
-                hist_pf));
-            continue;
-        }
-
-        if (input.small_seed_mode &&
-            hist_trades >= 10 &&
-            (hist_wr < 0.50 || hist_pf < 0.90)) {
-            out.dropped_by_policy++;
-            out.decisions.push_back(makeDecisionRecord(
-                s,
-                false,
-                "dropped_small_seed_quality",
                 (s.score > 0.0 ? s.score : s.strength),
                 0.0,
                 hist_trades,
@@ -212,45 +204,34 @@ PolicyOutput AdaptivePolicyController::selectCandidates(const PolicyInput& input
                   return score_a > score_b;
               });
 
-    std::vector<std::tuple<double, strategy::Signal, int, double, double>> filtered_ranked;
-    filtered_ranked.reserve(ranked.size());
-    for (auto& item : ranked) {
-        const auto& s = std::get<1>(item);
-        const int hist_trades = std::get<2>(item);
-        const double hist_wr = std::get<3>(item);
-        const double hist_pf = std::get<4>(item);
-        if (input.small_seed_mode) {
-            if (s.liquidity_score < 45.0 || s.volatility > 8.0) {
-                out.dropped_by_policy++;
-                out.decisions.push_back(makeDecisionRecord(
-                    s,
-                    false,
-                    "dropped_small_seed_liqvol",
-                    (s.score > 0.0 ? s.score : s.strength),
-                    std::get<0>(item),
-                    hist_trades,
-                    hist_wr,
-                    hist_pf));
-                continue;
-            }
-        }
-        filtered_ranked.push_back(std::move(item));
-    }
-
     const int cap = std::max(1, input.max_new_orders_per_scan);
-    out.selected_candidates.reserve(filtered_ranked.size());
-    for (size_t i = 0; i < filtered_ranked.size(); ++i) {
-        auto& item = filtered_ranked[i];
+    out.selected_candidates.reserve(ranked.size());
+    std::unordered_set<std::string> selected_markets;
+    selected_markets.reserve(static_cast<size_t>(cap) * 2);
+
+    int selected_count = 0;
+    for (auto& item : ranked) {
         auto& s = std::get<1>(item);
         const double policy_score = std::get<0>(item);
         const int hist_trades = std::get<2>(item);
         const double hist_wr = std::get<3>(item);
         const double hist_pf = std::get<4>(item);
-        const bool selected = static_cast<int>(i) < cap;
+        bool selected = false;
+        std::string reason = "dropped_capacity";
+
+        if (selected_markets.find(s.market) != selected_markets.end()) {
+            reason = "dropped_market_duplicate";
+        } else if (selected_count >= cap) {
+            reason = "dropped_capacity";
+        } else {
+            selected = true;
+            reason = "selected";
+        }
+
         out.decisions.push_back(makeDecisionRecord(
             s,
             selected,
-            selected ? "selected" : "dropped_capacity",
+            reason,
             (s.score > 0.0 ? s.score : s.strength),
             policy_score,
             hist_trades,
@@ -258,6 +239,8 @@ PolicyOutput AdaptivePolicyController::selectCandidates(const PolicyInput& input
             hist_pf));
         if (selected) {
             out.selected_candidates.push_back(std::move(s));
+            selected_markets.insert(out.selected_candidates.back().market);
+            selected_count++;
         } else {
             out.dropped_by_policy++;
         }

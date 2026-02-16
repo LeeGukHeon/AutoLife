@@ -7,6 +7,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <unordered_map>
+#include <vector>
 
 namespace autolife {
 
@@ -30,23 +32,99 @@ std::string normalizeStrategyName(std::string name) {
     return name;
 }
 
+std::unordered_map<std::string, std::string> parseDotEnvFile(const std::filesystem::path& path) {
+    std::unordered_map<std::string, std::string> out;
+    std::ifstream in(path, std::ios::binary);
+    if (!in.is_open()) {
+        return out;
+    }
+
+    std::string line;
+    while (std::getline(in, line)) {
+        line = trimCopy(line);
+        if (line.empty() || line[0] == '#') {
+            continue;
+        }
+        const std::size_t eq_pos = line.find('=');
+        if (eq_pos == std::string::npos) {
+            continue;
+        }
+
+        std::string key = trimCopy(line.substr(0, eq_pos));
+        std::string value = trimCopy(line.substr(eq_pos + 1));
+        if (key.empty()) {
+            continue;
+        }
+        if (!value.empty() && (value.front() == '"' || value.front() == '\'')) {
+            value.erase(value.begin());
+        }
+        if (!value.empty() && (value.back() == '"' || value.back() == '\'')) {
+            value.pop_back();
+        }
+
+        out[key] = trimCopy(value);
+    }
+
+    return out;
+}
+
+const std::unordered_map<std::string, std::string>& getDotEnvCache() {
+    static std::unordered_map<std::string, std::string> cache;
+    static bool loaded = false;
+    if (loaded) {
+        return cache;
+    }
+    loaded = true;
+
+    std::vector<std::filesystem::path> candidates;
+    candidates.push_back(utils::PathUtils::resolveRelativePath(".env"));
+    candidates.push_back(utils::PathUtils::resolveRelativePath("../../.env"));
+    candidates.push_back(utils::PathUtils::resolveRelativePath("../../../.env"));
+    candidates.push_back(std::filesystem::current_path() / ".env");
+
+    for (const auto& candidate : candidates) {
+        if (!std::filesystem::exists(candidate)) {
+            continue;
+        }
+        cache = parseDotEnvFile(candidate);
+        if (!cache.empty()) {
+            std::cout << ".env loaded from: " << candidate << std::endl;
+            break;
+        }
+    }
+
+    return cache;
+}
+
 std::string readEnvVar(const char* name) {
 #ifdef _WIN32
     char* value = nullptr;
     size_t len = 0;
-    if (_dupenv_s(&value, &len, name) != 0 || value == nullptr || len == 0) {
-        if (value != nullptr) {
-            free(value);
+    if (_dupenv_s(&value, &len, name) == 0 && value != nullptr && len > 0) {
+        std::string out = trimCopy(value);
+        free(value);
+        if (!out.empty()) {
+            return out;
         }
-        return "";
+    } else if (value != nullptr) {
+        free(value);
     }
-    std::string out = trimCopy(value);
-    free(value);
-    return out;
 #else
     const char* value = std::getenv(name);
-    return value ? trimCopy(value) : "";
+    if (value != nullptr) {
+        const std::string out = trimCopy(value);
+        if (!out.empty()) {
+            return out;
+        }
+    }
 #endif
+
+    const auto& dotenv = getDotEnvCache();
+    auto it = dotenv.find(name);
+    if (it == dotenv.end()) {
+        return "";
+    }
+    return trimCopy(it->second);
 }
 }
 
@@ -92,6 +170,34 @@ void Config::load(const std::string& path) {
 
         access_key_ = readEnvVar("UPBIT_ACCESS_KEY");
         secret_key_ = readEnvVar("UPBIT_SECRET_KEY");
+        if (access_key_.empty() || secret_key_.empty()) {
+            std::vector<std::filesystem::path> dotenv_candidates;
+            dotenv_candidates.push_back(config_path.parent_path().parent_path().parent_path() / ".env");
+            dotenv_candidates.push_back(std::filesystem::current_path() / ".env");
+
+            for (const auto& dotenv_path : dotenv_candidates) {
+                if (!std::filesystem::exists(dotenv_path)) {
+                    continue;
+                }
+                const auto env_map = parseDotEnvFile(dotenv_path);
+                if (access_key_.empty()) {
+                    auto it = env_map.find("UPBIT_ACCESS_KEY");
+                    if (it != env_map.end()) {
+                        access_key_ = trimCopy(it->second);
+                    }
+                }
+                if (secret_key_.empty()) {
+                    auto it = env_map.find("UPBIT_SECRET_KEY");
+                    if (it != env_map.end()) {
+                        secret_key_ = trimCopy(it->second);
+                    }
+                }
+                if (!access_key_.empty() && !secret_key_.empty()) {
+                    std::cout << ".env fallback loaded from: " << dotenv_path << std::endl;
+                    break;
+                }
+            }
+        }
         if (access_key_.empty() || secret_key_.empty()) {
             std::cout << "경고: UPBIT_ACCESS_KEY 또는 UPBIT_SECRET_KEY 환경 변수가 비어 있습니다." << std::endl;
         }
@@ -142,6 +248,7 @@ void Config::load(const std::string& path) {
             engine_config_.enable_core_policy_plane = t.value("enable_core_policy_plane", true);
             engine_config_.enable_core_risk_plane = t.value("enable_core_risk_plane", true);
             engine_config_.enable_core_execution_plane = t.value("enable_core_execution_plane", true);
+            engine_config_.use_strategy_alpha_head_mode = t.value("use_strategy_alpha_head_mode", false);
             engine_config_.hostility_ewma_alpha = t.value("hostility_ewma_alpha", 0.14);
             engine_config_.hostility_hostile_threshold = t.value("hostility_hostile_threshold", 0.62);
             engine_config_.hostility_severe_threshold = t.value("hostility_severe_threshold", 0.82);

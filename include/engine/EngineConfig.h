@@ -52,6 +52,7 @@ struct EngineConfig {
     bool enable_core_policy_plane = true;
     bool enable_core_risk_plane = true;
     bool enable_core_execution_plane = true;
+    bool use_strategy_alpha_head_mode = false;
     double hostility_ewma_alpha = 0.14;
     double hostility_hostile_threshold = 0.62;
     double hostility_severe_threshold = 0.82;

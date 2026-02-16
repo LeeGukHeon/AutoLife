@@ -16,6 +16,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <map>
 #include <random>
 #include <string>
 #include <thread>
@@ -102,6 +103,36 @@ static std::string toLowerCopy(std::string value) {
 
 static bool startsWith(const std::string& value, const std::string& prefix) {
     return value.size() >= prefix.size() && value.compare(0, prefix.size(), prefix) == 0;
+}
+
+static void printTopEntryRejectionReasons(
+    const std::map<std::string, int>& rejection_counts,
+    size_t top_n = 5
+) {
+    if (rejection_counts.empty()) {
+        return;
+    }
+
+    std::vector<std::pair<std::string, int>> reject_pairs(
+        rejection_counts.begin(),
+        rejection_counts.end()
+    );
+    std::sort(
+        reject_pairs.begin(),
+        reject_pairs.end(),
+        [](const auto& a, const auto& b) {
+            if (a.second != b.second) return a.second > b.second;
+            return a.first < b.first;
+        }
+    );
+
+    std::cout << "Top entry rejection reasons: ";
+    const size_t limit = std::min(top_n, reject_pairs.size());
+    for (size_t i = 0; i < limit; ++i) {
+        if (i > 0) std::cout << ", ";
+        std::cout << reject_pairs[i].first << "=" << reject_pairs[i].second;
+    }
+    std::cout << "\n";
 }
 
 struct CompanionCheckResult {
@@ -401,6 +432,7 @@ int main(int argc, char* argv[]) {
                     j["avg_fee_krw"] = result.avg_fee_krw;
                     j["intrabar_stop_tp_collision_count"] = result.intrabar_stop_tp_collision_count;
                     j["exit_reason_counts"] = result.exit_reason_counts;
+                    j["entry_rejection_reason_counts"] = result.entry_rejection_reason_counts;
                     j["intrabar_collision_by_strategy"] = result.intrabar_collision_by_strategy;
                     j["entry_funnel"] = {
                         {"entry_rounds", result.entry_funnel.entry_rounds},
@@ -491,6 +523,7 @@ int main(int argc, char* argv[]) {
                           << ", capital_drop=" << result.entry_funnel.blocked_min_order_or_capital
                           << ", sizing_drop=" << result.entry_funnel.blocked_order_sizing
                           << ", entries=" << result.entry_funnel.entries_executed << "\n";
+                printTopEntryRejectionReasons(result.entry_rejection_reason_counts);
                 if (!result.strategy_summaries.empty()) {
                     std::cout << "전략별 요약:\n";
                     for (const auto& s : result.strategy_summaries) {
@@ -635,6 +668,7 @@ int main(int argc, char* argv[]) {
                       << ", capital_drop=" << result.entry_funnel.blocked_min_order_or_capital
                       << ", sizing_drop=" << result.entry_funnel.blocked_order_sizing
                       << ", entries=" << result.entry_funnel.entries_executed << "\n";
+            printTopEntryRejectionReasons(result.entry_rejection_reason_counts);
             if (!result.strategy_summaries.empty()) {
                 std::cout << "전략별 요약:\n";
                 for (const auto& s : result.strategy_summaries) {

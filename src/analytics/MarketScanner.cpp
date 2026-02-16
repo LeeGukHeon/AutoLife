@@ -19,6 +19,40 @@ constexpr int kIncrementalFetchCount = 3;
 constexpr auto kMinCandleApiInterval = std::chrono::milliseconds(120);
 constexpr auto kMinFullSyncInterval = std::chrono::milliseconds(30LL * 60LL * 1000LL);
 constexpr auto kMaxFullSyncInterval = std::chrono::milliseconds(72LL * 60LL * 60LL * 1000LL);
+
+std::vector<autolife::Candle> aggregateCandlesByStep(
+    const std::vector<autolife::Candle>& source,
+    size_t step,
+    size_t max_bars = 0
+) {
+    std::vector<autolife::Candle> out;
+    if (step == 0 || source.size() < step) {
+        return out;
+    }
+
+    out.reserve(source.size() / step + 1);
+    for (size_t i = 0; i + step <= source.size(); i += step) {
+        autolife::Candle aggregated;
+        aggregated.open = source[i].open;
+        aggregated.close = source[i + step - 1].close;
+        aggregated.high = source[i].high;
+        aggregated.low = source[i].low;
+        aggregated.volume = 0.0;
+        aggregated.timestamp = source[i].timestamp;
+
+        for (size_t j = i; j < i + step; ++j) {
+            aggregated.high = std::max(aggregated.high, source[j].high);
+            aggregated.low = std::min(aggregated.low, source[j].low);
+            aggregated.volume += source[j].volume;
+        }
+        out.push_back(std::move(aggregated));
+    }
+
+    if (max_bars > 0 && out.size() > max_bars) {
+        out.erase(out.begin(), out.end() - static_cast<std::ptrdiff_t>(max_bars));
+    }
+    return out;
+}
 }
 
 namespace autolife {
@@ -228,6 +262,11 @@ if (ticker_map.find(market) != ticker_map.end()) {
             // [중요] 정렬된 구조체 데이터 생성
             metrics.candles = candles_map_1m[market];
             metrics.candles_by_tf["1m"] = metrics.candles;
+
+            auto candles_15m = aggregateCandlesByStep(metrics.candles, 15, 120);
+            if (!candles_15m.empty()) {
+                metrics.candles_by_tf["15m"] = std::move(candles_15m);
+            }
             
             if (!metrics.candles.empty()) {
                 metrics.volume_surge_ratio = analyzeVolumeSurge(metrics.candles); 
@@ -238,6 +277,12 @@ if (ticker_map.find(market) != ticker_map.end()) {
 
         if (candles_map_5m.find(market) != candles_map_5m.end()) {
             metrics.candles_by_tf["5m"] = candles_map_5m[market];
+            if (metrics.candles_by_tf.find("15m") == metrics.candles_by_tf.end()) {
+                auto candles_15m = aggregateCandlesByStep(candles_map_5m[market], 3, 120);
+                if (!candles_15m.empty()) {
+                    metrics.candles_by_tf["15m"] = std::move(candles_15m);
+                }
+            }
         }
 
         if (candles_map_1h.find(market) != candles_map_1h.end()) {
@@ -344,11 +389,21 @@ CoinMetrics MarketScanner::analyzeMarket(const std::string& market) {
         metrics.candles = getRecentCandles(market, "1", 120);
         if (!metrics.candles.empty()) {
             metrics.candles_by_tf["1m"] = metrics.candles;
+            auto candles_15m = aggregateCandlesByStep(metrics.candles, 15, 120);
+            if (!candles_15m.empty()) {
+                metrics.candles_by_tf["15m"] = std::move(candles_15m);
+            }
         }
 
         auto candles_5m = getRecentCandles(market, "5", 120);
         if (!candles_5m.empty()) {
             metrics.candles_by_tf["5m"] = candles_5m;
+            if (metrics.candles_by_tf.find("15m") == metrics.candles_by_tf.end()) {
+                auto candles_15m = aggregateCandlesByStep(candles_5m, 3, 120);
+                if (!candles_15m.empty()) {
+                    metrics.candles_by_tf["15m"] = std::move(candles_15m);
+                }
+            }
         }
 
         auto candles_1h = getRecentCandles(market, "60", 120);

@@ -96,6 +96,7 @@ public:
         double avg_fee_krw = 0.0;
         int intrabar_stop_tp_collision_count = 0;
         std::map<std::string, int> exit_reason_counts;
+        std::map<std::string, int> entry_rejection_reason_counts;
         std::map<std::string, int> intrabar_collision_by_strategy;
         std::vector<StrategySummary> strategy_summaries;
         std::vector<PatternSummary> pattern_summaries;
@@ -122,6 +123,7 @@ private:
     int no_entry_streak_candles_ = 0;   // Regime-aware minimum activation helper
     double market_hostility_ewma_ = 0.0;
     int hostile_entry_pause_candles_ = 0;
+    bool was_open_position_prev_candle_ = false; // Count open-position skip once per holding episode
     struct PendingBacktestOrder {
         Order order;
         double requested_price = 0.0;
@@ -148,6 +150,7 @@ private:
     std::map<std::string, int> strategy_selected_best_counts_;
     std::map<std::string, int> strategy_blocked_by_risk_manager_counts_;
     std::map<std::string, int> strategy_entries_executed_counts_;
+    std::map<std::string, int> entry_rejection_reason_counts_;
     int intrabar_stop_tp_collision_count_ = 0;
     std::map<std::string, int> intrabar_collision_by_strategy_;
 

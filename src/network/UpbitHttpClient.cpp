@@ -6,6 +6,7 @@
 #include <chrono>
 #include <set>
 #include <cctype>
+#include <optional>
 
 namespace autolife {
 namespace network {
@@ -101,11 +102,16 @@ HttpResponse UpbitHttpClient::get(
     headers["Content-Type"] = "application/json";
     
     auto response = performRequest("GET", url, "", headers);
-    
-    if (response.headers.find("Remaining-Req") != response.headers.end()) {
-        rate_limiter_->updateFromHeader(response.headers["Remaining-Req"]);
+
+    std::optional<std::string> remaining_req_header;
+    auto remaining_it = response.headers.find("Remaining-Req");
+    if (remaining_it != response.headers.end()) {
+        remaining_req_header = remaining_it->second;
+        rate_limiter_->updateFromHeader(remaining_it->second);
     }
-    
+
+    rate_limiter_->recordHttpOutcome(group, endpoint, response.status_code, remaining_req_header);
+
     if (response.isRateLimited() || response.isBlocked()) {
         rate_limiter_->handleRateLimitError(response.status_code);
     }
@@ -148,9 +154,14 @@ HttpResponse UpbitHttpClient::post(
     // Body는 원본 JSON 그대로 전송
     auto response = performRequest("POST", url, body.dump(), headers);
 
-    if (response.headers.find("Remaining-Req") != response.headers.end()) {
-        rate_limiter_->updateFromHeader(response.headers["Remaining-Req"]);
+    std::optional<std::string> remaining_req_header;
+    auto remaining_it = response.headers.find("Remaining-Req");
+    if (remaining_it != response.headers.end()) {
+        remaining_req_header = remaining_it->second;
+        rate_limiter_->updateFromHeader(remaining_it->second);
     }
+
+    rate_limiter_->recordHttpOutcome(group, endpoint, response.status_code, remaining_req_header);
 
     if (response.isRateLimited() || response.isBlocked()) {
         rate_limiter_->handleRateLimitError(response.status_code);
@@ -177,11 +188,16 @@ HttpResponse UpbitHttpClient::del(
     headers["Authorization"] = "Bearer " + jwt_token;
     
     auto response = performRequest("DELETE", url, "", headers);
-    
-    if (response.headers.find("Remaining-Req") != response.headers.end()) {
-        rate_limiter_->updateFromHeader(response.headers["Remaining-Req"]);
+
+    std::optional<std::string> remaining_req_header;
+    auto remaining_it = response.headers.find("Remaining-Req");
+    if (remaining_it != response.headers.end()) {
+        remaining_req_header = remaining_it->second;
+        rate_limiter_->updateFromHeader(remaining_it->second);
     }
-    
+
+    rate_limiter_->recordHttpOutcome("order", endpoint, response.status_code, remaining_req_header);
+
     if (response.isRateLimited() || response.isBlocked()) {
         rate_limiter_->handleRateLimitError(response.status_code);
     }

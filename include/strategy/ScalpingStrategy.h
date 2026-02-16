@@ -178,9 +178,7 @@ public:
         double entry_price,
         double current_price
     );
-    
-    ScalpingRollingStatistics getRollingStatistics() const;
-    
+
 private:
         // 포지션 상태 업데이트
         void updateState(const std::string& market, double current_price) override;

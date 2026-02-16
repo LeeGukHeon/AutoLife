@@ -321,8 +321,6 @@ public:
     bool shouldEmergencyExit(const std::string& market, double current_price);
     void emergencyLiquidateGrid(const std::string& market, ExitReason reason);
     
-    GridRollingStatistics getRollingStatistics() const;
-
 private:
     std::shared_ptr<network::UpbitHttpClient> client_;
     bool enabled_;

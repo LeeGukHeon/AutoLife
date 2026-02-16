@@ -727,11 +727,11 @@ Signal ScalpingStrategy::generateSignal(
             return signal;
         }
     }
-    if (regime.regime == analytics::MarketRegime::RANGING) {
-        // Pattern analysis baseline: scalping in ranging remained structurally weak.
+    // 횡보/미확정 장세는 품질 게이트를 통과한 경우에만 진입 후보를 유지한다.
+    if (regime.regime == analytics::MarketRegime::RANGING && !ranging_quality_ok) {
         return signal;
     }
-    if (regime.regime == analytics::MarketRegime::UNKNOWN) {
+    if (regime.regime == analytics::MarketRegime::UNKNOWN && !unknown_quality_ok) {
         return signal;
     }
     if (regime.regime == analytics::MarketRegime::TRENDING_UP) {
@@ -805,21 +805,18 @@ Signal ScalpingStrategy::generateSignal(
     // Weighted category scores, clamped to [0.0, 1.0]
     double total_score = 0.0;
     
-    // --- (1) 湲곗닠??吏???먯닔 (理쒕? 0.30) ---
     auto prices = analytics::TechnicalIndicators::extractClosePrices(candles);
     double rsi = analytics::TechnicalIndicators::calculateRSI(prices, 14);
     auto macd = analytics::TechnicalIndicators::calculateMACD(prices, 12, 26, 9);
     
-    // RSI ?먯닔 (0.00 ~ 0.12)
     double rsi_score = 0.0;
-    if (rsi >= 25 && rsi <= 45) rsi_score = 0.12;       // 怨쇰ℓ??諛섎벑 援ш컙
+    if (rsi >= 25 && rsi <= 45) rsi_score = 0.12;
     else if (rsi > 45 && rsi <= 55) rsi_score = 0.08;    // 以묐┰
-    else if (rsi > 55 && rsi <= 70) rsi_score = 0.10;    // 紐⑤찘? 援ш컙
-    else if (rsi > 70) rsi_score = 0.03;                  // 怨쇰ℓ??(?꾪뿕)
+    else if (rsi > 55 && rsi <= 70) rsi_score = 0.10;
+    else if (rsi > 70) rsi_score = 0.03;
     else rsi_score = 0.02;                                 // 洹밴낵留ㅻ룄
     total_score += rsi_score;
     
-    // MACD ?먯닔 (0.00 ~ 0.10)
     double macd_score = 0.0;
     double macd_hist_delta = 0.0;
     if (prices.size() >= 3) {
@@ -828,15 +825,14 @@ Signal ScalpingStrategy::generateSignal(
         macd_hist_delta = macd.histogram - macd_prev.histogram;
     }
     if (macd.histogram > 0) {
-        macd_score = 0.10;  // ?묒쓽 ?덉뒪?좉렇??
+        macd_score = 0.10;
     } else if (macd_hist_delta > 0.0) {
-        macd_score = 0.06; // ?섎씫 ?뷀솕 (?곸듅 ?꾪솚 以?
+        macd_score = 0.06;
     } else {
-        macd_score = 0.00; // ?섎씫 媛??
+        macd_score = 0.00;
     }
     total_score += macd_score;
     
-    // 媛寃?蹂?숇쪧 ?먯닔 (0.00 ~ 0.08)
     double abs_change = std::abs(metrics.price_change_rate);
     double change_score = 0.0;
     if (abs_change >= 0.5) change_score = 0.08;
@@ -845,7 +841,6 @@ Signal ScalpingStrategy::generateSignal(
     else change_score = 0.01;
     total_score += change_score;
     
-    // --- (2) 罹붾뱾 ?⑦꽩 ?먯닔 (理쒕? 0.15) ---
     size_t n = candles.size();
     const auto& last_candle = candles.back();
     int bullish_count = 0;
@@ -864,45 +859,39 @@ Signal ScalpingStrategy::generateSignal(
     else pattern_score = 0.00;
     total_score += pattern_score;
     
-    // --- (3) ?덉쭚 ?먯닔 (理쒕? 0.15) ---
     double regime_score = 0.0;
     switch (regime.regime) {
         case analytics::MarketRegime::TRENDING_UP:
             regime_score = 0.15; break;
         case analytics::MarketRegime::RANGING:
-            regime_score = 0.10; break;  // ?ㅼ틮?묒뿉 ?곹빀
+            regime_score = 0.10; break;
         case analytics::MarketRegime::HIGH_VOLATILITY:
-            regime_score = 0.05; break;  // ?꾪뿕?섏?留?湲고쉶 ?덉쓬
+            regime_score = 0.05; break;
         case analytics::MarketRegime::TRENDING_DOWN:
-            regime_score = 0.00; break;  // ?쏀븳 ?섎꼸??(hard gate ?꾨떂!)
+            regime_score = 0.00; break;
         default:
             regime_score = 0.05; break;
     }
     total_score += regime_score;
     
-    // --- (4) 嫄곕옒???먯닔 (理쒕? 0.15) ---
     double volume_score = 0.0;
-    if (metrics.volume_surge_ratio >= 3.0) volume_score = 0.15;       // 嫄곕옒????컻
-    else if (metrics.volume_surge_ratio >= 1.5) volume_score = 0.10;  // 嫄곕옒???곸듅
-    else if (metrics.volume_surge_ratio >= 1.0) volume_score = 0.06;  // ?됯퇏
+    if (metrics.volume_surge_ratio >= 3.0) volume_score = 0.15;
+    else if (metrics.volume_surge_ratio >= 1.5) volume_score = 0.10;
+    else if (metrics.volume_surge_ratio >= 1.0) volume_score = 0.06;
     else volume_score = 0.02;
     total_score += volume_score;
     
-    // --- (5) ?멸? & ?좊룞???먯닔 (理쒕? 0.15) ---
     double orderflow_score = 0.0;
     
-    // ?멸? ?곗씠?곌? ?덉쑝硫?遺꾩꽍, ?놁쑝硫?以묐┰ ?먯닔
     auto order_flow = analyzeUltraFastOrderFlow(metrics, current_price);
     if (order_flow.microstructure_score > 0.6) orderflow_score = 0.15;
     else if (order_flow.microstructure_score > 0.3) orderflow_score = 0.10;
     else if (order_flow.microstructure_score > 0.0) orderflow_score = 0.05;
-    else orderflow_score = 0.03; // ?멸? ?곗씠???놁뼱??理쒖냼 ?먯닔
+    else orderflow_score = 0.03;
     
-    // ?좊룞??蹂대꼫??
     if (metrics.liquidity_score >= 70) orderflow_score = std::min(0.15, orderflow_score + 0.03);
     total_score += orderflow_score;
     
-    // --- (6) MTF ?먯닔 (理쒕? 0.10) ---
     auto mtf_signal = analyzeScalpingTimeframes(candles);
     double mtf_score = mtf_signal.alignment_score * 0.10;
     total_score += mtf_score;
@@ -1274,7 +1263,6 @@ Signal ScalpingStrategy::generateSignal(
         return signal;
     }
     
-    // ?ъ????ъ씠吏?
     auto pos_metrics = calculateScalpingPositionSize(
         available_capital, signal.entry_price, signal.stop_loss, metrics, candles
     );
@@ -1388,6 +1376,13 @@ bool ScalpingStrategy::shouldEnter(
     const double buy_pressure_bias_gate =
         (metrics.buy_pressure - metrics.sell_pressure) / pressure_total_gate;
     const bool bullish_impulse = hasBullishImpulse(candles);
+    // generateSignal과 동일한 품질 게이트를 사용해 진입 판단 일관성을 맞춘다.
+    const bool ranging_quality_ok = passesScalpingRangingQualityGate(
+        metrics, higher_tf_trend_bias, bullish_impulse, buy_pressure_bias_gate
+    );
+    const bool unknown_quality_ok = passesScalpingUnknownQualityGate(
+        metrics, higher_tf_trend_bias, bullish_impulse, buy_pressure_bias_gate
+    );
     if (higher_tf_trend_bias < -0.22) {
         return false;
     }
@@ -1410,10 +1405,10 @@ bool ScalpingStrategy::shouldEnter(
             return false;
         }
     }
-    if (regime.regime == analytics::MarketRegime::RANGING) {
+    if (regime.regime == analytics::MarketRegime::RANGING && !ranging_quality_ok) {
         return false;
     }
-    if (regime.regime == analytics::MarketRegime::UNKNOWN) {
+    if (regime.regime == analytics::MarketRegime::UNKNOWN && !unknown_quality_ok) {
         return false;
     }
     if (regime.regime == analytics::MarketRegime::TRENDING_UP) {
@@ -1768,7 +1763,6 @@ bool ScalpingStrategy::shouldExit(
         return true;
     }
 
-    // ?쒓컙 ?먯젅 (5遺?
     if (holding_time_seconds >= MAX_HOLDING_TIME) {
         return true;
     }
@@ -1935,11 +1929,6 @@ bool ScalpingStrategy::shouldMoveToBreakeven(
     return current_price >= entry_price * (1.0 + BREAKEVEN_TRIGGER);
 }
 
-ScalpingRollingStatistics ScalpingStrategy::getRollingStatistics() const {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
-    return rolling_stats_;
-}
-
 double ScalpingStrategy::getArchetypeQualityBias(
     int archetype,
     analytics::MarketRegime regime
@@ -2067,12 +2056,10 @@ void ScalpingStrategy::saveAdaptiveArchetypeStats() const {
     }
 }
 
-// ===== API ?몄텧 愿由?(?낅퉬??Rate Limit 以?? =====
 
 bool ScalpingStrategy::canMakeOrderBookAPICall() const {
     long long now = getCurrentTimestamp();
     
-    // 1珥??대궡 ?몄텧 ?잛닔
     int calls_last_second = 0;
     for (auto ts : api_call_timestamps_) {
         if (now - ts < 1000) {
@@ -2099,7 +2086,6 @@ bool ScalpingStrategy::canMakeCandleAPICall() const {
 void ScalpingStrategy::recordAPICall() const {
     api_call_timestamps_.push_back(getCurrentTimestamp());
     
-    // 10珥??댁긽 ??湲곕줉 ?쒓굅
     while (!api_call_timestamps_.empty() && 
            getCurrentTimestamp() - api_call_timestamps_.front() > 10000) {
         api_call_timestamps_.pop_front();
@@ -2109,7 +2095,6 @@ void ScalpingStrategy::recordAPICall() const {
 nlohmann::json ScalpingStrategy::getCachedOrderBook(const std::string& market) {
     long long now = getCurrentTimestamp();
     
-    // 罹먯떆 ?좏슚??泥댄겕
     if (now - last_orderbook_fetch_time_ < ORDERBOOK_CACHE_MS && 
         !cached_orderbook_.empty()) {
         return cached_orderbook_;
@@ -2121,7 +2106,6 @@ nlohmann::json ScalpingStrategy::getCachedOrderBook(const std::string& market) {
         return cached_orderbook_;
     }
     
-    // ?덈줈 議고쉶
     try {
         recordAPICall();
         cached_orderbook_ = client_->getOrderBook(market);
@@ -2154,7 +2138,6 @@ std::vector<Candle> ScalpingStrategy::getCachedCandles(const std::string& market
     }
 }
 
-// ===== 嫄곕옒 鍮덈룄 愿由?=====
 
 bool ScalpingStrategy::canTradeNow() {
     resetDailyCounters();
@@ -2246,36 +2229,29 @@ bool ScalpingStrategy::isVolumeSpikeSignificant(
 
     if (candles.size() < 21) return false;
     
-    // ?꾩옱(T=0, 留??? 嫄곕옒??
     double current_volume = candles.back().volume;
     
-    // ?덉뒪?좊━: T-20 ~ T-1 (珥?20媛?
     std::vector<double> volumes;
     volumes.reserve(20);
     
-    // candles.size() - 21 遺??candles.size() - 1 源뚯? (吏곸쟾 罹붾뱾源뚯?)
     for (size_t i = candles.size() - 21; i < candles.size() - 1; ++i) {
         volumes.push_back(candles[i].volume);
     }
     
-    // volumes 踰≫꽣??援ъ꽦: [T-20, T-19, ..., T-2, T-1] (珥?20媛?
     
-    // Z-Score (?꾩옱 嫄곕옒?됱씠 怨쇨굅 20媛??됯퇏 ?鍮??쇰쭏????덈굹)
     double z_score = calculateZScore(current_volume, volumes);
     
     if (z_score < 1.15) { 
         return false;
     }
     
-    // T-Test: 理쒓렐 3遺?T-2, T-1, T-0) vs 怨쇨굅(T-20 ~ T-3)
-    // T-0(?꾩옱)瑜??ы븿?댁빞 '吏湲???異붿꽭瑜??????덉쓬
     
     std::vector<double> recent_3;
     recent_3.push_back(candles[candles.size()-3].volume);
     recent_3.push_back(candles[candles.size()-2].volume);
-    recent_3.push_back(candles[candles.size()-1].volume); // ?꾩옱
+    recent_3.push_back(candles[candles.size()-1].volume);
     
-    std::vector<double> past_17; // T-20 ~ T-4 (珥?17媛?
+    std::vector<double> past_17;
     for(size_t i = candles.size()-20; i <= candles.size()-4; ++i) {
         past_17.push_back(candles[i].volume);
     }
@@ -2302,7 +2278,7 @@ bool ScalpingStrategy::isTTestSignificant(
     const std::vector<double>& sample2,
     double alpha
 ) const {
-    (void)alpha;  // ??異붽?
+    (void)alpha;
 
     if (sample1.size() < 2 || sample2.size() < 2) return false;
     
@@ -2336,22 +2312,17 @@ ScalpingMultiTimeframeSignal ScalpingStrategy::analyzeScalpingTimeframes(
     ScalpingMultiTimeframeSignal signal;
     if (candles_1m.size() < 30) return signal;
 
-    // [湲곗〈 怨쇰ℓ??泥댄겕 ?좎??섎릺 ?⑸룄 蹂寃?
     signal.tf_1m_oversold = isOversoldOnTimeframe(candles_1m, signal.tf_1m);
     auto candles_3m = resampleTo3m(candles_1m);
 
     double score = 0.0;
     
-    // 1. 1遺꾨큺 諛⑺뼢??泥댄겕 (醫낃?媛 ?쒓?蹂대떎 ?믨굅??RSI媛 以묐┰ ?댁긽)
     if (candles_1m.back().close >= candles_1m.back().open) score += 0.4;
     
-    // 2. 3遺꾨큺 ?뺣젹 泥댄겕
     if (!candles_3m.empty()) {
         const auto& last_3m = candles_3m.back();
-        // 3遺꾨큺???묐큺?닿굅?? 理쒖냼???섎씫??硫덉톬?ㅻ㈃ ?먯닔 遺??
         if (last_3m.close >= last_3m.open) score += 0.4;
         
-        // 3. (蹂대꼫?? ?곸쐞 遺꾨큺?먯꽌 怨쇰ℓ?꾩??ㅺ? 諛섎벑 以묒씠硫???媛?곗젏
         signal.tf_3m_oversold = isOversoldOnTimeframe(candles_3m, signal.tf_3m);
         if (signal.tf_3m_oversold) score += 0.2;
     }
@@ -2368,14 +2339,11 @@ std::vector<Candle> ScalpingStrategy::resampleTo3m(
     std::vector<Candle> candles_3m;
     
     size_t n = candles_1m.size();
-    // 3??諛곗닔濡?留욎텛湲??꾪빐 ?욌?遺꾩쓣 踰꾨┝ (理쒖떊 ?곗씠?곕? ?대━湲??꾪븿)
     size_t start_idx = n % 3; 
     
     for (size_t i = start_idx; i + 3 <= n; i += 3) {
         Candle candle_3m;
         
-        // [?섏젙] 1遺꾨큺? ?쒓컙??Asc)?대?濡?
-        // i: ?쒖옉(Open), i+2: ??Close)
         candle_3m.open = candles_1m[i].open;
         candle_3m.close = candles_1m[i + 2].close;
         candle_3m.high = candles_1m[i].high;
@@ -2388,7 +2356,6 @@ std::vector<Candle> ScalpingStrategy::resampleTo3m(
             candle_3m.volume += candles_1m[j].volume;
         }
         
-        // ??꾩뒪?ы봽???쒖옉 ?쒓컙 or ???쒓컙? 蹂댄넻 罹붾뱾 ?쒖옉 ?쒓컙???곷땲??
         candle_3m.timestamp = candles_1m[i].timestamp;
         candles_3m.push_back(candle_3m);
     }
@@ -2404,27 +2371,21 @@ bool ScalpingStrategy::isOversoldOnTimeframe(
     
     auto prices = analytics::TechnicalIndicators::extractClosePrices(candles);
     
-    // 1. RSI 怨꾩궛 (媛??理쒖떊 prices.back()??湲곗?????
     metrics.rsi = analytics::TechnicalIndicators::calculateRSI(prices, 14);
     
-    // 2. Stochastic RSI (?곕━媛 怨좎튇 理쒖떊 ?곗씠??湲곗? ?⑥닔 ?몄텧)
     auto stoch_result = analytics::TechnicalIndicators::calculateStochastic(candles, 14, 3);
     metrics.stoch_rsi = stoch_result.k;
     
-    // 3. [?듭떖 ?섏젙] Instant Momentum (吏꾩쭨 理쒓렐 3媛?罹붾뱾)
-    if (candles.size() >= 4) { // 3媛??꾩쓣 蹂대젮硫?理쒖냼 4媛쒓? ?덉쟾??
-        // ?뺣젹???곗씠?곗뿉??媛??留덉?留됱씠 '吏湲?now)', ?ㅼ뿉??4踰덉㎏媛 '3媛???
+    if (candles.size() >= 4) {
         double price_now = candles.back().close;
         double price_3_ago = candles[candles.size() - 4].close;
         
         metrics.instant_momentum = (price_now - price_3_ago) / price_3_ago;
     }
     
-    // 4. 怨쇰ℓ??議곌굔 (?ㅼ틮???뱁솕)
-    // RSI媛 30~40 ?ъ씠?대㈃?? ?ㅽ넗罹먯뒪?깆씠 諛붾떏?닿굅??'吏湲??뱀옣' 媛寃⑹씠 怨좉컻瑜?????momentum > 0)
-    bool rsi_oversold = metrics.rsi >= 30.0 && metrics.rsi <= 45.0; // 40? ?덈Т 鍮〓묀?댁꽌 45濡??댁쭩 ?꾪솕
-    bool stoch_oversold = metrics.stoch_rsi < 25.0; // ?ㅽ넗罹먯뒪?깆? ???뺤떎??諛붾떏(25) ?뺤씤
-    bool momentum_positive = metrics.instant_momentum > 0.0005; // 誘몄꽭??諛섎벑(0.05%) ?뺤씤
+    bool rsi_oversold = metrics.rsi >= 30.0 && metrics.rsi <= 45.0;
+    bool stoch_oversold = metrics.stoch_rsi < 25.0;
+    bool momentum_positive = metrics.instant_momentum > 0.0005;
     
     return rsi_oversold && (stoch_oversold || momentum_positive);
 }
@@ -2435,7 +2396,7 @@ UltraFastOrderFlowMetrics ScalpingStrategy::analyzeUltraFastOrderFlow(
     const analytics::CoinMetrics& metrics,
     double current_price
 ) {
-    (void)current_price;  // ??異붽?
+    (void)current_price;
 
     UltraFastOrderFlowMetrics flow;
     nlohmann::json units;
@@ -2460,7 +2421,6 @@ UltraFastOrderFlowMetrics ScalpingStrategy::analyzeUltraFastOrderFlow(
         double best_bid = units[0]["bid_price"].get<double>();
         flow.bid_ask_spread = (best_ask - best_bid) / best_bid * 100;
         
-        // Instant Pressure (?곸쐞 3?덈꺼)
         double top3_bid = 0, top3_ask = 0;
         for (size_t i = 0; i < std::min(size_t(3), units.size()); ++i) {
             top3_bid += units[i]["bid_size"].get<double>();
@@ -2471,7 +2431,6 @@ UltraFastOrderFlowMetrics ScalpingStrategy::analyzeUltraFastOrderFlow(
             flow.instant_pressure = (top3_bid - top3_ask) / (top3_bid + top3_ask);
         }
         
-        // Order Flow Delta (?꾩껜)
         double total_bid = 0, total_ask = 0;
         for (const auto& unit : units) {
             total_bid += unit["bid_size"].get<double>();
@@ -2485,7 +2444,6 @@ UltraFastOrderFlowMetrics ScalpingStrategy::analyzeUltraFastOrderFlow(
         // Tape Reading Score
         flow.tape_reading_score = calculateTapeReadingScore(units);
         
-        // Micro Imbalance (?멸? 1-2?덈꺼 吏묒쨷??
         if (units.size() >= 2) {
             double level1_bid = units[0]["bid_size"].get<double>();
             double level2_bid = units[1]["bid_size"].get<double>();
@@ -2509,11 +2467,10 @@ UltraFastOrderFlowMetrics ScalpingStrategy::analyzeUltraFastOrderFlow(
         // Instant Pressure (30%)
         if (flow.instant_pressure > 0.2) score += 0.30;       // 0.4 -> 0.2
         else if (flow.instant_pressure > 0.0) score += 0.20;  // 0.2 -> 0.0
-        else if (flow.instant_pressure > -0.2) score += 0.10; // ?섎씫 ?뺣젰???쏀빐???먯닔 遺??
+        else if (flow.instant_pressure > -0.2) score += 0.10;
         
-        // Order Flow Delta (20%) - ?섏젙??
         if (flow.order_flow_delta > 0.1) score += 0.20;      // 0.2 -> 0.1
-        else if (flow.order_flow_delta > -0.1) score += 0.12; // -0.1源뚯???'洹좏삎'?쇰줈 ?몄젙
+        else if (flow.order_flow_delta > -0.1) score += 0.12;
         
         // Tape Reading (15%)
         score += flow.tape_reading_score * 0.15;
@@ -2541,16 +2498,14 @@ double ScalpingStrategy::calculateTapeReadingScore(
     auto units = orderbook_units;
     if (units.size() < 5) return 0.0;
     
-    // ?곸쐞 5?덈꺼???멸? 洹좏삎??
     double score = 0.0;
     
-    // 1. 留ㅼ닔 ?멸?媛 ?먯쭊?곸쑝濡?利앷??섎뒗吏 (怨꾨떒??吏吏)
     bool bid_support = true;
     for (size_t i = 1; i < std::min(size_t(5), units.size()); ++i) {
         double current_bid = units[i]["bid_size"].get<double>();
         double prev_bid = units[i-1]["bid_size"].get<double>();
         
-        if (current_bid < prev_bid * 0.5) {  // 湲됯꺽??媛먯냼
+        if (current_bid < prev_bid * 0.5) {
             bid_support = false;
             break;
         }
@@ -2558,7 +2513,6 @@ double ScalpingStrategy::calculateTapeReadingScore(
     
     if (bid_support) score += 0.5;
     
-    // 2. 留ㅻ룄 ?멸?媛 鍮덉빟?쒖? (????쏀븿)
     double avg_ask = 0;
     for (size_t i = 0; i < std::min(size_t(5), units.size()); ++i) {
         avg_ask += units[i]["ask_size"].get<double>();
@@ -2583,26 +2537,19 @@ double ScalpingStrategy::calculateTapeReadingScore(
 double ScalpingStrategy::calculateMomentumAcceleration(
     const std::vector<Candle>& candles
 ) const {
-    // 1. 理쒖냼 ?곗씠???뺣낫 (理쒓렐 6媛?罹붾뱾 ?꾩슂)
     if (candles.size() < 6) return 0.0;
     
-    // 2. [?듭떖 ?섏젙] ?몃뜳??湲곗???'?ㅼ뿉?쒕???濡?蹂寃?
     size_t n = candles.size();
     
-    // 理쒓렐 紐⑤찘? (T-0 vs T-2) : 媛??理쒓렐 3媛?罹붾뱾??蹂?붿쑉
-    // (?꾩옱媛 - 2遊됱쟾媛) / 2遊됱쟾媛
     double recent_now = candles[n - 1].close;
     double recent_past = candles[n - 3].close;
     double recent_momentum = (recent_now - recent_past) / recent_past;
     
-    // ?댁쟾 紐⑤찘? (T-3 vs T-5) : 洹?吏곸쟾 3媛?罹붾뱾??蹂?붿쑉
     // (3遊됱쟾媛 - 5遊됱쟾媛) / 5遊됱쟾媛
     double prev_start = candles[n - 4].close;
     double prev_end = candles[n - 6].close;
     double prev_momentum = (prev_start - prev_end) / prev_end;
     
-    // 3. 媛?띾룄 諛섑솚 (理쒓렐 ??- ?댁쟾 ??
-    // 寃곌낵媛 ?묒닔?쇰㈃ ?곸듅 ?섏씠 ?먯젏 ???몄?怨??덈떎???살엯?덈떎.
     return recent_momentum - prev_momentum;
 }
 // ===== 5. Position Sizing (Kelly Criterion + Ultra-Short Vol) =====
@@ -2624,7 +2571,6 @@ ScalpingPositionMetrics ScalpingStrategy::calculateScalpingPositionSize(
     pos_metrics.kelly_fraction = calculateKellyFraction(win_rate, avg_win, avg_loss);
     pos_metrics.half_kelly = pos_metrics.kelly_fraction * HALF_KELLY_FRACTION;
     
-    // 2. 蹂?숈꽦 議곗젙 (珥덈떒???
     double volatility = 0.015;  // 湲곕낯 1.5%
     if (!candles.empty()) {
         volatility = calculateUltraShortVolatility(candles);
@@ -2634,34 +2580,27 @@ ScalpingPositionMetrics ScalpingStrategy::calculateScalpingPositionSize(
         pos_metrics.half_kelly, volatility
     );
     
-    // 3. ?좊룞??議곗젙
     double liquidity_factor = std::min(1.0, metrics.liquidity_score / 80.0);
     pos_metrics.final_position_size = pos_metrics.volatility_adjusted * liquidity_factor;
     
-    // 4. ?ъ????쒗븳 諛?理쒖냼 湲덉븸 蹂댁젙 (理쒖쥌 ?섏젙蹂?
 
-    // (1) ?쇰떒 ?ㅼ젙??理쒕? 鍮꾩쨷 ?쒗븳??癒쇱? 寃곷땲??
     pos_metrics.final_position_size = std::min(pos_metrics.final_position_size, MAX_POSITION_SIZE);
     
-    // (2) ???꾩껜 ?먯궛蹂대떎 留롮씠 ???섎뒗 ?놁쑝誘濡?理쒖쥌 諛⑹뼱??
     if (pos_metrics.final_position_size > 1.0) {
         pos_metrics.final_position_size = 1.0;
     }
     
-    // (3) ?낅퉬??理쒖냼 二쇰Ц 湲덉븸 ?섎쭔 ?좎슚
     const double min_order_krw = std::max(5000.0, Config::getInstance().getEngineConfig().min_order_krw);
     if (capital < min_order_krw) {
         pos_metrics.final_position_size = 0.0;
     }
     
-    // 5. ?덉긽 Sharpe
     double risk = std::abs(entry_price - stop_loss) / entry_price;
     if (risk > 0.0001) {
         double reward = BASE_TAKE_PROFIT;
         pos_metrics.expected_sharpe = (reward - risk) / (volatility * std::sqrt(105120));
     }
     
-    // 6. 理쒕? ?먯떎 湲덉븸
     pos_metrics.max_loss_amount = capital * pos_metrics.final_position_size * risk;
     
     return pos_metrics;
@@ -2681,7 +2620,7 @@ double ScalpingStrategy::calculateKellyFraction(
     double kelly = (p * b - q) / b;
     
     kelly = std::max(0.0, kelly);
-    kelly = std::min(0.15, kelly);  // ?ㅼ틮?? 理쒕? 15%
+    kelly = std::min(0.15, kelly);
     
     return kelly;
 }
@@ -2724,13 +2663,11 @@ ScalpingDynamicStops ScalpingStrategy::calculateScalpingDynamicStops(
         return stops;
     }
     
-    // 1. Micro ATR 湲곕컲 ?먯젅
     double micro_atr_stop = calculateMicroATRBasedStop(entry_price, candles);
     
     // 2. Hard Stop
     double hard_stop = entry_price * (1.0 - BASE_STOP_LOSS);
     
-    // ?믪? ?먯젅???좏깮
     stops.stop_loss = std::max(hard_stop, micro_atr_stop);
     
     if (stops.stop_loss >= entry_price) {
@@ -2739,10 +2676,10 @@ ScalpingDynamicStops ScalpingStrategy::calculateScalpingDynamicStops(
     
     // 3. Take Profit (怨좎젙 鍮꾩쑉)
     double risk = entry_price - stops.stop_loss;
-    double reward_ratio = 2.0;  // ?ㅼ틮?? 1:2
+    double reward_ratio = 2.0;
     
-    stops.take_profit_1 = entry_price + (risk * reward_ratio * 0.5);  // 1% (50% 泥?궛)
-    stops.take_profit_2 = entry_price + (risk * reward_ratio);         // 2% (?꾩껜 泥?궛)
+    stops.take_profit_1 = entry_price + (risk * reward_ratio * 0.5);
+    stops.take_profit_2 = entry_price + (risk * reward_ratio);
     double min_tp1 = entry_price * (1.0 + MIN_TP1_PCT);
     double min_tp2 = entry_price * (1.0 + MIN_TP2_PCT);
     stops.take_profit_1 = std::max(stops.take_profit_1, min_tp1);
@@ -2751,7 +2688,6 @@ ScalpingDynamicStops ScalpingStrategy::calculateScalpingDynamicStops(
         stops.take_profit_2 = stops.take_profit_1 * 1.001;
     }
     
-    // 4. Breakeven Trigger (1% ?섏씡??
     stops.breakeven_trigger = entry_price * (1.0 + BREAKEVEN_TRIGGER);
     
     // 5. Trailing Start
@@ -2764,7 +2700,6 @@ double ScalpingStrategy::calculateMicroATRBasedStop(
     double entry_price,
     const std::vector<Candle>& candles
 ) const {
-    // 珥덈떒???吏㏃? ATR (5湲곌컙)
     double atr = analytics::TechnicalIndicators::calculateATR(candles, 5);
     
     if (atr < 0.0001) {
@@ -2773,7 +2708,7 @@ double ScalpingStrategy::calculateMicroATRBasedStop(
     
     double atr_percent = (atr / entry_price) * 100;
     
-    double multiplier = 1.2;  // ?ㅼ틮?? ????댄듃
+    double multiplier = 1.2;
     if (atr_percent < 0.5) {
         multiplier = 1.0;
     } else if (atr_percent < 1.0) {
@@ -2793,22 +2728,13 @@ double ScalpingStrategy::calculateMicroATRBasedStop(
 // ===== 7. Trade Cost Analysis =====
 
 bool ScalpingStrategy::isWorthScalping(double expected_return, double expected_sharpe) const {
-    // 1. 理쒖냼 鍮꾩슜 怨꾩궛 (?섏닔猷??щ━?쇱?) - ?닿굔 ?덈? ???紐삵븯???좎엯?덈떎.
     double total_cost = (UPBIT_FEE_RATE * 2) + (EXPECTED_SLIPPAGE * 2); 
     double net_return = expected_return - total_cost;
 
-    // 2. ?쒖닔??湲곗?: 0.05% (5bp)
-    // ?섏닔猷??쇨퀬 而ㅽ뵾媛믪씠?쇰룄 ?⑥쑝硫??쇰떒 '湲고쉶'?쇨퀬 遊낅땲??
     if (net_return < 0.0005) return false;
 
-    // 3. ?ㅽ봽吏??湲곗?: 0.3 (?꾪솕)
-    // 珥덈떒?(Scalping)??罹붾뱾 紐?媛쒕쭔 蹂닿퀬 ?ㅼ뼱媛湲??뚮Ц???ㅽ봽吏?섍? ?믨쾶 ?섏삤湲??대졄?듬땲??
-    // 湲곗〈 0.5~1.0? ?덈Т 媛?뱁븯??0.3?쇰줈 ??떠蹂댁꽭??
     if (expected_sharpe < 0.3) return false; 
 
-    // 4. ?먯씡鍮?R/R) 湲곗?: 0.8 (?꾪솕)
-    // ?ㅼ틮?묒? ?밸쪧濡?癒밴퀬?щ뒗 嫄곗?, ?먯씡鍮꾨줈 癒밴퀬?щ뒗 寃??꾨떃?덈떎.
-    // '癒뱀쓣 嫄?0.8 : ?껋쓣 嫄?1' ?뺣룄留??섏뼱???밸쪧??65%硫?臾댁“嫄??대뱷?낅땲??
     double actual_rr = expected_return / BASE_STOP_LOSS;
     if (actual_rr < 0.8) return false; 
 
@@ -2823,7 +2749,6 @@ double ScalpingStrategy::calculateScalpingSignalStrength(
     MarketMicrostate microstate) const 
 {
     double strength = 0.0;
-    // 1. ?쒖옣 ?곹깭 ?먯닔
     if (microstate == MarketMicrostate::OVERSOLD_BOUNCE) strength += 0.20;
     else if (microstate == MarketMicrostate::MOMENTUM_SPIKE) strength += 0.20;
     else if (microstate == MarketMicrostate::BREAKOUT) strength += 0.15; 
@@ -2831,30 +2756,24 @@ double ScalpingStrategy::calculateScalpingSignalStrength(
 
     strength += mtf_signal.alignment_score * 0.15;
 
-    // 2. ?ㅻ뜑?뚮줈??蹂대꼫??臾명꽦 ?꾪솕
     double of_weight = 0.30;
     double effective_of_score = order_flow.microstructure_score;
-    // [?섏젙] 0.5 -> 0.3?쇰줈 ?꾪솕?섏뿬 ?됱떆?먮룄 媛以묒튂 遺??
     if (effective_of_score > 0.3) { 
         effective_of_score = std::min(1.0, effective_of_score + 0.10);
     }
     strength += effective_of_score * of_weight;
 
-    // 3. RSI 援ш컙 ?섑븳???뺤옣 (?듭떖 ?섏젙)
     auto prices = analytics::TechnicalIndicators::extractClosePrices(candles);
     double rsi = analytics::TechnicalIndicators::calculateRSI(prices, 14);
     
-    // [?섏젙] 25(李먮컮??遺???먯닔瑜?二쇰룄濡?踰붿쐞 ?뺤옣
     if (rsi >= 25 && rsi <= 45) strength += 0.15; 
     else if (rsi > 45 && rsi < 55) strength += 0.05;
     else if (rsi >= 55 && rsi <= 75) strength += 0.10;
 
-    // 4. 嫄곕옒???먯닔
     if (metrics.volume_surge_ratio >= 150) strength += 0.15;
     else if (metrics.volume_surge_ratio >= 110) strength += 0.10; 
     else strength += 0.05;
 
-    // 5. ?좊룞??蹂댁젙
     double liquidity_score = std::min(metrics.liquidity_score / 100.0, 1.0);
     strength += liquidity_score * 0.05;
 
@@ -2874,7 +2793,7 @@ double ScalpingStrategy::calculateScalpingCVaR(
     std::vector<double> sorted_returns(recent_returns_.begin(), recent_returns_.end());
     std::sort(sorted_returns.begin(), sorted_returns.end());
     
-    int var_index = static_cast<int>(sorted_returns.size() * 0.05);  // 95% ?좊ː援ш컙
+    int var_index = static_cast<int>(sorted_returns.size() * 0.05);
     var_index = std::max(0, std::min(var_index, static_cast<int>(sorted_returns.size()) - 1));
     
     double sum_tail = 0.0;
@@ -2971,7 +2890,6 @@ void ScalpingStrategy::updateScalpingRollingStatistics() {
         rolling_stats_.rolling_profit_factor = total_profit / total_loss;
     }
     
-    // ?됯퇏 蹂댁쑀 ?쒓컙 (珥?
     if (!recent_holding_times_.empty()) {
         rolling_stats_.avg_holding_time_seconds = calculateMean(
             std::vector<double>(recent_holding_times_.begin(), recent_holding_times_.end())
@@ -3007,7 +2925,6 @@ double ScalpingStrategy::calculateUltraShortVolatility(const std::vector<Candle>
     std::vector<double> returns;
     size_t start = candles.size() - 10;
     for (size_t i = start + 1; i < candles.size(); ++i) {
-        // [?섏젙] (?꾩옱 - ?댁쟾) / ?댁쟾
         double ret = (candles[i].close - candles[i-1].close) / candles[i-1].close;
         returns.push_back(ret);
     }
@@ -3036,18 +2953,13 @@ bool ScalpingStrategy::shouldGenerateScalpingSignal(
     return true;
 }
 
-// ===== ?ъ????곹깭 ?낅뜲?댄듃 (紐⑤땲?곕쭅 以? =====
 
 void ScalpingStrategy::updateState(const std::string& market, double current_price) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     (void)market;
     (void)current_price;
     
-    // ScalpingStrategy??珥덈떒??대?濡??ㅼ떆媛?異붿쟻????以묒슂
-    // ?섏?留??꾩슂??留덉씠?щ줈?ㅽ뀒?댄듃 ?낅뜲?댄듃 媛??
    
-    // [?좏깮?ы빆] 媛??理쒓렐 媛寃⑹쑝濡?留덉씠?щ줈?곹깭 ?ы룊媛
-    // ?섏?留??ㅼ틮?묒씠誘濡?????쒓컙??吏㏃븘 ?遺遺?泥?궛 ?꾩뿉 ?좏샇 ?щ텇??????
 }
 
 } // namespace strategy

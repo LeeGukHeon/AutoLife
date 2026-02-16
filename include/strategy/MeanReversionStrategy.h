@@ -248,8 +248,6 @@ public:
         double entry_price,
         double current_price
     );
-    
-    MeanReversionRollingStatistics getRollingStatistics() const;
 
 private:
     std::shared_ptr<network::UpbitHttpClient> client_;

@@ -31,11 +31,13 @@ struct PerformanceBucketKey {
     std::string strategy_name;
     analytics::MarketRegime regime = analytics::MarketRegime::UNKNOWN;
     int liquidity_bucket = 0; // 0: <40, 1: 40-59, 2: 60-79, 3: >=80
+    std::string entry_archetype = "UNSPECIFIED";
 
     bool operator==(const PerformanceBucketKey& other) const {
         return strategy_name == other.strategy_name &&
                regime == other.regime &&
-               liquidity_bucket == other.liquidity_bucket;
+               liquidity_bucket == other.liquidity_bucket &&
+               entry_archetype == other.entry_archetype;
     }
 };
 
@@ -44,7 +46,8 @@ struct PerformanceBucketKeyHash {
         std::size_t h1 = std::hash<std::string>{}(key.strategy_name);
         std::size_t h2 = std::hash<int>{}(static_cast<int>(key.regime));
         std::size_t h3 = std::hash<int>{}(key.liquidity_bucket);
-        return h1 ^ (h2 << 1) ^ (h3 << 2);
+        std::size_t h4 = std::hash<std::string>{}(key.entry_archetype);
+        return h1 ^ (h2 << 1) ^ (h3 << 2) ^ (h4 << 3);
     }
 };
 
