@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-17 (Stage-2.41 promoted snapshot train/eval revalidation)
+Last updated: 2026-02-17 (Stage-2.43 drift-penalty sensitivity + promoted revalidation)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -1520,6 +1520,79 @@ The system must:
   - next:
     - run rr-focused local sweep (with split-ownership drift guard ON) centered on `rr_adaptive_regime` to improve expectancy while preserving ownership alignment.
     - if alignment breaks again, run penalty sensitivity sweep (`600/900/1200`) before expanding scenario family.
+
+- Stage-2.42 update (2026-02-17):
+  - `rr_adaptive_regime` focused local sweep support added:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - changes:
+      - new local sweep controls:
+        - `--enable-rr-adaptive-regime-local-sweep` (default ON)
+        - `--rr-adaptive-regime-local-rr-step` (default `0.02`)
+        - `--rr-adaptive-regime-local-signal-step` (default `0.01`)
+        - `--rr-adaptive-regime-local-edge-step` (default `0.0001`)
+      - `risk_gate_rr_adaptive_regime_focus` family now supports local profiles:
+        - `balance_local_{relax,center,tight}`
+        - `protect_medium_local_{center,tight}`
+        - plus `second_stage_severe_guard_comparator`
+      - report/console output includes rr-adaptive local sweep settings.
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage242.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage242.json`
+  - local-sweep batch summary (`core_full`, objective order):
+    - 1) `scenario_quality_focus_002`
+      - `obj=-21188.958`, `pf=0.8920`, `exp=-7.4982`, `trades=128.25`
+      - `severe_ratio=28.28%`
+      - top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime`
+      - profile=`balance_local_tight`
+    - 2) `scenario_quality_focus_005`
+      - `obj=-22616.871`, `pf=0.5449`, `exp=-8.3579`
+      - top risk=`blocked_risk_gate_entry_quality_rr_base`
+      - profile=`second_stage_severe_guard_comparator`
+    - 3) `scenario_quality_focus_001`
+      - `obj=-25850.285495`, `pf=0.4958`, `exp=-8.9763`
+      - top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_regime`
+      - profile=`balance_local_center`
+  - promoted snapshot validation:
+    - snapshot:
+      - `build/Release/logs/candidate_promoted_combo_stage2_42.json`
+    - command:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+    - result:
+      - recommendation=`hold_candidate_calibrate_risk_gate_edge_baseline_floor`
+      - validation top risk=`blocked_risk_gate_entry_quality_edge_base:2655`
+      - holdout top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1860`
+      - split ownership drift reappeared.
+
+- Stage-2.43 update (2026-02-17):
+  - split-ownership drift penalty sensitivity sweep executed (`600/900/1200`):
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py ... --objective-split-ownership-drift-penalty 600 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage243_pen600.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage243_pen600.json`
+      - `python scripts/tune_candidate_gate_trade_density.py ... --objective-split-ownership-drift-penalty 900 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage243_pen900.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage243_pen900.json`
+      - `python scripts/tune_candidate_gate_trade_density.py ... --objective-split-ownership-drift-penalty 1200 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage243_pen1200.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage243_pen1200.json`
+  - sensitivity result:
+    - top-3 set remained stable for all penalties:
+      - `005`, `003`, `001`
+    - best remained unchanged:
+      - `scenario_quality_focus_005` (`obj=-22175.155`, `pf=0.6623`, `exp=-7.8005`, top risk=`rr_adaptive_regime`)
+    - penalty scale mainly affected non-primary ownership candidates:
+      - `scenario_quality_focus_000` / `scenario_quality_focus_004` moved by `+-300` around baseline (`900`).
+  - promoted snapshot validation (`penalty=900` baseline):
+    - snapshot:
+      - `build/Release/logs/candidate_promoted_combo_stage2_43.json`
+    - command:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+    - result:
+      - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - validation top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:802`
+      - holdout top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:977`
+      - split ownership alignment recovered, but promotion gate still fails (`pf<1`, `exp<0`).
+  - interpretation:
+    - drift penalty baseline `900` is robust enough in current search space (no top-rank flip).
+    - ownership drift can be suppressed, but expectancy/profitability remains the bottleneck.
+  - next:
+    - run focused rr-adaptive regime adders refinement for expectancy uplift while keeping ownership alignment fixed.
+    - keep split-drift guard enabled and avoid widening family space until `exp` trend improves.
 
 2. Expectancy-first improvement loop
 - Optimize for:
