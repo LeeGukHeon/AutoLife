@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-17 (rr-ownership objective guard + bridge micro profile validation)
+Last updated: 2026-02-17 (rr-bridge local sweep + promoted snapshot train/eval validation)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -1360,6 +1360,60 @@ The system must:
   - next:
     - run focused local sweep around top-2 (`002`, `003`) with smaller RR/strength increments.
     - validate with train/eval cycle after promoting one candidate config snapshot.
+
+- Stage-2.38 update (2026-02-17):
+  - rr-base bridge local sweep (top-2 neighborhood) added and validated:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - changes:
+      - bridge local sweep controls (default ON):
+        - `--enable-rr-bridge-local-sweep`
+        - `--rr-bridge-local-rr-step` (default `0.02`)
+        - `--rr-bridge-local-signal-step` (default `0.01`)
+        - `--rr-bridge-local-edge-step` (default `0.0001`)
+      - bridge family profile router expanded for focused local variants:
+        - `bridge_balanced_local_{center,relax,tight}`
+        - `bridge_guarded_plus_local_{center,relax,tight}`
+      - report metadata now records local sweep parameters in summary JSON.
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache` completed
+  - routing evidence:
+    - `risk_gate_focus=entry_quality_rr_adaptive_regime_with_rr_base_holdout`
+    - `scenario_family_counts={'risk_gate_rr_adaptive_regime_base_bridge': 6}`
+    - local sweep log:
+      - `rr_bridge_local_sweep=on, rr_step=0.020, signal_step=0.010, edge_step=0.00010`
+  - final batch summary (`core_full`, objective order):
+    - 1) `scenario_quality_focus_002`
+      - `obj=-21413.72`, `pf=0.8838`, `exp=-7.8839`, `trades=126.5`
+      - `severe_ratio=42.87%`, profile=`bridge_balanced_local_tight`
+      - top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime`
+    - 2) `scenario_quality_focus_005`
+      - `obj=-22746.956`, `pf=0.5376`, `exp=-8.3801`, `trades=130.75`
+      - `severe_ratio=41.23%`, profile=`bridge_guarded_plus_local_tight`
+      - top risk=`blocked_risk_gate_entry_quality_rr_base`
+    - 3) `scenario_quality_focus_003`
+      - `obj=-22845.111`, `pf=0.5347`, `exp=-8.4924`, `trades=135.0`
+      - `severe_ratio=54.16%`, profile=`bridge_guarded_plus_local_center`
+      - top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime`
+  - promoted snapshot validation:
+    - promoted best combo snapshot:
+      - `build/Release/logs/candidate_promoted_combo_stage2_38.json`
+      - applied build config: `build/Release/config/config.json`
+    - command:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+    - result:
+      - recommendation=`hold_candidate_calibrate_risk_gate_edge_baseline_floor`
+      - train: `pf=0.9675`, `exp=-7.7190`, `trades=119.4286`
+      - validation: `pf=0.5206`, `exp=-7.3395`, `trades=170.5`, top risk=`blocked_risk_gate_entry_quality_edge_base:1187`
+      - holdout: `pf=0.4920`, `exp=-7.5554`, `trades=137.6667`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:2562`
+      - promotion gate: fail (`promotion_gate_pass=false`, `generalization_guard_pass=false`)
+  - interpretation:
+    - focused local sweep improved objective/PF ordering around top profiles, but promoted split validation still fails and ownership drifts to mixed edge/rr bottlenecks across validation/holdout.
+    - overfit 방지 원칙 유지: train-side improvement만으로는 승격 불가.
+  - next:
+    - add objective penalty for split ownership drift (`validation` vs `holdout` top risk mismatch) in RR-focused batches.
+    - run another 6-scenario local sweep with drift guard, then re-run train/eval cycle.
 
 2. Expectancy-first improvement loop
 - Optimize for:

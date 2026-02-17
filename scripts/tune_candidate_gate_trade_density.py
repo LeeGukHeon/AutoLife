@@ -820,6 +820,10 @@ def adapt_combo_specs_for_bottleneck(
     enable_hint_impact_guardrail: bool,
     hint_impact_guardrail_ratio: float,
     hint_impact_guardrail_tighten_scale: float,
+    enable_rr_bridge_local_sweep: bool = True,
+    rr_bridge_local_rr_step: float = 0.02,
+    rr_bridge_local_signal_step: float = 0.01,
+    rr_bridge_local_edge_step: float = 0.0001,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
     top_group = str(context.get("top_group", ""))
     risk_gate_focus = str(context.get("risk_gate_focus", ""))
@@ -1708,23 +1712,46 @@ def adapt_combo_specs_for_bottleneck(
             # Hybrid focus:
             # validation demands rr_adaptive_regime relief while holdout still
             # shows rr_base ownership. Keep guarded profiles as default and
-            # remove high-severe rebound relax variants.
-            profile_order = (
-                "bridge_guarded",
-                "bridge_guarded_plus",
-                "bridge_balanced",
-                "bridge_guarded_plus",
-                "bridge_guarded",
-                "bridge_rr_base_relief_micro",
-            )
+            # remove high-severe rebound relax variants. When local sweep is
+            # enabled, spend most slots on top-ranked profile neighborhood
+            # (balanced / guarded_plus) with small anti-overfit increments.
+            local_rr_step = max(0.0, float(rr_bridge_local_rr_step))
+            local_signal_step = max(0.0, float(rr_bridge_local_signal_step))
+            local_edge_step = max(0.0, float(rr_bridge_local_edge_step))
+            local_sweep_enabled = bool(enable_rr_bridge_local_sweep) and total_combos >= 4
+            if local_sweep_enabled:
+                profile_order = (
+                    "bridge_balanced_local_center",
+                    "bridge_balanced_local_relax",
+                    "bridge_balanced_local_tight",
+                    "bridge_guarded_plus_local_center",
+                    "bridge_guarded_plus_local_relax",
+                    "bridge_guarded_plus_local_tight",
+                    "bridge_guarded",
+                    "bridge_rr_base_relief_micro",
+                )
+            else:
+                profile_order = (
+                    "bridge_guarded",
+                    "bridge_guarded_plus",
+                    "bridge_balanced",
+                    "bridge_guarded_plus",
+                    "bridge_guarded",
+                    "bridge_rr_base_relief_micro",
+                )
             profile = profile_order[combo_index % len(profile_order)]
+            base_profile = profile
+            if profile.startswith("bridge_balanced_local_"):
+                base_profile = "bridge_balanced"
+            elif profile.startswith("bridge_guarded_plus_local_"):
+                base_profile = "bridge_guarded_plus"
             profile_to_variant = {
                 "bridge_balanced": 0,
                 "bridge_guarded": 1,
                 "bridge_guarded_plus": 2,
                 "bridge_rr_base_relief_micro": 3,
             }
-            variant = int(profile_to_variant.get(profile, 0))
+            variant = int(profile_to_variant.get(base_profile, 0))
             edge_mul_grid = (0.99, 1.01, 1.03, 0.97)
             rr_delta_grid = (-0.03, -0.01, 0.01, -0.05)
             weak_delta_grid = (-0.06, -0.03, -0.01, -0.08)
@@ -1807,10 +1834,159 @@ def adapt_combo_specs_for_bottleneck(
             clone["backtest_hostility_pause_candles_extreme"] = int(
                 max(24, int(clone.get("backtest_hostility_pause_candles_extreme", 60)) + candles_add_grid[variant])
             )
+            local_profile_adjustments: Dict[str, Dict[str, float]] = {
+                "bridge_balanced_local_center": {
+                    "d_rr": 0.0,
+                    "d_edge": 0.0,
+                    "d_signal": 0.0,
+                    "d_pf": 0.0,
+                    "d_ev": 0.0,
+                    "d_pause": 0.0,
+                    "d_candles": 0.0,
+                },
+                "bridge_balanced_local_relax": {
+                    "d_rr": -local_rr_step,
+                    "d_edge": -local_edge_step,
+                    "d_signal": -local_signal_step,
+                    "d_pf": -0.01,
+                    "d_ev": -0.08,
+                    "d_pause": -1.0,
+                    "d_candles": -2.0,
+                },
+                "bridge_balanced_local_tight": {
+                    "d_rr": local_rr_step,
+                    "d_edge": local_edge_step,
+                    "d_signal": local_signal_step,
+                    "d_pf": 0.01,
+                    "d_ev": 0.08,
+                    "d_pause": 1.0,
+                    "d_candles": 3.0,
+                },
+                "bridge_guarded_plus_local_center": {
+                    "d_rr": 0.0,
+                    "d_edge": 0.0,
+                    "d_signal": 0.0,
+                    "d_pf": 0.0,
+                    "d_ev": 0.0,
+                    "d_pause": 0.0,
+                    "d_candles": 0.0,
+                },
+                "bridge_guarded_plus_local_relax": {
+                    "d_rr": -local_rr_step,
+                    "d_edge": -local_edge_step,
+                    "d_signal": -local_signal_step,
+                    "d_pf": -0.01,
+                    "d_ev": -0.08,
+                    "d_pause": -1.0,
+                    "d_candles": -2.0,
+                },
+                "bridge_guarded_plus_local_tight": {
+                    "d_rr": local_rr_step,
+                    "d_edge": local_edge_step,
+                    "d_signal": local_signal_step,
+                    "d_pf": 0.01,
+                    "d_ev": 0.08,
+                    "d_pause": 1.0,
+                    "d_candles": 3.0,
+                },
+            }
+            if profile in local_profile_adjustments:
+                adj = local_profile_adjustments[profile]
+                clone["min_expected_edge_pct"] = round(
+                    _clamp(float(clone.get("min_expected_edge_pct", 0.0010)) + float(adj["d_edge"]), 0.0005, 0.0019),
+                    4,
+                )
+                clone["min_reward_risk"] = round(
+                    _clamp(float(clone.get("min_reward_risk", 1.20)) + float(adj["d_rr"]), 1.00, 1.85),
+                    2,
+                )
+                clone["min_rr_weak_signal"] = round(
+                    _clamp(float(clone.get("min_rr_weak_signal", 1.80)) + float(adj["d_rr"]), 1.05, 2.35),
+                    2,
+                )
+                clone["min_rr_strong_signal"] = round(
+                    _clamp(float(clone.get("min_rr_strong_signal", 1.20)) + (float(adj["d_rr"]) * 0.8), 0.82, 1.80),
+                    2,
+                )
+                clone["min_strategy_profit_factor"] = round(
+                    _clamp(float(clone.get("min_strategy_profit_factor", 0.95)) + float(adj["d_pf"]), 0.86, 1.25),
+                    2,
+                )
+                clone["min_strategy_expectancy_krw"] = round(
+                    float(clone.get("min_strategy_expectancy_krw", -1.0)) + float(adj["d_ev"]),
+                    2,
+                )
+                clone["scalping_min_signal_strength"] = round(
+                    _clamp(
+                        float(clone.get("scalping_min_signal_strength", 0.70)) + float(adj["d_signal"]),
+                        0.58,
+                        0.90,
+                    ),
+                    2,
+                )
+                clone["momentum_min_signal_strength"] = round(
+                    _clamp(
+                        float(clone.get("momentum_min_signal_strength", 0.72)) + float(adj["d_signal"]),
+                        0.58,
+                        0.90,
+                    ),
+                    2,
+                )
+                clone["breakout_min_signal_strength"] = round(
+                    _clamp(
+                        float(clone.get("breakout_min_signal_strength", 0.40)) + (float(adj["d_signal"]) * 0.6),
+                        0.30,
+                        0.56,
+                    ),
+                    2,
+                )
+                clone["mean_reversion_min_signal_strength"] = round(
+                    _clamp(
+                        float(clone.get("mean_reversion_min_signal_strength", 0.40)) + (float(adj["d_signal"]) * 0.6),
+                        0.30,
+                        0.56,
+                    ),
+                    2,
+                )
+                clone["hostility_pause_scans"] = int(
+                    max(2, min(16, int(clone.get("hostility_pause_scans", 4)) + int(round(float(adj["d_pause"])))))
+                )
+                clone["hostility_pause_scans_extreme"] = int(
+                    max(
+                        3,
+                        min(
+                            20,
+                            int(clone.get("hostility_pause_scans_extreme", 6))
+                            + int(round(float(adj["d_pause"]))),
+                        ),
+                    )
+                )
+                clone["backtest_hostility_pause_candles"] = int(
+                    max(
+                        12,
+                        min(
+                            220,
+                            int(clone.get("backtest_hostility_pause_candles", 36))
+                            + int(round(float(adj["d_candles"]))),
+                        ),
+                    )
+                )
+                clone["backtest_hostility_pause_candles_extreme"] = int(
+                    max(
+                        24,
+                        min(
+                            260,
+                            int(clone.get("backtest_hostility_pause_candles_extreme", 60))
+                            + int(round(float(adj["d_candles"]))),
+                        ),
+                    )
+                )
             clone["avoid_high_volatility"] = True
             clone["avoid_trending_down"] = True
             clone["bottleneck_rr_adaptive_regime_base_bridge_variant"] = int(variant)
             clone["bottleneck_rr_adaptive_regime_base_bridge_profile"] = str(profile)
+            clone["bottleneck_rr_adaptive_regime_base_bridge_base_profile"] = str(base_profile)
+            clone["bottleneck_rr_adaptive_regime_base_bridge_local_sweep"] = bool(local_sweep_enabled)
 
         elif adapted and family == "risk_gate_adaptive_rebalance":
             # Adaptive RR adders suspected too strict: keep quality, but avoid aggressive tightening.
@@ -2961,6 +3137,36 @@ def main(argv=None) -> int:
         action="store_false",
     )
     parser.add_argument(
+        "--enable-rr-bridge-local-sweep",
+        "-EnableRrBridgeLocalSweep",
+        dest="enable_rr_bridge_local_sweep",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--disable-rr-bridge-local-sweep",
+        dest="enable_rr_bridge_local_sweep",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--rr-bridge-local-rr-step",
+        "-RrBridgeLocalRrStep",
+        type=float,
+        default=0.02,
+    )
+    parser.add_argument(
+        "--rr-bridge-local-signal-step",
+        "-RrBridgeLocalSignalStep",
+        type=float,
+        default=0.01,
+    )
+    parser.add_argument(
+        "--rr-bridge-local-edge-step",
+        "-RrBridgeLocalEdgeStep",
+        type=float,
+        default=0.0001,
+    )
+    parser.add_argument(
         "--enable-hint-impact-guardrail",
         "-EnableHintImpactGuardrail",
         dest="enable_hint_impact_guardrail",
@@ -3143,6 +3349,10 @@ def main(argv=None) -> int:
             enable_hint_impact_guardrail=bool(args.enable_hint_impact_guardrail),
             hint_impact_guardrail_ratio=float(args.hint_impact_guardrail_ratio),
             hint_impact_guardrail_tighten_scale=float(args.hint_impact_guardrail_tighten_scale),
+            enable_rr_bridge_local_sweep=bool(args.enable_rr_bridge_local_sweep),
+            rr_bridge_local_rr_step=float(args.rr_bridge_local_rr_step),
+            rr_bridge_local_signal_step=float(args.rr_bridge_local_signal_step),
+            rr_bridge_local_edge_step=float(args.rr_bridge_local_edge_step),
         )
         combo_specs = dedupe_combos(combo_specs)
     else:
@@ -3236,6 +3446,13 @@ def main(argv=None) -> int:
         f"[TuneCandidate] objective_rr_ownership_guard="
         f"{'on' if enforce_rr_ownership_objective else 'off'}, "
         f"penalty={float(args.objective_rr_ownership_penalty):.2f}"
+    )
+    print(
+        f"[TuneCandidate] rr_bridge_local_sweep="
+        f"{'on' if bool(args.enable_rr_bridge_local_sweep) else 'off'}, "
+        f"rr_step={float(args.rr_bridge_local_rr_step):.3f}, "
+        f"signal_step={float(args.rr_bridge_local_signal_step):.3f}, "
+        f"edge_step={float(args.rr_bridge_local_edge_step):.5f}"
     )
 
     original_build_raw = build_config.read_text(encoding="utf-8-sig")
@@ -3525,6 +3742,10 @@ def main(argv=None) -> int:
             "skip_core_vs_legacy_gate": bool(args.skip_core_vs_legacy_gate),
             "use_effective_thresholds_for_objective": bool(args.use_effective_thresholds_for_objective),
             "enable_bottleneck_adapted_scenarios": bool(args.enable_bottleneck_adapted_scenarios),
+            "enable_rr_bridge_local_sweep": bool(args.enable_rr_bridge_local_sweep),
+            "rr_bridge_local_rr_step": float(args.rr_bridge_local_rr_step),
+            "rr_bridge_local_signal_step": float(args.rr_bridge_local_signal_step),
+            "rr_bridge_local_edge_step": float(args.rr_bridge_local_edge_step),
             "enable_hint_impact_guardrail": bool(args.enable_hint_impact_guardrail),
             "hint_impact_guardrail_ratio": float(args.hint_impact_guardrail_ratio),
             "hint_impact_guardrail_tighten_scale": float(args.hint_impact_guardrail_tighten_scale),
