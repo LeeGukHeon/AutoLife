@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-17 (Stage-2.57 post-fix full-cycle rerun)
+Last updated: 2026-02-17 (Stage-2.59 split-penalty hardening rerun)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -1990,6 +1990,57 @@ The system must:
     - holdout top ownership improved from `edge_base` to `rr_edge_adaptive_history`, but profitability/expectancy gates still fail.
   - next:
     - add `rr_edge_adaptive_history` ownership alignment guard path (mixed context) and rerun A/B on history-specific penalties.
+
+- Stage-2.58 update (2026-02-17):
+  - context-refresh rerun before new code patch:
+    - command:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage258.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage258.json`
+  - tuning context:
+    - `risk_gate_focus=entry_quality_rr_adaptive_mixed`
+    - split targets:
+      - primary=`blocked_risk_gate_entry_quality_rr_edge_adaptive_history`
+      - secondary=`blocked_risk_gate_entry_quality_rr_adaptive_mixed`
+    - `objective_rr_adaptive_mixed_vs_regime_drift_guard=on`
+  - tuning result:
+    - `best_combo=scenario_quality_focus_000`
+    - `objective=-23445.606`, `pf=0.5506`, `exp=-8.2902`, top risk=`blocked_risk_gate_entry_quality_rr_base`
+  - promoted cycle result:
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+    - verdict:
+      - `promotion_gate_pass=false`, `generalization_guard_pass=false`
+      - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+    - split ownership regressed:
+      - validation top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_regime:1391`
+      - holdout top risk=`blocked_risk_gate_entry_quality_edge_base:712`
+
+- Stage-2.59 update (2026-02-17):
+  - split-drift penalty hardening rerun:
+    - command:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --objective-split-ownership-drift-penalty 2400 --objective-edge-base-anti-drift-penalty 1800 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage259.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage259.json`
+  - tuning context reverted to regime-focused branch after Stage-2.58 promoted pass:
+    - `risk_gate_focus=entry_quality_rr_adaptive_regime`
+    - split targets:
+      - primary=`blocked_risk_gate_entry_quality_edge_base`
+      - secondary=`blocked_risk_gate_entry_quality_rr_edge_adaptive_regime`
+  - tuning result:
+    - `best_combo=scenario_quality_focus_005`
+    - `objective=-25016.871`, `pf=0.5449`, `exp=-8.3579`, top risk=`blocked_risk_gate_entry_quality_rr_base`
+  - promoted cycle result:
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+    - verdict:
+      - `promotion_gate_pass=false`, `generalization_guard_pass=false`
+      - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_mixed_adders`
+    - split ownership recovered to Stage-2.57 pattern:
+      - validation top risk=`blocked_risk_gate_entry_quality_rr_adaptive_mixed:1327`
+      - holdout top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_history:709`
+    - stage metrics:
+      - train: `pf=0.5618`, `exp=-8.9594`, `trades=137.2857`
+      - validation: `pf=0.4667`, `exp=-8.2747`, `trades=158.5`
+      - holdout: `pf=0.5682`, `exp=-5.8946`, `trades=110.6667`
+  - interpretation:
+    - stronger split penalties changed objective scale but did not unlock promotion; the loop oscillates between two ownership states (`mixed/history` vs `regime/edge_base`).
+  - next:
+    - add context-stability guard to prevent immediate branch flip (mixed <-> regime) across consecutive cycles and retune on stabilized branch.
 
 2. Expectancy-first improvement loop
 - Optimize for:
