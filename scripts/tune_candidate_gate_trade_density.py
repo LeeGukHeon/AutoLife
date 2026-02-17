@@ -466,6 +466,8 @@ def compute_combo_bottleneck_priority_score(combo: Dict[str, Any], context: Dict
             "entry_quality_rr_edge_adaptive_regime",
             "entry_quality_rr_edge_adaptive_mixed",
         }:
+            if risk_gate_focus == "entry_quality_rr_adaptive_regime":
+                return round((quality_score * 0.78) + (relax_score * 0.22), 6)
             return round((quality_score * 0.84) + (relax_score * 0.16), 6)
         if risk_gate_focus in {"entry_quality_rr", "entry_quality_edge", "entry_quality_rr_edge"}:
             return round((quality_score * 0.88) + (relax_score * 0.12), 6)
@@ -868,6 +870,8 @@ def adapt_combo_specs_for_bottleneck(
             family = "risk_gate_second_stage_hostile_consistency"
         elif risk_gate_focus == "second_stage_confirmation":
             family = "risk_gate_second_stage_consistency"
+        elif risk_gate_focus == "entry_quality_rr_adaptive_regime":
+            family = "risk_gate_rr_adaptive_regime_focus"
         elif risk_gate_focus in {
             "entry_quality_rr_adaptive",
             "entry_quality_edge_adaptive",
@@ -1546,6 +1550,91 @@ def adapt_combo_specs_for_bottleneck(
             clone["avoid_trending_down"] = True
             clone["bottleneck_second_stage_focus"] = risk_gate_focus
             clone["bottleneck_second_stage_variant"] = int(variant)
+
+        elif adapted and family == "risk_gate_rr_adaptive_regime_focus":
+            # Targeted response for rr_adaptive_regime bottleneck:
+            # widen RR-adaptive pass window while keeping edge/hostility guardrails bounded.
+            variant = (sum(ord(c) for c in combo_id) % 3)
+            edge_mul_grid = (0.95, 0.98, 1.01)
+            rr_delta_grid = (-0.08, -0.05, -0.02)
+            weak_delta_grid = (-0.14, -0.10, -0.06)
+            strong_delta_grid = (-0.09, -0.06, -0.03)
+            pf_delta_grid = (-0.02, -0.01, 0.00)
+            ev_delta_grid = (-0.45, -0.25, -0.10)
+            orders_add_grid = (1, 1, 0)
+            regime_guard_shift = (0.00, 0.01, 0.02)
+
+            clone["min_expected_edge_pct"] = round(
+                _clamp(
+                    float(clone.get("min_expected_edge_pct", 0.0010)) * edge_mul_grid[variant],
+                    0.0005,
+                    0.0018,
+                ),
+                4,
+            )
+            clone["min_reward_risk"] = round(
+                _clamp(float(clone.get("min_reward_risk", 1.20)) + rr_delta_grid[variant], 1.00, 1.70),
+                2,
+            )
+            clone["min_rr_weak_signal"] = round(
+                _clamp(float(clone.get("min_rr_weak_signal", 1.80)) + weak_delta_grid[variant], 1.05, 2.20),
+                2,
+            )
+            clone["min_rr_strong_signal"] = round(
+                _clamp(float(clone.get("min_rr_strong_signal", 1.20)) + strong_delta_grid[variant], 0.82, 1.60),
+                2,
+            )
+            clone["min_strategy_trades_for_ev"] = int(
+                max(16, round(float(clone.get("min_strategy_trades_for_ev", 30)) * (0.88 + (0.04 * variant))))
+            )
+            clone["min_strategy_profit_factor"] = round(
+                _clamp(float(clone.get("min_strategy_profit_factor", 0.95)) + pf_delta_grid[variant], 0.86, 1.20),
+                2,
+            )
+            clone["min_strategy_expectancy_krw"] = round(
+                float(clone.get("min_strategy_expectancy_krw", -1.0)) + ev_delta_grid[variant],
+                2,
+            )
+            clone["max_new_orders_per_scan"] = int(
+                max(1, min(4, int(clone.get("max_new_orders_per_scan", 2)) + orders_add_grid[variant]))
+            )
+            clone["scalping_min_signal_strength"] = round(
+                _clamp(float(clone.get("scalping_min_signal_strength", 0.70)) - (0.03 - (0.01 * variant)), 0.58, 0.86),
+                2,
+            )
+            clone["momentum_min_signal_strength"] = round(
+                _clamp(float(clone.get("momentum_min_signal_strength", 0.72)) - (0.03 - (0.01 * variant)), 0.58, 0.86),
+                2,
+            )
+            clone["breakout_min_signal_strength"] = round(
+                _clamp(float(clone.get("breakout_min_signal_strength", 0.40)) - (0.02 - (0.01 * variant)), 0.30, 0.52),
+                2,
+            )
+            clone["mean_reversion_min_signal_strength"] = round(
+                _clamp(float(clone.get("mean_reversion_min_signal_strength", 0.40)) - (0.02 - (0.01 * variant)), 0.30, 0.52),
+                2,
+            )
+            clone["hostility_hostile_threshold"] = round(
+                _clamp(float(clone.get("hostility_hostile_threshold", 0.62)) + regime_guard_shift[variant], 0.50, 0.80),
+                2,
+            )
+            clone["hostility_severe_threshold"] = round(
+                _clamp(float(clone.get("hostility_severe_threshold", 0.82)) + regime_guard_shift[variant], 0.65, 0.92),
+                2,
+            )
+            clone["hostility_extreme_threshold"] = round(
+                _clamp(float(clone.get("hostility_extreme_threshold", 0.88)) + regime_guard_shift[variant], 0.70, 0.95),
+                2,
+            )
+            clone["hostility_pause_scans"] = int(max(2, int(clone.get("hostility_pause_scans", 4)) - 1))
+            clone["hostility_pause_scans_extreme"] = int(max(3, int(clone.get("hostility_pause_scans_extreme", 6)) - 1))
+            clone["backtest_hostility_pause_candles"] = int(max(12, int(clone.get("backtest_hostility_pause_candles", 36)) - 4))
+            clone["backtest_hostility_pause_candles_extreme"] = int(
+                max(24, int(clone.get("backtest_hostility_pause_candles_extreme", 60)) - 6)
+            )
+            clone["avoid_high_volatility"] = True
+            clone["avoid_trending_down"] = True
+            clone["bottleneck_rr_adaptive_regime_variant"] = int(variant)
 
         elif adapted and family == "risk_gate_adaptive_rebalance":
             # Adaptive RR adders suspected too strict: keep quality, but avoid aggressive tightening.

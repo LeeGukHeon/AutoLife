@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-17 (second-stage severe-history routing hardening)
+Last updated: 2026-02-17 (rr_adaptive_regime-focused tuning family activation)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -1049,6 +1049,77 @@ The system must:
   - next:
     - run `quality_focus` with multi-scenario (`--max-scenarios 4~6`) and compare severe-history rejection share delta.
     - keep promotion gate strict (validation/holdout/walk-forward/generalization guard unchanged).
+
+- Stage-2.29 update (2026-02-17):
+  - multi-scenario follow-up completed for severe-history ownership check:
+    - exploratory run (sample dataset):
+      - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 6 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate`
+    - real-data run (decision run):
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 4 --real-data-only --require-higher-tf-companions --screen-top-k 4 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate`
+  - routing/selection evidence:
+    - bottleneck context remained `risk_gate_focus=second_stage_confirmation_hostile_history_severe`
+    - scenario-family routing stayed deterministic:
+      - `scenario_family_counts={'risk_gate_second_stage_history_severe_guard': 4}`
+    - best combo selected: `scenario_quality_focus_002`
+  - real-data final comparison (`core_full`, 8 datasets):
+    - `scenario_quality_focus_000` (baseline in this batch):
+      - `pf=0.5360`, `exp=-8.5572`, `trades=127.7500`
+      - `second_stage_total=1190`, `severe=576` (`48.40%`)
+    - `scenario_quality_focus_002` (best):
+      - `pf=0.9089`, `exp=-7.0813`, `trades=132.8750`
+      - `second_stage_total=617`, `severe=222` (`35.98%`)
+    - delta (`002 - 000`):
+      - `pf +0.3729`
+      - `expectancy +1.4759 KRW`
+      - `trades +5.1250`
+      - `second_stage_total -573` (`-48.15%`)
+      - `severe -354` (`-61.46%`)
+      - `severe_ratio -12.42pp`
+  - current bottleneck interpretation:
+    - severe-history second-stage pressure was reduced materially in best combo.
+    - however top risk component in final matrix remains
+      - `blocked_risk_gate_entry_quality_rr_adaptive_regime`
+    - meaning bottleneck ownership has shifted back to risk-gate RR adaptive regime branch.
+  - next:
+    - add dedicated `risk_gate_entry_quality_rr_adaptive_regime` tuning family and keep second-stage severe guard branch as safety baseline.
+    - verify with train/eval cycle (`--skip-tune`) after applying best combo candidate.
+
+- Stage-2.30 update (2026-02-17):
+  - `rr_adaptive_regime` dedicated tuning family implemented:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - change:
+      - added `risk_gate_rr_adaptive_regime_focus` family selection/adaptation branch
+      - added dedicated bottleneck priority weighting for `entry_quality_rr_adaptive_regime`
+  - best combo candidate application check:
+    - applied `scenario_quality_focus_002` parameters to runtime config
+      - source: `config/config.json` (local runtime source)
+      - synced to runtime file: `build/Release/config/config.json`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 4 --real-data-only --require-higher-tf-companions --screen-top-k 4 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - train/eval outcome after best-combo sync (`core_full`):
+    - train: `pf=0.9922`, `trades=123.5714`, `exp=-7.1964`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1802`
+    - validation: `pf=0.5335`, `trades=173.5`, `exp=-6.8249`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:250`
+    - holdout: `pf=0.5226`, `trades=150.0`, `exp=-6.7470`, top risk=`blocked_risk_gate_entry_quality_rr_base:563`
+    - promotion recommendation moved to:
+      - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+  - tuning run evidence (new family activation):
+    - bottleneck context:
+      - `risk_gate_focus=entry_quality_rr_adaptive_regime`
+    - scenario family routing:
+      - `scenario_family_counts={'risk_gate_rr_adaptive_regime_focus': 4}`
+    - final best combo in this batch:
+      - `scenario_quality_focus_000`
+      - `pf=0.5596`, `exp=-8.0615`, `trades=135.6250`
+      - top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime`
+  - interpretation:
+    - routing ownership shift from second-stage severe to risk-gate RR-adaptive branch is now confirmed end-to-end.
+    - however this first rr-adaptive-regime-focused batch still fails gate (`pf<1`, `exp<0`), so branch-specific tuning needs additional bounded variants.
+  - next:
+    - expand rr-adaptive-regime variants (`max_new_orders_per_scan`, adaptive RR floors, strength guard) with stricter overfit guard.
+    - keep second-stage severe guard family available as fallback comparator in the same batch.
 
 2. Expectancy-first improvement loop
 - Optimize for:
