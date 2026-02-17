@@ -142,6 +142,11 @@ def read_train_eval_holdout_context(path_value: pathlib.Path) -> Dict[str, Any]:
             "top_rejection_group": "",
             "top_risk_gate_component_reason": "",
             "top_risk_gate_component_count": 0,
+            "holdout_top_risk_gate_component_reason": "",
+            "holdout_top_risk_gate_component_count": 0,
+            "validation_top_risk_gate_component_reason": "",
+            "validation_top_risk_gate_component_count": 0,
+            "risk_split_ownership_drift_active": False,
             "recommendation": "",
         }
 
@@ -173,19 +178,42 @@ def read_train_eval_holdout_context(path_value: pathlib.Path) -> Dict[str, Any]:
     verdict = payload.get("promotion_verdict") or {}
     holdout_reject_ctx = verdict.get("holdout_core_rejection_context") or {}
     validation_reject_ctx = verdict.get("validation_core_rejection_context") or {}
+    holdout_top_risk_gate_component_reason = str(
+        holdout_reject_ctx.get("top_entry_risk_gate_component_reason") or ""
+    )
+    validation_top_risk_gate_component_reason = str(
+        validation_reject_ctx.get("top_entry_risk_gate_component_reason") or ""
+    )
+    try:
+        holdout_top_risk_gate_component_count = int(
+            holdout_reject_ctx.get("top_entry_risk_gate_component_count") or 0
+        )
+    except (TypeError, ValueError):
+        holdout_top_risk_gate_component_count = 0
+    try:
+        validation_top_risk_gate_component_count = int(
+            validation_reject_ctx.get("top_entry_risk_gate_component_count") or 0
+        )
+    except (TypeError, ValueError):
+        validation_top_risk_gate_component_count = 0
     top_risk_gate_component_reason = str(
-        holdout_reject_ctx.get("top_entry_risk_gate_component_reason")
-        or validation_reject_ctx.get("top_entry_risk_gate_component_reason")
+        holdout_top_risk_gate_component_reason
+        or validation_top_risk_gate_component_reason
         or ""
     )
     try:
         top_risk_gate_component_count = int(
-            holdout_reject_ctx.get("top_entry_risk_gate_component_count")
-            or validation_reject_ctx.get("top_entry_risk_gate_component_count")
+            holdout_top_risk_gate_component_count
+            or validation_top_risk_gate_component_count
             or 0
         )
     except (TypeError, ValueError):
         top_risk_gate_component_count = 0
+    risk_split_ownership_drift_active = bool(
+        holdout_top_risk_gate_component_reason
+        and validation_top_risk_gate_component_reason
+        and holdout_top_risk_gate_component_reason != validation_top_risk_gate_component_reason
+    )
 
     return {
         "exists": True,
@@ -200,6 +228,11 @@ def read_train_eval_holdout_context(path_value: pathlib.Path) -> Dict[str, Any]:
         "top_rejection_group": str(taxonomy.get("overall_top_group", "") or ""),
         "top_risk_gate_component_reason": top_risk_gate_component_reason,
         "top_risk_gate_component_count": int(top_risk_gate_component_count),
+        "holdout_top_risk_gate_component_reason": holdout_top_risk_gate_component_reason,
+        "holdout_top_risk_gate_component_count": int(holdout_top_risk_gate_component_count),
+        "validation_top_risk_gate_component_reason": validation_top_risk_gate_component_reason,
+        "validation_top_risk_gate_component_count": int(validation_top_risk_gate_component_count),
+        "risk_split_ownership_drift_active": bool(risk_split_ownership_drift_active),
         "recommendation": str(verdict.get("recommendation", "") or ""),
     }
 
@@ -325,6 +358,15 @@ def build_effective_bottleneck_context(
     context["top_group_holdout"] = top_group_holdout
     context["holdout_recommendation"] = holdout_recommendation
     context["top_risk_gate_component_reason"] = top_risk_gate_component_reason
+    context["holdout_top_risk_gate_component_reason"] = str(
+        holdout_context.get("holdout_top_risk_gate_component_reason", "") or ""
+    )
+    context["validation_top_risk_gate_component_reason"] = str(
+        holdout_context.get("validation_top_risk_gate_component_reason", "") or ""
+    )
+    context["risk_split_ownership_drift_active"] = bool(
+        holdout_context.get("risk_split_ownership_drift_active", False)
+    )
     context["risk_gate_focus"] = risk_gate_focus
     context["risk_gate_focus_source"] = risk_gate_focus_source
     context["top_group_source"] = "live"
@@ -2689,6 +2731,10 @@ def compute_combo_objective(
     top_risk_gate_component_reason: str,
     enforce_rr_ownership_top_component: bool,
     objective_rr_ownership_penalty: float,
+    expected_primary_risk_component: str,
+    expected_secondary_risk_component: str,
+    enforce_split_ownership_drift_guard: bool,
+    objective_split_ownership_drift_penalty: float,
 ) -> float:
     penalty = 0.0
     if objective_mode == "profitable_ratio_priority":
@@ -2715,6 +2761,16 @@ def compute_combo_objective(
         top_reason = str(top_risk_gate_component_reason or "")
         if not top_reason.startswith("blocked_risk_gate_entry_quality_rr"):
             penalty += float(objective_rr_ownership_penalty)
+    if bool(enforce_split_ownership_drift_guard):
+        top_reason = str(top_risk_gate_component_reason or "")
+        primary_reason = str(expected_primary_risk_component or "")
+        secondary_reason = str(expected_secondary_risk_component or "")
+        if top_reason and primary_reason and top_reason == primary_reason:
+            pass
+        elif top_reason and secondary_reason and top_reason == secondary_reason:
+            penalty += (float(objective_split_ownership_drift_penalty) * 0.35)
+        else:
+            penalty += float(objective_split_ownership_drift_penalty)
 
     if penalty > 0.0:
         # Keep all infeasible combos below feasible ones while preserving ordering.
@@ -3059,6 +3115,26 @@ def main(argv=None) -> int:
         help="Penalty applied when RR ownership top-component constraint is violated.",
     )
     parser.add_argument(
+        "--objective-enforce-split-ownership-drift-guard",
+        "-ObjectiveEnforceSplitOwnershipDriftGuard",
+        dest="objective_enforce_split_ownership_drift_guard",
+        action="store_true",
+        default=True,
+        help="Penalize candidates that diverge from holdout/validation risk ownership targets when drift is active.",
+    )
+    parser.add_argument(
+        "--disable-objective-enforce-split-ownership-drift-guard",
+        dest="objective_enforce_split_ownership_drift_guard",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--objective-split-ownership-drift-penalty",
+        "-ObjectiveSplitOwnershipDriftPenalty",
+        type=float,
+        default=900.0,
+        help="Penalty applied when split ownership drift guard is violated.",
+    )
+    parser.add_argument(
         "--objective-mode",
         "-ObjectiveMode",
         choices=["balanced", "profitable_ratio_priority"],
@@ -3340,6 +3416,19 @@ def main(argv=None) -> int:
     enforce_rr_ownership_objective = bool(args.objective_enforce_rr_ownership_top_component) and (
         risk_gate_focus_for_objective.startswith("entry_quality_rr")
     )
+    holdout_top_risk_component_for_objective = str(
+        bottleneck_context.get("holdout_top_risk_gate_component_reason", "") or ""
+    )
+    validation_top_risk_component_for_objective = str(
+        bottleneck_context.get("validation_top_risk_gate_component_reason", "") or ""
+    )
+    split_ownership_drift_active = bool(bottleneck_context.get("risk_split_ownership_drift_active", False))
+    enforce_split_ownership_drift_objective = bool(args.objective_enforce_split_ownership_drift_guard) and (
+        risk_gate_focus_for_objective.startswith("entry_quality_rr")
+        and split_ownership_drift_active
+        and bool(holdout_top_risk_component_for_objective)
+        and bool(validation_top_risk_component_for_objective)
+    )
     scenario_family_counts: Dict[str, int] = {}
     if bool(args.enable_bottleneck_adapted_scenarios):
         combo_specs, scenario_family_counts = adapt_combo_specs_for_bottleneck(
@@ -3448,6 +3537,14 @@ def main(argv=None) -> int:
         f"penalty={float(args.objective_rr_ownership_penalty):.2f}"
     )
     print(
+        f"[TuneCandidate] objective_split_ownership_drift_guard="
+        f"{'on' if enforce_split_ownership_drift_objective else 'off'}, "
+        f"drift_active={split_ownership_drift_active}, "
+        f"primary={holdout_top_risk_component_for_objective}, "
+        f"secondary={validation_top_risk_component_for_objective}, "
+        f"penalty={float(args.objective_split_ownership_drift_penalty):.2f}"
+    )
+    print(
         f"[TuneCandidate] rr_bridge_local_sweep="
         f"{'on' if bool(args.enable_rr_bridge_local_sweep) else 'off'}, "
         f"rr_step={float(args.rr_bridge_local_rr_step):.3f}, "
@@ -3531,6 +3628,10 @@ def main(argv=None) -> int:
                     ),
                     enforce_rr_ownership_top_component=bool(enforce_rr_ownership_objective),
                     objective_rr_ownership_penalty=float(args.objective_rr_ownership_penalty),
+                    expected_primary_risk_component=holdout_top_risk_component_for_objective,
+                    expected_secondary_risk_component=validation_top_risk_component_for_objective,
+                    enforce_split_ownership_drift_guard=bool(enforce_split_ownership_drift_objective),
+                    objective_split_ownership_drift_penalty=float(args.objective_split_ownership_drift_penalty),
                 )
                 screen_row["objective_score"] = screen_objective
                 screen_row["objective_effective_min_avg_trades"] = float(screen_effective["min_avg_trades"])
@@ -3641,6 +3742,10 @@ def main(argv=None) -> int:
                     ),
                     enforce_rr_ownership_top_component=bool(enforce_rr_ownership_objective),
                     objective_rr_ownership_penalty=float(args.objective_rr_ownership_penalty),
+                    expected_primary_risk_component=holdout_top_risk_component_for_objective,
+                    expected_secondary_risk_component=validation_top_risk_component_for_objective,
+                    enforce_split_ownership_drift_guard=bool(enforce_split_ownership_drift_objective),
+                    objective_split_ownership_drift_penalty=float(args.objective_split_ownership_drift_penalty),
                 )
                 final_row["objective_score"] = final_objective
                 final_row["objective_effective_min_avg_trades"] = float(final_effective["min_avg_trades"])
@@ -3736,6 +3841,13 @@ def main(argv=None) -> int:
                 args.objective_enforce_rr_ownership_top_component
             ),
             "objective_rr_ownership_penalty": float(args.objective_rr_ownership_penalty),
+            "objective_enforce_split_ownership_drift_guard": bool(
+                args.objective_enforce_split_ownership_drift_guard
+            ),
+            "objective_split_ownership_drift_penalty": float(args.objective_split_ownership_drift_penalty),
+            "objective_split_ownership_drift_active": bool(split_ownership_drift_active),
+            "objective_split_ownership_primary_component": holdout_top_risk_component_for_objective,
+            "objective_split_ownership_secondary_component": validation_top_risk_component_for_objective,
             "objective_mode": str(args.objective_mode),
             "enable_hostility_adaptive_thresholds": bool(args.enable_hostility_adaptive_thresholds),
             "enable_hostility_adaptive_trades_only": bool(args.enable_hostility_adaptive_trades_only),

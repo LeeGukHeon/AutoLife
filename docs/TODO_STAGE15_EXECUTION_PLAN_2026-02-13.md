@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-17 (rr-bridge local sweep + promoted snapshot train/eval validation)
+Last updated: 2026-02-17 (split ownership drift objective guard + rr-focused A/B verification)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -1414,6 +1414,48 @@ The system must:
   - next:
     - add objective penalty for split ownership drift (`validation` vs `holdout` top risk mismatch) in RR-focused batches.
     - run another 6-scenario local sweep with drift guard, then re-run train/eval cycle.
+
+- Stage-2.39 update (2026-02-17):
+  - split ownership drift objective guard implemented:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - changes:
+      - train/eval context parser now captures split-specific risk ownership:
+        - `holdout_top_risk_gate_component_reason`
+        - `validation_top_risk_gate_component_reason`
+        - `risk_split_ownership_drift_active`
+      - objective guard added (RR-focused batches only):
+        - `--objective-enforce-split-ownership-drift-guard` (default ON)
+        - `--objective-split-ownership-drift-penalty` (default `900`)
+      - penalty rule:
+        - match holdout top component: no penalty
+        - match validation top component: partial penalty (`35%`)
+        - otherwise: full penalty
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - real-context run (current recommendation=`edge_base`):
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache`
+      - drift guard log: `drift_active=True` but `objective_split_ownership_drift_guard=off` (RR focus inactive by design)
+    - rr-focused forced-drift run (guard ON):
+      - `python scripts/tune_candidate_gate_trade_density.py ... --train-eval-summary-json build/Release/logs/candidate_train_eval_cycle_summary_rr_drift_mock.json --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage239.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage239.json`
+      - log:
+        - `objective_split_ownership_drift_guard=on`
+        - `primary=blocked_risk_gate_entry_quality_rr_adaptive_regime`
+        - `secondary=blocked_risk_gate_entry_quality_edge_base`
+    - rr-focused forced-drift run (guard OFF baseline):
+      - `python scripts/tune_candidate_gate_trade_density.py ... --train-eval-summary-json build/Release/logs/candidate_train_eval_cycle_summary_rr_drift_mock.json --disable-objective-enforce-split-ownership-drift-guard --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage239_nodriftguard.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage239_nodriftguard.json`
+  - A/B delta evidence (ON minus OFF):
+    - `scenario_quality_focus_003` (`rr_edge_adaptive_mixed`): `-900` (full penalty)
+    - `scenario_quality_focus_004` (`second_stage_*`): `-900` (full penalty)
+    - `scenario_quality_focus_005` (`rr_base`): `-900` (full penalty)
+    - `scenario_quality_focus_000` (`edge_base`): `-315` (35% partial penalty)
+    - `scenario_quality_focus_002` (`rr_adaptive_regime` primary match): `0`
+  - interpretation:
+    - drift guard behaves as intended in RR-focused regime and discourages split ownership divergence without breaking top candidate stability.
+    - current live context recommendation is `edge_base`, so drift guard remains intentionally inactive until RR-focused ownership returns.
+  - next:
+    - re-enter RR-focused branch on live context (or apply focused RR candidate) and run split train/eval cycle to validate guard effect on real recommendation path.
+    - if recommendation remains `edge_base`, mirror the same drift-guard concept for edge-focused ownership branch.
 
 2. Expectancy-first improvement loop
 - Optimize for:
