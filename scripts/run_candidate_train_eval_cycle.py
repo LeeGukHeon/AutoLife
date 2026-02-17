@@ -112,6 +112,16 @@ def parse_args(argv=None):
         default=0,
         help="Limit number of markets used for cycle (0 means all).",
     )
+    parser.add_argument(
+        "--reserve-newest-markets-for-holdout",
+        "-ReserveNewestMarketsForHoldout",
+        type=int,
+        default=0,
+        help=(
+            "Reserve newest markets (by dataset mtime) into holdout before ratio split. "
+            "Useful for out-of-time anti-overfit checks."
+        ),
+    )
 
     parser.add_argument(
         "--run-learned-eval",
@@ -496,11 +506,27 @@ def split_market_tokens(market_tokens: List[str], train_ratio: float, validation
     return {"train": train, "validation": validation, "holdout": holdout}
 
 
+def build_market_latest_mtime_map(by_market: Dict[str, List[Path]]) -> Dict[str, float]:
+    out: Dict[str, float] = {}
+    for market, rows in by_market.items():
+        latest = 0.0
+        for ds in rows:
+            try:
+                ts = float(ds.stat().st_mtime)
+            except OSError:
+                continue
+            if ts > latest:
+                latest = ts
+        out[str(market)] = float(latest)
+    return out
+
+
 def build_dataset_splits(
     datasets: List[Path],
     train_ratio: float,
     validation_ratio: float,
     max_markets: int,
+    reserve_newest_holdout_markets: int,
 ) -> Dict[str, Any]:
     by_market: Dict[str, List[Path]] = {}
     for ds in datasets:
@@ -511,7 +537,30 @@ def build_dataset_splits(
         market_tokens = market_tokens[: int(max_markets)]
         by_market = {k: by_market[k] for k in market_tokens}
 
-    split_markets = split_market_tokens(market_tokens, train_ratio=train_ratio, validation_ratio=validation_ratio)
+    market_latest_mtime = build_market_latest_mtime_map(by_market)
+    reserve_requested = max(0, int(reserve_newest_holdout_markets))
+    reserve_max_allowed = max(0, len(market_tokens) - 2)
+    reserve_applied = min(reserve_requested, reserve_max_allowed)
+    reserve_markets: List[str] = []
+    if reserve_applied > 0:
+        ranked_by_recency = sorted(
+            market_tokens,
+            key=lambda token: (-float(market_latest_mtime.get(token, 0.0)), str(token).lower()),
+        )
+        reserve_markets = ranked_by_recency[:reserve_applied]
+    reserve_set = set(reserve_markets)
+    split_base_tokens = [x for x in market_tokens if x not in reserve_set]
+
+    split_markets = split_market_tokens(
+        split_base_tokens,
+        train_ratio=train_ratio,
+        validation_ratio=validation_ratio,
+    )
+    if reserve_markets:
+        split_markets["holdout"] = sorted(
+            set(split_markets.get("holdout", []) + reserve_markets),
+            key=lambda x: x.lower(),
+        )
 
     split_datasets: Dict[str, List[Path]] = {}
     for stage in ("train", "validation", "holdout"):
@@ -522,6 +571,9 @@ def build_dataset_splits(
 
     manifest = {
         "market_count_total": len(market_tokens),
+        "reserve_newest_markets_for_holdout_requested": int(reserve_requested),
+        "reserve_newest_markets_for_holdout_applied": int(reserve_applied),
+        "reserve_newest_markets_for_holdout": reserve_markets,
         "train_markets": split_markets["train"],
         "validation_markets": split_markets["validation"],
         "holdout_markets": split_markets["holdout"],
@@ -531,6 +583,9 @@ def build_dataset_splits(
         "train_datasets": [str(x) for x in split_datasets["train"]],
         "validation_datasets": [str(x) for x in split_datasets["validation"]],
         "holdout_datasets": [str(x) for x in split_datasets["holdout"]],
+        "market_latest_mtime_epoch": {
+            str(k): float(v) for k, v in sorted(market_latest_mtime.items(), key=lambda kv: str(kv[0]).lower())
+        },
     }
     return {"manifest": manifest, "datasets": split_datasets}
 
@@ -1022,6 +1077,7 @@ def main(argv=None) -> int:
         train_ratio=float(args.train_market_ratio),
         validation_ratio=float(args.validation_market_ratio),
         max_markets=int(args.max_markets),
+        reserve_newest_holdout_markets=int(args.reserve_newest_markets_for_holdout),
     )
     split_manifest = split_info["manifest"]
     split_datasets = split_info["datasets"]
@@ -1040,6 +1096,7 @@ def main(argv=None) -> int:
             "train_market_ratio": float(args.train_market_ratio),
             "validation_market_ratio": float(args.validation_market_ratio),
             "max_markets": int(args.max_markets),
+            "reserve_newest_markets_for_holdout": int(args.reserve_newest_markets_for_holdout),
             **split_manifest,
         },
     )

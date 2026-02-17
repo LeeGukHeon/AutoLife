@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-17 (Stage-2.50 rr-adaptive stabilization experiments)
+Last updated: 2026-02-17 (Stage-2.51 newest-data OOT holdout quarantine)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -16,6 +16,7 @@ The system must:
 - Prefer robust logic changes over narrow parameter overfitting.
 - If market data is hostile, do not force trade count.
 - Never accept train-only gains: promotion requires validation/holdout generalization evidence.
+- Always quarantine newest market slices as OOT holdout for at least one full cycle before any tuning reuse.
 
 ## Execution Discipline (Context Handoff)
 - Every completed subtask must update this TODO immediately with:
@@ -1813,6 +1814,41 @@ The system must:
   - next:
     - run rr-adaptive sub-branch stabilization sweep (history/regime/mixed ownership alignment objective) before further expectancy micro-tuning.
 
+- Stage-2.51 update (2026-02-17):
+  - newest-data OOT holdout quarantine rule operationalized in train/eval cycle:
+    - file:
+      - `scripts/run_candidate_train_eval_cycle.py`
+    - changes:
+      - new arg:
+        - `--reserve-newest-markets-for-holdout` (default `0`)
+      - split behavior:
+        - computes per-market latest dataset mtime and reserves newest `N` markets into holdout first.
+        - keeps train/validation minimum viability by capping applied reserve to `len(markets) - 2`.
+      - split manifest fields added:
+        - `reserve_newest_markets_for_holdout_requested`
+        - `reserve_newest_markets_for_holdout_applied`
+        - `reserve_newest_markets_for_holdout`
+        - `market_latest_mtime_epoch`
+  - verification:
+    - `python -m py_compile scripts/run_candidate_train_eval_cycle.py` PASS
+    - option presence check:
+      - `python scripts/run_candidate_train_eval_cycle.py --help | rg reserve-newest-markets-for-holdout`
+    - short real-data cycle:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --max-markets 4 --reserve-newest-markets-for-holdout 1 --walk-forward-max-datasets 1 --walk-forward-min-datasets 1`
+  - result:
+    - split manifest confirmed:
+      - requested/applied reserve: `1/1`
+      - reserved market: `KRW_BCH`
+      - train: `KRW_ADA`
+      - validation: `KRW_AVAX`
+      - holdout: `KRW_BCH, KRW_BTC`
+    - cycle summary:
+      - `promotion_gate_pass=false`
+      - `generalization_guard_pass=true`
+      - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_mixed_adders`
+  - interpretation:
+    - newest-data leakage into tuning path is now explicitly blocked by default workflow option, reinforcing anti-overfit discipline.
+
 2. Expectancy-first improvement loop
 - Optimize for:
   - `avg_expectancy_krw`,
@@ -1843,6 +1879,7 @@ The system must:
   - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions`
 - Split train/eval cycle with walk-forward gate:
   - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+  - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
 - v2 shadow parity gate:
   - `python scripts/validate_v2_shadow_parity.py -Strict`
   - `python scripts/validate_v2_shadow_parity.py -CheckRuntimeShadow -Strict`
