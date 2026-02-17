@@ -3701,21 +3701,38 @@ def main(argv=None) -> int:
         and bool(holdout_top_risk_component_for_objective)
         and bool(validation_top_risk_component_for_objective)
     )
+    edge_base_top_reasons_for_objective = {
+        "blocked_risk_gate_entry_quality_edge_base",
+        "blocked_risk_gate_entry_quality_rr_edge_base",
+    }
     edge_base_anti_drift_split_rr_to_edge_active = bool(
         split_ownership_drift_active
         and holdout_top_risk_component_for_objective.startswith(
             "blocked_risk_gate_entry_quality_rr"
         )
-        and validation_top_risk_component_for_objective in {
-            "blocked_risk_gate_entry_quality_edge_base",
-            "blocked_risk_gate_entry_quality_rr_edge_base",
-        }
+        and validation_top_risk_component_for_objective in edge_base_top_reasons_for_objective
+    )
+    edge_base_anti_drift_split_edge_to_rr_active = bool(
+        split_ownership_drift_active
+        and holdout_top_risk_component_for_objective in edge_base_top_reasons_for_objective
+        and validation_top_risk_component_for_objective.startswith(
+            "blocked_risk_gate_entry_quality_rr"
+        )
+    )
+    edge_base_anti_drift_split_rr_edge_drift_active = bool(
+        edge_base_anti_drift_split_rr_to_edge_active or edge_base_anti_drift_split_edge_to_rr_active
+    )
+    rr_adaptive_mixed_focus_for_objective = risk_gate_focus_for_objective.startswith(
+        "entry_quality_rr_adaptive_mixed"
     )
     enforce_edge_base_anti_drift_objective = bool(args.objective_enforce_edge_base_anti_drift_guard) and (
         rr_adaptive_regime_focus_for_objective
+        or rr_adaptive_mixed_focus_for_objective
         or holdout_recommendation_for_objective
         == "hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders"
-        or edge_base_anti_drift_split_rr_to_edge_active
+        or holdout_recommendation_for_objective
+        == "hold_candidate_calibrate_risk_gate_rr_adaptive_mixed_adders"
+        or edge_base_anti_drift_split_rr_edge_drift_active
     )
     enforce_rr_edge_floor_cap_objective = bool(args.objective_enforce_rr_edge_floor_cap_guard) and (
         rr_adaptive_focus_for_objective
@@ -3863,6 +3880,7 @@ def main(argv=None) -> int:
         f"focus={risk_gate_focus_for_objective}, "
         f"holdout_recommendation={holdout_recommendation_for_objective}, "
         f"split_rr_to_edge_drift={edge_base_anti_drift_split_rr_to_edge_active}, "
+        f"split_edge_to_rr_drift={edge_base_anti_drift_split_edge_to_rr_active}, "
         f"penalty={float(args.objective_edge_base_anti_drift_penalty):.2f}"
     )
     print(
@@ -4207,6 +4225,12 @@ def main(argv=None) -> int:
             "objective_edge_base_anti_drift_guard_active": bool(enforce_edge_base_anti_drift_objective),
             "objective_edge_base_anti_drift_split_rr_to_edge_drift_active": bool(
                 edge_base_anti_drift_split_rr_to_edge_active
+            ),
+            "objective_edge_base_anti_drift_split_edge_to_rr_drift_active": bool(
+                edge_base_anti_drift_split_edge_to_rr_active
+            ),
+            "objective_edge_base_anti_drift_split_rr_edge_drift_active": bool(
+                edge_base_anti_drift_split_rr_edge_drift_active
             ),
             "objective_enforce_rr_edge_floor_cap_guard": bool(
                 args.objective_enforce_rr_edge_floor_cap_guard

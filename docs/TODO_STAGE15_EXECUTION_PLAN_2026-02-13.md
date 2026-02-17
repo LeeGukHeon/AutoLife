@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-17 (Stage-2.51 newest-data OOT holdout quarantine)
+Last updated: 2026-02-17 (Stage-2.53 mixed-drift anti-drift activation expansion)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -1848,6 +1848,55 @@ The system must:
       - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_mixed_adders`
   - interpretation:
     - newest-data leakage into tuning path is now explicitly blocked by default workflow option, reinforcing anti-overfit discipline.
+
+- Stage-2.52 update (2026-02-17):
+  - rr-adaptive sub-branch stabilization sweep executed under newest-data OOT holdout workflow:
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage252.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage252.json`
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - result:
+    - tuning best combo remained `scenario_quality_focus_005`
+    - split ownership drift persisted:
+      - validation top risk=`blocked_risk_gate_entry_quality_rr_adaptive_mixed:1334`
+      - holdout top risk=`blocked_risk_gate_entry_quality_edge_base:672`
+    - promotion gate remained fail:
+      - `promotion_gate_pass=false`, `generalization_guard_pass=false`
+    - OOT reserve confirmed:
+      - requested/applied reserve=`1/1`, reserved market=`KRW_BCH`
+  - interpretation:
+    - objective split-drift guard alone did not suppress edge-base drift in mixed context; activation scope gap remained for edge-base anti-drift guard.
+
+- Stage-2.53 update (2026-02-17):
+  - edge-base anti-drift activation scope expanded for mixed drift context:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - changes:
+      - `objective_edge_base_anti_drift_guard` now activates when:
+        - focus is `entry_quality_rr_adaptive_mixed`, or
+        - recommendation is `hold_candidate_calibrate_risk_gate_rr_adaptive_mixed_adders`, or
+        - split ownership drift is active in either direction (`rr->edge` or `edge->rr`).
+      - added split-drift direction flags to summary metadata:
+        - `objective_edge_base_anti_drift_split_edge_to_rr_drift_active`
+        - `objective_edge_base_anti_drift_split_rr_edge_drift_active`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - re-run tuning:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage253.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage253.json`
+      - log evidence:
+        - `objective_edge_base_anti_drift_guard=on`
+        - `split_rr_to_edge_drift=False`
+        - `split_edge_to_rr_drift=True`
+    - promoted snapshot validation:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - result:
+    - promotion gate remained fail (`promotion_gate_pass=false`, `generalization_guard_pass=false`)
+    - split drift still observed:
+      - validation top risk=`blocked_risk_gate_entry_quality_rr_adaptive_mixed:1334`
+      - holdout top risk=`blocked_risk_gate_entry_quality_edge_base:672`
+  - interpretation:
+    - drift detection/penalty activation is now correct, but current combo search space still converges to same candidate (`scenario_quality_focus_005`) and does not resolve holdout edge-base ownership.
+  - next:
+    - run penalty-strength A/B (`objective_split_ownership_drift_penalty`, `objective_edge_base_anti_drift_penalty`) and mixed-local-step sweep to force candidate rank separation under persistent `edge->rr` drift.
 
 2. Expectancy-first improvement loop
 - Optimize for:
