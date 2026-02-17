@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-17 (Stage-2.47 re-tune + promoted revalidation)
+Last updated: 2026-02-17 (Stage-2.50 rr-adaptive stabilization experiments)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -1720,6 +1720,98 @@ The system must:
   - next:
     - run edge-baseline-floor focused sweep under active anti-drift guard and compare against current `stage247` snapshot.
     - enforce promoted-pass acceptance only when validation/holdout top-risk ownership stays aligned across one full cycle.
+
+- Stage-2.48 update (2026-02-17):
+  - edge-baseline-floor focused re-run executed under active anti-drift guards:
+    - command:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage248.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage248.json`
+  - result:
+    - context returned to `entry_quality_edge_base` with split drift (`holdout=rr_adaptive_regime`, `validation=edge_base`)
+    - best remained `scenario_quality_focus_005` (same ordering/score as Stage-2.46)
+  - promoted snapshot validation:
+    - snapshot:
+      - `build/Release/logs/candidate_promoted_combo_stage2_48.json`
+    - command:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+    - result:
+      - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - validation top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:802`
+      - holdout top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:977`
+      - split ownership alignment recovered, but promotion gate still fail (`pf<1`, `exp<0`).
+
+- Stage-2.49 update (2026-02-17):
+  - proactive RR edge-floor cap objective guard added:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - changes:
+      - new objective penalty guard for rr-adaptive contexts:
+        - penalize when `combo.min_expected_edge_pct > objective_rr_edge_floor_cap`
+      - new args:
+        - `--objective-enforce-rr-edge-floor-cap-guard` (default ON)
+        - `--disable-objective-enforce-rr-edge-floor-cap-guard`
+        - `--objective-rr-edge-floor-cap` (default `0.0010`)
+        - `--objective-rr-edge-floor-cap-penalty-scale` (default `4000000`)
+      - objective logs/summary fields added for cap-guard status.
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - guard ON:
+      - `python scripts/tune_candidate_gate_trade_density.py ... --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage249.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage249.json`
+    - guard OFF baseline:
+      - `python scripts/tune_candidate_gate_trade_density.py ... --disable-objective-enforce-rr-edge-floor-cap-guard --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage249_nocap.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage249_nocap.json`
+  - A/B evidence (ON minus OFF):
+    - `scenario_quality_focus_002` (`min_expected_edge_pct=0.0015`): `-2000`
+    - `scenario_quality_focus_001` (`0.0012`): `-800`
+    - `scenario_quality_focus_003` (`0.0011`): `-400`
+    - top candidate changed:
+      - OFF: `scenario_quality_focus_002`
+      - ON: `scenario_quality_focus_005`
+  - promoted snapshot validation (ON best):
+    - snapshot:
+      - `build/Release/logs/candidate_promoted_combo_stage2_49.json`
+    - command:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+    - result:
+      - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_history_adders`
+      - validation top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_history:1575`
+      - holdout top risk=`blocked_risk_gate_entry_quality_rr_adaptive_mixed:1093`
+      - promotion gate fail persisted.
+
+- Stage-2.50 update (2026-02-17):
+  - rr-edge-floor hard-cap option added and scope expanded:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - changes:
+      - new arg:
+        - `--objective-apply-rr-edge-floor-hard-cap` (default OFF)
+      - when enabled, rr-adaptive focused combos are clamped:
+        - `min_expected_edge_pct = min(min_expected_edge_pct, objective_rr_edge_floor_cap)`
+      - rr-edge-floor-cap guard activation scope expanded:
+        - `risk_gate_focus.startswith("entry_quality_rr_adaptive")` or
+        - recommendation starts with `hold_candidate_calibrate_risk_gate_rr_adaptive_`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - hard-cap ON:
+      - `python scripts/tune_candidate_gate_trade_density.py ... --objective-apply-rr-edge-floor-hard-cap --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage250.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage250.json`
+      - log evidence:
+        - `objective_rr_edge_floor_cap_guard=on ... hard_cap=on, hard_cap_applied=3`
+    - hard-cap OFF baseline:
+      - `python scripts/tune_candidate_gate_trade_density.py ... --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage250_nocap.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage250_nocap.json`
+  - A/B note:
+    - hard-cap improved several non-top combos but top candidate remained `scenario_quality_focus_005`.
+  - promoted snapshot validation:
+    - snapshot:
+      - `build/Release/logs/candidate_promoted_combo_stage2_50.json`
+    - command:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+    - result:
+      - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - validation top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_regime:709`
+      - holdout top risk=`blocked_risk_gate_entry_quality_rr_adaptive_mixed:840`
+      - promotion gate fail persisted (`promotion_gate_pass=false`, `generalization_guard_pass=false`)
+  - interpretation:
+    - edge-base direct regression was reduced, but split ownership is still unstable inside rr-adaptive sub-branches and profitability/expectancy gates remain unmet.
+  - next:
+    - run rr-adaptive sub-branch stabilization sweep (history/regime/mixed ownership alignment objective) before further expectancy micro-tuning.
 
 2. Expectancy-first improvement loop
 - Optimize for:

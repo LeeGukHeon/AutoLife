@@ -2901,6 +2901,10 @@ def compute_combo_objective(
     objective_split_ownership_drift_penalty: float,
     enforce_edge_base_anti_drift_guard: bool,
     objective_edge_base_anti_drift_penalty: float,
+    enforce_rr_edge_floor_cap_guard: bool,
+    combo_min_expected_edge_pct: float,
+    objective_rr_edge_floor_cap: float,
+    objective_rr_edge_floor_cap_penalty_scale: float,
 ) -> float:
     penalty = 0.0
     if objective_mode == "profitable_ratio_priority":
@@ -2944,6 +2948,11 @@ def compute_combo_objective(
             "blocked_risk_gate_entry_quality_rr_edge_base",
         }:
             penalty += float(objective_edge_base_anti_drift_penalty)
+    if bool(enforce_rr_edge_floor_cap_guard):
+        edge_floor = float(combo_min_expected_edge_pct or 0.0)
+        edge_cap = float(objective_rr_edge_floor_cap or 0.0)
+        if edge_cap > 0.0 and edge_floor > edge_cap:
+            penalty += (edge_floor - edge_cap) * float(objective_rr_edge_floor_cap_penalty_scale)
 
     if penalty > 0.0:
         # Keep all infeasible combos below feasible ones while preserving ordering.
@@ -3328,6 +3337,40 @@ def main(argv=None) -> int:
         help="Penalty applied when edge-base reversion is detected under rr_adaptive_regime focus.",
     )
     parser.add_argument(
+        "--objective-enforce-rr-edge-floor-cap-guard",
+        "-ObjectiveEnforceRrEdgeFloorCapGuard",
+        dest="objective_enforce_rr_edge_floor_cap_guard",
+        action="store_true",
+        default=True,
+        help="Penalize rr-focused combos whose min_expected_edge_pct exceeds proactive cap.",
+    )
+    parser.add_argument(
+        "--disable-objective-enforce-rr-edge-floor-cap-guard",
+        dest="objective_enforce_rr_edge_floor_cap_guard",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--objective-rr-edge-floor-cap",
+        "-ObjectiveRrEdgeFloorCap",
+        type=float,
+        default=0.0010,
+        help="Proactive cap for min_expected_edge_pct under rr-focused objective guard.",
+    )
+    parser.add_argument(
+        "--objective-rr-edge-floor-cap-penalty-scale",
+        "-ObjectiveRrEdgeFloorCapPenaltyScale",
+        type=float,
+        default=4000000.0,
+        help="Penalty scale applied to (min_expected_edge_pct - cap) when rr edge-floor cap guard is active.",
+    )
+    parser.add_argument(
+        "--objective-apply-rr-edge-floor-hard-cap",
+        "-ObjectiveApplyRrEdgeFloorHardCap",
+        action="store_true",
+        default=False,
+        help="Clamp rr-focused combo min_expected_edge_pct to objective_rr_edge_floor_cap before evaluation.",
+    )
+    parser.add_argument(
         "--objective-mode",
         "-ObjectiveMode",
         choices=["balanced", "profitable_ratio_priority"],
@@ -3638,6 +3681,7 @@ def main(argv=None) -> int:
     risk_gate_focus_for_objective = str(bottleneck_context.get("risk_gate_focus", ""))
     holdout_recommendation_for_objective = str(bottleneck_context.get("holdout_recommendation", "") or "")
     entry_quality_focus_for_objective = risk_gate_focus_for_objective.startswith("entry_quality_")
+    rr_adaptive_focus_for_objective = risk_gate_focus_for_objective.startswith("entry_quality_rr_adaptive")
     rr_adaptive_regime_focus_for_objective = risk_gate_focus_for_objective.startswith(
         "entry_quality_rr_adaptive_regime"
     )
@@ -3673,6 +3717,16 @@ def main(argv=None) -> int:
         == "hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders"
         or edge_base_anti_drift_split_rr_to_edge_active
     )
+    enforce_rr_edge_floor_cap_objective = bool(args.objective_enforce_rr_edge_floor_cap_guard) and (
+        rr_adaptive_focus_for_objective
+        or holdout_recommendation_for_objective.startswith(
+            "hold_candidate_calibrate_risk_gate_rr_adaptive_"
+        )
+    )
+    apply_rr_edge_floor_hard_cap = bool(args.objective_apply_rr_edge_floor_hard_cap) and bool(
+        enforce_rr_edge_floor_cap_objective
+    )
+    rr_edge_floor_hard_cap_applied_count = 0
     scenario_family_counts: Dict[str, int] = {}
     if bool(args.enable_bottleneck_adapted_scenarios):
         combo_specs, scenario_family_counts = adapt_combo_specs_for_bottleneck(
@@ -3721,6 +3775,16 @@ def main(argv=None) -> int:
         enabled=bool(args.enable_post_suppression_quality_expansion),
         min_combo_count=int(args.post_suppression_min_combo_count),
     )
+    if apply_rr_edge_floor_hard_cap:
+        rr_edge_cap = float(args.objective_rr_edge_floor_cap)
+        for combo in combo_specs:
+            edge_floor = float(combo.get("min_expected_edge_pct", 0.0) or 0.0)
+            combo["objective_rr_edge_floor_cap_applied"] = False
+            combo["objective_rr_edge_floor_cap_original"] = edge_floor
+            if rr_edge_cap > 0.0 and edge_floor > rr_edge_cap:
+                combo["min_expected_edge_pct"] = rr_edge_cap
+                combo["objective_rr_edge_floor_cap_applied"] = True
+                rr_edge_floor_hard_cap_applied_count += 1
     combo_specs = dedupe_combos(combo_specs)
     if not combo_specs:
         raise RuntimeError("No tuning combos left after holdout family suppression.")
@@ -3800,6 +3864,14 @@ def main(argv=None) -> int:
         f"holdout_recommendation={holdout_recommendation_for_objective}, "
         f"split_rr_to_edge_drift={edge_base_anti_drift_split_rr_to_edge_active}, "
         f"penalty={float(args.objective_edge_base_anti_drift_penalty):.2f}"
+    )
+    print(
+        f"[TuneCandidate] objective_rr_edge_floor_cap_guard="
+        f"{'on' if enforce_rr_edge_floor_cap_objective else 'off'}, "
+        f"cap={float(args.objective_rr_edge_floor_cap):.5f}, "
+        f"penalty_scale={float(args.objective_rr_edge_floor_cap_penalty_scale):.1f}, "
+        f"hard_cap={'on' if apply_rr_edge_floor_hard_cap else 'off'}, "
+        f"hard_cap_applied={int(rr_edge_floor_hard_cap_applied_count)}"
     )
     print(
         f"[TuneCandidate] rr_adaptive_regime_local_sweep="
@@ -3898,6 +3970,12 @@ def main(argv=None) -> int:
                     objective_split_ownership_drift_penalty=float(args.objective_split_ownership_drift_penalty),
                     enforce_edge_base_anti_drift_guard=bool(enforce_edge_base_anti_drift_objective),
                     objective_edge_base_anti_drift_penalty=float(args.objective_edge_base_anti_drift_penalty),
+                    enforce_rr_edge_floor_cap_guard=bool(enforce_rr_edge_floor_cap_objective),
+                    combo_min_expected_edge_pct=float(combo.get("min_expected_edge_pct", 0.0) or 0.0),
+                    objective_rr_edge_floor_cap=float(args.objective_rr_edge_floor_cap),
+                    objective_rr_edge_floor_cap_penalty_scale=float(
+                        args.objective_rr_edge_floor_cap_penalty_scale
+                    ),
                 )
                 screen_row["objective_score"] = screen_objective
                 screen_row["objective_effective_min_avg_trades"] = float(screen_effective["min_avg_trades"])
@@ -4014,6 +4092,12 @@ def main(argv=None) -> int:
                     objective_split_ownership_drift_penalty=float(args.objective_split_ownership_drift_penalty),
                     enforce_edge_base_anti_drift_guard=bool(enforce_edge_base_anti_drift_objective),
                     objective_edge_base_anti_drift_penalty=float(args.objective_edge_base_anti_drift_penalty),
+                    enforce_rr_edge_floor_cap_guard=bool(enforce_rr_edge_floor_cap_objective),
+                    combo_min_expected_edge_pct=float(combo.get("min_expected_edge_pct", 0.0) or 0.0),
+                    objective_rr_edge_floor_cap=float(args.objective_rr_edge_floor_cap),
+                    objective_rr_edge_floor_cap_penalty_scale=float(
+                        args.objective_rr_edge_floor_cap_penalty_scale
+                    ),
                 )
                 final_row["objective_score"] = final_objective
                 final_row["objective_effective_min_avg_trades"] = float(final_effective["min_avg_trades"])
@@ -4124,6 +4208,17 @@ def main(argv=None) -> int:
             "objective_edge_base_anti_drift_split_rr_to_edge_drift_active": bool(
                 edge_base_anti_drift_split_rr_to_edge_active
             ),
+            "objective_enforce_rr_edge_floor_cap_guard": bool(
+                args.objective_enforce_rr_edge_floor_cap_guard
+            ),
+            "objective_rr_edge_floor_cap": float(args.objective_rr_edge_floor_cap),
+            "objective_rr_edge_floor_cap_penalty_scale": float(
+                args.objective_rr_edge_floor_cap_penalty_scale
+            ),
+            "objective_rr_edge_floor_cap_guard_active": bool(enforce_rr_edge_floor_cap_objective),
+            "objective_apply_rr_edge_floor_hard_cap": bool(args.objective_apply_rr_edge_floor_hard_cap),
+            "objective_rr_edge_floor_hard_cap_active": bool(apply_rr_edge_floor_hard_cap),
+            "objective_rr_edge_floor_hard_cap_applied_count": int(rr_edge_floor_hard_cap_applied_count),
             "objective_mode": str(args.objective_mode),
             "enable_hostility_adaptive_thresholds": bool(args.enable_hostility_adaptive_thresholds),
             "enable_hostility_adaptive_trades_only": bool(args.enable_hostility_adaptive_trades_only),
