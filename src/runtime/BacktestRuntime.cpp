@@ -998,6 +998,14 @@ enum class SecondStageConfirmationFailureKind {
     HostileSafetyAdders,
 };
 
+enum class SecondStageConfirmationSafetySource {
+    Unknown,
+    Regime,
+    Liquidity,
+    StrategyHistory,
+    DynamicTighten,
+};
+
 bool passesSecondStageEntryConfirmation(
     const strategy::Signal& signal,
     const engine::EngineConfig& cfg,
@@ -1005,10 +1013,14 @@ bool passesSecondStageEntryConfirmation(
     double rr_gate,
     double calibrated_expected_edge_pct,
     double edge_gate,
-    SecondStageConfirmationFailureKind* out_failure = nullptr
+    SecondStageConfirmationFailureKind* out_failure = nullptr,
+    SecondStageConfirmationSafetySource* out_safety_source = nullptr
 ) {
     if (out_failure != nullptr) {
         *out_failure = SecondStageConfirmationFailureKind::None;
+    }
+    if (out_safety_source != nullptr) {
+        *out_safety_source = SecondStageConfirmationSafetySource::Unknown;
     }
     if (!(reward_risk_ratio >= rr_gate && calibrated_expected_edge_pct >= edge_gate)) {
         return false;
@@ -1019,6 +1031,14 @@ bool passesSecondStageEntryConfirmation(
     double min_edge_margin = std::max(0.00007, round_trip_cost_pct * 0.11);
     double safety_rr_add = 0.0;
     double safety_edge_add = 0.0;
+    double safety_regime_rr_add = 0.0;
+    double safety_regime_edge_add = 0.0;
+    double safety_liquidity_rr_add = 0.0;
+    double safety_liquidity_edge_add = 0.0;
+    double safety_history_rr_add = 0.0;
+    double safety_history_edge_add = 0.0;
+    double safety_dynamic_rr_add = 0.0;
+    double safety_dynamic_edge_add = 0.0;
 
     if (signal.market_regime == analytics::MarketRegime::HIGH_VOLATILITY ||
         signal.market_regime == analytics::MarketRegime::TRENDING_DOWN) {
@@ -1026,12 +1046,16 @@ bool passesSecondStageEntryConfirmation(
         min_edge_margin += 0.00012;
         safety_rr_add += 0.07;
         safety_edge_add += 0.00012;
+        safety_regime_rr_add += 0.07;
+        safety_regime_edge_add += 0.00012;
     }
     if (signal.liquidity_score > 0.0 && signal.liquidity_score < 55.0) {
         min_rr_margin += 0.04;
         min_edge_margin += 0.00008;
         safety_rr_add += 0.04;
         safety_edge_add += 0.00008;
+        safety_liquidity_rr_add += 0.04;
+        safety_liquidity_edge_add += 0.00008;
     }
     if (signal.strategy_trade_count >= std::max(8, cfg.min_strategy_trades_for_ev / 2) &&
         (signal.strategy_win_rate < 0.45 ||
@@ -1040,6 +1064,8 @@ bool passesSecondStageEntryConfirmation(
         min_edge_margin += 0.00006;
         safety_rr_add += 0.03;
         safety_edge_add += 0.00006;
+        safety_history_rr_add += 0.03;
+        safety_history_edge_add += 0.00006;
     }
     if (signal.market_regime == analytics::MarketRegime::TRENDING_UP &&
         signal.strength >= 0.74 &&
@@ -1127,6 +1153,8 @@ bool passesSecondStageEntryConfirmation(
     min_edge_margin += dynamic_safety_edge_add;
     safety_rr_add += dynamic_safety_rr_add;
     safety_edge_add += dynamic_safety_edge_add;
+    safety_dynamic_rr_add += dynamic_safety_rr_add;
+    safety_dynamic_edge_add += dynamic_safety_edge_add;
     min_rr_margin -= (0.028 * relief_scale);
     min_edge_margin -= (0.000045 * relief_scale);
 
@@ -1167,6 +1195,49 @@ bool passesSecondStageEntryConfirmation(
         edge_margin >= edge_relaxed_threshold;
     if (rr_safety_only || edge_safety_only) {
         failure = SecondStageConfirmationFailureKind::HostileSafetyAdders;
+        SecondStageConfirmationSafetySource safety_source = SecondStageConfirmationSafetySource::Unknown;
+        double regime_pressure = 0.0;
+        double liquidity_pressure = 0.0;
+        double history_pressure = 0.0;
+        double dynamic_pressure = 0.0;
+        if (rr_safety_only) {
+            const double rr_norm_den = std::max(min_rr_margin, 1e-6);
+            regime_pressure += safety_regime_rr_add / rr_norm_den;
+            liquidity_pressure += safety_liquidity_rr_add / rr_norm_den;
+            history_pressure += safety_history_rr_add / rr_norm_den;
+            dynamic_pressure += safety_dynamic_rr_add / rr_norm_den;
+        }
+        if (edge_safety_only) {
+            const double edge_norm_den = std::max(min_edge_margin, 1e-9);
+            regime_pressure += safety_regime_edge_add / edge_norm_den;
+            liquidity_pressure += safety_liquidity_edge_add / edge_norm_den;
+            history_pressure += safety_history_edge_add / edge_norm_den;
+            dynamic_pressure += safety_dynamic_edge_add / edge_norm_den;
+        }
+        const double max_pressure = std::max(
+            std::max(regime_pressure, liquidity_pressure),
+            std::max(history_pressure, dynamic_pressure)
+        );
+        if (max_pressure > 1e-12) {
+            if (regime_pressure >= liquidity_pressure &&
+                regime_pressure >= history_pressure &&
+                regime_pressure >= dynamic_pressure) {
+                safety_source = SecondStageConfirmationSafetySource::Regime;
+            } else if (liquidity_pressure >= regime_pressure &&
+                       liquidity_pressure >= history_pressure &&
+                       liquidity_pressure >= dynamic_pressure) {
+                safety_source = SecondStageConfirmationSafetySource::Liquidity;
+            } else if (history_pressure >= regime_pressure &&
+                       history_pressure >= liquidity_pressure &&
+                       history_pressure >= dynamic_pressure) {
+                safety_source = SecondStageConfirmationSafetySource::StrategyHistory;
+            } else {
+                safety_source = SecondStageConfirmationSafetySource::DynamicTighten;
+            }
+        }
+        if (out_safety_source != nullptr) {
+            *out_safety_source = safety_source;
+        }
     } else if (rr_failed && !edge_failed) {
         failure = SecondStageConfirmationFailureKind::RRMarginShortfall;
     } else if (edge_failed && !rr_failed) {
@@ -2790,6 +2861,8 @@ void BacktestEngine::processCandle(const Candle& candle) {
             const double calibrated_expected_edge_pct = entry_quality_eval.calibrated_expected_edge_pct;
             SecondStageConfirmationFailureKind second_stage_failure =
                 SecondStageConfirmationFailureKind::None;
+            SecondStageConfirmationSafetySource second_stage_safety_source =
+                SecondStageConfirmationSafetySource::Unknown;
             const bool second_stage_ok =
                 !core_risk_enabled ||
                 (rr_rebalance_ok &&
@@ -2800,7 +2873,8 @@ void BacktestEngine::processCandle(const Candle& candle) {
                      tuned_cfg.min_reward_risk,
                      calibrated_expected_edge_pct,
                      tuned_cfg.min_expected_edge_pct,
-                     &second_stage_failure));
+                     &second_stage_failure,
+                     &second_stage_safety_source));
             if (!pattern_strength_ok) {
                 entry_funnel_.blocked_pattern_gate++;
                 if (!archetype_ready) {
@@ -2912,6 +2986,23 @@ void BacktestEngine::processCandle(const Candle& candle) {
                             break;
                         case SecondStageConfirmationFailureKind::HostileSafetyAdders:
                             entry_funnel_.blocked_second_stage_confirmation_hostile_safety_adders++;
+                            switch (second_stage_safety_source) {
+                                case SecondStageConfirmationSafetySource::Regime:
+                                    entry_funnel_.blocked_second_stage_confirmation_hostile_regime_safety_adders++;
+                                    break;
+                                case SecondStageConfirmationSafetySource::Liquidity:
+                                    entry_funnel_.blocked_second_stage_confirmation_hostile_liquidity_safety_adders++;
+                                    break;
+                                case SecondStageConfirmationSafetySource::StrategyHistory:
+                                    entry_funnel_.blocked_second_stage_confirmation_hostile_history_safety_adders++;
+                                    break;
+                                case SecondStageConfirmationSafetySource::DynamicTighten:
+                                    entry_funnel_.blocked_second_stage_confirmation_hostile_dynamic_tighten_safety_adders++;
+                                    break;
+                                case SecondStageConfirmationSafetySource::Unknown:
+                                default:
+                                    break;
+                            }
                             break;
                         case SecondStageConfirmationFailureKind::None:
                         default:

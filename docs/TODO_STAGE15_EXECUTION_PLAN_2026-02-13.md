@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-17 (second-stage confirmation ownership split instrumentation)
+Last updated: 2026-02-17 (second-stage hostile safety source split instrumentation)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -929,6 +929,45 @@ The system must:
     - next tuning can target hostile-safety contribution directly without blind RR/edge floor movement.
   - next:
     - introduce bounded hostile-safety attenuation experiments (high-quality favorable contexts only) and keep overfit guards unchanged.
+
+- Stage-2.26 update (2026-02-17):
+  - hostile safety source split instrumentation implemented (no threshold change):
+    - runtime/source split updates:
+      - `include/runtime/BacktestRuntime.h`
+      - `src/runtime/BacktestRuntime.cpp`
+      - `src/runtime/LiveTradingRuntime.cpp`
+      - `src/main.cpp`
+    - matrix aggregation split updates:
+      - `scripts/run_profitability_matrix.py`
+    - new hostile-source buckets added under second-stage aggregate:
+      - `blocked_second_stage_confirmation_hostile_regime_safety_adders`
+      - `blocked_second_stage_confirmation_hostile_liquidity_safety_adders`
+      - `blocked_second_stage_confirmation_hostile_history_safety_adders`
+      - `blocked_second_stage_confirmation_hostile_dynamic_tighten_safety_adders`
+    - classification behavior:
+      - keep aggregate `blocked_second_stage_confirmation_hostile_safety_adders` for compatibility
+      - assign dominant hostile source by normalized safety pressure contribution (RR/edge safety-only zone)
+      - risk component ranking now prefers hostile-source detail keys when available
+  - verification:
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python -m py_compile scripts/run_profitability_matrix.py scripts/run_candidate_train_eval_cycle.py scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full`):
+    - train: `pf=0.7289`, `trades=132.0`, `exp=-7.94`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1601`
+    - validation: `pf=0.5028`, `trades=172.0`, `exp=-7.6628`, top risk=`blocked_second_stage_confirmation_hostile_history_safety_adders:885`
+    - holdout: `pf=0.4557`, `trades=149.3333`, `exp=-7.8552`, top risk=`blocked_second_stage_confirmation_hostile_history_safety_adders:1463`
+    - promotion recommendation: `hold_candidate_calibrate_second_stage_confirmation_consistency`
+  - hostile safety composition snapshot:
+    - validation: `total=1180`, `rr_margin=214`, `edge_margin=81`, `hostile_total=885` -> `regime=0`, `liquidity=0`, `history=885`, `dynamic_tighten=0`
+    - holdout: `total=1715`, `rr_margin=166`, `edge_margin=86`, `hostile_total=1463` -> `regime=0`, `liquidity=0`, `history=1463`, `dynamic_tighten=0`
+  - effect:
+    - dominant second-stage pressure is now explicitly isolated as history-based hostile safety adders.
+    - next calibration target can be narrowed from generic hostile safety to history-evidence safety branch only.
+  - next:
+    - design bounded history-safety attenuation candidates (confidence-gated, hostile-regime holdouts protected) and evaluate split-wise PF/expectancy impact.
 
 2. Expectancy-first improvement loop
 - Optimize for:
