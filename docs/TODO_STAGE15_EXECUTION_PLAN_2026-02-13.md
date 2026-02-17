@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-17 (rr_base_bridge routing activation + guard sensitivity sweep)
+Last updated: 2026-02-17 (rr-ownership objective guard + bridge micro profile validation)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -1277,6 +1277,89 @@ The system must:
   - next:
     - narrow bridge profile generation around `bridge_guarded` neighborhood (drop high-severe variants).
     - add explicit rr_base-floor-specific micro-family for holdout-dominant runs while preserving validation rr_adaptive support.
+
+- Stage-2.36 update (2026-02-17):
+  - narrowed `rr_base_bridge` profile space applied:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - change:
+      - removed `bridge_relax` generation from `risk_gate_rr_adaptive_regime_base_bridge`
+      - profile mix re-centered to guarded neighborhood:
+        - `bridge_guarded_plus` weighted
+        - `bridge_guarded`
+        - `bridge_balanced`
+      - guard parameters tightened (higher hostility guard shift / pause / candle guards, bounded RR relaxation)
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache` completed
+  - routing evidence:
+    - `risk_gate_focus=entry_quality_rr_adaptive_regime_with_rr_base_holdout`
+    - `scenario_family_counts={'risk_gate_rr_adaptive_regime_base_bridge': 6}`
+  - latest batch summary (`core_full`, objective order):
+    - best: `scenario_quality_focus_005`
+      - `obj=-22214.82`, `pf=0.6019`, `exp=-7.9922`, `trades=129.375`
+      - `severe_ratio=49.51%`, profile=`bridge_guarded_plus`
+      - top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_mixed`
+    - `scenario_quality_focus_002`:
+      - `obj=-22833.91`, `pf=0.5494`, `exp=-8.7605`, `severe_ratio=50.68%`, profile=`bridge_balanced`
+      - top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime`
+    - `scenario_quality_focus_003`:
+      - `obj=-22845.11`, `pf=0.5347`, `exp=-8.4924`, `severe_ratio=54.16%`, profile=`bridge_guarded_plus`
+      - top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime`
+  - effect (vs Stage-2.35 bridge batch):
+    - upper severe-ratio tail reduced (previous max ~`75.94%` -> current max ~`64.12%`)
+    - best candidate severe ratio improved from prior bridge best (`43.27%` baseline in Stage-2.35) to sub-50 guard zone while improving objective rank and PF in current batch context.
+  - next:
+    - add holdout `rr_base` micro-family to avoid top-risk drift into `rr_edge_*` in best candidate.
+    - re-run 6-scenario batch and require top-2 candidates to keep severe ratio <= 55% and top-risk within rr ownership branches.
+
+- Stage-2.37 update (2026-02-17):
+  - holdout `rr_base` micro-profile + rr-ownership objective guard applied:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - changes:
+      - bridge micro profile added:
+        - `bridge_rr_base_relief_micro`
+      - objective rr-ownership guard added:
+        - non-RR top component penalty in RR-focused runs
+        - new CLI controls:
+          - `--objective-enforce-rr-ownership-top-component` (default ON)
+          - `--objective-rr-ownership-penalty` (default `1200`)
+      - objective now includes:
+        - `top_entry_risk_gate_component_reason` for ranking penalty decisions
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache` completed
+  - routing evidence:
+    - `risk_gate_focus=entry_quality_rr_adaptive_regime_with_rr_base_holdout`
+    - `scenario_family_counts={'risk_gate_rr_adaptive_regime_base_bridge': 6}`
+    - objective rr-ownership guard log:
+      - `objective_rr_ownership_guard=on, penalty=1200.00`
+  - final batch summary (`core_full`, objective order):
+    - 1) `scenario_quality_focus_002`
+      - `obj=-22833.91`, `pf=0.5494`, `exp=-8.7605`, `trades=126.250`
+      - `severe_ratio=50.68%`, profile=`bridge_balanced`
+      - top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime` (RR ownership)
+    - 2) `scenario_quality_focus_003`
+      - `obj=-22845.11`, `pf=0.5347`, `exp=-8.4924`, `trades=135.000`
+      - `severe_ratio=54.16%`, profile=`bridge_guarded_plus`
+      - top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime` (RR ownership)
+    - 3) `scenario_quality_focus_001`
+      - `obj=-23180.88`, `pf=0.4977`, `exp=-8.9854`, `trades=129.000`
+      - `severe_ratio=45.17%`, profile=`bridge_guarded_plus`
+      - top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime` (RR ownership)
+    - `bridge_rr_base_relief_micro` candidate (`scenario_quality_focus_005`) produced:
+      - `pf=0.5861`, `exp=-8.7034`, `severe_ratio=51.50%`
+      - but top risk=`blocked_risk_gate_entry_quality_edge_base`, so objective guard demoted it.
+  - requirement check (from Stage-2.36 next):
+    - top-2 severe ratio <= 55%: PASS (`50.68%`, `54.16%`)
+    - top-2 RR ownership top-risk: PASS
+  - interpretation:
+    - objective now prioritizes rr-ownership-consistent candidates while holding severe ratio within guard zone.
+    - quality gate still fails (`pf<1`, `exp<0`), so next step remains param refinement within RR ownership-safe region.
+  - next:
+    - run focused local sweep around top-2 (`002`, `003`) with smaller RR/strength increments.
+    - validate with train/eval cycle after promoting one candidate config snapshot.
 
 2. Expectancy-first improvement loop
 - Optimize for:

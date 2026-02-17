@@ -1707,30 +1707,35 @@ def adapt_combo_specs_for_bottleneck(
         elif adapted and family == "risk_gate_rr_adaptive_regime_base_bridge":
             # Hybrid focus:
             # validation demands rr_adaptive_regime relief while holdout still
-            # shows rr_base ownership. Keep bounded relaxation and stronger base guard.
+            # shows rr_base ownership. Keep guarded profiles as default and
+            # remove high-severe rebound relax variants.
             profile_order = (
-                "bridge_relax",
-                "bridge_balanced",
                 "bridge_guarded",
                 "bridge_guarded_plus",
+                "bridge_balanced",
+                "bridge_guarded_plus",
+                "bridge_guarded",
+                "bridge_rr_base_relief_micro",
             )
             profile = profile_order[combo_index % len(profile_order)]
             profile_to_variant = {
-                "bridge_relax": 0,
-                "bridge_balanced": 1,
-                "bridge_guarded": 2,
-                "bridge_guarded_plus": 3,
+                "bridge_balanced": 0,
+                "bridge_guarded": 1,
+                "bridge_guarded_plus": 2,
+                "bridge_rr_base_relief_micro": 3,
             }
-            variant = int(profile_to_variant.get(profile, 1))
-            edge_mul_grid = (0.94, 0.97, 1.00, 1.03)
-            rr_delta_grid = (-0.06, -0.04, -0.02, 0.00)
-            weak_delta_grid = (-0.11, -0.08, -0.05, -0.02)
-            strong_delta_grid = (-0.08, -0.06, -0.04, -0.01)
-            pf_delta_grid = (-0.02, -0.01, 0.00, 0.01)
-            ev_delta_grid = (-0.35, -0.20, -0.05, 0.10)
-            orders_delta_grid = (1, 1, 0, 0)
-            strength_delta_grid = (-0.03, -0.02, -0.01, 0.00)
-            guard_shift_grid = (0.01, 0.02, 0.03, 0.04)
+            variant = int(profile_to_variant.get(profile, 0))
+            edge_mul_grid = (0.99, 1.01, 1.03, 0.97)
+            rr_delta_grid = (-0.03, -0.01, 0.01, -0.05)
+            weak_delta_grid = (-0.06, -0.03, -0.01, -0.08)
+            strong_delta_grid = (-0.04, -0.02, -0.01, -0.06)
+            pf_delta_grid = (0.00, 0.01, 0.02, 0.00)
+            ev_delta_grid = (-0.08, 0.02, 0.12, -0.10)
+            orders_delta_grid = (0, 0, -1, 1)
+            strength_delta_grid = (-0.01, 0.00, 0.01, -0.02)
+            guard_shift_grid = (0.03, 0.04, 0.05, 0.04)
+            pause_add_grid = (1, 1, 2, 1)
+            candles_add_grid = (4, 6, 10, 6)
 
             clone["min_expected_edge_pct"] = round(
                 _clamp(float(clone.get("min_expected_edge_pct", 0.0010)) * edge_mul_grid[variant], 0.0005, 0.0019),
@@ -1749,7 +1754,7 @@ def adapt_combo_specs_for_bottleneck(
                 2,
             )
             clone["min_strategy_trades_for_ev"] = int(
-                max(16, round(float(clone.get("min_strategy_trades_for_ev", 30)) * (0.86 + (0.05 * variant))))
+                max(16, round(float(clone.get("min_strategy_trades_for_ev", 30)) * (0.95 + (0.05 * variant))))
             )
             clone["min_strategy_profit_factor"] = round(
                 _clamp(float(clone.get("min_strategy_profit_factor", 0.95)) + pf_delta_grid[variant], 0.86, 1.25),
@@ -1790,15 +1795,17 @@ def adapt_combo_specs_for_bottleneck(
                 _clamp(float(clone.get("hostility_extreme_threshold", 0.88)) + guard_shift_grid[variant], 0.70, 0.97),
                 2,
             )
-            clone["hostility_pause_scans"] = int(max(2, int(clone.get("hostility_pause_scans", 4)) + (0 if variant < 2 else 1)))
+            clone["hostility_pause_scans"] = int(
+                max(2, int(clone.get("hostility_pause_scans", 4)) + pause_add_grid[variant])
+            )
             clone["hostility_pause_scans_extreme"] = int(
-                max(3, int(clone.get("hostility_pause_scans_extreme", 6)) + (0 if variant < 2 else 1))
+                max(3, int(clone.get("hostility_pause_scans_extreme", 6)) + pause_add_grid[variant])
             )
             clone["backtest_hostility_pause_candles"] = int(
-                max(12, int(clone.get("backtest_hostility_pause_candles", 36)) + (0 if variant < 2 else 4))
+                max(12, int(clone.get("backtest_hostility_pause_candles", 36)) + candles_add_grid[variant])
             )
             clone["backtest_hostility_pause_candles_extreme"] = int(
-                max(24, int(clone.get("backtest_hostility_pause_candles_extreme", 60)) + (0 if variant < 2 else 6))
+                max(24, int(clone.get("backtest_hostility_pause_candles_extreme", 60)) + candles_add_grid[variant])
             )
             clone["avoid_high_volatility"] = True
             clone["avoid_trending_down"] = True
@@ -2503,6 +2510,9 @@ def compute_combo_objective(
     objective_max_severe_history_ratio: float,
     objective_severe_history_penalty_scale: float,
     objective_severe_history_hard_cap_penalty: float,
+    top_risk_gate_component_reason: str,
+    enforce_rr_ownership_top_component: bool,
+    objective_rr_ownership_penalty: float,
 ) -> float:
     penalty = 0.0
     if objective_mode == "profitable_ratio_priority":
@@ -2525,6 +2535,10 @@ def compute_combo_objective(
         severe_over = second_stage_history_severe_ratio - objective_max_severe_history_ratio
         penalty += float(objective_severe_history_hard_cap_penalty)
         penalty += severe_over * float(objective_severe_history_penalty_scale)
+    if bool(enforce_rr_ownership_top_component):
+        top_reason = str(top_risk_gate_component_reason or "")
+        if not top_reason.startswith("blocked_risk_gate_entry_quality_rr"):
+            penalty += float(objective_rr_ownership_penalty)
 
     if penalty > 0.0:
         # Keep all infeasible combos below feasible ones while preserving ordering.
@@ -2709,6 +2723,7 @@ def evaluate_combo(
         "avg_total_trades": float(summary.get("avg_total_trades", 0.0)),
         "avg_win_rate_pct": float(summary.get("avg_win_rate_pct", 0.0)),
         "profitable_ratio": float(summary.get("profitable_ratio", 0.0)),
+        "top_entry_risk_gate_component_reason": str(summary.get("top_entry_risk_gate_component_reason", "")),
         "gate_profit_factor_pass": bool(summary.get("gate_profit_factor_pass", False)),
         "gate_trades_pass": bool(summary.get("gate_trades_pass", False)),
         "gate_profitable_ratio_pass": bool(summary.get("gate_profitable_ratio_pass", False)),
@@ -2846,6 +2861,26 @@ def main(argv=None) -> int:
         type=float,
         default=1800.0,
         help="Base penalty applied once severe-history ratio exceeds cap.",
+    )
+    parser.add_argument(
+        "--objective-enforce-rr-ownership-top-component",
+        "-ObjectiveEnforceRrOwnershipTopComponent",
+        dest="objective_enforce_rr_ownership_top_component",
+        action="store_true",
+        default=True,
+        help="Penalize candidates whose top risk component is not RR ownership when RR focus is active.",
+    )
+    parser.add_argument(
+        "--disable-objective-enforce-rr-ownership-top-component",
+        dest="objective_enforce_rr_ownership_top_component",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--objective-rr-ownership-penalty",
+        "-ObjectiveRrOwnershipPenalty",
+        type=float,
+        default=1200.0,
+        help="Penalty applied when RR ownership top-component constraint is violated.",
     )
     parser.add_argument(
         "--objective-mode",
@@ -3095,6 +3130,10 @@ def main(argv=None) -> int:
     live_bottleneck_context = read_live_signal_funnel_snapshot(live_signal_funnel_taxonomy_json)
     holdout_context = read_train_eval_holdout_context(train_eval_summary_json)
     bottleneck_context = build_effective_bottleneck_context(live_bottleneck_context, holdout_context)
+    risk_gate_focus_for_objective = str(bottleneck_context.get("risk_gate_focus", ""))
+    enforce_rr_ownership_objective = bool(args.objective_enforce_rr_ownership_top_component) and (
+        risk_gate_focus_for_objective.startswith("entry_quality_rr")
+    )
     scenario_family_counts: Dict[str, int] = {}
     if bool(args.enable_bottleneck_adapted_scenarios):
         combo_specs, scenario_family_counts = adapt_combo_specs_for_bottleneck(
@@ -3193,6 +3232,11 @@ def main(argv=None) -> int:
         f"threshold={float(args.hint_impact_guardrail_ratio):.4f}, "
         f"tighten_scale={float(args.hint_impact_guardrail_tighten_scale):.2f}"
     )
+    print(
+        f"[TuneCandidate] objective_rr_ownership_guard="
+        f"{'on' if enforce_rr_ownership_objective else 'off'}, "
+        f"penalty={float(args.objective_rr_ownership_penalty):.2f}"
+    )
 
     original_build_raw = build_config.read_text(encoding="utf-8-sig")
     base_config_hash = stable_base_config_hash(original_build_raw)
@@ -3265,6 +3309,11 @@ def main(argv=None) -> int:
                     objective_severe_history_hard_cap_penalty=float(
                         args.objective_severe_history_hard_cap_penalty
                     ),
+                    top_risk_gate_component_reason=str(
+                        screen_row.get("top_entry_risk_gate_component_reason", "")
+                    ),
+                    enforce_rr_ownership_top_component=bool(enforce_rr_ownership_objective),
+                    objective_rr_ownership_penalty=float(args.objective_rr_ownership_penalty),
                 )
                 screen_row["objective_score"] = screen_objective
                 screen_row["objective_effective_min_avg_trades"] = float(screen_effective["min_avg_trades"])
@@ -3370,6 +3419,11 @@ def main(argv=None) -> int:
                     objective_severe_history_hard_cap_penalty=float(
                         args.objective_severe_history_hard_cap_penalty
                     ),
+                    top_risk_gate_component_reason=str(
+                        final_row.get("top_entry_risk_gate_component_reason", "")
+                    ),
+                    enforce_rr_ownership_top_component=bool(enforce_rr_ownership_objective),
+                    objective_rr_ownership_penalty=float(args.objective_rr_ownership_penalty),
                 )
                 final_row["objective_score"] = final_objective
                 final_row["objective_effective_min_avg_trades"] = float(final_effective["min_avg_trades"])
@@ -3461,6 +3515,10 @@ def main(argv=None) -> int:
             "objective_severe_history_hard_cap_penalty": float(
                 args.objective_severe_history_hard_cap_penalty
             ),
+            "objective_enforce_rr_ownership_top_component": bool(
+                args.objective_enforce_rr_ownership_top_component
+            ),
+            "objective_rr_ownership_penalty": float(args.objective_rr_ownership_penalty),
             "objective_mode": str(args.objective_mode),
             "enable_hostility_adaptive_thresholds": bool(args.enable_hostility_adaptive_thresholds),
             "enable_hostility_adaptive_trades_only": bool(args.enable_hostility_adaptive_trades_only),
