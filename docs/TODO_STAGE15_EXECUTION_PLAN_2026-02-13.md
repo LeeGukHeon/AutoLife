@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-17 (Stage-2.56 tune->promote call-flow bug fix and verification)
+Last updated: 2026-02-17 (Stage-2.57 post-fix full-cycle rerun)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -1958,6 +1958,38 @@ The system must:
   - next:
     - with promotion flow fixed, continue true candidate comparison on fresh tuned winners (no stale-config illusion).
     - prioritize ownership re-alignment to reduce holdout `edge_base` while preventing validation shift into `rr_edge_adaptive_regime`.
+
+- Stage-2.57 update (2026-02-17):
+  - post-fix full-size rerun executed (`max_scenarios=6`) to validate real winner propagation:
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage257.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage257.json`
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - tuning result:
+    - `best_combo=scenario_quality_focus_005`
+    - `promote_best_combo_applied=true` (promotion wiring confirmed active)
+    - best row:
+      - `objective=-23516.871`
+      - `pf=0.5449`
+      - `exp=-8.3579`
+      - `top_risk=blocked_risk_gate_entry_quality_rr_base`
+  - train/eval result (OOT reserve kept):
+    - reserve confirmed: requested/applied=`1/1`, reserved=`KRW_BCH`
+    - verdict:
+      - `promotion_gate_pass=false`
+      - `generalization_guard_pass=false`
+      - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_mixed_adders`
+    - split ownership:
+      - validation top risk=`blocked_risk_gate_entry_quality_rr_adaptive_mixed:1327`
+      - holdout top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_history:709`
+    - stage metrics:
+      - train: `pf=0.5618`, `exp=-8.9594`, `trades=137.2857`
+      - validation: `pf=0.4667`, `exp=-8.2747`, `trades=158.5`
+      - holdout: `pf=0.5682`, `exp=-5.8946`, `trades=110.6667`
+  - interpretation:
+    - stale-config illusion is resolved; tuned winner is now actually applied to next cycle.
+    - holdout top ownership improved from `edge_base` to `rr_edge_adaptive_history`, but profitability/expectancy gates still fail.
+  - next:
+    - add `rr_edge_adaptive_history` ownership alignment guard path (mixed context) and rerun A/B on history-specific penalties.
 
 2. Expectancy-first improvement loop
 - Optimize for:
