@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-17 (rr_adaptive_regime-focused tuning family activation)
+Last updated: 2026-02-17 (rr_base_bridge routing activation + guard sensitivity sweep)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -1120,6 +1120,163 @@ The system must:
   - next:
     - expand rr-adaptive-regime variants (`max_new_orders_per_scan`, adaptive RR floors, strength guard) with stricter overfit guard.
     - keep second-stage severe guard family available as fallback comparator in the same batch.
+
+- Stage-2.31 update (2026-02-17):
+  - rr-adaptive 2-axis expansion + comparator-in-batch implemented:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - change:
+      - `risk_gate_rr_adaptive_regime_focus` now emits multiple profiles in one batch:
+        - `relax_strong`, `relax_medium`, `balance`, `protect_medium`, `protect_strong`
+      - same batch includes explicit second-stage comparator profile:
+        - `second_stage_severe_guard_comparator`
+      - comparator family tag:
+        - `risk_gate_rr_adaptive_regime_with_second_stage_comparator`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache` completed
+  - routing evidence:
+    - `risk_gate_focus=entry_quality_rr_adaptive_regime`
+    - `scenario_family_counts={'risk_gate_rr_adaptive_regime_focus': 5, 'risk_gate_rr_adaptive_regime_with_second_stage_comparator': 1}`
+  - final batch summary (`core_full`, 8 datasets):
+    - `scenario_quality_focus_004` (`protect_strong`):
+      - `pf=0.6254`, `exp=-7.3389`, `trades=138.6250` (best in batch)
+      - top risk=`blocked_second_stage_confirmation_hostile_history_severe_safety_adders`
+    - `scenario_quality_focus_002` (`balance`):
+      - `pf=0.5742`, `exp=-8.2515`, `trades=131.1250`
+      - top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime`
+    - `scenario_quality_focus_000` (`relax_strong`):
+      - `pf=0.5843`, `exp=-8.6136`, `trades=139.3750`
+      - top risk=`blocked_risk_gate_entry_quality_edge_base`
+    - `scenario_quality_focus_005` (`second_stage_severe_guard_comparator`):
+      - `pf=0.5449`, `exp=-8.3579`, `trades=127.6250`
+      - top risk=`blocked_risk_gate_entry_quality_rr_base`
+  - interpretation:
+    - two-axis expansion improved best PF/expectancy versus previous rr-adaptive batch,
+      but top bottleneck for best combo moved back to second-stage severe-history.
+    - this confirms the intended tradeoff surface:
+      - rr-adaptive relief and severe-history pressure are tightly coupled.
+  - next:
+    - run mixed ownership batch with hard cap on severe-history ratio (guard constraint) while keeping rr-adaptive relief.
+    - evaluate whether `balance/protect_medium` can reduce severe-history rebound with acceptable PF/expectancy.
+
+- Stage-2.32 update (2026-02-17):
+  - objective guardrail added for severe-history rebound control:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - additions:
+      - objective inputs from report:
+        - `second_stage_total`
+        - `second_stage_history_severe_count`
+        - `second_stage_history_severe_ratio`
+      - objective penalty terms:
+        - `objective_max_severe_history_ratio` (default `0.55`)
+        - `objective_severe_history_penalty_scale` (default `18000`)
+        - `objective_severe_history_hard_cap_penalty` (default `1800`)
+      - CLI flags added for tuning-time control:
+        - `--objective-max-severe-history-ratio`
+        - `--objective-severe-history-penalty-scale`
+        - `--objective-severe-history-hard-cap-penalty`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache` completed
+  - routing evidence:
+    - `risk_gate_focus=entry_quality_rr_adaptive_regime`
+    - `scenario_family_counts={'risk_gate_rr_adaptive_regime_focus': 5, 'risk_gate_rr_adaptive_regime_with_second_stage_comparator': 1}`
+  - objective-selected best changed:
+    - before guard (Stage-2.31): best=`scenario_quality_focus_004` (`protect_strong`)
+      - `pf=0.6254`, `exp=-7.3389`, `severe_ratio=64.21%`
+    - after guard (Stage-2.32): best=`scenario_quality_focus_002` (`balance`)
+      - `pf=0.5742`, `exp=-8.2515`, `severe_ratio=34.47%`
+  - top candidates after guard (objective order):
+    - `scenario_quality_focus_002` (`balance`, family=`risk_gate_rr_adaptive_regime_focus`)
+      - `obj=-22486.5140`, `pf=0.5742`, `exp=-8.2515`, `trades=131.1250`
+      - top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime`
+    - `scenario_quality_focus_005` (`second_stage_severe_guard_comparator`, family=`risk_gate_rr_adaptive_regime_with_second_stage_comparator`)
+      - `obj=-22616.8710`, `pf=0.5449`, `exp=-8.3579`, `trades=127.6250`
+      - top risk=`blocked_risk_gate_entry_quality_rr_base`
+    - `scenario_quality_focus_000` (`relax_strong`)
+      - `obj=-24771.4141`, `pf=0.5843`, `exp=-8.6136`, `trades=139.3750`
+      - top risk=`blocked_risk_gate_entry_quality_edge_base`
+  - interpretation:
+    - severe-history objective guard is functioning as designed:
+      - high-PF but high-severe-ratio candidates are now deprioritized.
+    - selection is now aligned with "overfit/hostile rebound prevention" principle, not PF-only ranking.
+  - next:
+    - validate the new objective-selected candidate (`scenario_quality_focus_002`) in full train/eval cycle and confirm recommendation stability.
+    - if needed, tune guard constants (`max ratio/penalty scale/hard cap`) with bounded sensitivity sweep.
+
+- Stage-2.33 update (2026-02-17):
+  - objective-selected candidate train/eval stability check completed:
+    - command:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+  - recommendation stability:
+    - recommendation remains:
+      - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+    - validation top component:
+      - `blocked_risk_gate_entry_quality_rr_adaptive_regime:250`
+    - holdout top component:
+      - `blocked_risk_gate_entry_quality_rr_base:563`
+  - latest readout (`core_full`):
+    - train: `pf=0.9922`, `trades=123.5714`, `exp=-7.1964`
+    - validation: `pf=0.5335`, `trades=173.5`, `exp=-6.8249`
+    - holdout: `pf=0.5226`, `trades=150.0`, `exp=-6.7470`
+  - second-stage severe share (rejection context):
+    - validation: `second_stage_total=258`, `severe=134` (`51.94%`)
+    - holdout: `second_stage_total=242`, `severe=113` (`46.69%`)
+  - interpretation:
+    - bottleneck ownership remains in risk-gate RR branches (adaptive_regime/base), which is consistent with Stage-2.32 objective guard intent.
+    - gate remains fail (`pf<1`, `exp<0`) so next work should stay on rr-adaptive/base branch calibration, not second-stage-first fallback.
+  - next:
+    - run small sensitivity sweep on severe-history objective guard:
+      - `objective_max_severe_history_ratio` in `[0.50, 0.55, 0.60]`
+      - keep penalty scale bounded and compare recommendation flip / objective ranking stability.
+    - add rr_base-specific family split if holdout keeps preferring `blocked_risk_gate_entry_quality_rr_base`.
+
+- Stage-2.34 update (2026-02-17):
+  - severe-history objective guard sensitivity sweep completed:
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py ... --objective-max-severe-history-ratio 0.50 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_ratio050.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_ratio050.json`
+      - `python scripts/tune_candidate_gate_trade_density.py ... --objective-max-severe-history-ratio 0.55 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_ratio055.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_ratio055.json`
+      - `python scripts/tune_candidate_gate_trade_density.py ... --objective-max-severe-history-ratio 0.60 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_ratio060.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_ratio060.json`
+  - result:
+    - best combo did not flip across tested cap values:
+      - all caps selected `scenario_quality_focus_002`
+    - ranking stability:
+      - top-1 stable, top-2/3 ordering changes as cap relaxes (0.60에서 `relax_strong`이 상대적으로 상향)
+  - interpretation:
+    - objective severe-history guard is not hypersensitive around 0.50~0.60 in current search space.
+    - current best appears robust to moderate cap variation.
+
+- Stage-2.35 update (2026-02-17):
+  - holdout rr_base 대응용 hybrid routing implemented:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - changes:
+      - hybrid focus detection added:
+        - condition: recommendation=`entry_quality_rr_adaptive_regime` + holdout top component=`rr_base`
+        - focus key: `entry_quality_rr_adaptive_regime_with_rr_base_holdout`
+      - new family added:
+        - `risk_gate_rr_adaptive_regime_base_bridge`
+      - bridge profile variants added:
+        - `bridge_relax`, `bridge_balanced`, `bridge_guarded`, `bridge_guarded_plus`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache` completed
+  - routing evidence:
+    - `risk_gate_focus=entry_quality_rr_adaptive_regime_with_rr_base_holdout`
+    - `scenario_family_counts={'risk_gate_rr_adaptive_regime_base_bridge': 6}`
+  - latest batch summary (`core_full`, objective order):
+    - best: `scenario_quality_focus_002`
+      - `obj=-22559.32`, `pf=0.5678`, `exp=-8.0924`, `trades=129.000`
+      - `severe_ratio=43.27%`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime`
+    - remaining candidates still show high severe ratios (`61%~76%`) and unstable top components (`edge_base`, `rr_base`, `second_stage_severe`)
+  - interpretation:
+    - hybrid bridge routing is activated correctly and keeps ownership on risk-gate RR side in top candidate.
+    - gate remains fail and severe rebound still present in most variants, so next step must tighten bridge profile space.
+  - next:
+    - narrow bridge profile generation around `bridge_guarded` neighborhood (drop high-severe variants).
+    - add explicit rr_base-floor-specific micro-family for holdout-dominant runs while preserving validation rr_adaptive support.
 
 2. Expectancy-first improvement loop
 - Optimize for:
