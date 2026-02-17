@@ -98,6 +98,9 @@ public:
             int blocked_second_stage_confirmation_hostile_regime_safety_adders = 0;
             int blocked_second_stage_confirmation_hostile_liquidity_safety_adders = 0;
             int blocked_second_stage_confirmation_hostile_history_safety_adders = 0;
+            int blocked_second_stage_confirmation_hostile_history_mild_safety_adders = 0;
+            int blocked_second_stage_confirmation_hostile_history_moderate_safety_adders = 0;
+            int blocked_second_stage_confirmation_hostile_history_severe_safety_adders = 0;
             int blocked_second_stage_confirmation_hostile_dynamic_tighten_safety_adders = 0;
             int blocked_risk_manager = 0;
             int blocked_min_order_or_capital = 0;

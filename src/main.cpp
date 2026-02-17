@@ -474,6 +474,9 @@ int main(int argc, char* argv[]) {
                         {"blocked_second_stage_confirmation_hostile_regime_safety_adders", result.entry_funnel.blocked_second_stage_confirmation_hostile_regime_safety_adders},
                         {"blocked_second_stage_confirmation_hostile_liquidity_safety_adders", result.entry_funnel.blocked_second_stage_confirmation_hostile_liquidity_safety_adders},
                         {"blocked_second_stage_confirmation_hostile_history_safety_adders", result.entry_funnel.blocked_second_stage_confirmation_hostile_history_safety_adders},
+                        {"blocked_second_stage_confirmation_hostile_history_mild_safety_adders", result.entry_funnel.blocked_second_stage_confirmation_hostile_history_mild_safety_adders},
+                        {"blocked_second_stage_confirmation_hostile_history_moderate_safety_adders", result.entry_funnel.blocked_second_stage_confirmation_hostile_history_moderate_safety_adders},
+                        {"blocked_second_stage_confirmation_hostile_history_severe_safety_adders", result.entry_funnel.blocked_second_stage_confirmation_hostile_history_severe_safety_adders},
                         {"blocked_second_stage_confirmation_hostile_dynamic_tighten_safety_adders", result.entry_funnel.blocked_second_stage_confirmation_hostile_dynamic_tighten_safety_adders},
                         {"blocked_risk_manager", result.entry_funnel.blocked_risk_manager},
                         {"blocked_min_order_or_capital", result.entry_funnel.blocked_min_order_or_capital},
@@ -587,6 +590,10 @@ int main(int argc, char* argv[]) {
                           << " {regime=" << result.entry_funnel.blocked_second_stage_confirmation_hostile_regime_safety_adders
                           << ", liquidity=" << result.entry_funnel.blocked_second_stage_confirmation_hostile_liquidity_safety_adders
                           << ", history=" << result.entry_funnel.blocked_second_stage_confirmation_hostile_history_safety_adders
+                          << " {mild=" << result.entry_funnel.blocked_second_stage_confirmation_hostile_history_mild_safety_adders
+                          << ", moderate=" << result.entry_funnel.blocked_second_stage_confirmation_hostile_history_moderate_safety_adders
+                          << ", severe=" << result.entry_funnel.blocked_second_stage_confirmation_hostile_history_severe_safety_adders
+                          << "}"
                           << ", dynamic_tighten=" << result.entry_funnel.blocked_second_stage_confirmation_hostile_dynamic_tighten_safety_adders
                           << "}"
                           << "}"
@@ -783,6 +790,10 @@ int main(int argc, char* argv[]) {
                       << " {regime=" << result.entry_funnel.blocked_second_stage_confirmation_hostile_regime_safety_adders
                       << ", liquidity=" << result.entry_funnel.blocked_second_stage_confirmation_hostile_liquidity_safety_adders
                       << ", history=" << result.entry_funnel.blocked_second_stage_confirmation_hostile_history_safety_adders
+                      << " {mild=" << result.entry_funnel.blocked_second_stage_confirmation_hostile_history_mild_safety_adders
+                      << ", moderate=" << result.entry_funnel.blocked_second_stage_confirmation_hostile_history_moderate_safety_adders
+                      << ", severe=" << result.entry_funnel.blocked_second_stage_confirmation_hostile_history_severe_safety_adders
+                      << "}"
                       << ", dynamic_tighten=" << result.entry_funnel.blocked_second_stage_confirmation_hostile_dynamic_tighten_safety_adders
                       << "}"
                       << "}"

@@ -1006,6 +1006,32 @@ enum class SecondStageConfirmationSafetySource {
     DynamicTighten,
 };
 
+enum class SecondStageHistorySafetySeverity {
+    Mild,
+    Moderate,
+    Severe,
+};
+
+SecondStageHistorySafetySeverity classifySecondStageHistorySafetySeverity(
+    const strategy::Signal& signal
+) {
+    const double win_rate = signal.strategy_win_rate;
+    const double pf = signal.strategy_profit_factor;
+    const bool severe =
+        win_rate < 0.42 ||
+        (pf > 0.0 && pf < 0.90);
+    if (severe) {
+        return SecondStageHistorySafetySeverity::Severe;
+    }
+    const bool moderate =
+        win_rate < 0.45 ||
+        (pf > 0.0 && pf < 0.95);
+    if (moderate) {
+        return SecondStageHistorySafetySeverity::Moderate;
+    }
+    return SecondStageHistorySafetySeverity::Mild;
+}
+
 bool passesSecondStageEntryConfirmation(
     const strategy::Signal& signal,
     const engine::EngineConfig& cfg,
@@ -2995,6 +3021,17 @@ void BacktestEngine::processCandle(const Candle& candle) {
                                     break;
                                 case SecondStageConfirmationSafetySource::StrategyHistory:
                                     entry_funnel_.blocked_second_stage_confirmation_hostile_history_safety_adders++;
+                                    switch (classifySecondStageHistorySafetySeverity(best_signal)) {
+                                        case SecondStageHistorySafetySeverity::Mild:
+                                            entry_funnel_.blocked_second_stage_confirmation_hostile_history_mild_safety_adders++;
+                                            break;
+                                        case SecondStageHistorySafetySeverity::Moderate:
+                                            entry_funnel_.blocked_second_stage_confirmation_hostile_history_moderate_safety_adders++;
+                                            break;
+                                        case SecondStageHistorySafetySeverity::Severe:
+                                            entry_funnel_.blocked_second_stage_confirmation_hostile_history_severe_safety_adders++;
+                                            break;
+                                    }
                                     break;
                                 case SecondStageConfirmationSafetySource::DynamicTighten:
                                     entry_funnel_.blocked_second_stage_confirmation_hostile_dynamic_tighten_safety_adders++;

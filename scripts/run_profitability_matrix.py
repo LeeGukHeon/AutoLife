@@ -220,6 +220,15 @@ def run_profile_backtests(
             "blocked_second_stage_confirmation_hostile_history_safety_adders": int(
                 entry_funnel.get("blocked_second_stage_confirmation_hostile_history_safety_adders", 0) or 0
             ),
+            "blocked_second_stage_confirmation_hostile_history_mild_safety_adders": int(
+                entry_funnel.get("blocked_second_stage_confirmation_hostile_history_mild_safety_adders", 0) or 0
+            ),
+            "blocked_second_stage_confirmation_hostile_history_moderate_safety_adders": int(
+                entry_funnel.get("blocked_second_stage_confirmation_hostile_history_moderate_safety_adders", 0) or 0
+            ),
+            "blocked_second_stage_confirmation_hostile_history_severe_safety_adders": int(
+                entry_funnel.get("blocked_second_stage_confirmation_hostile_history_severe_safety_adders", 0) or 0
+            ),
             "blocked_second_stage_confirmation_hostile_dynamic_tighten_safety_adders": int(
                 entry_funnel.get("blocked_second_stage_confirmation_hostile_dynamic_tighten_safety_adders", 0) or 0
             ),
@@ -1050,6 +1059,9 @@ def main() -> int:
             "blocked_second_stage_confirmation_hostile_regime_safety_adders",
             "blocked_second_stage_confirmation_hostile_liquidity_safety_adders",
             "blocked_second_stage_confirmation_hostile_history_safety_adders",
+            "blocked_second_stage_confirmation_hostile_history_mild_safety_adders",
+            "blocked_second_stage_confirmation_hostile_history_moderate_safety_adders",
+            "blocked_second_stage_confirmation_hostile_history_severe_safety_adders",
             "blocked_second_stage_confirmation_hostile_dynamic_tighten_safety_adders",
         }
         second_stage_hostile_split_keys = {
@@ -1057,6 +1069,11 @@ def main() -> int:
             "blocked_second_stage_confirmation_hostile_liquidity_safety_adders",
             "blocked_second_stage_confirmation_hostile_history_safety_adders",
             "blocked_second_stage_confirmation_hostile_dynamic_tighten_safety_adders",
+        }
+        second_stage_hostile_history_split_keys = {
+            "blocked_second_stage_confirmation_hostile_history_mild_safety_adders",
+            "blocked_second_stage_confirmation_hostile_history_moderate_safety_adders",
+            "blocked_second_stage_confirmation_hostile_history_severe_safety_adders",
         }
         exclude_component_keys = {
             "blocked_risk_gate_total",
@@ -1074,10 +1091,15 @@ def main() -> int:
         has_second_stage_hostile_split = any(
             int(risk_gate_counts.get(k, 0)) > 0 for k in second_stage_hostile_split_keys
         )
+        has_second_stage_hostile_history_split = any(
+            int(risk_gate_counts.get(k, 0)) > 0 for k in second_stage_hostile_history_split_keys
+        )
         if has_second_stage_split:
             exclude_component_keys.add("blocked_second_stage_confirmation")
         if has_second_stage_hostile_split:
             exclude_component_keys.add("blocked_second_stage_confirmation_hostile_safety_adders")
+        if has_second_stage_hostile_history_split:
+            exclude_component_keys.add("blocked_second_stage_confirmation_hostile_history_safety_adders")
         risk_gate_component_counts = {
             k: int(v)
             for k, v in risk_gate_counts.items()

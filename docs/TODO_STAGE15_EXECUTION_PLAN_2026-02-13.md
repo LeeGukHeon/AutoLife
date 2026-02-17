@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-17 (second-stage hostile safety source split instrumentation)
+Last updated: 2026-02-17 (second-stage hostile history severity split instrumentation)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -968,6 +968,44 @@ The system must:
     - next calibration target can be narrowed from generic hostile safety to history-evidence safety branch only.
   - next:
     - design bounded history-safety attenuation candidates (confidence-gated, hostile-regime holdouts protected) and evaluate split-wise PF/expectancy impact.
+
+- Stage-2.27 update (2026-02-17):
+  - hostile history severity split instrumentation implemented (no threshold/decision change):
+    - runtime/reporting updates:
+      - `include/runtime/BacktestRuntime.h`
+      - `src/runtime/BacktestRuntime.cpp`
+      - `src/main.cpp`
+      - `scripts/run_profitability_matrix.py`
+    - new history severity buckets added:
+      - `blocked_second_stage_confirmation_hostile_history_mild_safety_adders`
+      - `blocked_second_stage_confirmation_hostile_history_moderate_safety_adders`
+      - `blocked_second_stage_confirmation_hostile_history_severe_safety_adders`
+    - classification rule:
+      - severe: `win_rate < 0.42` or `profit_factor < 0.90`
+      - moderate: `win_rate < 0.45` or `profit_factor < 0.95`
+      - mild: otherwise
+    - component ranking behavior:
+      - when history severity detail exists, top risk component now prefers severity key over aggregate history key
+  - verification:
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python -m py_compile scripts/run_profitability_matrix.py scripts/run_candidate_train_eval_cycle.py scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full`):
+    - train: `pf=0.7289`, `trades=132.0`, `exp=-7.94`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1601`
+    - validation: `pf=0.5028`, `trades=172.0`, `exp=-7.6628`, top risk=`blocked_second_stage_confirmation_hostile_history_severe_safety_adders:885`
+    - holdout: `pf=0.4557`, `trades=149.3333`, `exp=-7.8552`, top risk=`blocked_second_stage_confirmation_hostile_history_severe_safety_adders:1463`
+    - promotion recommendation: `hold_candidate_calibrate_second_stage_confirmation_consistency`
+  - hostile history severity snapshot:
+    - validation: `hostile_history=885` -> `mild=0`, `moderate=0`, `severe=885`
+    - holdout: `hostile_history=1463` -> `mild=0`, `moderate=0`, `severe=1463`
+  - effect:
+    - second-stage 병목의 핵심이 `history` 중에서도 `severe` 구간에 집중됨이 확정됨.
+    - 완화 실험은 mild/moderate가 아니라 severe 대응 정책(혹은 사전 필터/학습 신뢰도 규칙)을 대상으로 설계해야 함.
+  - next:
+    - severe-history safety adders 전용 candidate(완화 대신 진입 전 신뢰도 보강/차단 정책 분리) 설계 및 split-wise 검증.
 
 2. Expectancy-first improvement loop
 - Optimize for:
