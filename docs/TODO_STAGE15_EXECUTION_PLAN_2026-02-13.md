@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-17 (Stage-2.53 mixed-drift anti-drift activation expansion)
+Last updated: 2026-02-17 (Stage-2.56 tune->promote call-flow bug fix and verification)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -1898,6 +1898,67 @@ The system must:
   - next:
     - run penalty-strength A/B (`objective_split_ownership_drift_penalty`, `objective_edge_base_anti_drift_penalty`) and mixed-local-step sweep to force candidate rank separation under persistent `edge->rr` drift.
 
+- Stage-2.54 update (2026-02-17):
+  - penalty-strength A/B/C executed:
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py ... --objective-split-ownership-drift-penalty 1500 --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage254_a.json`
+      - `python scripts/tune_candidate_gate_trade_density.py ... --objective-edge-base-anti-drift-penalty 2200 --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage254_b.json`
+      - `python scripts/tune_candidate_gate_trade_density.py ... --objective-split-ownership-drift-penalty 1800 --objective-edge-base-anti-drift-penalty 2600 --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage254_c.json`
+  - result:
+    - ranking did not change (`scenario_quality_focus_005` remained top in all three runs).
+    - objective scores only shifted by guard penalty constants; candidate ordering remained identical.
+  - interpretation:
+    - current objective penalties were active but did not create rank separation in the active combo space.
+
+- Stage-2.55 update (2026-02-17):
+  - mixed-local-step sweep executed:
+    - command:
+      - `python scripts/tune_candidate_gate_trade_density.py ... --objective-split-ownership-drift-penalty 1500 --objective-edge-base-anti-drift-penalty 2200 --rr-adaptive-regime-local-rr-step 0.03 --rr-adaptive-regime-local-signal-step 0.015 --rr-adaptive-regime-local-edge-step 0.00015 --rr-bridge-local-rr-step 0.03 --rr-bridge-local-signal-step 0.015 --rr-bridge-local-edge-step 0.00015 --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage255_mixedsweep.json`
+  - result:
+    - top combo still remained `scenario_quality_focus_005`.
+  - interpretation:
+    - local-step range expansion alone did not break the winner lock.
+
+- Stage-2.56 update (2026-02-17):
+  - tune->promote call-flow audit requested (winner lock suspicion):
+    - finding:
+      - `scripts/tune_candidate_gate_trade_density.py` restored original `config.json` in `finally` after all evaluations, but never persisted `best_combo` back to build config.
+      - consequence: tune winner could change in summary, yet subsequent train/eval consumed stale config (same effective candidate), which can look like optimizer stagnation/call-flow bug.
+  - fix implemented:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - changes:
+      - added explicit post-sort promotion flow:
+        - apply `best_combo` to `build/Release/config/config.json` after tuning.
+        - save promoted snapshot JSON (`--promoted-combo-json`, default `build/Release/logs/candidate_promoted_combo.json`).
+      - added CLI controls:
+        - `--promote-best-combo` (default ON)
+        - `--disable-promote-best-combo`
+      - added mixed-vs-regime drift guard:
+        - `--objective-enforce-rr-adaptive-mixed-vs-regime-drift-guard` (default ON)
+        - `--objective-rr-adaptive-mixed-vs-regime-drift-penalty` (default `800`)
+      - added summary metadata for new guard/promotion fields.
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - reduced verification run:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 3 --real-data-only --require-higher-tf-companions --screen-top-k 3 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage256_verify.json`
+      - log evidence:
+        - `best_combo=scenario_quality_focus_000`
+        - `promote_best_combo=on, applied=True`
+    - config/snapshot reflection confirmed:
+      - `build/Release/config/config.json` now matches `scenario_quality_focus_000` key fields.
+      - `build/Release/logs/candidate_promoted_combo.json` generated with same combo id.
+    - promoted train/eval cycle:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+      - result changed vs stale-flow baseline (proof that promotion wiring now effective):
+        - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+        - validation top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_regime:1391`
+        - holdout top risk=`blocked_risk_gate_entry_quality_edge_base:712`
+        - gate remained fail (`promotion_gate_pass=false`, `generalization_guard_pass=false`)
+  - next:
+    - with promotion flow fixed, continue true candidate comparison on fresh tuned winners (no stale-config illusion).
+    - prioritize ownership re-alignment to reduce holdout `edge_base` while preventing validation shift into `rr_edge_adaptive_regime`.
+
 2. Expectancy-first improvement loop
 - Optimize for:
   - `avg_expectancy_krw`,
@@ -1926,6 +1987,7 @@ The system must:
   - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune`
 - Candidate tuning:
   - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions`
+  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --promoted-combo-json build/Release/logs/candidate_promoted_combo.json`
 - Split train/eval cycle with walk-forward gate:
   - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
   - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`

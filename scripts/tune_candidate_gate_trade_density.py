@@ -2899,6 +2899,9 @@ def compute_combo_objective(
     expected_secondary_risk_component: str,
     enforce_split_ownership_drift_guard: bool,
     objective_split_ownership_drift_penalty: float,
+    enforce_rr_adaptive_mixed_vs_regime_drift_guard: bool,
+    objective_rr_adaptive_mixed_vs_regime_drift_penalty: float,
+    expected_mixed_risk_component: str,
     enforce_edge_base_anti_drift_guard: bool,
     objective_edge_base_anti_drift_penalty: float,
     enforce_rr_edge_floor_cap_guard: bool,
@@ -2941,6 +2944,14 @@ def compute_combo_objective(
             penalty += (float(objective_split_ownership_drift_penalty) * 0.35)
         else:
             penalty += float(objective_split_ownership_drift_penalty)
+    if bool(enforce_rr_adaptive_mixed_vs_regime_drift_guard):
+        top_reason = str(top_risk_gate_component_reason or "")
+        mixed_reason = str(expected_mixed_risk_component or "")
+        if (
+            mixed_reason == "blocked_risk_gate_entry_quality_rr_adaptive_mixed"
+            and top_reason.startswith("blocked_risk_gate_entry_quality_rr_adaptive_regime")
+        ):
+            penalty += float(objective_rr_adaptive_mixed_vs_regime_drift_penalty)
     if bool(enforce_edge_base_anti_drift_guard):
         top_reason = str(top_risk_gate_component_reason or "")
         if top_reason in {
@@ -3203,6 +3214,25 @@ def main(argv=None) -> int:
     parser.add_argument("--summary-csv", "-SummaryCsv", default=r".\build\Release\logs\candidate_trade_density_tuning_summary.csv")
     parser.add_argument("--summary-json", "-SummaryJson", default=r".\build\Release\logs\candidate_trade_density_tuning_summary.json")
     parser.add_argument(
+        "--promoted-combo-json",
+        "-PromotedComboJson",
+        default=r".\build\Release\logs\candidate_promoted_combo.json",
+        help="Output path for promoted best-combo snapshot.",
+    )
+    parser.add_argument(
+        "--promote-best-combo",
+        "-PromoteBestCombo",
+        dest="promote_best_combo",
+        action="store_true",
+        default=True,
+        help="Persist best combo into build config after tuning (default: enabled).",
+    )
+    parser.add_argument(
+        "--disable-promote-best-combo",
+        dest="promote_best_combo",
+        action="store_false",
+    )
+    parser.add_argument(
         "--scenario-mode",
         "-ScenarioMode",
         choices=["legacy_only", "diverse_light", "diverse_wide", "quality_focus"],
@@ -3315,6 +3345,26 @@ def main(argv=None) -> int:
         type=float,
         default=900.0,
         help="Penalty applied when split ownership drift guard is violated.",
+    )
+    parser.add_argument(
+        "--objective-enforce-rr-adaptive-mixed-vs-regime-drift-guard",
+        "-ObjectiveEnforceRrAdaptiveMixedVsRegimeDriftGuard",
+        dest="objective_enforce_rr_adaptive_mixed_vs_regime_drift_guard",
+        action="store_true",
+        default=True,
+        help="Penalize rr_adaptive_regime ownership when mixed ownership is the expected split target.",
+    )
+    parser.add_argument(
+        "--disable-objective-enforce-rr-adaptive-mixed-vs-regime-drift-guard",
+        dest="objective_enforce_rr_adaptive_mixed_vs_regime_drift_guard",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--objective-rr-adaptive-mixed-vs-regime-drift-penalty",
+        "-ObjectiveRrAdaptiveMixedVsRegimeDriftPenalty",
+        type=float,
+        default=800.0,
+        help="Additional penalty for mixed-focus ownership drifting to rr_adaptive_regime top component.",
     )
     parser.add_argument(
         "--objective-enforce-edge-base-anti-drift-guard",
@@ -3599,6 +3649,7 @@ def main(argv=None) -> int:
     output_dir = pathlib.Path(args.output_dir).resolve()
     summary_csv = pathlib.Path(args.summary_csv).resolve()
     summary_json = pathlib.Path(args.summary_json).resolve()
+    promoted_combo_json = pathlib.Path(args.promoted_combo_json).resolve()
     dataset_quality_report_json = pathlib.Path(args.dataset_quality_report_json).resolve()
     eval_cache_json = pathlib.Path(args.eval_cache_json).resolve()
     live_signal_funnel_taxonomy_json = pathlib.Path(args.live_signal_funnel_taxonomy_json).resolve()
@@ -3607,6 +3658,7 @@ def main(argv=None) -> int:
     cache_enabled = not bool(args.disable_eval_cache)
     ensure_parent_directory(summary_csv)
     ensure_parent_directory(summary_json)
+    ensure_parent_directory(promoted_combo_json)
     ensure_parent_directory(dataset_quality_report_json)
     ensure_parent_directory(eval_cache_json)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -3724,6 +3776,17 @@ def main(argv=None) -> int:
     )
     rr_adaptive_mixed_focus_for_objective = risk_gate_focus_for_objective.startswith(
         "entry_quality_rr_adaptive_mixed"
+    )
+    enforce_rr_adaptive_mixed_vs_regime_drift_objective = bool(
+        args.objective_enforce_rr_adaptive_mixed_vs_regime_drift_guard
+    ) and (
+        split_ownership_drift_active
+        and (
+            rr_adaptive_mixed_focus_for_objective
+            or holdout_recommendation_for_objective
+            == "hold_candidate_calibrate_risk_gate_rr_adaptive_mixed_adders"
+        )
+        and validation_top_risk_component_for_objective == "blocked_risk_gate_entry_quality_rr_adaptive_mixed"
     )
     enforce_edge_base_anti_drift_objective = bool(args.objective_enforce_edge_base_anti_drift_guard) and (
         rr_adaptive_regime_focus_for_objective
@@ -3875,6 +3938,12 @@ def main(argv=None) -> int:
         f"penalty={float(args.objective_split_ownership_drift_penalty):.2f}"
     )
     print(
+        f"[TuneCandidate] objective_rr_adaptive_mixed_vs_regime_drift_guard="
+        f"{'on' if enforce_rr_adaptive_mixed_vs_regime_drift_objective else 'off'}, "
+        f"secondary={validation_top_risk_component_for_objective}, "
+        f"penalty={float(args.objective_rr_adaptive_mixed_vs_regime_drift_penalty):.2f}"
+    )
+    print(
         f"[TuneCandidate] objective_edge_base_anti_drift_guard="
         f"{'on' if enforce_edge_base_anti_drift_objective else 'off'}, "
         f"focus={risk_gate_focus_for_objective}, "
@@ -3986,6 +4055,13 @@ def main(argv=None) -> int:
                     expected_secondary_risk_component=validation_top_risk_component_for_objective,
                     enforce_split_ownership_drift_guard=bool(enforce_split_ownership_drift_objective),
                     objective_split_ownership_drift_penalty=float(args.objective_split_ownership_drift_penalty),
+                    enforce_rr_adaptive_mixed_vs_regime_drift_guard=bool(
+                        enforce_rr_adaptive_mixed_vs_regime_drift_objective
+                    ),
+                    objective_rr_adaptive_mixed_vs_regime_drift_penalty=float(
+                        args.objective_rr_adaptive_mixed_vs_regime_drift_penalty
+                    ),
+                    expected_mixed_risk_component=validation_top_risk_component_for_objective,
                     enforce_edge_base_anti_drift_guard=bool(enforce_edge_base_anti_drift_objective),
                     objective_edge_base_anti_drift_penalty=float(args.objective_edge_base_anti_drift_penalty),
                     enforce_rr_edge_floor_cap_guard=bool(enforce_rr_edge_floor_cap_objective),
@@ -4108,6 +4184,13 @@ def main(argv=None) -> int:
                     expected_secondary_risk_component=validation_top_risk_component_for_objective,
                     enforce_split_ownership_drift_guard=bool(enforce_split_ownership_drift_objective),
                     objective_split_ownership_drift_penalty=float(args.objective_split_ownership_drift_penalty),
+                    enforce_rr_adaptive_mixed_vs_regime_drift_guard=bool(
+                        enforce_rr_adaptive_mixed_vs_regime_drift_objective
+                    ),
+                    objective_rr_adaptive_mixed_vs_regime_drift_penalty=float(
+                        args.objective_rr_adaptive_mixed_vs_regime_drift_penalty
+                    ),
+                    expected_mixed_risk_component=validation_top_risk_component_for_objective,
                     enforce_edge_base_anti_drift_guard=bool(enforce_edge_base_anti_drift_objective),
                     objective_edge_base_anti_drift_penalty=float(args.objective_edge_base_anti_drift_penalty),
                     enforce_rr_edge_floor_cap_guard=bool(enforce_rr_edge_floor_cap_objective),
@@ -4180,10 +4263,53 @@ def main(argv=None) -> int:
         writer.writeheader()
         writer.writerows(sorted_rows)
 
+    best_row = sorted_rows[0]
+    best_combo_id = str(best_row.get("combo_id", ""))
+    combo_spec_by_id = {str(c.get("combo_id", "")): c for c in combo_specs}
+    best_combo_payload = deepcopy(combo_spec_by_id.get(best_combo_id, {}))
+    promotion_applied = False
+    if bool(args.promote_best_combo) and best_combo_payload:
+        promoted_cfg = json.loads(original_build_raw)
+        apply_candidate_combo_to_config(promoted_cfg, best_combo_payload)
+        build_config.write_text(
+            json.dumps(promoted_cfg, ensure_ascii=False, indent=4),
+            encoding="utf-8",
+            newline="\n",
+        )
+        promoted_snapshot = {
+            "generated_at": __import__("datetime").datetime.now().astimezone().isoformat(),
+            "source_summary_json": str(summary_json),
+            "build_config_path": str(build_config),
+            "best_combo_id": best_combo_id,
+            "best_combo": best_combo_payload,
+            "objective_score": float(best_row.get("objective_score", 0.0) or 0.0),
+            "avg_profit_factor": float(best_row.get("avg_profit_factor", 0.0) or 0.0),
+            "avg_expectancy_krw": float(best_row.get("avg_expectancy_krw", 0.0) or 0.0),
+            "avg_total_trades": float(best_row.get("avg_total_trades", 0.0) or 0.0),
+            "top_entry_risk_gate_component_reason": str(
+                best_row.get("top_entry_risk_gate_component_reason", "")
+            ),
+            "top_entry_risk_gate_component_count": int(
+                best_row.get("top_entry_risk_gate_component_count", 0) or 0
+            ),
+        }
+        ensure_parent_directory(promoted_combo_json)
+        promoted_combo_json.write_text(
+            json.dumps(promoted_snapshot, ensure_ascii=False, indent=4),
+            encoding="utf-8",
+            newline="\n",
+        )
+        promotion_applied = True
+
     report_out = {
         "generated_at": __import__("datetime").datetime.now().astimezone().isoformat(),
         "dataset_mode": "realdata_only" if args.real_data_only else "mixed",
         "require_higher_tf_companions": bool(args.require_higher_tf_companions),
+        "best_combo_id": best_combo_id,
+        "best_combo_objective_score": float(best_row.get("objective_score", 0.0) or 0.0),
+        "promote_best_combo": bool(args.promote_best_combo),
+        "promote_best_combo_applied": bool(promotion_applied),
+        "promoted_combo_json": str(promoted_combo_json),
         "dataset_quality_gate": dataset_quality_gate,
         "dataset_dirs": [str(x) for x in scan_dirs],
         "dataset_count": len(datasets),
@@ -4218,6 +4344,15 @@ def main(argv=None) -> int:
             "objective_split_ownership_drift_active": bool(split_ownership_drift_active),
             "objective_split_ownership_primary_component": holdout_top_risk_component_for_objective,
             "objective_split_ownership_secondary_component": validation_top_risk_component_for_objective,
+            "objective_enforce_rr_adaptive_mixed_vs_regime_drift_guard": bool(
+                args.objective_enforce_rr_adaptive_mixed_vs_regime_drift_guard
+            ),
+            "objective_rr_adaptive_mixed_vs_regime_drift_penalty": float(
+                args.objective_rr_adaptive_mixed_vs_regime_drift_penalty
+            ),
+            "objective_rr_adaptive_mixed_vs_regime_drift_guard_active": bool(
+                enforce_rr_adaptive_mixed_vs_regime_drift_objective
+            ),
             "objective_enforce_edge_base_anti_drift_guard": bool(
                 args.objective_enforce_edge_base_anti_drift_guard
             ),
@@ -4310,7 +4445,11 @@ def main(argv=None) -> int:
     print("[TuneCandidate] Completed")
     print(f"summary_csv={summary_csv}")
     print(f"summary_json={summary_json}")
-    print(f"best_combo={sorted_rows[0]['combo_id']}")
+    print(f"best_combo={best_combo_id}")
+    print(
+        f"promote_best_combo={'on' if bool(args.promote_best_combo) else 'off'}, "
+        f"applied={bool(promotion_applied)}, promoted_combo_json={promoted_combo_json}"
+    )
     return 0
 
 
