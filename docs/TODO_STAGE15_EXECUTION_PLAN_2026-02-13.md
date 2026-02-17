@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-17 (Stage-2.44 rr-step micro sweep + promoted revalidation)
+Last updated: 2026-02-17 (Stage-2.47 re-tune + promoted revalidation)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -1627,6 +1627,99 @@ The system must:
   - next:
     - add `edge_base`-specific objective penalty reinforcement when holdout recommendation remains `rr_adaptive_regime`.
     - re-run 6-scenario sweep with the reinforcement and verify split ownership alignment before additional expectancy tuning.
+
+- Stage-2.45 update (2026-02-17):
+  - `edge_base` anti-drift objective guard introduced:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - changes:
+      - objective penalty branch added for edge-baseline ownership:
+        - target reasons:
+          - `blocked_risk_gate_entry_quality_edge_base`
+          - `blocked_risk_gate_entry_quality_rr_edge_base`
+      - new args:
+        - `--objective-enforce-edge-base-anti-drift-guard` (default ON)
+        - `--disable-objective-enforce-edge-base-anti-drift-guard`
+        - `--objective-edge-base-anti-drift-penalty` (default `1200`)
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage245.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage245.json`
+  - result:
+    - best combo remained `scenario_quality_focus_005`
+    - real context held split ownership drift:
+      - holdout top=`blocked_risk_gate_entry_quality_rr_adaptive_regime`
+      - validation top=`blocked_risk_gate_entry_quality_edge_base`
+    - guard was still inactive in this run:
+      - `objective_edge_base_anti_drift_guard_active=false`
+      - reason: activation condition was tied to RR-adaptive recommendation/focus only.
+
+- Stage-2.46 update (2026-02-17):
+  - anti-drift activation scope expanded for split ownership drift context:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - change:
+      - `objective_edge_base_anti_drift_guard` now also activates when:
+        - split drift is active, and
+        - holdout top risk is RR-ownership branch, and
+        - validation top risk is edge-base branch.
+      - reporting added:
+        - console flag: `split_rr_to_edge_drift=<true|false>`
+        - summary JSON field:
+          - `objective_edge_base_anti_drift_split_rr_to_edge_drift_active`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - real-context run:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage246.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage246.json`
+      - log evidence:
+        - `objective_edge_base_anti_drift_guard=on`
+        - `split_rr_to_edge_drift=True`
+    - soft-step A/B check:
+      - ON:
+        - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --rr-adaptive-regime-local-rr-step 0.015 --rr-adaptive-regime-local-signal-step 0.008 --rr-adaptive-regime-local-edge-step 0.00008 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage246_soft_guardon.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage246_soft_guardon.json`
+      - OFF baseline:
+        - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --rr-adaptive-regime-local-rr-step 0.015 --rr-adaptive-regime-local-signal-step 0.008 --rr-adaptive-regime-local-edge-step 0.00008 --disable-objective-enforce-edge-base-anti-drift-guard --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage246_soft_guardoff.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage246_soft_guardoff.json`
+  - promoted snapshot validation:
+    - snapshot:
+      - `build/Release/logs/candidate_promoted_combo_stage2_46.json`
+    - command:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+    - result:
+      - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - validation top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:802`
+      - holdout top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:977`
+      - split ownership drift cleared in this promoted pass, but promotion gate still failed (`pf<1`, `exp<0`).
+
+- Stage-2.47 update (2026-02-17):
+  - re-tune on refreshed RR-focused context:
+    - command:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage247.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage247.json`
+    - context/guard evidence:
+      - `risk_gate_focus=entry_quality_rr_adaptive_regime`
+      - `objective_rr_ownership_guard=on`
+      - `objective_edge_base_anti_drift_guard=on`
+      - best combo switched to `scenario_quality_focus_002`
+      - best metrics:
+        - `obj=-21188.958`, `pf=0.8920`, `exp=-7.4982`, `trades=128.25`
+        - top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime`
+  - promoted snapshot validation:
+    - snapshot:
+      - `build/Release/logs/candidate_promoted_combo_stage2_47.json`
+    - command:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+    - result:
+      - train improved but still below promotion floor:
+        - train `pf=0.9826`, `exp=-7.3787`, `trades=119.7143`
+      - split ownership drift reappeared in eval:
+        - validation top risk=`blocked_risk_gate_entry_quality_edge_base:2655`
+        - holdout top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1860`
+      - recommendation reverted to `hold_candidate_calibrate_risk_gate_edge_baseline_floor`
+      - promotion gate remains fail (`promotion_gate_pass=false`, `generalization_guard_pass=false`)
+  - interpretation:
+    - objective-side RR ownership reinforcement can recover alignment in one iteration, but promoted split still flips back to validation edge-base pressure.
+    - overfitting prevention principle maintained: no promotion accepted while validation/holdout generalization fails.
+  - next:
+    - run edge-baseline-floor focused sweep under active anti-drift guard and compare against current `stage247` snapshot.
+    - enforce promoted-pass acceptance only when validation/holdout top-risk ownership stays aligned across one full cycle.
 
 2. Expectancy-first improvement loop
 - Optimize for:

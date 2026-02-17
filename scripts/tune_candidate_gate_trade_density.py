@@ -2899,6 +2899,8 @@ def compute_combo_objective(
     expected_secondary_risk_component: str,
     enforce_split_ownership_drift_guard: bool,
     objective_split_ownership_drift_penalty: float,
+    enforce_edge_base_anti_drift_guard: bool,
+    objective_edge_base_anti_drift_penalty: float,
 ) -> float:
     penalty = 0.0
     if objective_mode == "profitable_ratio_priority":
@@ -2935,6 +2937,13 @@ def compute_combo_objective(
             penalty += (float(objective_split_ownership_drift_penalty) * 0.35)
         else:
             penalty += float(objective_split_ownership_drift_penalty)
+    if bool(enforce_edge_base_anti_drift_guard):
+        top_reason = str(top_risk_gate_component_reason or "")
+        if top_reason in {
+            "blocked_risk_gate_entry_quality_edge_base",
+            "blocked_risk_gate_entry_quality_rr_edge_base",
+        }:
+            penalty += float(objective_edge_base_anti_drift_penalty)
 
     if penalty > 0.0:
         # Keep all infeasible combos below feasible ones while preserving ordering.
@@ -3299,6 +3308,26 @@ def main(argv=None) -> int:
         help="Penalty applied when split ownership drift guard is violated.",
     )
     parser.add_argument(
+        "--objective-enforce-edge-base-anti-drift-guard",
+        "-ObjectiveEnforceEdgeBaseAntiDriftGuard",
+        dest="objective_enforce_edge_base_anti_drift_guard",
+        action="store_true",
+        default=True,
+        help="Penalize edge-base ownership reversion when rr_adaptive_regime focus is active.",
+    )
+    parser.add_argument(
+        "--disable-objective-enforce-edge-base-anti-drift-guard",
+        dest="objective_enforce_edge_base_anti_drift_guard",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--objective-edge-base-anti-drift-penalty",
+        "-ObjectiveEdgeBaseAntiDriftPenalty",
+        type=float,
+        default=1200.0,
+        help="Penalty applied when edge-base reversion is detected under rr_adaptive_regime focus.",
+    )
+    parser.add_argument(
         "--objective-mode",
         "-ObjectiveMode",
         choices=["balanced", "profitable_ratio_priority"],
@@ -3607,7 +3636,11 @@ def main(argv=None) -> int:
     holdout_context = read_train_eval_holdout_context(train_eval_summary_json)
     bottleneck_context = build_effective_bottleneck_context(live_bottleneck_context, holdout_context)
     risk_gate_focus_for_objective = str(bottleneck_context.get("risk_gate_focus", ""))
+    holdout_recommendation_for_objective = str(bottleneck_context.get("holdout_recommendation", "") or "")
     entry_quality_focus_for_objective = risk_gate_focus_for_objective.startswith("entry_quality_")
+    rr_adaptive_regime_focus_for_objective = risk_gate_focus_for_objective.startswith(
+        "entry_quality_rr_adaptive_regime"
+    )
     enforce_rr_ownership_objective = bool(args.objective_enforce_rr_ownership_top_component) and (
         risk_gate_focus_for_objective.startswith("entry_quality_rr")
     )
@@ -3623,6 +3656,22 @@ def main(argv=None) -> int:
         and split_ownership_drift_active
         and bool(holdout_top_risk_component_for_objective)
         and bool(validation_top_risk_component_for_objective)
+    )
+    edge_base_anti_drift_split_rr_to_edge_active = bool(
+        split_ownership_drift_active
+        and holdout_top_risk_component_for_objective.startswith(
+            "blocked_risk_gate_entry_quality_rr"
+        )
+        and validation_top_risk_component_for_objective in {
+            "blocked_risk_gate_entry_quality_edge_base",
+            "blocked_risk_gate_entry_quality_rr_edge_base",
+        }
+    )
+    enforce_edge_base_anti_drift_objective = bool(args.objective_enforce_edge_base_anti_drift_guard) and (
+        rr_adaptive_regime_focus_for_objective
+        or holdout_recommendation_for_objective
+        == "hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders"
+        or edge_base_anti_drift_split_rr_to_edge_active
     )
     scenario_family_counts: Dict[str, int] = {}
     if bool(args.enable_bottleneck_adapted_scenarios):
@@ -3745,6 +3794,14 @@ def main(argv=None) -> int:
         f"penalty={float(args.objective_split_ownership_drift_penalty):.2f}"
     )
     print(
+        f"[TuneCandidate] objective_edge_base_anti_drift_guard="
+        f"{'on' if enforce_edge_base_anti_drift_objective else 'off'}, "
+        f"focus={risk_gate_focus_for_objective}, "
+        f"holdout_recommendation={holdout_recommendation_for_objective}, "
+        f"split_rr_to_edge_drift={edge_base_anti_drift_split_rr_to_edge_active}, "
+        f"penalty={float(args.objective_edge_base_anti_drift_penalty):.2f}"
+    )
+    print(
         f"[TuneCandidate] rr_adaptive_regime_local_sweep="
         f"{'on' if bool(args.enable_rr_adaptive_regime_local_sweep) else 'off'}, "
         f"rr_step={float(args.rr_adaptive_regime_local_rr_step):.3f}, "
@@ -3839,6 +3896,8 @@ def main(argv=None) -> int:
                     expected_secondary_risk_component=validation_top_risk_component_for_objective,
                     enforce_split_ownership_drift_guard=bool(enforce_split_ownership_drift_objective),
                     objective_split_ownership_drift_penalty=float(args.objective_split_ownership_drift_penalty),
+                    enforce_edge_base_anti_drift_guard=bool(enforce_edge_base_anti_drift_objective),
+                    objective_edge_base_anti_drift_penalty=float(args.objective_edge_base_anti_drift_penalty),
                 )
                 screen_row["objective_score"] = screen_objective
                 screen_row["objective_effective_min_avg_trades"] = float(screen_effective["min_avg_trades"])
@@ -3953,6 +4012,8 @@ def main(argv=None) -> int:
                     expected_secondary_risk_component=validation_top_risk_component_for_objective,
                     enforce_split_ownership_drift_guard=bool(enforce_split_ownership_drift_objective),
                     objective_split_ownership_drift_penalty=float(args.objective_split_ownership_drift_penalty),
+                    enforce_edge_base_anti_drift_guard=bool(enforce_edge_base_anti_drift_objective),
+                    objective_edge_base_anti_drift_penalty=float(args.objective_edge_base_anti_drift_penalty),
                 )
                 final_row["objective_score"] = final_objective
                 final_row["objective_effective_min_avg_trades"] = float(final_effective["min_avg_trades"])
@@ -4055,6 +4116,14 @@ def main(argv=None) -> int:
             "objective_split_ownership_drift_active": bool(split_ownership_drift_active),
             "objective_split_ownership_primary_component": holdout_top_risk_component_for_objective,
             "objective_split_ownership_secondary_component": validation_top_risk_component_for_objective,
+            "objective_enforce_edge_base_anti_drift_guard": bool(
+                args.objective_enforce_edge_base_anti_drift_guard
+            ),
+            "objective_edge_base_anti_drift_penalty": float(args.objective_edge_base_anti_drift_penalty),
+            "objective_edge_base_anti_drift_guard_active": bool(enforce_edge_base_anti_drift_objective),
+            "objective_edge_base_anti_drift_split_rr_to_edge_drift_active": bool(
+                edge_base_anti_drift_split_rr_to_edge_active
+            ),
             "objective_mode": str(args.objective_mode),
             "enable_hostility_adaptive_thresholds": bool(args.enable_hostility_adaptive_thresholds),
             "enable_hostility_adaptive_trades_only": bool(args.enable_hostility_adaptive_trades_only),
