@@ -405,6 +405,164 @@ def build_effective_bottleneck_context(
     return context
 
 
+def canonical_rr_adaptive_focus_branch(risk_gate_focus: str) -> str:
+    focus = str(risk_gate_focus or "").strip()
+    if focus.startswith("entry_quality_rr_adaptive_mixed"):
+        return "entry_quality_rr_adaptive_mixed"
+    if focus.startswith("entry_quality_rr_adaptive_regime"):
+        return "entry_quality_rr_adaptive_regime"
+    return ""
+
+
+def load_context_stability_state(path_value: pathlib.Path) -> Dict[str, Any]:
+    default_state = {
+        "schema_version": 1,
+        "exists": False,
+        "path": str(path_value),
+        "runs_total": 0,
+        "applied_focus": "",
+        "applied_focus_streak": 0,
+        "flip_candidate_focus": "",
+        "flip_candidate_count": 0,
+        "last_raw_focus": "",
+        "last_raw_focus_branch": "",
+        "last_override_applied": False,
+        "last_reason": "",
+        "updated_at": "",
+    }
+    if not path_value.exists():
+        return default_state
+    try:
+        payload = json.loads(path_value.read_text(encoding="utf-8-sig"))
+    except Exception:
+        return default_state
+    state = dict(default_state)
+    if isinstance(payload, dict):
+        state.update(payload)
+    state["exists"] = True
+    state["path"] = str(path_value)
+    return state
+
+
+def save_context_stability_state(path_value: pathlib.Path, state: Dict[str, Any]) -> None:
+    ensure_parent_directory(path_value)
+    path_value.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
+def apply_context_stability_guard(
+    context: Dict[str, Any],
+    state: Dict[str, Any],
+    enabled: bool,
+    min_consecutive_to_flip: int,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    ctx = dict(context or {})
+    branch_to_recommendation = {
+        "entry_quality_rr_adaptive_mixed": "hold_candidate_calibrate_risk_gate_rr_adaptive_mixed_adders",
+        "entry_quality_rr_adaptive_regime": "hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders",
+    }
+
+    raw_focus = str(ctx.get("risk_gate_focus", "") or "").strip()
+    raw_branch = canonical_rr_adaptive_focus_branch(raw_focus)
+
+    prev_focus = str(state.get("applied_focus", "") or "").strip()
+    prev_branch = canonical_rr_adaptive_focus_branch(prev_focus)
+    try:
+        prev_streak = int(state.get("applied_focus_streak", 0) or 0)
+    except (TypeError, ValueError):
+        prev_streak = 0
+    prev_candidate_focus = str(state.get("flip_candidate_focus", "") or "").strip()
+    try:
+        prev_candidate_count = int(state.get("flip_candidate_count", 0) or 0)
+    except (TypeError, ValueError):
+        prev_candidate_count = 0
+    try:
+        prev_runs_total = int(state.get("runs_total", 0) or 0)
+    except (TypeError, ValueError):
+        prev_runs_total = 0
+
+    threshold = max(1, int(min_consecutive_to_flip))
+    applied_focus = raw_focus
+    applied_branch = raw_branch
+    override_applied = False
+    reason = "disabled" if not bool(enabled) else "not_applicable"
+    flip_candidate_focus = ""
+    flip_candidate_count = 0
+
+    if bool(enabled):
+        if raw_branch and prev_branch and raw_branch != prev_branch:
+            if prev_candidate_focus == raw_branch:
+                flip_candidate_count = int(prev_candidate_count + 1)
+            else:
+                flip_candidate_count = 1
+            flip_candidate_focus = raw_branch
+            if flip_candidate_count < threshold:
+                applied_focus = prev_focus
+                applied_branch = prev_branch
+                override_applied = True
+                reason = "flip_candidate_below_threshold"
+            else:
+                reason = "flip_accepted_after_threshold"
+                flip_candidate_focus = ""
+                flip_candidate_count = 0
+        elif raw_branch and prev_branch and raw_branch == prev_branch:
+            reason = "same_branch"
+        elif raw_branch and not prev_branch:
+            reason = "first_managed_branch"
+        else:
+            reason = "focus_not_managed"
+
+    if override_applied:
+        ctx["risk_gate_focus"] = applied_focus
+        ctx["risk_gate_focus_source"] = "context_stability_guard_override"
+        aligned_recommendation = branch_to_recommendation.get(applied_branch, "")
+        if aligned_recommendation:
+            ctx["holdout_recommendation"] = aligned_recommendation
+            ctx["holdout_recommendation_source"] = "context_stability_guard_override"
+
+    applied_focus_final = str(ctx.get("risk_gate_focus", "") or "").strip()
+    applied_branch_final = canonical_rr_adaptive_focus_branch(applied_focus_final)
+    if applied_focus_final and applied_focus_final == prev_focus:
+        next_streak = int(prev_streak + 1)
+    elif applied_focus_final:
+        next_streak = 1
+    else:
+        next_streak = 0
+
+    ctx["context_stability_guard_enabled"] = bool(enabled)
+    ctx["context_stability_guard_override_applied"] = bool(override_applied)
+    ctx["context_stability_guard_reason"] = reason
+    ctx["context_stability_guard_raw_focus"] = raw_focus
+    ctx["context_stability_guard_raw_focus_branch"] = raw_branch
+    ctx["context_stability_guard_applied_focus"] = applied_focus_final
+    ctx["context_stability_guard_applied_focus_branch"] = applied_branch_final
+    ctx["context_stability_guard_prev_applied_focus"] = prev_focus
+    ctx["context_stability_guard_prev_applied_focus_branch"] = prev_branch
+    ctx["context_stability_guard_prev_applied_focus_streak"] = int(prev_streak)
+    ctx["context_stability_guard_flip_candidate_focus"] = flip_candidate_focus
+    ctx["context_stability_guard_flip_candidate_count"] = int(flip_candidate_count)
+    ctx["context_stability_guard_min_consecutive_to_flip"] = int(threshold)
+
+    next_state = {
+        "schema_version": 1,
+        "path": str(state.get("path", "")),
+        "runs_total": int(prev_runs_total + 1),
+        "applied_focus": applied_focus_final,
+        "applied_focus_streak": int(next_streak),
+        "flip_candidate_focus": flip_candidate_focus,
+        "flip_candidate_count": int(flip_candidate_count),
+        "last_raw_focus": raw_focus,
+        "last_raw_focus_branch": raw_branch,
+        "last_override_applied": bool(override_applied),
+        "last_reason": reason,
+        "updated_at": __import__("datetime").datetime.now().astimezone().isoformat(),
+    }
+    return ctx, next_state
+
+
 def compute_combo_bottleneck_priority_score(combo: Dict[str, Any], context: Dict[str, Any]) -> float:
     top_group = str(context.get("top_group", ""))
     risk_gate_focus = str(context.get("risk_gate_focus", ""))
@@ -3475,6 +3633,31 @@ def main(argv=None) -> int:
         default=r".\build\Release\logs\candidate_train_eval_cycle_summary.json",
     )
     parser.add_argument(
+        "--context-stability-state-json",
+        "-ContextStabilityStateJson",
+        default=r".\build\Release\logs\candidate_context_stability_state.json",
+    )
+    parser.add_argument(
+        "--enable-context-stability-guard",
+        "-EnableContextStabilityGuard",
+        dest="enable_context_stability_guard",
+        action="store_true",
+        default=True,
+        help="Require branch-flip persistence before switching mixed/regime focus.",
+    )
+    parser.add_argument(
+        "--disable-context-stability-guard",
+        dest="enable_context_stability_guard",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--context-stability-min-consecutive-to-flip",
+        "-ContextStabilityMinConsecutiveToFlip",
+        type=int,
+        default=2,
+        help="Minimum consecutive runs observing new branch before mixed/regime focus flip is accepted.",
+    )
+    parser.add_argument(
         "--enable-bottleneck-priority",
         "-EnableBottleneckPriority",
         dest="enable_bottleneck_priority",
@@ -3654,6 +3837,7 @@ def main(argv=None) -> int:
     eval_cache_json = pathlib.Path(args.eval_cache_json).resolve()
     live_signal_funnel_taxonomy_json = pathlib.Path(args.live_signal_funnel_taxonomy_json).resolve()
     train_eval_summary_json = pathlib.Path(args.train_eval_summary_json).resolve()
+    context_stability_state_json = pathlib.Path(args.context_stability_state_json).resolve()
     lock_path = pathlib.Path(args.verification_lock_path).resolve()
     cache_enabled = not bool(args.disable_eval_cache)
     ensure_parent_directory(summary_csv)
@@ -3661,6 +3845,7 @@ def main(argv=None) -> int:
     ensure_parent_directory(promoted_combo_json)
     ensure_parent_directory(dataset_quality_report_json)
     ensure_parent_directory(eval_cache_json)
+    ensure_parent_directory(context_stability_state_json)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     scan_dirs = [pathlib.Path(args.data_dir), pathlib.Path(args.curated_data_dir)]
@@ -3730,6 +3915,13 @@ def main(argv=None) -> int:
     live_bottleneck_context = read_live_signal_funnel_snapshot(live_signal_funnel_taxonomy_json)
     holdout_context = read_train_eval_holdout_context(train_eval_summary_json)
     bottleneck_context = build_effective_bottleneck_context(live_bottleneck_context, holdout_context)
+    context_stability_state = load_context_stability_state(context_stability_state_json)
+    bottleneck_context, context_stability_next_state = apply_context_stability_guard(
+        context=bottleneck_context,
+        state=context_stability_state,
+        enabled=bool(args.enable_context_stability_guard),
+        min_consecutive_to_flip=int(args.context_stability_min_consecutive_to_flip),
+    )
     risk_gate_focus_for_objective = str(bottleneck_context.get("risk_gate_focus", ""))
     holdout_recommendation_for_objective = str(bottleneck_context.get("holdout_recommendation", "") or "")
     entry_quality_focus_for_objective = risk_gate_focus_for_objective.startswith("entry_quality_")
@@ -3895,6 +4087,17 @@ def main(argv=None) -> int:
         f"source={bottleneck_context.get('top_group_source', 'live')}, "
         f"risk_gate_focus={bottleneck_context.get('risk_gate_focus', '')}, "
         f"no_trade_bias_active={bool(bottleneck_context.get('no_trade_bias_active', False))}"
+    )
+    print(
+        f"[TuneCandidate] context_stability_guard="
+        f"{'on' if bool(args.enable_context_stability_guard) else 'off'}, "
+        f"override={bool(bottleneck_context.get('context_stability_guard_override_applied', False))}, "
+        f"reason={bottleneck_context.get('context_stability_guard_reason', '')}, "
+        f"raw_focus={bottleneck_context.get('context_stability_guard_raw_focus', '')}, "
+        f"applied_focus={bottleneck_context.get('risk_gate_focus', '')}, "
+        f"candidate={bottleneck_context.get('context_stability_guard_flip_candidate_focus', '')}:"
+        f"{int(bottleneck_context.get('context_stability_guard_flip_candidate_count', 0) or 0)}, "
+        f"threshold={int(args.context_stability_min_consecutive_to_flip)}"
     )
     print(
         f"[TuneCandidate] bottleneck_adapted_scenarios="
@@ -4310,6 +4513,8 @@ def main(argv=None) -> int:
         "promote_best_combo": bool(args.promote_best_combo),
         "promote_best_combo_applied": bool(promotion_applied),
         "promoted_combo_json": str(promoted_combo_json),
+        "context_stability_state_json": str(context_stability_state_json),
+        "context_stability_state": context_stability_next_state,
         "dataset_quality_gate": dataset_quality_gate,
         "dataset_dirs": [str(x) for x in scan_dirs],
         "dataset_count": len(datasets),
@@ -4403,6 +4608,21 @@ def main(argv=None) -> int:
             "enable_post_suppression_quality_expansion": bool(args.enable_post_suppression_quality_expansion),
             "post_suppression_min_combo_count": int(max(1, int(args.post_suppression_min_combo_count))),
             "train_eval_summary_json": str(train_eval_summary_json),
+            "context_stability_state_json": str(context_stability_state_json),
+            "enable_context_stability_guard": bool(args.enable_context_stability_guard),
+            "context_stability_min_consecutive_to_flip": int(args.context_stability_min_consecutive_to_flip),
+            "context_stability_guard_override_applied": bool(
+                bottleneck_context.get("context_stability_guard_override_applied", False)
+            ),
+            "context_stability_guard_reason": str(
+                bottleneck_context.get("context_stability_guard_reason", "")
+            ),
+            "context_stability_guard_raw_focus": str(
+                bottleneck_context.get("context_stability_guard_raw_focus", "")
+            ),
+            "context_stability_guard_applied_focus": str(
+                bottleneck_context.get("context_stability_guard_applied_focus", "")
+            ),
         },
         "bottleneck_priority": {
             "enabled": bool(args.enable_bottleneck_priority),
@@ -4439,6 +4659,7 @@ def main(argv=None) -> int:
     }
     ensure_parent_directory(summary_json)
     summary_json.write_text(json.dumps(report_out, ensure_ascii=False, indent=4), encoding="utf-8", newline="\n")
+    save_context_stability_state(context_stability_state_json, context_stability_next_state)
     if cache_enabled:
         save_eval_cache(eval_cache_json, eval_cache)
 
@@ -4449,6 +4670,11 @@ def main(argv=None) -> int:
     print(
         f"promote_best_combo={'on' if bool(args.promote_best_combo) else 'off'}, "
         f"applied={bool(promotion_applied)}, promoted_combo_json={promoted_combo_json}"
+    )
+    print(
+        f"context_stability_state_json={context_stability_state_json}, "
+        f"applied_focus={context_stability_next_state.get('applied_focus', '')}, "
+        f"override={bool(context_stability_next_state.get('last_override_applied', False))}"
     )
     return 0
 

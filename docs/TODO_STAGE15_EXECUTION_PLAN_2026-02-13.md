@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-17 (Stage-2.59 split-penalty hardening rerun)
+Last updated: 2026-02-17 (Stage-2.60 context-stability guard implementation and validation)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -2042,6 +2042,57 @@ The system must:
   - next:
     - add context-stability guard to prevent immediate branch flip (mixed <-> regime) across consecutive cycles and retune on stabilized branch.
 
+- Stage-2.60 update (2026-02-17):
+  - context-stability guard implemented for mixed/regime branch oscillation:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - changes:
+      - added persistent state-based guard to stabilize `risk_gate_focus` transitions between:
+        - `entry_quality_rr_adaptive_mixed`
+        - `entry_quality_rr_adaptive_regime`
+      - added guard CLI/options:
+        - `--context-stability-state-json` (default `build/Release/logs/candidate_context_stability_state.json`)
+        - `--enable-context-stability-guard` / `--disable-context-stability-guard`
+        - `--context-stability-min-consecutive-to-flip` (default `2`)
+      - added guard telemetry:
+        - console log (`override`, `reason`, `raw_focus`, `applied_focus`, candidate count)
+        - summary JSON fields under `screening`
+        - persisted state JSON output
+  - verification:
+    - compile/help:
+      - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+      - `python scripts/tune_candidate_gate_trade_density.py --help | rg context-stability` PASS
+    - smoke run (state bootstrap):
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 3 --real-data-only --require-higher-tf-companions --screen-top-k 3 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage260_smoke.json`
+      - guard status:
+        - `override=false`, `reason=first_managed_branch`, `applied_focus=entry_quality_rr_adaptive_mixed`
+    - flip-hold verification:
+      - after one promoted train/eval cycle, rerun:
+        - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 3 --real-data-only --require-higher-tf-companions --screen-top-k 3 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage260_verify_flip.json`
+      - guard status:
+        - `override=true`, `reason=flip_candidate_below_threshold`
+        - `raw_focus=entry_quality_rr_adaptive_regime`
+        - `applied_focus=entry_quality_rr_adaptive_mixed`
+    - full rerun:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage260.json`
+      - guard status:
+        - `override=false`, `reason=flip_accepted_after_threshold`
+        - `applied_focus=entry_quality_rr_adaptive_regime`
+      - best combo:
+        - `scenario_quality_focus_005` (`objective=-23516.871`, `pf=0.5449`, `exp=-8.3579`)
+    - promoted cycle:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+      - verdict:
+        - `promotion_gate_pass=false`, `generalization_guard_pass=false`
+        - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_mixed_adders`
+      - split ownership:
+        - validation top risk=`blocked_risk_gate_entry_quality_rr_adaptive_mixed:1327`
+        - holdout top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_history:709`
+  - interpretation:
+    - guard is functioning as designed (single-run flip suppression + persistence evidence), but with threshold `2` branch flip is accepted on the next consecutive signal.
+  - next:
+    - raise stability hysteresis (`--context-stability-min-consecutive-to-flip 3`) for production loop and compare promotion-gate volatility against threshold `2`.
+
 2. Expectancy-first improvement loop
 - Optimize for:
   - `avg_expectancy_krw`,
@@ -2071,6 +2122,7 @@ The system must:
 - Candidate tuning:
   - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions`
   - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --promoted-combo-json build/Release/logs/candidate_promoted_combo.json`
+  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --context-stability-min-consecutive-to-flip 3`
 - Split train/eval cycle with walk-forward gate:
   - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
   - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
