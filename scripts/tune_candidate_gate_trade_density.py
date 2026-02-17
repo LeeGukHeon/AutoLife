@@ -3413,6 +3413,7 @@ def main(argv=None) -> int:
     holdout_context = read_train_eval_holdout_context(train_eval_summary_json)
     bottleneck_context = build_effective_bottleneck_context(live_bottleneck_context, holdout_context)
     risk_gate_focus_for_objective = str(bottleneck_context.get("risk_gate_focus", ""))
+    entry_quality_focus_for_objective = risk_gate_focus_for_objective.startswith("entry_quality_")
     enforce_rr_ownership_objective = bool(args.objective_enforce_rr_ownership_top_component) and (
         risk_gate_focus_for_objective.startswith("entry_quality_rr")
     )
@@ -3424,7 +3425,7 @@ def main(argv=None) -> int:
     )
     split_ownership_drift_active = bool(bottleneck_context.get("risk_split_ownership_drift_active", False))
     enforce_split_ownership_drift_objective = bool(args.objective_enforce_split_ownership_drift_guard) and (
-        risk_gate_focus_for_objective.startswith("entry_quality_rr")
+        entry_quality_focus_for_objective
         and split_ownership_drift_active
         and bool(holdout_top_risk_component_for_objective)
         and bool(validation_top_risk_component_for_objective)
@@ -3539,6 +3540,7 @@ def main(argv=None) -> int:
     print(
         f"[TuneCandidate] objective_split_ownership_drift_guard="
         f"{'on' if enforce_split_ownership_drift_objective else 'off'}, "
+        f"focus={risk_gate_focus_for_objective}, "
         f"drift_active={split_ownership_drift_active}, "
         f"primary={holdout_top_risk_component_for_objective}, "
         f"secondary={validation_top_risk_component_for_objective}, "

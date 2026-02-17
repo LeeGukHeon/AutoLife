@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-17 (split ownership drift objective guard + rr-focused A/B verification)
+Last updated: 2026-02-17 (Stage-2.41 promoted snapshot train/eval revalidation)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -1456,6 +1456,70 @@ The system must:
   - next:
     - re-enter RR-focused branch on live context (or apply focused RR candidate) and run split train/eval cycle to validate guard effect on real recommendation path.
     - if recommendation remains `edge_base`, mirror the same drift-guard concept for edge-focused ownership branch.
+
+- Stage-2.40 update (2026-02-17):
+  - split ownership drift guard scope expanded from RR-only to `entry_quality_*`:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - change:
+      - objective drift guard enable condition:
+        - before: `risk_gate_focus.startswith("entry_quality_rr")`
+        - after: `risk_gate_focus.startswith("entry_quality_")`
+      - drift guard log now includes active focus key:
+        - `focus=<risk_gate_focus>`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - real-context run (guard ON):
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage240.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage240.json`
+      - log evidence:
+        - `risk_gate_focus=entry_quality_edge_base`
+        - `objective_split_ownership_drift_guard=on`
+        - `focus=entry_quality_edge_base`
+        - `drift_active=True`
+    - real-context run (guard OFF baseline):
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --disable-objective-enforce-split-ownership-drift-guard --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage240_nodriftguard.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage240_nodriftguard.json`
+  - A/B delta evidence (ON minus OFF, real context):
+    - `scenario_quality_focus_000` (`blocked_risk_gate_entry_quality_rr_adaptive_mixed`): `-900`
+    - `scenario_quality_focus_004` (`blocked_second_stage_confirmation_hostile_history_severe_safety_adders`): `-900`
+    - `scenario_quality_focus_001/002/003/005` (`blocked_risk_gate_entry_quality_rr_adaptive_regime`): `0`
+    - ranking effect:
+      - guard OFF top-2: `005`, `000`
+      - guard ON top-2: `005`, `003` (`000` demoted)
+  - interpretation:
+    - edge-focused live context에서도 split ownership drift guard가 즉시 동작하며, holdout primary ownership과 불일치하는 후보를 안정적으로 하향시킨다.
+    - 과적합 방지 관점에서 split별 ownership drift를 objective 차원에서 통일적으로 제어할 수 있게 됨.
+  - next:
+    - Stage-2.40 best (`scenario_quality_focus_005`)를 snapshot 반영 후 train/eval cycle 재검증.
+    - 검증/홀드아웃 top ownership이 다시 분기되면, penalty scale(`900`) 민감도 스윕(`600/900/1200`) 수행.
+
+- Stage-2.41 update (2026-02-17):
+  - promoted snapshot from Stage-2.40 best applied:
+    - source summary:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage240.json`
+    - promoted snapshot artifact:
+      - `build/Release/logs/candidate_promoted_combo_stage2_41.json`
+    - applied combo:
+      - `scenario_quality_focus_005`
+      - objective(top): `-22175.155`
+  - verification:
+    - command:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+    - result:
+      - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - promotion gate: fail (`promotion_gate_pass=false`, `generalization_guard_pass=false`)
+      - train: `pf=0.7318`, `exp=-7.5464`, `trades=123.0`
+      - validation: `pf=0.4875`, `exp=-7.9956`, `trades=165.5`
+      - holdout: `pf=0.4739`, `exp=-7.6324`, `trades=143.6667`
+      - validation top risk component:
+        - `blocked_risk_gate_entry_quality_rr_adaptive_regime:802`
+      - holdout top risk component:
+        - `blocked_risk_gate_entry_quality_rr_adaptive_regime:977`
+  - interpretation:
+    - split ownership drift from Stage-2.40 edge context was reduced in this promoted run (validation/holdout ownership re-aligned to rr_adaptive_regime).
+    - however profitability/expectancy gates are still not met, so promotion remains blocked.
+  - next:
+    - run rr-focused local sweep (with split-ownership drift guard ON) centered on `rr_adaptive_regime` to improve expectancy while preserving ownership alignment.
+    - if alignment breaks again, run penalty sensitivity sweep (`600/900/1200`) before expanding scenario family.
 
 2. Expectancy-first improvement loop
 - Optimize for:
