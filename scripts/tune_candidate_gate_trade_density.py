@@ -258,6 +258,26 @@ def build_effective_bottleneck_context(
         risk_gate_focus = "regime"
     elif top_risk_gate_component_reason == "blocked_risk_gate_strategy_ev":
         risk_gate_focus = "strategy_ev"
+    elif top_risk_gate_component_reason == "blocked_second_stage_confirmation_rr_margin":
+        risk_gate_focus = "second_stage_confirmation_rr_margin"
+    elif top_risk_gate_component_reason == "blocked_second_stage_confirmation_edge_margin":
+        risk_gate_focus = "second_stage_confirmation_edge_margin"
+    elif top_risk_gate_component_reason == "blocked_second_stage_confirmation_hostile_regime_safety_adders":
+        risk_gate_focus = "second_stage_confirmation_hostile_regime"
+    elif top_risk_gate_component_reason == "blocked_second_stage_confirmation_hostile_liquidity_safety_adders":
+        risk_gate_focus = "second_stage_confirmation_hostile_liquidity"
+    elif top_risk_gate_component_reason == "blocked_second_stage_confirmation_hostile_history_mild_safety_adders":
+        risk_gate_focus = "second_stage_confirmation_hostile_history_mild"
+    elif top_risk_gate_component_reason == "blocked_second_stage_confirmation_hostile_history_moderate_safety_adders":
+        risk_gate_focus = "second_stage_confirmation_hostile_history_moderate"
+    elif top_risk_gate_component_reason == "blocked_second_stage_confirmation_hostile_history_severe_safety_adders":
+        risk_gate_focus = "second_stage_confirmation_hostile_history_severe"
+    elif top_risk_gate_component_reason == "blocked_second_stage_confirmation_hostile_history_safety_adders":
+        risk_gate_focus = "second_stage_confirmation_hostile_history"
+    elif top_risk_gate_component_reason == "blocked_second_stage_confirmation_hostile_dynamic_tighten_safety_adders":
+        risk_gate_focus = "second_stage_confirmation_hostile_dynamic_tighten"
+    elif top_risk_gate_component_reason == "blocked_second_stage_confirmation_hostile_safety_adders":
+        risk_gate_focus = "second_stage_confirmation_hostile_safety"
     elif top_risk_gate_component_reason.startswith("blocked_second_stage_confirmation"):
         risk_gate_focus = "second_stage_confirmation"
 
@@ -277,6 +297,17 @@ def build_effective_bottleneck_context(
         "hold_candidate_calibrate_risk_gate_entry_quality_edge": "entry_quality_edge",
         "hold_candidate_calibrate_risk_gate_entry_quality_rr_edge": "entry_quality_rr_edge",
         "hold_candidate_calibrate_risk_gate_entry_quality_ownership": "entry_quality",
+        "hold_candidate_calibrate_second_stage_confirmation_rr_margin_consistency": "second_stage_confirmation_rr_margin",
+        "hold_candidate_calibrate_second_stage_confirmation_edge_margin_consistency": "second_stage_confirmation_edge_margin",
+        "hold_candidate_calibrate_second_stage_confirmation_hostile_regime_consistency": "second_stage_confirmation_hostile_regime",
+        "hold_candidate_calibrate_second_stage_confirmation_hostile_liquidity_consistency": "second_stage_confirmation_hostile_liquidity",
+        "hold_candidate_calibrate_second_stage_confirmation_hostile_history_mild_consistency": "second_stage_confirmation_hostile_history_mild",
+        "hold_candidate_calibrate_second_stage_confirmation_hostile_history_moderate_consistency": "second_stage_confirmation_hostile_history_moderate",
+        "hold_candidate_calibrate_second_stage_confirmation_hostile_history_severe_consistency": "second_stage_confirmation_hostile_history_severe",
+        "hold_candidate_calibrate_second_stage_confirmation_hostile_history_consistency": "second_stage_confirmation_hostile_history",
+        "hold_candidate_calibrate_second_stage_confirmation_hostile_dynamic_tighten_consistency": "second_stage_confirmation_hostile_dynamic_tighten",
+        "hold_candidate_calibrate_second_stage_confirmation_hostile_safety_consistency": "second_stage_confirmation_hostile_safety",
+        "hold_candidate_calibrate_second_stage_confirmation_consistency": "second_stage_confirmation",
     }
     recommendation_focus = recommendation_focus_map.get(holdout_recommendation, "")
     risk_gate_focus_source = "top_risk_component"
@@ -297,7 +328,8 @@ def build_effective_bottleneck_context(
         holdout_recommendation.startswith("hold_candidate_calibrate_risk_gate_")
         or holdout_recommendation == "hold_candidate_fix_entry_quality_price_level_consistency"
     )
-    if risk_gate_override:
+    second_stage_override = holdout_recommendation.startswith("hold_candidate_calibrate_second_stage_confirmation")
+    if risk_gate_override or second_stage_override:
         context["top_group"] = "risk_gate"
         context["top_group_source"] = "holdout_recommendation_override"
         context["top_group_fallback_applied"] = True
@@ -347,6 +379,13 @@ def compute_combo_bottleneck_priority_score(combo: Dict[str, Any], context: Dict
     avoid_down = bool(combo.get("avoid_trending_down", True))
     min_strategy_pf = float(combo.get("min_strategy_profit_factor", 0.95))
     min_strategy_ev = float(combo.get("min_strategy_expectancy_krw", -1.0))
+    hostility_hostile_threshold = float(combo.get("hostility_hostile_threshold", 0.62))
+    hostility_severe_threshold = float(combo.get("hostility_severe_threshold", 0.82))
+    hostility_extreme_threshold = float(combo.get("hostility_extreme_threshold", 0.88))
+    hostility_pause_scans = int(combo.get("hostility_pause_scans", 4))
+    hostility_pause_scans_extreme = int(combo.get("hostility_pause_scans_extreme", 6))
+    backtest_hostility_pause_candles = int(combo.get("backtest_hostility_pause_candles", 36))
+    backtest_hostility_pause_candles_extreme = int(combo.get("backtest_hostility_pause_candles_extreme", 60))
 
     # Relaxation affinity: higher means easier to generate entries.
     relax_score = 0.0
@@ -372,6 +411,19 @@ def compute_combo_bottleneck_priority_score(combo: Dict[str, Any], context: Dict
         quality_score += 3.0
     if avoid_down:
         quality_score += 3.0
+    # Higher means stronger hostility guard and stricter adverse-regime handling.
+    hostility_guard_score = 0.0
+    hostility_guard_score += max(0.0, (0.68 - hostility_hostile_threshold) * 85.0)
+    hostility_guard_score += max(0.0, (0.86 - hostility_severe_threshold) * 95.0)
+    hostility_guard_score += max(0.0, (0.91 - hostility_extreme_threshold) * 115.0)
+    hostility_guard_score += max(0.0, float(hostility_pause_scans - 3)) * 3.0
+    hostility_guard_score += max(0.0, float(hostility_pause_scans_extreme - 5)) * 2.6
+    hostility_guard_score += max(0.0, float(backtest_hostility_pause_candles - 30)) * 0.20
+    hostility_guard_score += max(0.0, float(backtest_hostility_pause_candles_extreme - 48)) * 0.14
+    if avoid_high_vol:
+        hostility_guard_score += 2.0
+    if avoid_down:
+        hostility_guard_score += 2.0
 
     if top_group == "position_state" and position_state_share >= 0.40:
         # Entries already happen; prioritize quality-preserving candidates.
@@ -417,8 +469,49 @@ def compute_combo_bottleneck_priority_score(combo: Dict[str, Any], context: Dict
             return round((quality_score * 0.84) + (relax_score * 0.16), 6)
         if risk_gate_focus in {"entry_quality_rr", "entry_quality_edge", "entry_quality_rr_edge"}:
             return round((quality_score * 0.88) + (relax_score * 0.12), 6)
+        if risk_gate_focus == "second_stage_confirmation_rr_margin":
+            # Margin consistency: allow controlled relaxation, keep overfit guard.
+            return round((quality_score * 0.76) + (relax_score * 0.24), 6)
+        if risk_gate_focus == "second_stage_confirmation_edge_margin":
+            return round((quality_score * 0.74) + (relax_score * 0.26), 6)
+        if risk_gate_focus == "second_stage_confirmation_hostile_history_severe":
+            # Severe history regime: prioritize robust quality + hostility guard.
+            return round(
+                (quality_score * 0.78) + (relax_score * 0.05) + (hostility_guard_score * 0.17),
+                6,
+            )
+        if risk_gate_focus == "second_stage_confirmation_hostile_history_moderate":
+            return round(
+                (quality_score * 0.74) + (relax_score * 0.11) + (hostility_guard_score * 0.15),
+                6,
+            )
+        if risk_gate_focus == "second_stage_confirmation_hostile_history_mild":
+            return round(
+                (quality_score * 0.70) + (relax_score * 0.18) + (hostility_guard_score * 0.12),
+                6,
+            )
+        if risk_gate_focus == "second_stage_confirmation_hostile_history":
+            return round(
+                (quality_score * 0.73) + (relax_score * 0.13) + (hostility_guard_score * 0.14),
+                6,
+            )
+        if risk_gate_focus in {
+            "second_stage_confirmation_hostile_regime",
+            "second_stage_confirmation_hostile_liquidity",
+            "second_stage_confirmation_hostile_dynamic_tighten",
+            "second_stage_confirmation_hostile_safety",
+        }:
+            return round(
+                (quality_score * 0.72) + (relax_score * 0.12) + (hostility_guard_score * 0.16),
+                6,
+            )
         if risk_gate_focus in {"entry_quality", "second_stage_confirmation"}:
             # Overfit-safe policy: keep quality-oriented candidates first.
+            if risk_gate_focus == "second_stage_confirmation":
+                return round(
+                    (quality_score * 0.74) + (relax_score * 0.13) + (hostility_guard_score * 0.13),
+                    6,
+                )
             return round((quality_score * 0.85) + (relax_score * 0.15), 6)
         return round((quality_score * 0.75) + (relax_score * 0.25), 6)
 
@@ -755,6 +848,27 @@ def adapt_combo_specs_for_bottleneck(
         ):
             family = "risk_gate_edge_baseline_floor_sweep"
         elif risk_gate_focus in {
+            "second_stage_confirmation_rr_margin",
+            "second_stage_confirmation_edge_margin",
+        }:
+            family = "risk_gate_second_stage_margin_consistency"
+        elif risk_gate_focus == "second_stage_confirmation_hostile_history_severe":
+            family = "risk_gate_second_stage_history_severe_guard"
+        elif risk_gate_focus == "second_stage_confirmation_hostile_history_moderate":
+            family = "risk_gate_second_stage_history_moderate_guard"
+        elif risk_gate_focus == "second_stage_confirmation_hostile_history_mild":
+            family = "risk_gate_second_stage_history_mild_rebalance"
+        elif risk_gate_focus in {
+            "second_stage_confirmation_hostile_regime",
+            "second_stage_confirmation_hostile_liquidity",
+            "second_stage_confirmation_hostile_history",
+            "second_stage_confirmation_hostile_dynamic_tighten",
+            "second_stage_confirmation_hostile_safety",
+        }:
+            family = "risk_gate_second_stage_hostile_consistency"
+        elif risk_gate_focus == "second_stage_confirmation":
+            family = "risk_gate_second_stage_consistency"
+        elif risk_gate_focus in {
             "entry_quality_rr_adaptive",
             "entry_quality_edge_adaptive",
             "entry_quality_rr_edge_adaptive",
@@ -986,6 +1100,452 @@ def adapt_combo_specs_for_bottleneck(
             clone["backtest_hostility_pause_candles"] = int(
                 min(210, int(clone.get("backtest_hostility_pause_candles", 36)) + 12)
             )
+
+        elif adapted and family == "risk_gate_second_stage_margin_consistency":
+            variant = (sum(ord(c) for c in combo_id) % 3)
+            rr_margin_focus = risk_gate_focus == "second_stage_confirmation_rr_margin"
+            edge_mul_grid = (0.95, 0.97, 0.99) if rr_margin_focus else (0.90, 0.94, 0.97)
+            rr_delta_grid = (-0.06, -0.04, -0.02) if rr_margin_focus else (0.03, 0.02, 0.01)
+            weak_delta_grid = (-0.10, -0.07, -0.05) if rr_margin_focus else (0.05, 0.03, 0.02)
+            strong_delta_grid = (-0.07, -0.05, -0.03) if rr_margin_focus else (0.04, 0.03, 0.02)
+            pf_add_grid = (0.01, 0.02, 0.03)
+            ev_add_grid = (0.10, 0.20, 0.30)
+
+            clone["min_expected_edge_pct"] = round(
+                _clamp(
+                    float(clone.get("min_expected_edge_pct", 0.0010)) * edge_mul_grid[variant],
+                    0.0005,
+                    0.0018,
+                ),
+                4,
+            )
+            clone["min_reward_risk"] = round(
+                _clamp(float(clone.get("min_reward_risk", 1.20)) + rr_delta_grid[variant], 1.00, 1.80),
+                2,
+            )
+            clone["min_rr_weak_signal"] = round(
+                _clamp(float(clone.get("min_rr_weak_signal", 1.80)) + weak_delta_grid[variant], 1.10, 2.40),
+                2,
+            )
+            clone["min_rr_strong_signal"] = round(
+                _clamp(float(clone.get("min_rr_strong_signal", 1.20)) + strong_delta_grid[variant], 0.85, 1.80),
+                2,
+            )
+            clone["min_strategy_trades_for_ev"] = int(
+                min(78, max(20, int(clone.get("min_strategy_trades_for_ev", 30)) + (1 + variant)))
+            )
+            clone["min_strategy_profit_factor"] = round(
+                _clamp(float(clone.get("min_strategy_profit_factor", 0.95)) + pf_add_grid[variant], 0.88, 1.30),
+                2,
+            )
+            clone["min_strategy_expectancy_krw"] = round(
+                float(clone.get("min_strategy_expectancy_krw", -1.0)) + ev_add_grid[variant],
+                2,
+            )
+            clone["max_new_orders_per_scan"] = int(
+                max(1, min(3, int(clone.get("max_new_orders_per_scan", 2)) - (1 if variant == 0 else 0)))
+            )
+            clone["scalping_min_signal_strength"] = round(
+                _clamp(float(clone.get("scalping_min_signal_strength", 0.70)) + (0.01 * variant), 0.58, 0.90),
+                2,
+            )
+            clone["momentum_min_signal_strength"] = round(
+                _clamp(float(clone.get("momentum_min_signal_strength", 0.72)) + (0.01 * variant), 0.58, 0.90),
+                2,
+            )
+            clone["breakout_min_signal_strength"] = round(
+                _clamp(float(clone.get("breakout_min_signal_strength", 0.40)) + (0.005 * variant), 0.30, 0.56),
+                2,
+            )
+            clone["mean_reversion_min_signal_strength"] = round(
+                _clamp(float(clone.get("mean_reversion_min_signal_strength", 0.40)) + (0.005 * variant), 0.30, 0.56),
+                2,
+            )
+            clone["hostility_hostile_threshold"] = round(
+                _clamp(float(clone.get("hostility_hostile_threshold", 0.62)) + 0.01, 0.50, 0.80),
+                2,
+            )
+            clone["hostility_severe_threshold"] = round(
+                _clamp(float(clone.get("hostility_severe_threshold", 0.82)) + 0.01, 0.65, 0.92),
+                2,
+            )
+            clone["hostility_extreme_threshold"] = round(
+                _clamp(float(clone.get("hostility_extreme_threshold", 0.88)) + 0.01, 0.70, 0.96),
+                2,
+            )
+            clone["avoid_high_volatility"] = True
+            clone["avoid_trending_down"] = True
+            clone["bottleneck_second_stage_focus"] = risk_gate_focus
+            clone["bottleneck_second_stage_variant"] = int(variant)
+
+        elif adapted and family == "risk_gate_second_stage_history_severe_guard":
+            variant = (sum(ord(c) for c in combo_id) % 3)
+            edge_mul_grid = (1.05, 1.08, 1.11)
+            rr_add_grid = (0.06, 0.08, 0.10)
+            weak_add_grid = (0.08, 0.10, 0.12)
+            strong_add_grid = (0.05, 0.07, 0.09)
+            pf_add_grid = (0.03, 0.04, 0.05)
+            ev_add_grid = (0.30, 0.45, 0.60)
+            threshold_relax_grid = (0.01, 0.02, 0.03)
+            pause_reduce_grid = (1, 1, 0)
+
+            clone["min_expected_edge_pct"] = round(
+                _clamp(
+                    float(clone.get("min_expected_edge_pct", 0.0010)) * edge_mul_grid[variant],
+                    0.0007,
+                    0.0020,
+                ),
+                4,
+            )
+            clone["min_reward_risk"] = round(
+                _clamp(float(clone.get("min_reward_risk", 1.20)) + rr_add_grid[variant], 1.06, 1.95),
+                2,
+            )
+            clone["min_rr_weak_signal"] = round(
+                _clamp(float(clone.get("min_rr_weak_signal", 1.80)) + weak_add_grid[variant], 1.20, 2.50),
+                2,
+            )
+            clone["min_rr_strong_signal"] = round(
+                _clamp(float(clone.get("min_rr_strong_signal", 1.20)) + strong_add_grid[variant], 0.95, 1.90),
+                2,
+            )
+            clone["min_strategy_trades_for_ev"] = int(
+                min(88, max(28, int(clone.get("min_strategy_trades_for_ev", 30)) + (4 + variant)))
+            )
+            clone["min_strategy_profit_factor"] = round(
+                _clamp(float(clone.get("min_strategy_profit_factor", 0.95)) + pf_add_grid[variant], 0.90, 1.35),
+                2,
+            )
+            clone["min_strategy_expectancy_krw"] = round(
+                float(clone.get("min_strategy_expectancy_krw", -1.0)) + ev_add_grid[variant],
+                2,
+            )
+            clone["max_new_orders_per_scan"] = int(max(1, int(clone.get("max_new_orders_per_scan", 2)) - 1))
+            clone["scalping_min_signal_strength"] = round(
+                _clamp(float(clone.get("scalping_min_signal_strength", 0.70)) + 0.03, 0.60, 0.94),
+                2,
+            )
+            clone["momentum_min_signal_strength"] = round(
+                _clamp(float(clone.get("momentum_min_signal_strength", 0.72)) + 0.03, 0.60, 0.94),
+                2,
+            )
+            clone["breakout_min_signal_strength"] = round(
+                _clamp(float(clone.get("breakout_min_signal_strength", 0.40)) + 0.02, 0.32, 0.60),
+                2,
+            )
+            clone["mean_reversion_min_signal_strength"] = round(
+                _clamp(float(clone.get("mean_reversion_min_signal_strength", 0.40)) + 0.02, 0.32, 0.60),
+                2,
+            )
+            clone["hostility_hostile_threshold"] = round(
+                _clamp(
+                    float(clone.get("hostility_hostile_threshold", 0.62)) + threshold_relax_grid[variant],
+                    0.50,
+                    0.82,
+                ),
+                2,
+            )
+            clone["hostility_severe_threshold"] = round(
+                _clamp(
+                    float(clone.get("hostility_severe_threshold", 0.82)) + threshold_relax_grid[variant],
+                    0.65,
+                    0.94,
+                ),
+                2,
+            )
+            clone["hostility_extreme_threshold"] = round(
+                _clamp(
+                    float(clone.get("hostility_extreme_threshold", 0.88)) + threshold_relax_grid[variant],
+                    0.70,
+                    0.97,
+                ),
+                2,
+            )
+            clone["hostility_pause_scans"] = int(
+                max(2, int(clone.get("hostility_pause_scans", 4)) - pause_reduce_grid[variant])
+            )
+            clone["hostility_pause_scans_extreme"] = int(
+                max(3, int(clone.get("hostility_pause_scans_extreme", 6)) - pause_reduce_grid[variant])
+            )
+            clone["backtest_hostility_pause_candles"] = int(
+                max(12, int(clone.get("backtest_hostility_pause_candles", 36)) - (6 - (2 * variant)))
+            )
+            clone["backtest_hostility_pause_candles_extreme"] = int(
+                max(24, int(clone.get("backtest_hostility_pause_candles_extreme", 60)) - (8 - (2 * variant)))
+            )
+            clone["avoid_high_volatility"] = True
+            clone["avoid_trending_down"] = True
+            clone["bottleneck_second_stage_focus"] = risk_gate_focus
+            clone["bottleneck_second_stage_variant"] = int(variant)
+
+        elif adapted and family == "risk_gate_second_stage_history_moderate_guard":
+            variant = (sum(ord(c) for c in combo_id) % 3)
+            edge_mul_grid = (1.02, 1.05, 1.07)
+            rr_add_grid = (0.03, 0.05, 0.07)
+            weak_add_grid = (0.04, 0.06, 0.08)
+            strong_add_grid = (0.03, 0.04, 0.06)
+            pf_add_grid = (0.02, 0.03, 0.04)
+            ev_add_grid = (0.18, 0.28, 0.38)
+
+            clone["min_expected_edge_pct"] = round(
+                _clamp(
+                    float(clone.get("min_expected_edge_pct", 0.0010)) * edge_mul_grid[variant],
+                    0.0006,
+                    0.0019,
+                ),
+                4,
+            )
+            clone["min_reward_risk"] = round(
+                _clamp(float(clone.get("min_reward_risk", 1.20)) + rr_add_grid[variant], 1.03, 1.90),
+                2,
+            )
+            clone["min_rr_weak_signal"] = round(
+                _clamp(float(clone.get("min_rr_weak_signal", 1.80)) + weak_add_grid[variant], 1.15, 2.45),
+                2,
+            )
+            clone["min_rr_strong_signal"] = round(
+                _clamp(float(clone.get("min_rr_strong_signal", 1.20)) + strong_add_grid[variant], 0.90, 1.85),
+                2,
+            )
+            clone["min_strategy_trades_for_ev"] = int(
+                min(84, max(24, int(clone.get("min_strategy_trades_for_ev", 30)) + (3 + variant)))
+            )
+            clone["min_strategy_profit_factor"] = round(
+                _clamp(float(clone.get("min_strategy_profit_factor", 0.95)) + pf_add_grid[variant], 0.89, 1.32),
+                2,
+            )
+            clone["min_strategy_expectancy_krw"] = round(
+                float(clone.get("min_strategy_expectancy_krw", -1.0)) + ev_add_grid[variant],
+                2,
+            )
+            clone["max_new_orders_per_scan"] = int(
+                max(1, min(3, int(clone.get("max_new_orders_per_scan", 2)) - (1 if variant == 0 else 0)))
+            )
+            clone["scalping_min_signal_strength"] = round(
+                _clamp(float(clone.get("scalping_min_signal_strength", 0.70)) + 0.02, 0.60, 0.92),
+                2,
+            )
+            clone["momentum_min_signal_strength"] = round(
+                _clamp(float(clone.get("momentum_min_signal_strength", 0.72)) + 0.02, 0.60, 0.92),
+                2,
+            )
+            clone["breakout_min_signal_strength"] = round(
+                _clamp(float(clone.get("breakout_min_signal_strength", 0.40)) + 0.01, 0.31, 0.58),
+                2,
+            )
+            clone["mean_reversion_min_signal_strength"] = round(
+                _clamp(float(clone.get("mean_reversion_min_signal_strength", 0.40)) + 0.01, 0.31, 0.58),
+                2,
+            )
+            clone["hostility_hostile_threshold"] = round(
+                _clamp(float(clone.get("hostility_hostile_threshold", 0.62)) + 0.02, 0.50, 0.82),
+                2,
+            )
+            clone["hostility_severe_threshold"] = round(
+                _clamp(float(clone.get("hostility_severe_threshold", 0.82)) + 0.02, 0.65, 0.94),
+                2,
+            )
+            clone["hostility_extreme_threshold"] = round(
+                _clamp(float(clone.get("hostility_extreme_threshold", 0.88)) + 0.01, 0.70, 0.97),
+                2,
+            )
+            clone["hostility_pause_scans"] = int(max(2, int(clone.get("hostility_pause_scans", 4)) - 1))
+            clone["hostility_pause_scans_extreme"] = int(max(3, int(clone.get("hostility_pause_scans_extreme", 6)) - 1))
+            clone["backtest_hostility_pause_candles"] = int(max(12, int(clone.get("backtest_hostility_pause_candles", 36)) - 4))
+            clone["backtest_hostility_pause_candles_extreme"] = int(
+                max(24, int(clone.get("backtest_hostility_pause_candles_extreme", 60)) - 6)
+            )
+            clone["avoid_high_volatility"] = True
+            clone["avoid_trending_down"] = True
+            clone["bottleneck_second_stage_focus"] = risk_gate_focus
+            clone["bottleneck_second_stage_variant"] = int(variant)
+
+        elif adapted and family == "risk_gate_second_stage_history_mild_rebalance":
+            variant = (sum(ord(c) for c in combo_id) % 3)
+            edge_mul_grid = (0.92, 0.96, 1.00)
+            rr_add_grid = (0.00, 0.02, 0.04)
+            weak_delta_grid = (-0.04, 0.00, 0.03)
+            strong_delta_grid = (-0.03, 0.00, 0.02)
+            pf_add_grid = (0.01, 0.02, 0.03)
+            ev_add_grid = (0.12, 0.20, 0.28)
+
+            clone["min_expected_edge_pct"] = round(
+                _clamp(
+                    float(clone.get("min_expected_edge_pct", 0.0010)) * edge_mul_grid[variant],
+                    0.0005,
+                    0.0018,
+                ),
+                4,
+            )
+            clone["min_reward_risk"] = round(
+                _clamp(float(clone.get("min_reward_risk", 1.20)) + rr_add_grid[variant], 1.00, 1.80),
+                2,
+            )
+            clone["min_rr_weak_signal"] = round(
+                _clamp(float(clone.get("min_rr_weak_signal", 1.80)) + weak_delta_grid[variant], 1.10, 2.35),
+                2,
+            )
+            clone["min_rr_strong_signal"] = round(
+                _clamp(float(clone.get("min_rr_strong_signal", 1.20)) + strong_delta_grid[variant], 0.85, 1.75),
+                2,
+            )
+            clone["min_strategy_trades_for_ev"] = int(
+                min(80, max(20, int(clone.get("min_strategy_trades_for_ev", 30)) + (2 + variant)))
+            )
+            clone["min_strategy_profit_factor"] = round(
+                _clamp(float(clone.get("min_strategy_profit_factor", 0.95)) + pf_add_grid[variant], 0.88, 1.28),
+                2,
+            )
+            clone["min_strategy_expectancy_krw"] = round(
+                float(clone.get("min_strategy_expectancy_krw", -1.0)) + ev_add_grid[variant],
+                2,
+            )
+            clone["max_new_orders_per_scan"] = int(
+                max(1, min(4, int(clone.get("max_new_orders_per_scan", 2)) + (1 if variant == 0 else 0)))
+            )
+            clone["hostility_hostile_threshold"] = round(
+                _clamp(float(clone.get("hostility_hostile_threshold", 0.62)) + 0.02, 0.50, 0.82),
+                2,
+            )
+            clone["hostility_severe_threshold"] = round(
+                _clamp(float(clone.get("hostility_severe_threshold", 0.82)) + 0.02, 0.65, 0.94),
+                2,
+            )
+            clone["hostility_extreme_threshold"] = round(
+                _clamp(float(clone.get("hostility_extreme_threshold", 0.88)) + 0.02, 0.70, 0.97),
+                2,
+            )
+            clone["hostility_pause_scans"] = int(max(2, int(clone.get("hostility_pause_scans", 4)) - 1))
+            clone["hostility_pause_scans_extreme"] = int(max(3, int(clone.get("hostility_pause_scans_extreme", 6)) - 1))
+            clone["backtest_hostility_pause_candles"] = int(max(12, int(clone.get("backtest_hostility_pause_candles", 36)) - 6))
+            clone["backtest_hostility_pause_candles_extreme"] = int(
+                max(24, int(clone.get("backtest_hostility_pause_candles_extreme", 60)) - 8)
+            )
+            clone["avoid_high_volatility"] = True
+            clone["avoid_trending_down"] = True
+            clone["bottleneck_second_stage_focus"] = risk_gate_focus
+            clone["bottleneck_second_stage_variant"] = int(variant)
+
+        elif adapted and family == "risk_gate_second_stage_hostile_consistency":
+            variant = (sum(ord(c) for c in combo_id) % 3)
+            clone["min_expected_edge_pct"] = round(
+                _clamp(float(clone.get("min_expected_edge_pct", 0.0010)) * (1.01 + (0.01 * variant)), 0.0006, 0.0019),
+                4,
+            )
+            clone["min_reward_risk"] = round(
+                _clamp(float(clone.get("min_reward_risk", 1.20)) + (0.02 + (0.01 * variant)), 1.02, 1.90),
+                2,
+            )
+            clone["min_rr_weak_signal"] = round(
+                _clamp(float(clone.get("min_rr_weak_signal", 1.80)) + (0.03 + (0.02 * variant)), 1.15, 2.40),
+                2,
+            )
+            clone["min_rr_strong_signal"] = round(
+                _clamp(float(clone.get("min_rr_strong_signal", 1.20)) + (0.02 + (0.01 * variant)), 0.90, 1.80),
+                2,
+            )
+            clone["min_strategy_trades_for_ev"] = int(
+                min(82, max(22, int(clone.get("min_strategy_trades_for_ev", 30)) + (2 + variant)))
+            )
+            clone["min_strategy_profit_factor"] = round(
+                _clamp(float(clone.get("min_strategy_profit_factor", 0.95)) + 0.02, 0.89, 1.32),
+                2,
+            )
+            clone["min_strategy_expectancy_krw"] = round(
+                float(clone.get("min_strategy_expectancy_krw", -1.0)) + (0.18 + (0.10 * variant)),
+                2,
+            )
+            clone["hostility_hostile_threshold"] = round(
+                _clamp(float(clone.get("hostility_hostile_threshold", 0.62)) + 0.02, 0.50, 0.82),
+                2,
+            )
+            clone["hostility_severe_threshold"] = round(
+                _clamp(float(clone.get("hostility_severe_threshold", 0.82)) + 0.02, 0.65, 0.94),
+                2,
+            )
+            clone["hostility_extreme_threshold"] = round(
+                _clamp(float(clone.get("hostility_extreme_threshold", 0.88)) + 0.01, 0.70, 0.97),
+                2,
+            )
+            if risk_gate_focus == "second_stage_confirmation_hostile_regime":
+                clone["avoid_trending_down"] = True
+                clone["momentum_min_signal_strength"] = round(
+                    _clamp(float(clone.get("momentum_min_signal_strength", 0.72)) + 0.02, 0.60, 0.92),
+                    2,
+                )
+            if risk_gate_focus == "second_stage_confirmation_hostile_liquidity":
+                clone["avoid_high_volatility"] = True
+                clone["max_new_orders_per_scan"] = int(max(1, int(clone.get("max_new_orders_per_scan", 2)) - 1))
+            if risk_gate_focus == "second_stage_confirmation_hostile_dynamic_tighten":
+                clone["hostility_ewma_alpha"] = round(
+                    _clamp(float(clone.get("hostility_ewma_alpha", 0.14)) - 0.01, 0.06, 0.30),
+                    2,
+                )
+                clone["hostility_hostile_threshold"] = round(
+                    _clamp(float(clone.get("hostility_hostile_threshold", 0.62)) + 0.03, 0.50, 0.82),
+                    2,
+                )
+                clone["hostility_severe_threshold"] = round(
+                    _clamp(float(clone.get("hostility_severe_threshold", 0.82)) + 0.03, 0.65, 0.94),
+                    2,
+                )
+                clone["hostility_extreme_threshold"] = round(
+                    _clamp(float(clone.get("hostility_extreme_threshold", 0.88)) + 0.02, 0.70, 0.97),
+                    2,
+                )
+            clone["avoid_high_volatility"] = True
+            clone["avoid_trending_down"] = True
+            clone["bottleneck_second_stage_focus"] = risk_gate_focus
+            clone["bottleneck_second_stage_variant"] = int(variant)
+
+        elif adapted and family == "risk_gate_second_stage_consistency":
+            variant = (sum(ord(c) for c in combo_id) % 3)
+            clone["min_expected_edge_pct"] = round(
+                _clamp(float(clone.get("min_expected_edge_pct", 0.0010)) * (1.02 + (0.01 * variant)), 0.0006, 0.0019),
+                4,
+            )
+            clone["min_reward_risk"] = round(
+                _clamp(float(clone.get("min_reward_risk", 1.20)) + (0.03 + (0.01 * variant)), 1.03, 1.90),
+                2,
+            )
+            clone["min_rr_weak_signal"] = round(
+                _clamp(float(clone.get("min_rr_weak_signal", 1.80)) + (0.04 + (0.02 * variant)), 1.15, 2.45),
+                2,
+            )
+            clone["min_rr_strong_signal"] = round(
+                _clamp(float(clone.get("min_rr_strong_signal", 1.20)) + (0.03 + (0.01 * variant)), 0.90, 1.85),
+                2,
+            )
+            clone["min_strategy_trades_for_ev"] = int(
+                min(84, max(22, int(clone.get("min_strategy_trades_for_ev", 30)) + (3 + variant)))
+            )
+            clone["min_strategy_profit_factor"] = round(
+                _clamp(float(clone.get("min_strategy_profit_factor", 0.95)) + 0.03, 0.90, 1.35),
+                2,
+            )
+            clone["min_strategy_expectancy_krw"] = round(
+                float(clone.get("min_strategy_expectancy_krw", -1.0)) + (0.22 + (0.12 * variant)),
+                2,
+            )
+            clone["max_new_orders_per_scan"] = int(
+                max(1, min(3, int(clone.get("max_new_orders_per_scan", 2)) - (1 if variant == 0 else 0)))
+            )
+            clone["hostility_hostile_threshold"] = round(
+                _clamp(float(clone.get("hostility_hostile_threshold", 0.62)) + 0.02, 0.50, 0.82),
+                2,
+            )
+            clone["hostility_severe_threshold"] = round(
+                _clamp(float(clone.get("hostility_severe_threshold", 0.82)) + 0.02, 0.65, 0.94),
+                2,
+            )
+            clone["hostility_extreme_threshold"] = round(
+                _clamp(float(clone.get("hostility_extreme_threshold", 0.88)) + 0.01, 0.70, 0.97),
+                2,
+            )
+            clone["avoid_high_volatility"] = True
+            clone["avoid_trending_down"] = True
+            clone["bottleneck_second_stage_focus"] = risk_gate_focus
+            clone["bottleneck_second_stage_variant"] = int(variant)
 
         elif adapted and family == "risk_gate_adaptive_rebalance":
             # Adaptive RR adders suspected too strict: keep quality, but avoid aggressive tightening.

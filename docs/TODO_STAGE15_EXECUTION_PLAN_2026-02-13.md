@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-17 (second-stage hostile history severity split instrumentation)
+Last updated: 2026-02-17 (second-stage severe-history routing hardening)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -1006,6 +1006,49 @@ The system must:
     - 완화 실험은 mild/moderate가 아니라 severe 대응 정책(혹은 사전 필터/학습 신뢰도 규칙)을 대상으로 설계해야 함.
   - next:
     - severe-history safety adders 전용 candidate(완화 대신 진입 전 신뢰도 보강/차단 정책 분리) 설계 및 split-wise 검증.
+
+- Stage-2.28 update (2026-02-17):
+  - second-stage recommendation/focus routing hardened for severe-history ownership:
+    - recommendation detail routing update:
+      - `scripts/run_candidate_train_eval_cycle.py`
+    - bottleneck focus scoring + scenario-family adaptation update:
+      - `scripts/tune_candidate_gate_trade_density.py`
+  - `tune` routing change summary:
+    - new risk-gate second-stage focus scoring branches:
+      - `second_stage_confirmation_rr_margin`
+      - `second_stage_confirmation_edge_margin`
+      - `second_stage_confirmation_hostile_regime`
+      - `second_stage_confirmation_hostile_liquidity`
+      - `second_stage_confirmation_hostile_history_mild`
+      - `second_stage_confirmation_hostile_history_moderate`
+      - `second_stage_confirmation_hostile_history_severe`
+      - `second_stage_confirmation_hostile_history`
+      - `second_stage_confirmation_hostile_dynamic_tighten`
+      - `second_stage_confirmation_hostile_safety`
+    - new scenario families:
+      - `risk_gate_second_stage_margin_consistency`
+      - `risk_gate_second_stage_history_severe_guard`
+      - `risk_gate_second_stage_history_moderate_guard`
+      - `risk_gate_second_stage_history_mild_rebalance`
+      - `risk_gate_second_stage_hostile_consistency`
+      - `risk_gate_second_stage_consistency`
+    - overfit guard intent:
+      - severe-history branch does not blindly relax thresholds.
+      - tuning prioritizes quality/guard balance and only bounded safety-side relaxation.
+  - verification:
+    - `python -m py_compile scripts/run_profitability_matrix.py scripts/run_candidate_train_eval_cycle.py scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full` from train/eval cycle):
+    - train: `pf=0.7289`, `trades=132.0`, `exp=-7.94`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1601`
+    - validation: `pf=0.5028`, `trades=172.0`, `exp=-7.6628`, top risk=`blocked_second_stage_confirmation_hostile_history_severe_safety_adders:885`
+    - holdout: `pf=0.4557`, `trades=149.3333`, `exp=-7.8552`, top risk=`blocked_second_stage_confirmation_hostile_history_severe_safety_adders:1463`
+    - promotion recommendation: `hold_candidate_calibrate_second_stage_confirmation_hostile_history_severe_consistency`
+  - tuning routing evidence:
+    - runtime log: `bottleneck_adapted_scenarios=on, scenario_family_counts={'risk_gate_second_stage_history_severe_guard': 1}`
+  - next:
+    - run `quality_focus` with multi-scenario (`--max-scenarios 4~6`) and compare severe-history rejection share delta.
+    - keep promotion gate strict (validation/holdout/walk-forward/generalization guard unchanged).
 
 2. Expectancy-first improvement loop
 - Optimize for:

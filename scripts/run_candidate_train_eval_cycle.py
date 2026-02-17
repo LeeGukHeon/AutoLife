@@ -929,6 +929,26 @@ def build_promotion_verdict(
             recommendation = "hold_candidate_calibrate_risk_gate_regime_alignment"
         elif risk_component == "blocked_risk_gate_strategy_ev":
             recommendation = "hold_candidate_calibrate_risk_gate_strategy_ev_alignment"
+        elif risk_component == "blocked_second_stage_confirmation_rr_margin":
+            recommendation = "hold_candidate_calibrate_second_stage_confirmation_rr_margin_consistency"
+        elif risk_component == "blocked_second_stage_confirmation_edge_margin":
+            recommendation = "hold_candidate_calibrate_second_stage_confirmation_edge_margin_consistency"
+        elif risk_component == "blocked_second_stage_confirmation_hostile_regime_safety_adders":
+            recommendation = "hold_candidate_calibrate_second_stage_confirmation_hostile_regime_consistency"
+        elif risk_component == "blocked_second_stage_confirmation_hostile_liquidity_safety_adders":
+            recommendation = "hold_candidate_calibrate_second_stage_confirmation_hostile_liquidity_consistency"
+        elif risk_component == "blocked_second_stage_confirmation_hostile_history_mild_safety_adders":
+            recommendation = "hold_candidate_calibrate_second_stage_confirmation_hostile_history_mild_consistency"
+        elif risk_component == "blocked_second_stage_confirmation_hostile_history_moderate_safety_adders":
+            recommendation = "hold_candidate_calibrate_second_stage_confirmation_hostile_history_moderate_consistency"
+        elif risk_component == "blocked_second_stage_confirmation_hostile_history_severe_safety_adders":
+            recommendation = "hold_candidate_calibrate_second_stage_confirmation_hostile_history_severe_consistency"
+        elif risk_component == "blocked_second_stage_confirmation_hostile_history_safety_adders":
+            recommendation = "hold_candidate_calibrate_second_stage_confirmation_hostile_history_consistency"
+        elif risk_component == "blocked_second_stage_confirmation_hostile_dynamic_tighten_safety_adders":
+            recommendation = "hold_candidate_calibrate_second_stage_confirmation_hostile_dynamic_tighten_consistency"
+        elif risk_component == "blocked_second_stage_confirmation_hostile_safety_adders":
+            recommendation = "hold_candidate_calibrate_second_stage_confirmation_hostile_safety_consistency"
         elif risk_component.startswith("blocked_second_stage_confirmation"):
             recommendation = "hold_candidate_calibrate_second_stage_confirmation_consistency"
         else:
