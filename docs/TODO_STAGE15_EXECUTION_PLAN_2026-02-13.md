@@ -1,6 +1,6 @@
 # Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-17 (Stage-2.43 drift-penalty sensitivity + promoted revalidation)
+Last updated: 2026-02-17 (Stage-2.44 rr-step micro sweep + promoted revalidation)
 
 ## Goal
 Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
@@ -1593,6 +1593,40 @@ The system must:
   - next:
     - run focused rr-adaptive regime adders refinement for expectancy uplift while keeping ownership alignment fixed.
     - keep split-drift guard enabled and avoid widening family space until `exp` trend improves.
+
+- Stage-2.44 update (2026-02-17):
+  - rr-adaptive local-step micro sweep executed (`soft/default/tight`):
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py ... --rr-adaptive-regime-local-rr-step 0.015 --rr-adaptive-regime-local-signal-step 0.008 --rr-adaptive-regime-local-edge-step 0.00008 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage244_soft.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage244_soft.json`
+      - `python scripts/tune_candidate_gate_trade_density.py ... --rr-adaptive-regime-local-rr-step 0.020 --rr-adaptive-regime-local-signal-step 0.010 --rr-adaptive-regime-local-edge-step 0.00010 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage244_default.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage244_default.json`
+      - `python scripts/tune_candidate_gate_trade_density.py ... --rr-adaptive-regime-local-rr-step 0.025 --rr-adaptive-regime-local-signal-step 0.012 --rr-adaptive-regime-local-edge-step 0.00012 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage244_tight.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage244_tight.json`
+  - sweep result:
+    - best case: `default` (`0.020 / 0.010 / 0.00010`)
+      - best combo=`scenario_quality_focus_002`
+      - `obj=-21188.958`, `pf=0.8920`, `exp=-7.4982`, `severe_ratio=28.28%`
+      - top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime`
+    - `soft`:
+      - `obj=-22525.317`, `pf=0.8827`, `exp=-7.7113`
+      - top risk drifted to `blocked_risk_gate_entry_quality_edge_base`
+    - `tight`:
+      - `obj=-21542.196`, `pf=0.8722`, `exp=-8.0654`
+      - degraded expectancy vs default.
+  - promoted snapshot validation (`default` case):
+    - snapshot:
+      - `build/Release/logs/candidate_promoted_combo_stage2_44.json`
+    - command:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+    - result:
+      - recommendation=`hold_candidate_calibrate_risk_gate_edge_baseline_floor`
+      - validation top risk=`blocked_risk_gate_entry_quality_edge_base:2655`
+      - holdout top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1860`
+      - promotion gate fail persists (`promotion_gate_pass=false`, `generalization_guard_pass=false`)
+  - interpretation:
+    - local-step tuning improved tuning-batch objective at `default` setting, but split cycle에서 ownership drift(검증=edge, 홀드아웃=rr)가 재발.
+    - 현재 병목은 단순 rr step 크기보다 split ownership stabilizer(특히 validation edge_base 억제) 쪽이 우선.
+  - next:
+    - add `edge_base`-specific objective penalty reinforcement when holdout recommendation remains `rr_adaptive_regime`.
+    - re-run 6-scenario sweep with the reinforcement and verify split ownership alignment before additional expectancy tuning.
 
 2. Expectancy-first improvement loop
 - Optimize for:
