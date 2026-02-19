@@ -1,4 +1,4 @@
-#include "core/adapters/PolicyLearningPlaneAdapter.h"
+#include "engine/PolicyLearningPlaneAdapter.h"
 
 namespace autolife {
 namespace core {

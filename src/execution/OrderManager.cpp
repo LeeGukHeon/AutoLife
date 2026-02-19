@@ -4,7 +4,7 @@
 #include "common/Logger.h"
 #include "common/PathUtils.h"
 #include "common/TickSizeHelper.h"
-#include "core/execution/ExecutionUpdateSchema.h"
+#include "execution/ExecutionUpdateSchema.h"
 
 #include <algorithm>
 #include <cctype>

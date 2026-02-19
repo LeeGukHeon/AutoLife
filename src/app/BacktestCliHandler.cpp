@@ -358,6 +358,11 @@ bool tryRunCliBacktest(int argc, char* argv[], Config& config, int& out_exit_cod
         if (s == "grid") {
             return std::string("grid_trading");
         }
+        if (s == "foundation" ||
+            s == "foundation_adaptive_strategy" ||
+            s == "foundation adaptive strategy") {
+            return std::string("foundation_adaptive");
+        }
         return s;
     };
 

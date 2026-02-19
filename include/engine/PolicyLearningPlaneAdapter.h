@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/contracts/IPolicyLearningPlane.h"
+#include "engine/IPolicyLearningPlane.h"
 #include "engine/AdaptivePolicyController.h"
 #include "engine/PerformanceStore.h"
 

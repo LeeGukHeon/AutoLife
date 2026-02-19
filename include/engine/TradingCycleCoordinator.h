@@ -4,10 +4,10 @@
 #include <string>
 #include <vector>
 
-#include "core/contracts/IExecutionPlane.h"
-#include "core/contracts/IPolicyLearningPlane.h"
-#include "core/contracts/IRiskCompliancePlane.h"
-#include "core/model/PlaneTypes.h"
+#include "execution/IExecutionPlane.h"
+#include "engine/IPolicyLearningPlane.h"
+#include "risk/IRiskCompliancePlane.h"
+#include "engine/PlaneTypes.h"
 #include "risk/RiskManager.h"
 #include "strategy/IStrategy.h"
 

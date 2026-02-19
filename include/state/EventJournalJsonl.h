@@ -4,7 +4,7 @@
 #include <filesystem>
 #include <mutex>
 
-#include "core/contracts/IEventJournal.h"
+#include "state/IEventJournal.h"
 
 namespace autolife {
 namespace core {

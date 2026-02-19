@@ -1,4 +1,4 @@
-#include "core/state/EventJournalJsonl.h"
+#include "state/EventJournalJsonl.h"
 
 #include <filesystem>
 #include <iostream>

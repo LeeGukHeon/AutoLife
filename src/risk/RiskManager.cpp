@@ -1125,7 +1125,7 @@ bool RiskManager::applyGridFill(
         : 0.0;
     trade.entry_time = inv.last_buy_time;
     trade.exit_time = getCurrentTimestamp();
-    trade.strategy_name = "Grid Trading Strategy";
+    trade.strategy_name = "legacy_grid_cycle";
     trade.exit_reason = "grid_cycle";
     trade.entry_archetype = "GRID_CYCLE";
     trade_history_.push_back(trade);

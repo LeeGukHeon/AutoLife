@@ -33,4 +33,13 @@ Keep each completed chapter to 2-4 lines.
   - Purged remaining v2/legacy shadow stack (runtime probe, `AutoLifeV2*` targets, `Legacy*PlaneAdapter`, `DecisionKernel`, `*V2` engine/backtest/contracts/tests).
   - Finalized active-path naming cleanup: `run_verification.py` entrypoint, `verification_report/matrix` artifacts, `getPrimaryTakeProfit()`.
   - Removed residual preset fallback file: `config/presets/legacy_fallback.json`.
+  - Audited core-vs-external runtime ownership and confirmed active dependency chain (`core` bridge + `execution/engine/risk`).
+  - Validated backtest data-loader ownership (`DataHistory`) and kept it in active path (`BacktestRuntime` direct dependency).
+  - Flattened active runtime bridge tree from `core/*` folders into domain folders (`engine/execution/risk/state`) and removed `include/core`, `src/core`.
+  - Hardened overfit-risk gate rule: `requiresTypedArchetype(...)` narrowed from near-global enforcement to archetype-sensitive strategy families only.
+  - Started runtime gate commonization by promoting `isAlphaHeadFallbackCandidate(...)` and `normalizeSignalStopLossByRegime(...)` into `common/SignalPolicyShared`.
+  - Default runtime profile hardened: `config/config.json` now sets `use_strategy_alpha_head_mode=false`.
+  - Reduced default CMake build to `AutoLifeTrading` only (`AUTOLIFE_BUILD_GATE_TESTS=OFF`) and revalidated with fresh `build_fresh` configure/build.
+  - Completed runtime commonization phase-2A by extracting duplicated edge stats/key-builder helpers into `common/StrategyEdgeStatsShared` and wiring both runtimes to shared helpers.
+  - Normalized core runtime/risk/config files to UTF-8 to unblock safe large-file patching and reduce `C4828` warning noise.
 

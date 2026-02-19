@@ -44,14 +44,16 @@ int main() {
     assert(std::abs(config.getFeeRate() - 0.0005) < 1e-9);
     assert(config.getMinOrderKrw() >= 5000.0);
 
-    // 4. Verify Strategy Config
-    auto scalping = config.getScalpingConfig();
-    std::cout << "Scalping RSI Lower: " << scalping.rsi_lower << std::endl;
-    std::cout << "Scalping Daily Trades: " << scalping.max_daily_trades << std::endl;
+    // 4. Verify Engine Config (foundation-first runtime path)
+    const auto engine_cfg = config.getEngineConfig();
+    std::cout << "Enabled Strategies: " << engine_cfg.enabled_strategies.size() << std::endl;
+    std::cout << "Min Expected Edge: " << engine_cfg.min_expected_edge_pct << std::endl;
+    std::cout << "Min Reward/Risk: " << engine_cfg.min_reward_risk << std::endl;
 
     // Assertions
-    assert(scalping.rsi_lower > 0);
-    assert(scalping.max_daily_trades > 0);
+    assert(engine_cfg.max_positions > 0);
+    assert(engine_cfg.min_expected_edge_pct >= 0.0);
+    assert(engine_cfg.min_reward_risk >= 1.0);
 
     std::cout << "[TEST] Config Test PASSED!" << std::endl;
 

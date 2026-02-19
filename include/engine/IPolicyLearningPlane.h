@@ -2,7 +2,7 @@
 
 #include <vector>
 
-#include "core/model/PlaneTypes.h"
+#include "engine/PlaneTypes.h"
 #include "strategy/IStrategy.h"
 
 namespace autolife {

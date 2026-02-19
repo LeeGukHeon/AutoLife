@@ -1,5 +1,5 @@
-#include "core/adapters/ExecutionPlaneAdapter.h"
-#include "core/execution/ExecutionUpdateSchema.h"
+#include "execution/ExecutionPlaneAdapter.h"
+#include "execution/ExecutionUpdateSchema.h"
 
 namespace autolife {
 namespace core {

@@ -9,6 +9,7 @@
 #include <iostream>
 #include <unordered_map>
 #include <vector>
+#include <nlohmann/json.hpp>
 
 namespace autolife {
 
@@ -569,66 +570,6 @@ void Config::load(const std::string& path) {
             risk_per_trade_pct_ = t.value("risk_per_trade_pct", 0.01);
         }
 
-        if (j.contains("strategies") && j["strategies"].contains("scalping")) {
-            auto& s = j["strategies"]["scalping"];
-            scalping_config_.max_daily_trades = s.value("max_daily_trades", 15);
-            scalping_config_.max_hourly_trades = s.value("max_hourly_trades", 5);
-            scalping_config_.max_consecutive_losses = s.value("max_consecutive_losses", 5);
-            scalping_config_.rsi_lower = s.value("rsi_lower", 20.0);
-            scalping_config_.rsi_upper = s.value("rsi_upper", 75.0);
-            scalping_config_.volume_z_score_threshold = s.value("volume_z_score_threshold", 1.15);
-            scalping_config_.base_take_profit = s.value("base_take_profit", 0.02);
-            scalping_config_.base_stop_loss = s.value("base_stop_loss", 0.01);
-            scalping_config_.min_risk_reward_ratio = s.value("min_risk_reward_ratio", 1.5);
-            scalping_config_.min_signal_strength = s.value("min_signal_strength", 0.65);
-        }
-
-        if (j.contains("strategies") && j["strategies"].contains("momentum")) {
-            auto& s = j["strategies"]["momentum"];
-            momentum_config_.max_daily_trades = s.value("max_daily_trades", 12);
-            momentum_config_.max_hourly_trades = s.value("max_hourly_trades", 4);
-            momentum_config_.max_consecutive_losses = s.value("max_consecutive_losses", 4);
-            momentum_config_.min_liquidity_score = s.value("min_liquidity_score", 50.0);
-            momentum_config_.min_signal_strength = s.value("min_signal_strength", 0.40);
-            momentum_config_.min_signal_interval_sec = s.value("min_signal_interval_sec", 300);
-            momentum_config_.min_risk_reward_ratio = s.value("min_risk_reward_ratio", 2.0);
-            momentum_config_.min_expected_sharpe = s.value("min_expected_sharpe", 1.0);
-        }
-
-        if (j.contains("strategies") && j["strategies"].contains("breakout")) {
-            auto& s = j["strategies"]["breakout"];
-            breakout_config_.max_daily_trades = s.value("max_daily_trades", 10);
-            breakout_config_.max_hourly_trades = s.value("max_hourly_trades", 3);
-            breakout_config_.max_consecutive_losses = s.value("max_consecutive_losses", 4);
-            breakout_config_.min_liquidity_score = s.value("min_liquidity_score", 50.0);
-            breakout_config_.min_signal_strength = s.value("min_signal_strength", 0.40);
-            breakout_config_.min_signal_interval_sec = s.value("min_signal_interval_sec", 720);
-            breakout_config_.min_risk_reward_ratio = s.value("min_risk_reward_ratio", 1.5);
-        }
-
-        if (j.contains("strategies") && j["strategies"].contains("mean_reversion")) {
-            auto& s = j["strategies"]["mean_reversion"];
-            mean_reversion_config_.max_daily_trades = s.value("max_daily_trades", 12);
-            mean_reversion_config_.max_hourly_trades = s.value("max_hourly_trades", 4);
-            mean_reversion_config_.max_consecutive_losses = s.value("max_consecutive_losses", 4);
-            mean_reversion_config_.min_liquidity_score = s.value("min_liquidity_score", 50.0);
-            mean_reversion_config_.min_signal_strength = s.value("min_signal_strength", 0.40);
-            mean_reversion_config_.min_signal_interval_sec = s.value("min_signal_interval_sec", 600);
-            mean_reversion_config_.min_reversion_probability = s.value("min_reversion_probability", 0.70);
-        }
-
-        if (j.contains("strategies") && j["strategies"].contains("grid_trading")) {
-            auto& s = j["strategies"]["grid_trading"];
-            grid_trading_config_.max_daily_trades = s.value("max_daily_trades", 15);
-            grid_trading_config_.max_hourly_trades = s.value("max_hourly_trades", 5);
-            grid_trading_config_.max_consecutive_losses = s.value("max_consecutive_losses", 3);
-            grid_trading_config_.min_liquidity_score = s.value("min_liquidity_score", 60.0);
-            grid_trading_config_.min_signal_strength = s.value("min_signal_strength", 0.40);
-            grid_trading_config_.min_signal_interval_sec = s.value("min_signal_interval_sec", 900);
-            grid_trading_config_.max_grid_capital_pct = s.value("max_grid_capital_pct", 0.30);
-        }
-
-        std::cout << "설정 파일 로드 완료" << std::endl;
         std::cout << "Config Loaded: Fee=" << fee_rate_ << ", MinOrder=" << min_order_krw_ << std::endl;
     } catch (const std::exception& e) {
         std::cerr << "설정 로드 오류: " << e.what() << std::endl;

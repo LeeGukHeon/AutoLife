@@ -9,7 +9,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include "core/contracts/IRiskCompliancePlane.h"
+#include "risk/IRiskCompliancePlane.h"
 #include "engine/EngineConfig.h"
 #include "network/UpbitHttpClient.h"
 #include "risk/RiskManager.h"

@@ -28,12 +28,22 @@ find_package(Boost REQUIRED COMPONENTS system thread)
 
 include_directories(${CMAKE_SOURCE_DIR}/include)
 
+option(AUTOLIFE_BUILD_TOOL_BINARIES "Build optional operational tool binaries" OFF)
+option(AUTOLIFE_BUILD_GATE_TESTS "Build core gate validation tests" OFF)
+option(AUTOLIFE_BUILD_EXTRA_TESTS "Build extra diagnostic tests" OFF)
+
+message(STATUS "AUTOLIFE_BUILD_TOOL_BINARIES=${AUTOLIFE_BUILD_TOOL_BINARIES}")
+message(STATUS "AUTOLIFE_BUILD_GATE_TESTS=${AUTOLIFE_BUILD_GATE_TESTS}")
+message(STATUS "AUTOLIFE_BUILD_EXTRA_TESTS=${AUTOLIFE_BUILD_EXTRA_TESTS}")
+
 # Source files (shared library objects, excluding main entrypoint)
 # Keep this list as the single compilation source of truth
 set(LIB_SOURCES
     src/common/Logger.cpp
     src/common/Config.cpp
     src/common/PathUtils.cpp
+    src/common/SignalPolicyShared.cpp
+    src/common/StrategyEdgeStatsShared.cpp
     src/network/JwtGenerator.cpp
     src/network/UpbitHttpClient.cpp
     src/network/UpbitMyOrderWebSocketClient.cpp
@@ -48,13 +58,13 @@ set(LIB_SOURCES
     src/runtime/LiveTradingRuntime.cpp
     src/engine/AdaptivePolicyController.cpp
     src/engine/PerformanceStore.cpp
-    src/core/adapters/ExecutionPlaneAdapter.cpp
-    src/core/adapters/PolicyLearningPlaneAdapter.cpp
-    src/core/adapters/UpbitComplianceAdapter.cpp
-    src/core/execution/OrderLifecycleStateMachine.cpp
-    src/core/orchestration/TradingCycleCoordinator.cpp
-    src/core/state/EventJournalJsonl.cpp
-    src/core/state/LearningStateStoreJson.cpp
+    src/execution/ExecutionPlaneAdapter.cpp
+    src/engine/PolicyLearningPlaneAdapter.cpp
+    src/risk/UpbitComplianceAdapter.cpp
+    src/execution/OrderLifecycleStateMachine.cpp
+    src/engine/TradingCycleCoordinator.cpp
+    src/state/EventJournalJsonl.cpp
+    src/state/LearningStateStoreJson.cpp
     src/backtest/DataHistory.cpp
     src/runtime/BacktestRuntime.cpp
     src/execution/OrderManager.cpp
@@ -71,51 +81,8 @@ add_executable(
     src/app/LiveModeHandler.cpp
     ${LIB_SOURCES}
 )
-add_executable(AutoLifeCancelOrder src/tools/CancelOrder.cpp src/common/Config.cpp src/common/PathUtils.cpp src/common/Logger.cpp src/network/JwtGenerator.cpp src/network/UpbitHttpClient.cpp src/execution/RateLimiter.cpp)
-add_executable(
-    AutoLifeLiveExecutionProbe
-    src/tools/LiveExecutionProbe.cpp
-    src/common/Config.cpp
-    src/common/PathUtils.cpp
-    src/common/Logger.cpp
-    src/network/JwtGenerator.cpp
-    src/network/UpbitHttpClient.cpp
-    src/network/UpbitMyOrderWebSocketClient.cpp
-    src/execution/RateLimiter.cpp
-    src/execution/OrderManager.cpp
-    src/execution/OrderStateMapper.cpp
-    src/core/execution/OrderLifecycleStateMachine.cpp
-)
-add_executable(
-    AutoLifeLiveQuotationProbe
-    src/tools/LiveQuotationProbe.cpp
-    src/common/Config.cpp
-    src/common/PathUtils.cpp
-    src/common/Logger.cpp
-    src/network/JwtGenerator.cpp
-    src/network/UpbitHttpClient.cpp
-    src/execution/RateLimiter.cpp
-)
 
-# [Test] Config Unit Test
-add_executable(AutoLifeTest tests/TestConfig.cpp ${LIB_SOURCES})
-target_link_libraries(AutoLifeTest PRIVATE
-    CURL::libcurl
-    OpenSSL::SSL
-    OpenSSL::Crypto
-    nlohmann_json::nlohmann_json
-    spdlog::spdlog
-    Boost::system
-    Boost::thread
-)
-if(WIN32)
-    target_link_libraries(AutoLifeTest PRIVATE ws2_32 wsock32)
-endif()
-
-target_compile_definitions(AutoLifeTest PRIVATE
-    _WIN32_WINNT=0x0A00
-    NOMINMAX
-)
+set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT AutoLifeTrading)
 
 target_link_libraries(AutoLifeTrading PRIVATE
     CURL::libcurl
@@ -131,46 +98,147 @@ target_compile_definitions(AutoLifeTrading PRIVATE
     _WIN32_WINNT=0x0A00
     NOMINMAX
 )
-target_compile_definitions(AutoLifeLiveExecutionProbe PRIVATE
-    _WIN32_WINNT=0x0A00
-    NOMINMAX
-)
-target_compile_definitions(AutoLifeLiveQuotationProbe PRIVATE
-    _WIN32_WINNT=0x0A00
-    NOMINMAX
-)
-
-target_link_libraries(AutoLifeCancelOrder PRIVATE
-    CURL::libcurl
-    OpenSSL::SSL
-    OpenSSL::Crypto
-    nlohmann_json::nlohmann_json
-    spdlog::spdlog
-)
-target_link_libraries(AutoLifeLiveExecutionProbe PRIVATE
-    CURL::libcurl
-    OpenSSL::SSL
-    OpenSSL::Crypto
-    nlohmann_json::nlohmann_json
-    spdlog::spdlog
-    Boost::system
-    Boost::thread
-)
-target_link_libraries(AutoLifeLiveQuotationProbe PRIVATE
-    CURL::libcurl
-    OpenSSL::SSL
-    OpenSSL::Crypto
-    nlohmann_json::nlohmann_json
-    spdlog::spdlog
-)
-if(WIN32)
-    target_link_libraries(AutoLifeCancelOrder PRIVATE ws2_32 wsock32)
-    target_link_libraries(AutoLifeLiveExecutionProbe PRIVATE ws2_32 wsock32)
-    target_link_libraries(AutoLifeLiveQuotationProbe PRIVATE ws2_32 wsock32)
-endif()
 
 if(WIN32)
     target_link_libraries(AutoLifeTrading PRIVATE ws2_32 wsock32)
+endif()
+
+if(AUTOLIFE_BUILD_TOOL_BINARIES)
+    add_executable(
+        AutoLifeCancelOrder
+        src/tools/CancelOrder.cpp
+        src/common/Config.cpp
+        src/common/PathUtils.cpp
+        src/common/Logger.cpp
+        src/network/JwtGenerator.cpp
+        src/network/UpbitHttpClient.cpp
+        src/execution/RateLimiter.cpp
+    )
+    add_executable(
+        AutoLifeLiveExecutionProbe
+        src/tools/LiveExecutionProbe.cpp
+        src/common/Config.cpp
+        src/common/PathUtils.cpp
+        src/common/Logger.cpp
+        src/network/JwtGenerator.cpp
+        src/network/UpbitHttpClient.cpp
+        src/network/UpbitMyOrderWebSocketClient.cpp
+        src/execution/RateLimiter.cpp
+        src/execution/OrderManager.cpp
+        src/execution/OrderStateMapper.cpp
+        src/execution/OrderLifecycleStateMachine.cpp
+    )
+    add_executable(
+        AutoLifeLiveQuotationProbe
+        src/tools/LiveQuotationProbe.cpp
+        src/common/Config.cpp
+        src/common/PathUtils.cpp
+        src/common/Logger.cpp
+        src/network/JwtGenerator.cpp
+        src/network/UpbitHttpClient.cpp
+        src/execution/RateLimiter.cpp
+    )
+
+    target_compile_definitions(AutoLifeLiveExecutionProbe PRIVATE
+        _WIN32_WINNT=0x0A00
+        NOMINMAX
+    )
+    target_compile_definitions(AutoLifeLiveQuotationProbe PRIVATE
+        _WIN32_WINNT=0x0A00
+        NOMINMAX
+    )
+
+    target_link_libraries(AutoLifeCancelOrder PRIVATE
+        CURL::libcurl
+        OpenSSL::SSL
+        OpenSSL::Crypto
+        nlohmann_json::nlohmann_json
+        spdlog::spdlog
+    )
+    target_link_libraries(AutoLifeLiveExecutionProbe PRIVATE
+        CURL::libcurl
+        OpenSSL::SSL
+        OpenSSL::Crypto
+        nlohmann_json::nlohmann_json
+        spdlog::spdlog
+        Boost::system
+        Boost::thread
+    )
+    target_link_libraries(AutoLifeLiveQuotationProbe PRIVATE
+        CURL::libcurl
+        OpenSSL::SSL
+        OpenSSL::Crypto
+        nlohmann_json::nlohmann_json
+        spdlog::spdlog
+    )
+    if(WIN32)
+        target_link_libraries(AutoLifeCancelOrder PRIVATE ws2_32 wsock32)
+        target_link_libraries(AutoLifeLiveExecutionProbe PRIVATE ws2_32 wsock32)
+        target_link_libraries(AutoLifeLiveQuotationProbe PRIVATE ws2_32 wsock32)
+    endif()
+endif()
+
+if(AUTOLIFE_BUILD_GATE_TESTS)
+    # [Test] Config Unit Test
+    add_executable(AutoLifeTest tests/TestConfig.cpp ${LIB_SOURCES})
+    target_link_libraries(AutoLifeTest PRIVATE
+        CURL::libcurl
+        OpenSSL::SSL
+        OpenSSL::Crypto
+        nlohmann_json::nlohmann_json
+        spdlog::spdlog
+        Boost::system
+        Boost::thread
+    )
+    if(WIN32)
+        target_link_libraries(AutoLifeTest PRIVATE ws2_32 wsock32)
+    endif()
+    target_compile_definitions(AutoLifeTest PRIVATE
+        _WIN32_WINNT=0x0A00
+        NOMINMAX
+    )
+
+    add_executable(
+        AutoLifeStateTest
+        tests/TestOrderStateMapper.cpp
+        src/execution/OrderStateMapper.cpp
+        src/execution/OrderLifecycleStateMachine.cpp
+    )
+    target_link_libraries(AutoLifeStateTest PRIVATE nlohmann_json::nlohmann_json)
+
+    add_executable(
+        AutoLifeEventJournalTest
+        tests/TestEventJournal.cpp
+        src/state/EventJournalJsonl.cpp
+    )
+    target_link_libraries(AutoLifeEventJournalTest PRIVATE nlohmann_json::nlohmann_json)
+
+    add_executable(
+        AutoLifeExecutionStateTest
+        tests/TestExecutionStateMachine.cpp
+        src/execution/OrderLifecycleStateMachine.cpp
+    )
+    target_link_libraries(AutoLifeExecutionStateTest PRIVATE nlohmann_json::nlohmann_json)
+endif()
+
+if(AUTOLIFE_BUILD_EXTRA_TESTS)
+    add_executable(
+        AutoLifeRateLimiterComplianceTest
+        tests/TestRateLimiterComplianceTelemetry.cpp
+        src/execution/RateLimiter.cpp
+        src/common/PathUtils.cpp
+        src/common/Logger.cpp
+    )
+    target_link_libraries(
+        AutoLifeRateLimiterComplianceTest
+        PRIVATE
+            nlohmann_json::nlohmann_json
+            spdlog::spdlog
+    )
+    target_compile_definitions(AutoLifeRateLimiterComplianceTest PRIVATE
+        _WIN32_WINNT=0x0A00
+        NOMINMAX
+    )
 endif()
 
 # ========================================
@@ -202,34 +270,4 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/README.md)
     )
 endif()
 
-add_executable(
-    AutoLifeStateTest
-    tests/TestOrderStateMapper.cpp
-    src/execution/OrderStateMapper.cpp
-    src/core/execution/OrderLifecycleStateMachine.cpp
-)
-target_link_libraries(AutoLifeStateTest PRIVATE nlohmann_json::nlohmann_json)
-
-add_executable(AutoLifeEventJournalTest tests/TestEventJournal.cpp src/core/state/EventJournalJsonl.cpp)
-target_link_libraries(AutoLifeEventJournalTest PRIVATE nlohmann_json::nlohmann_json)
-
-add_executable(
-    AutoLifeExecutionStateTest
-    tests/TestExecutionStateMachine.cpp
-    src/core/execution/OrderLifecycleStateMachine.cpp
-)
-target_link_libraries(AutoLifeExecutionStateTest PRIVATE nlohmann_json::nlohmann_json)
-
-add_executable(
-    AutoLifeRateLimiterComplianceTest
-    tests/TestRateLimiterComplianceTelemetry.cpp
-    src/execution/RateLimiter.cpp
-    src/common/PathUtils.cpp
-    src/common/Logger.cpp
-)
-target_link_libraries(AutoLifeRateLimiterComplianceTest PRIVATE nlohmann_json::nlohmann_json spdlog::spdlog)
-target_compile_definitions(AutoLifeRateLimiterComplianceTest PRIVATE
-    _WIN32_WINNT=0x0A00
-    NOMINMAX
-)
 

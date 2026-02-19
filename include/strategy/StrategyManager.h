@@ -100,6 +100,7 @@ public:
 
 private:
     enum class StrategyRole {
+        FOUNDATION,
         SCALPING,
         MOMENTUM,
         BREAKOUT,

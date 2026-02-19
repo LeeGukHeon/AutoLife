@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-#include "core/model/PlaneTypes.h"
+#include "engine/PlaneTypes.h"
 
 namespace autolife {
 namespace core {

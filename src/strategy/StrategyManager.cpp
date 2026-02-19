@@ -373,79 +373,66 @@ Signal buildAlphaHeadFallbackSignal(
     }
 
     const std::string lower = toLowerCopy(strategy_name);
-    const bool is_scalping = (lower.find("scalping") != std::string::npos);
-    const bool is_momentum = (lower.find("momentum") != std::string::npos);
-    const bool is_breakout = (lower.find("breakout") != std::string::npos);
-    const bool is_mean_reversion =
-        (lower.find("mean reversion") != std::string::npos) ||
-        (lower.find("mean_reversion") != std::string::npos);
+    const bool is_foundation = (lower.find("foundation") != std::string::npos);
 
     bool candidate_ok = false;
     double base_strength = 0.0;
     std::string archetype = "FALLBACK_GENERIC";
 
-    if (is_scalping || is_momentum || is_breakout) {
-        const bool regime_ok =
-            (regime.regime == analytics::MarketRegime::TRENDING_UP ||
-             regime.regime == analytics::MarketRegime::RANGING ||
-             regime.regime == analytics::MarketRegime::UNKNOWN);
-        candidate_ok = regime_ok && liquid_ok && ret5 >= -0.0015 && ret20 >= -0.01 && buy_bias >= -0.06;
-        base_strength = 0.45
-            + std::clamp(ret5 * 40.0, -0.08, 0.14)
-            + std::clamp(ret20 * 18.0, -0.06, 0.12)
-            + std::clamp((metrics.liquidity_score - 55.0) / 240.0, -0.05, 0.08)
-            + std::clamp(buy_bias * 0.12, -0.05, 0.08);
-        if (regime.regime == analytics::MarketRegime::TRENDING_UP) {
-            base_strength += 0.05;
-        } else if (regime.regime == analytics::MarketRegime::RANGING) {
-            base_strength += 0.02;
+    if (is_foundation) {
+        if (regime.regime == analytics::MarketRegime::TRENDING_UP ||
+            regime.regime == analytics::MarketRegime::RANGING ||
+            regime.regime == analytics::MarketRegime::UNKNOWN) {
+            candidate_ok = liquid_ok && ret5 >= -0.0025 && ret20 >= -0.012 && buy_bias >= -0.08;
+            base_strength = 0.46
+                + std::clamp(ret5 * 36.0, -0.08, 0.13)
+                + std::clamp(ret20 * 16.0, -0.06, 0.10)
+                + std::clamp((metrics.liquidity_score - 55.0) / 240.0, -0.05, 0.08)
+                + std::clamp(buy_bias * 0.10, -0.05, 0.08);
+
+            if (regime.regime == analytics::MarketRegime::TRENDING_UP) {
+                base_strength += 0.05;
+                archetype = "FOUNDATION_UPTREND_CONTINUATION";
+            } else if (regime.regime == analytics::MarketRegime::RANGING) {
+                base_strength += 0.02;
+                archetype = "FOUNDATION_RANGE_PULLBACK";
+            } else {
+                archetype = "FOUNDATION_UNKNOWN_GUARDED";
+            }
+        } else {
+            candidate_ok = liquid_ok && ret5 >= -0.0035 && buy_bias >= -0.02;
+            base_strength = 0.44
+                + std::clamp((-ret5) * 22.0, -0.04, 0.10)
+                + std::clamp((metrics.liquidity_score - 58.0) / 220.0, -0.06, 0.10)
+                + std::clamp(buy_bias * 0.08, -0.05, 0.06);
+
+            if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
+                archetype = "FOUNDATION_DOWNTREND_BOUNCE";
+                base_strength += 0.01;
+            } else {
+                archetype = "FOUNDATION_HIGH_VOL_GUARDED";
+            }
         }
+
         if (metrics.volume_surge_ratio >= 1.35) {
-            base_strength += 0.03;
+            base_strength += 0.02;
         }
         if (hostile_band) {
             candidate_ok = candidate_ok &&
-                metrics.liquidity_score >= 55.0 &&
-                ret5 >= 0.0 &&
-                buy_bias >= 0.02;
+                metrics.liquidity_score >= 58.0 &&
+                buy_bias >= 0.0;
             base_strength -= 0.03;
         } else if (hostility <= 0.35) {
             base_strength += 0.02;
         }
-        if (is_scalping) {
-            archetype = "FALLBACK_SCALP_FLOW";
-        } else if (is_momentum) {
-            archetype = "FALLBACK_MOMENTUM_CONT";
-        } else {
-            archetype = "FALLBACK_BREAKOUT_CONT";
-        }
-    } else if (is_mean_reversion) {
-        const bool regime_ok =
-            (regime.regime == analytics::MarketRegime::RANGING ||
-             regime.regime == analytics::MarketRegime::HIGH_VOLATILITY ||
-             regime.regime == analytics::MarketRegime::UNKNOWN);
-        candidate_ok = regime_ok && liquid_ok && ret5 <= 0.002 && ret20 <= 0.01 && buy_bias >= -0.12;
-        base_strength = 0.44
-            + std::clamp((-ret5) * 28.0, -0.04, 0.12)
-            + std::clamp((-ret20) * 10.0, -0.04, 0.08)
-            + std::clamp((metrics.liquidity_score - 55.0) / 260.0, -0.05, 0.08)
-            + std::clamp(buy_bias * 0.10, -0.05, 0.06);
-        if (regime.regime == analytics::MarketRegime::RANGING) {
-            base_strength += 0.04;
-        } else if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
-            base_strength += 0.01;
-        }
-        if (hostile_band) {
-            candidate_ok = candidate_ok &&
-                metrics.liquidity_score >= 55.0 &&
-                ret5 <= -0.0005;
-            base_strength -= 0.02;
-        } else if (hostility <= 0.35) {
-            base_strength += 0.02;
-        }
-        archetype = "FALLBACK_MEAN_REV_PULLBACK";
     } else {
-        return out;
+        // Keep fallback for externally-registered custom strategies without role hard-coding.
+        candidate_ok = liquid_ok && ret5 >= -0.002 && ret20 >= -0.012 && buy_bias >= -0.10;
+        base_strength = 0.44
+            + std::clamp(ret5 * 24.0, -0.06, 0.10)
+            + std::clamp(ret20 * 12.0, -0.05, 0.08)
+            + std::clamp((metrics.liquidity_score - 55.0) / 250.0, -0.05, 0.08)
+            + std::clamp(buy_bias * 0.08, -0.05, 0.06);
     }
 
     if (!candidate_ok) {
@@ -459,10 +446,14 @@ Signal buildAlphaHeadFallbackSignal(
     const double vol_pct = std::max(0.2, metrics.volatility) / 100.0;
     const double risk_pct = std::clamp((vol_pct * 0.85) + 0.0042, 0.0045, 0.0180);
     double rr_target = 1.45;
-    if (is_momentum || is_breakout) {
-        rr_target = (regime.regime == analytics::MarketRegime::TRENDING_UP) ? 1.85 : 1.70;
-    } else if (is_mean_reversion) {
-        rr_target = 1.50;
+    if (archetype == "FOUNDATION_UPTREND_CONTINUATION") {
+        rr_target = 1.78;
+    } else if (archetype == "FOUNDATION_RANGE_PULLBACK") {
+        rr_target = 1.48;
+    } else if (archetype == "FOUNDATION_DOWNTREND_BOUNCE" ||
+               archetype == "FOUNDATION_HIGH_VOL_GUARDED" ||
+               archetype == "FOUNDATION_UNKNOWN_GUARDED") {
+        rr_target = 1.28;
     }
     const double tp2_pct = std::clamp(risk_pct * rr_target, 0.0085, 0.0320);
     const double tp1_pct = std::clamp(tp2_pct * 0.62, 0.0045, 0.0200);
@@ -1098,6 +1089,9 @@ double StrategyManager::calculateSignalScore(const Signal& signal) const {
 
 StrategyManager::StrategyRole StrategyManager::detectStrategyRole(const std::string& strategy_name) const {
     const std::string n = toLowerCopy(strategy_name);
+    if (n.find("foundation") != std::string::npos) {
+        return StrategyRole::FOUNDATION;
+    }
     if (n.find("scalping") != std::string::npos) {
         return StrategyRole::SCALPING;
     }
@@ -1123,6 +1117,7 @@ StrategyManager::RegimePolicy StrategyManager::getRegimePolicy(
     switch (regime) {
         case analytics::MarketRegime::TRENDING_UP:
             switch (role) {
+                case StrategyRole::FOUNDATION:
                 case StrategyRole::BREAKOUT:
                 case StrategyRole::MOMENTUM:
                 case StrategyRole::SCALPING:
@@ -1136,6 +1131,8 @@ StrategyManager::RegimePolicy StrategyManager::getRegimePolicy(
 
         case analytics::MarketRegime::TRENDING_DOWN:
             switch (role) {
+                case StrategyRole::FOUNDATION:
+                    return RegimePolicy::HOLD;
                 case StrategyRole::MOMENTUM:
                 case StrategyRole::BREAKOUT:
                 case StrategyRole::GRID:
@@ -1149,6 +1146,8 @@ StrategyManager::RegimePolicy StrategyManager::getRegimePolicy(
 
         case analytics::MarketRegime::RANGING:
             switch (role) {
+                case StrategyRole::FOUNDATION:
+                    return RegimePolicy::ALLOW;
                 case StrategyRole::MEAN_REVERSION:
                 case StrategyRole::GRID:
                     return RegimePolicy::ALLOW;
@@ -1162,6 +1161,8 @@ StrategyManager::RegimePolicy StrategyManager::getRegimePolicy(
 
         case analytics::MarketRegime::HIGH_VOLATILITY:
             switch (role) {
+                case StrategyRole::FOUNDATION:
+                    return RegimePolicy::HOLD;
                 case StrategyRole::MOMENTUM:
                 case StrategyRole::BREAKOUT:
                     return RegimePolicy::BLOCK;
@@ -1189,6 +1190,11 @@ StrategyManager::PerformanceGate StrategyManager::getPerformanceGate(
 
     // Objective separation by strategy role.
     switch (role) {
+        case StrategyRole::FOUNDATION:
+            gate.min_win_rate = 0.50;
+            gate.min_profit_factor = 1.10;
+            gate.min_sample_trades = 16;
+            break;
         case StrategyRole::SCALPING:
             gate.min_win_rate = 0.60;      // high win-rate, lower R
             gate.min_profit_factor = 1.05;

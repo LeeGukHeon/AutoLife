@@ -19,11 +19,19 @@ This document classifies repository files by operational criticality so cleanup 
     - `src/runtime/LiveTradingRuntime.cpp`
     - `include/runtime/BacktestRuntime.h`
     - `src/runtime/BacktestRuntime.cpp`
-  - active core adapter replacements:
-    - `include/core/adapters/ExecutionPlaneAdapter.h`
-    - `include/core/adapters/PolicyLearningPlaneAdapter.h`
-    - `src/core/adapters/ExecutionPlaneAdapter.cpp`
-    - `src/core/adapters/PolicyLearningPlaneAdapter.cpp`
+  - active runtime adapter/orchestration path (core folder flattened):
+    - `include/execution/ExecutionPlaneAdapter.h`
+    - `include/engine/PolicyLearningPlaneAdapter.h`
+    - `include/risk/UpbitComplianceAdapter.h`
+    - `include/engine/TradingCycleCoordinator.h`
+    - `include/state/EventJournalJsonl.h`
+    - `include/state/LearningStateStoreJson.h`
+    - `src/execution/ExecutionPlaneAdapter.cpp`
+    - `src/engine/PolicyLearningPlaneAdapter.cpp`
+    - `src/risk/UpbitComplianceAdapter.cpp`
+    - `src/engine/TradingCycleCoordinator.cpp`
+    - `src/state/EventJournalJsonl.cpp`
+    - `src/state/LearningStateStoreJson.cpp`
   - active strategy runtime units (foundation-only):
     - `include/strategy/FoundationAdaptiveStrategy.h`
     - `src/strategy/FoundationAdaptiveStrategy.cpp`
@@ -32,7 +40,20 @@ This document classifies repository files by operational criticality so cleanup 
     - `include/strategy/IStrategy.h`
     - `include/strategy/StrategyManager.h`
     - `src/strategy/StrategyManager.cpp`
-    - `include/strategy/StrategyConfig.h` (config compatibility type-only header)
+  - runtime ownership after flattening:
+    - `execution/*`: order transport/state mapping + execution plane port/adapter.
+    - `engine/*`: policy plane port/adapter + cycle coordinator + policy/performance primitives.
+    - `risk/*`: compliance plane port/adapter + risk engine.
+    - `state/*`: event journal + learning state store port/implementation.
+    - `core` directory is removed from active include/src tree (namespace `autolife::core` is retained for API compatibility).
+  - retained helper unit (validated as active):
+    - `include/backtest/DataHistory.h`
+    - `src/backtest/DataHistory.cpp`
+    - reason: `src/runtime/BacktestRuntime.cpp`에서 `DataHistory::loadCSV/loadJSON` 직접 호출.
+  - shared runtime analytics helper (live/backtest common):
+    - `include/common/StrategyEdgeStatsShared.h`
+    - `src/common/StrategyEdgeStatsShared.cpp`
+    - reason: strategy-level/regime-level edge stats aggregation + key builders are now single source of truth.
   - runtime strategy registration mode:
     - runtime is hard-switched to foundation-only registration:
       - registered: `Foundation Adaptive Strategy`
@@ -62,7 +83,12 @@ This document classifies repository files by operational criticality so cleanup 
 - Status: retired on 2026-02-19.
 - Removed from active tree/build:
   - `include/v2/`, `src/v2/` (already removed)
-  - all `autolife::v2` scaffold headers/sources under `include/core/*`, `src/core/*`, `include/engine/*`, `src/engine/*`, `include/backtest/*`, `src/backtest/*`
+  - v2-only scaffold units under legacy core tree:
+    - `DecisionKernel`, `Legacy*PlaneAdapter`, `*V2` contracts/tests
+    - old `include/core/*`, `src/core/*` paths (removed)
+  - note:
+    - `include/engine/*`, `src/engine/*`, `include/backtest/*`, `src/backtest/*`
+      are active canonical runtime paths after flattening (non-v2).
   - legacy shadow adapter/test stack (`Legacy*PlaneAdapter`, `DecisionKernel`, `TestV2*`, `AutoLifeV2*` targets)
 - Current policy:
   - no runtime/compile dependency on v2 shadow-parity path

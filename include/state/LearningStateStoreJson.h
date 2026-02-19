@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <optional>
 
-#include "core/contracts/ILearningStateStore.h"
+#include "state/ILearningStateStore.h"
 
 namespace autolife {
 namespace core {
