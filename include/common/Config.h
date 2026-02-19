@@ -4,7 +4,7 @@
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include "engine/EngineConfig.h"
-#include "v2/strategy/StrategyConfig.h"
+#include "strategy/StrategyConfig.h"
 
 namespace autolife {
 
@@ -21,9 +21,9 @@ public:
     double getMaxDrawdown() const { return max_drawdown_; }
     double getPositionSizeRatio() const { return position_size_ratio_; }
     std::string getLogLevel() const { return log_level_; }
-    // [✅ 추가] 완성된 엔진 설정 구조체 반환
+    // [??추�?] ?�성???�진 ?�정 구조�?반환
     engine::EngineConfig getEngineConfig() const { return engine_config_; }
-    // [✅ 추가] 동적 손절 배수 설정
+    // [??추�?] ?�적 ?�절 배수 ?�정
     double getStopLossMultiplier() const { return stop_loss_multiplier_; }
     
     // [Refactor] Centralized Trading Constants

@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 import argparse
-import concurrent.futures
 import csv
-import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
@@ -28,7 +26,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--recurse", "-Recurse", action="store_true")
     parser.add_argument("--min-trades", "-MinTrades", type=int, default=30)
     parser.add_argument("--include-strategy-matrix", "-IncludeStrategyMatrix", action="store_true")
-    parser.add_argument("--max-workers", "-MaxWorkers", type=int, default=max(1, min(8, os.cpu_count() or 4)))
+    parser.add_argument("--max-workers", "-MaxWorkers", type=int, default=1)
     return parser.parse_args(argv)
 
 
@@ -152,18 +150,24 @@ def main(argv=None) -> int:
         for ds in datasets:
             tasks.append((profile["name"], csv_value, ds))
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, int(args.max_workers))) as pool:
-        future_map = {
-            pool.submit(run_profile_dataset, exe_path, ds, profile_name, strategies_csv): (profile_name, ds)
-            for profile_name, strategies_csv, ds in tasks
-        }
-        for future in concurrent.futures.as_completed(future_map):
-            row = future.result()
-            dataset_path = row.pop("dataset_path")
-            relative_path = str(dataset_path.relative_to(data_dir)) if str(dataset_path).startswith(str(data_dir)) else dataset_path.name
-            row["relative_path"] = relative_path.replace("\\", "/")
-            strategy_rows.extend(row.pop("strategy_rows"))
-            rows.append(row)
+    requested_workers = max(1, int(args.max_workers))
+    if requested_workers > 1:
+        print(
+            "[validate_readiness] Parallel validation is disabled; "
+            "forcing sequential execution (--max-workers=1)."
+        )
+
+    for profile_name, strategies_csv, ds in tasks:
+        row = run_profile_dataset(exe_path, ds, profile_name, strategies_csv)
+        dataset_path = row.pop("dataset_path")
+        relative_path = (
+            str(dataset_path.relative_to(data_dir))
+            if str(dataset_path).startswith(str(data_dir))
+            else dataset_path.name
+        )
+        row["relative_path"] = relative_path.replace("\\", "/")
+        strategy_rows.extend(row.pop("strategy_rows"))
+        rows.append(row)
 
     rows.sort(key=lambda r: (str(r["profile_name"]), str(r["relative_path"]).lower()))
     output_csv.parent.mkdir(parents=True, exist_ok=True)

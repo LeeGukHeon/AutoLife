@@ -42,7 +42,13 @@ def parse_args(argv=None):
         help="Deprecated compatibility flag. Strict/adaptive split is no longer used.",
     )
     parser.add_argument("--gate-min-avg-trades", "-GateMinAvgTrades", type=int, default=8)
-    parser.add_argument("--matrix-max-workers", "-MatrixMaxWorkers", type=int, default=1)
+    parser.add_argument(
+        "--matrix-max-workers",
+        "-MatrixMaxWorkers",
+        type=int,
+        default=1,
+        help="Deprecated. Validation is forced to sequential execution.",
+    )
     parser.add_argument("--matrix-backtest-retry-count", "-MatrixBacktestRetryCount", type=int, default=2)
     parser.add_argument(
         "--run-parity-invariant",
@@ -62,6 +68,18 @@ def parse_args(argv=None):
     parser.add_argument(
         "--disable-hostility-adaptive-thresholds",
         dest="enable_hostility_adaptive_thresholds",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--enable-hostility-adaptive-trades-only",
+        "-EnableHostilityAdaptiveTradesOnly",
+        dest="enable_hostility_adaptive_trades_only",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--disable-hostility-adaptive-trades-only",
+        dest="enable_hostility_adaptive_trades_only",
         action="store_false",
     )
 
@@ -103,6 +121,15 @@ def parse_args(argv=None):
         "-RealDataDir",
         default=r".\data\backtest_real",
     )
+    parser.add_argument(
+        "--real-live-data-dir",
+        "-RealLiveDataDir",
+        default=r".\data\backtest_real_live",
+        help=(
+            "Additional real-data directory (live-captured datasets). "
+            "When default path shape is used, build/Release|Debug live roots are auto-scanned too."
+        ),
+    )
     parser.add_argument("--train-market-ratio", "-TrainMarketRatio", type=float, default=0.6)
     parser.add_argument("--validation-market-ratio", "-ValidationMarketRatio", type=float, default=0.2)
     parser.add_argument(
@@ -111,6 +138,25 @@ def parse_args(argv=None):
         type=int,
         default=0,
         help="Limit number of markets used for cycle (0 means all).",
+    )
+    parser.add_argument(
+        "--reserve-newest-markets-for-holdout",
+        "-ReserveNewestMarketsForHoldout",
+        type=int,
+        default=0,
+        help=(
+            "Reserve newest markets (by dataset mtime) into holdout before ratio split. "
+            "Useful for out-of-time anti-overfit checks."
+        ),
+    )
+    parser.add_argument(
+        "--fixed-holdout-markets",
+        "-FixedHoldoutMarkets",
+        default="",
+        help=(
+            "Comma-separated market tokens for deterministic holdout "
+            "(e.g. KRW_BTC,KRW_ETH). Overrides newest-mtime holdout reservation."
+        ),
     )
 
     parser.add_argument(
@@ -153,6 +199,29 @@ def parse_args(argv=None):
     )
     parser.add_argument("--walk-forward-min-ready-ratio", "-WalkForwardMinReadyRatio", type=float, default=0.55)
     parser.add_argument("--walk-forward-min-datasets", "-WalkForwardMinDatasets", type=int, default=2)
+    parser.add_argument(
+        "--walk-forward-use-viable-ready-ratio",
+        "-WalkForwardUseViableReadyRatio",
+        dest="walk_forward_use_viable_ready_ratio",
+        action="store_true",
+        default=True,
+        help=(
+            "Use ready ratio over viable datasets only (datasets that pass min_oos_windows). "
+            "When disabled, use ratio over all ran datasets."
+        ),
+    )
+    parser.add_argument(
+        "--disable-walk-forward-use-viable-ready-ratio",
+        dest="walk_forward_use_viable_ready_ratio",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--walk-forward-min-viable-datasets",
+        "-WalkForwardMinViableDatasets",
+        type=int,
+        default=2,
+        help="Minimum viable datasets required when viable-ready-ratio mode is enabled.",
+    )
     parser.add_argument(
         "--walk-forward-output-root",
         "-WalkForwardOutputRoot",
@@ -377,7 +446,54 @@ def read_gate_snapshot(report_path: Path) -> Dict[str, Any]:
     risk_gate_component_breakdown = {
         k: int(v)
         for k, v in risk_gate_breakdown.items()
-        if str(k) not in {"blocked_risk_gate_total", "blocked_risk_gate_entry_quality"}
+        if str(k)
+        not in {
+            "blocked_risk_gate_total",
+            "blocked_risk_gate_entry_quality",
+            "blocked_risk_gate_entry_quality_rr",
+            "blocked_risk_gate_entry_quality_rr_adaptive",
+            "blocked_risk_gate_entry_quality_edge",
+            "blocked_risk_gate_entry_quality_edge_adaptive",
+            "blocked_risk_gate_entry_quality_rr_edge",
+            "blocked_risk_gate_entry_quality_rr_edge_adaptive",
+            "strategy_ev_pre_cat_observed",
+            "strategy_ev_pre_cat_recovery_quality_context",
+            "strategy_ev_pre_cat_recovery_evidence_any",
+            "strategy_ev_pre_cat_recovery_evidence_relaxed_any",
+            "strategy_ev_pre_cat_recovery_evidence_relaxed_recent_regime",
+            "strategy_ev_pre_cat_recovery_evidence_relaxed_full_history",
+            "strategy_ev_pre_cat_recovery_evidence_for_soften",
+            "strategy_ev_pre_cat_recovery_evidence_bridge",
+            "strategy_ev_pre_cat_recovery_evidence_bridge_surrogate",
+            "strategy_ev_pre_cat_recovery_evidence_hysteresis_override",
+            "strategy_ev_pre_cat_quality_hysteresis_override",
+            "strategy_ev_pre_cat_quality_context_relaxed_overlap",
+            "strategy_ev_pre_cat_quality_fail_regime",
+            "strategy_ev_pre_cat_quality_fail_strength",
+            "strategy_ev_pre_cat_quality_fail_expected_value",
+            "strategy_ev_pre_cat_quality_fail_liquidity",
+            "strategy_ev_pre_cat_soften_ready",
+            "strategy_ev_pre_cat_soften_candidate_quality_and_evidence",
+            "strategy_ev_pre_cat_soften_candidate_non_severe",
+            "strategy_ev_pre_cat_soften_candidate_non_hostile",
+            "strategy_ev_pre_cat_soften_candidate_rr_ok",
+            "strategy_ev_pre_cat_severe_legacy_hits",
+            "strategy_ev_pre_cat_severe_composite_hits",
+            "strategy_ev_pre_cat_severe_composite_catastrophic_hits",
+            "strategy_ev_pre_cat_severe_composite_pressure_axis_hits",
+            "strategy_ev_pre_cat_severe_composite_pressure_only_hits",
+            "strategy_ev_pre_cat_contextual_severe_downgrade_hits",
+            "strategy_ev_pre_cat_severe_active_hits",
+            "strategy_ev_pre_cat_softened_contextual",
+            "strategy_ev_pre_cat_softened_override",
+            "strategy_ev_pre_cat_softened_no_soft_quality_relief",
+            "strategy_ev_pre_cat_softened_candidate_rr_failsafe",
+            "strategy_ev_pre_cat_softened_pressure_rebound_relief",
+            "strategy_ev_pre_cat_negative_history_quarantine_set",
+            "strategy_ev_pre_cat_negative_history_quarantine_active",
+            "strategy_ev_pre_cat_blocked_severe_sync",
+            "strategy_ev_pre_cat_blocked_no_soft_path",
+        }
     }
     top_risk_gate_component_reason = ""
     top_risk_gate_component_count = 0
@@ -434,17 +550,18 @@ def has_higher_tf_companions(primary_path: Path) -> bool:
     return True
 
 
-def list_real_primary_datasets(real_data_dir: Path, require_higher_tf_companions: bool) -> List[Path]:
-    if not real_data_dir.exists():
-        return []
+def list_real_primary_datasets(real_data_dirs: List[Path], require_higher_tf_companions: bool) -> List[Path]:
     out: List[Path] = []
-    for f in sorted(real_data_dir.glob("*.csv"), key=lambda x: x.name.lower()):
-        name = f.name.lower()
-        if not name.startswith("upbit_") or "_1m_" not in name:
+    for real_data_dir in real_data_dirs:
+        if not real_data_dir.exists():
             continue
-        if require_higher_tf_companions and not has_higher_tf_companions(f):
-            continue
-        out.append(f.resolve())
+        for f in sorted(real_data_dir.glob("*.csv"), key=lambda x: x.name.lower()):
+            name = f.name.lower()
+            if not name.startswith("upbit_") or "_1m_" not in name:
+                continue
+            if require_higher_tf_companions and not has_higher_tf_companions(f):
+                continue
+            out.append(f.resolve())
     return sorted(set(out), key=lambda x: str(x).lower())
 
 
@@ -486,11 +603,28 @@ def split_market_tokens(market_tokens: List[str], train_ratio: float, validation
     return {"train": train, "validation": validation, "holdout": holdout}
 
 
+def build_market_latest_mtime_map(by_market: Dict[str, List[Path]]) -> Dict[str, float]:
+    out: Dict[str, float] = {}
+    for market, rows in by_market.items():
+        latest = 0.0
+        for ds in rows:
+            try:
+                ts = float(ds.stat().st_mtime)
+            except OSError:
+                continue
+            if ts > latest:
+                latest = ts
+        out[str(market)] = float(latest)
+    return out
+
+
 def build_dataset_splits(
     datasets: List[Path],
     train_ratio: float,
     validation_ratio: float,
     max_markets: int,
+    reserve_newest_holdout_markets: int,
+    fixed_holdout_markets: List[str],
 ) -> Dict[str, Any]:
     by_market: Dict[str, List[Path]] = {}
     for ds in datasets:
@@ -501,7 +635,43 @@ def build_dataset_splits(
         market_tokens = market_tokens[: int(max_markets)]
         by_market = {k: by_market[k] for k in market_tokens}
 
-    split_markets = split_market_tokens(market_tokens, train_ratio=train_ratio, validation_ratio=validation_ratio)
+    market_latest_mtime = build_market_latest_mtime_map(by_market)
+    normalized_fixed_holdout = sorted(
+        {
+            str(token).strip().upper().replace("-", "_")
+            for token in fixed_holdout_markets
+            if str(token).strip()
+        },
+        key=lambda x: x.lower(),
+    )
+    fixed_holdout_applied = [token for token in normalized_fixed_holdout if token in market_tokens]
+    reserve_requested = max(0, int(reserve_newest_holdout_markets))
+    reserve_max_allowed = max(0, len(market_tokens) - 2)
+    reserve_applied = min(reserve_requested, reserve_max_allowed)
+    reserve_markets: List[str] = []
+    if fixed_holdout_applied:
+        reserve_markets = fixed_holdout_applied
+        reserve_requested = 0
+        reserve_applied = 0
+    elif reserve_applied > 0:
+        ranked_by_recency = sorted(
+            market_tokens,
+            key=lambda token: (-float(market_latest_mtime.get(token, 0.0)), str(token).lower()),
+        )
+        reserve_markets = ranked_by_recency[:reserve_applied]
+    reserve_set = set(reserve_markets)
+    split_base_tokens = [x for x in market_tokens if x not in reserve_set]
+
+    split_markets = split_market_tokens(
+        split_base_tokens,
+        train_ratio=train_ratio,
+        validation_ratio=validation_ratio,
+    )
+    if reserve_markets:
+        split_markets["holdout"] = sorted(
+            set(split_markets.get("holdout", []) + reserve_markets),
+            key=lambda x: x.lower(),
+        )
 
     split_datasets: Dict[str, List[Path]] = {}
     for stage in ("train", "validation", "holdout"):
@@ -512,6 +682,12 @@ def build_dataset_splits(
 
     manifest = {
         "market_count_total": len(market_tokens),
+        "fixed_holdout_mode": bool(fixed_holdout_applied),
+        "fixed_holdout_markets_requested": normalized_fixed_holdout,
+        "fixed_holdout_markets_applied": fixed_holdout_applied,
+        "reserve_newest_markets_for_holdout_requested": int(reserve_requested),
+        "reserve_newest_markets_for_holdout_applied": int(reserve_applied),
+        "reserve_newest_markets_for_holdout": reserve_markets,
         "train_markets": split_markets["train"],
         "validation_markets": split_markets["validation"],
         "holdout_markets": split_markets["holdout"],
@@ -521,12 +697,16 @@ def build_dataset_splits(
         "train_datasets": [str(x) for x in split_datasets["train"]],
         "validation_datasets": [str(x) for x in split_datasets["validation"]],
         "holdout_datasets": [str(x) for x in split_datasets["holdout"]],
+        "market_latest_mtime_epoch": {
+            str(k): float(v) for k, v in sorted(market_latest_mtime.items(), key=lambda kv: str(kv[0]).lower())
+        },
     }
     return {"manifest": manifest, "datasets": split_datasets}
 
 
 def build_loop_argv(
     args,
+    report_path: Path,
     enable_adaptive_state_io: bool,
     datasets: List[Path],
     skip_tune: bool,
@@ -552,13 +732,25 @@ def build_loop_argv(
         loop_argv.append("--enable-hostility-adaptive-thresholds")
     else:
         loop_argv.append("--disable-hostility-adaptive-thresholds")
+    if bool(getattr(args, "enable_hostility_adaptive_trades_only", True)):
+        loop_argv.append("--enable-hostility-adaptive-trades-only")
+    else:
+        loop_argv.append("--disable-hostility-adaptive-trades-only")
     if bool(enable_adaptive_state_io):
         loop_argv.append("--enable-adaptive-state-io")
 
     loop_argv.extend(["--real-data-dir", str(Path(args.real_data_dir).resolve())])
+    loop_argv.extend(["--real-live-data-dir", str(Path(args.real_live_data_dir).resolve())])
     loop_argv.extend(["--gate-min-avg-trades", str(max(1, int(args.gate_min_avg_trades)))])
     loop_argv.extend(["--matrix-max-workers", str(max(1, int(args.matrix_max_workers)))])
     loop_argv.extend(["--matrix-backtest-retry-count", str(max(1, int(args.matrix_backtest_retry_count)))])
+    loop_argv.extend(["--output-report-json", str(Path(report_path).resolve())])
+    loop_argv.extend(
+        [
+            "--live-signal-funnel-taxonomy-json",
+            str(Path(args.live_signal_funnel_taxonomy_json).resolve()),
+        ]
+    )
     loop_argv.extend(["--verification-lock-path", str(Path(args.verification_lock_path).resolve())])
     loop_argv.extend(["--verification-lock-timeout-sec", str(max(1, int(args.verification_lock_timeout_sec)))])
     loop_argv.extend(["--verification-lock-stale-sec", str(max(10, int(args.verification_lock_stale_sec)))])
@@ -594,6 +786,7 @@ def run_loop_once(
     rc = run_realdata_candidate_loop.main(
         build_loop_argv(
             args,
+            report_path=report_path,
             enable_adaptive_state_io=enable_adaptive_state_io,
             datasets=datasets,
             skip_tune=skip_tune,
@@ -622,6 +815,11 @@ def mode_gate_pass(bundle: Dict[str, Any]) -> Tuple[bool, bool, bool]:
 
 
 def run_walk_forward_batch(args, datasets: List[Path], stage_name: str) -> Dict[str, Any]:
+    use_viable_ready_ratio = bool(getattr(args, "walk_forward_use_viable_ready_ratio", True))
+    min_viable_datasets_requested = max(
+        1,
+        int(getattr(args, "walk_forward_min_viable_datasets", 2) or 2),
+    )
     if not bool(args.enforce_walk_forward):
         return {
             "enforced": False,
@@ -629,7 +827,19 @@ def run_walk_forward_batch(args, datasets: List[Path], stage_name: str) -> Dict[
             "datasets_requested": len(datasets),
             "datasets_ran": 0,
             "ready_ratio": 0.0,
+            "ready_ratio_overall": 0.0,
+            "ready_ratio_viable": 0.0,
+            "ready_ratio_reference_basis": "viable" if use_viable_ready_ratio else "overall",
+            "walk_forward_use_viable_ready_ratio": bool(use_viable_ready_ratio),
+            "datasets_viable": 0,
+            "datasets_nonviable": 0,
+            "effective_min_viable_datasets": 0,
+            "min_viable_datasets": int(min_viable_datasets_requested),
             "gate_pass": True,
+            "failure_reason_counts": {},
+            "failure_reason_counts_viable": {},
+            "dominant_failure_reason": "",
+            "dominant_failure_reason_viable": "",
             "details": [],
             "failures": [],
         }
@@ -685,6 +895,22 @@ def run_walk_forward_batch(args, datasets: List[Path], stage_name: str) -> Dict[
             failures.append({"dataset": str(ds), "exit_code": 0, "error": "missing_output_json"})
             continue
         report = json.loads(out_json.read_text(encoding="utf-8-sig"))
+        gate_checks = report.get("gate_checks") or {}
+        min_oos_windows_check = (
+            gate_checks.get("min_oos_windows")
+            if isinstance(gate_checks, dict)
+            else {}
+        )
+        min_oos_windows_pass = bool(
+            (min_oos_windows_check or {}).get("pass", False)
+        )
+        if not isinstance(min_oos_windows_check, dict):
+            min_oos_windows_check = {}
+        if "pass" not in min_oos_windows_check:
+            min_oos_windows_pass = bool(
+                int(report.get("windows_oos_ran", 0) or 0)
+                >= int(report.get("gate_oos_windows_min", 1) or 1)
+            )
         details.append(
             {
                 "dataset": str(ds),
@@ -693,6 +919,10 @@ def run_walk_forward_batch(args, datasets: List[Path], stage_name: str) -> Dict[
                 "oos_profitable_ratio": float(report.get("oos_profitable_ratio", 0.0)),
                 "oos_total_profit": float(report.get("oos_total_profit", 0.0)),
                 "oos_max_mdd_pct": float(report.get("oos_max_mdd_pct", 0.0)),
+                "min_oos_windows_pass": bool(min_oos_windows_pass),
+                "gate_fail_reasons": list(report.get("gate_fail_reasons", []) or []),
+                "dominant_failure_reason": str(report.get("dominant_failure_reason", "") or ""),
+                "gate_checks": gate_checks,
                 "report_json": str(out_json),
                 "report_csv": str(out_csv),
             }
@@ -700,10 +930,64 @@ def run_walk_forward_batch(args, datasets: List[Path], stage_name: str) -> Dict[
 
     ran_count = len(details)
     ready_count = sum(1 for x in details if bool(x.get("is_ready_for_live_walkforward", False)))
-    ready_ratio = (ready_count / float(ran_count)) if ran_count > 0 else 0.0
+    ready_ratio_overall = (ready_count / float(ran_count)) if ran_count > 0 else 0.0
+    viable_details = [
+        item for item in details if bool(item.get("min_oos_windows_pass", False))
+    ]
+    viable_count = len(viable_details)
+    nonviable_count = max(0, ran_count - viable_count)
+    ready_viable_count = sum(
+        1
+        for item in viable_details
+        if bool(item.get("is_ready_for_live_walkforward", False))
+    )
+    ready_ratio_viable = (
+        ready_viable_count / float(viable_count) if viable_count > 0 else 0.0
+    )
+    ready_ratio = (
+        ready_ratio_viable if use_viable_ready_ratio else ready_ratio_overall
+    )
+    failure_reason_counts: Dict[str, int] = {}
+    for item in details:
+        for reason in item.get("gate_fail_reasons", []) or []:
+            key = str(reason or "").strip()
+            if not key:
+                continue
+            failure_reason_counts[key] = int(failure_reason_counts.get(key, 0)) + 1
+    failure_reason_counts_viable: Dict[str, int] = {}
+    for item in viable_details:
+        for reason in item.get("gate_fail_reasons", []) or []:
+            key = str(reason or "").strip()
+            if not key:
+                continue
+            failure_reason_counts_viable[key] = int(
+                failure_reason_counts_viable.get(key, 0)
+            ) + 1
+    dominant_failure_reason = ""
+    if failure_reason_counts:
+        dominant_failure_reason = max(
+            failure_reason_counts.items(),
+            key=lambda x: (int(x[1]), str(x[0])),
+        )[0]
+    dominant_failure_reason_viable = ""
+    if failure_reason_counts_viable:
+        dominant_failure_reason_viable = max(
+            failure_reason_counts_viable.items(),
+            key=lambda x: (int(x[1]), str(x[0])),
+        )[0]
+
     effective_min_datasets = min(max(1, int(args.walk_forward_min_datasets)), max(1, len(selected)))
+    effective_min_viable_datasets = min(
+        min_viable_datasets_requested,
+        max(1, len(selected)),
+    )
     gate_pass = (
         ran_count >= effective_min_datasets
+        and (
+            viable_count >= effective_min_viable_datasets
+            if use_viable_ready_ratio
+            else True
+        )
         and ready_ratio >= float(args.walk_forward_min_ready_ratio)
         and len(failures) == 0
     )
@@ -714,10 +998,22 @@ def run_walk_forward_batch(args, datasets: List[Path], stage_name: str) -> Dict[
         "datasets_requested": len(selected),
         "datasets_ran": ran_count,
         "datasets_ready": ready_count,
+        "datasets_viable": viable_count,
+        "datasets_nonviable": nonviable_count,
         "ready_ratio": round(ready_ratio, 4),
+        "ready_ratio_overall": round(ready_ratio_overall, 4),
+        "ready_ratio_viable": round(ready_ratio_viable, 4),
+        "ready_ratio_reference_basis": "viable" if use_viable_ready_ratio else "overall",
+        "walk_forward_use_viable_ready_ratio": bool(use_viable_ready_ratio),
         "min_ready_ratio": float(args.walk_forward_min_ready_ratio),
         "effective_min_datasets": effective_min_datasets,
+        "min_viable_datasets": min_viable_datasets_requested,
+        "effective_min_viable_datasets": effective_min_viable_datasets,
         "gate_pass": bool(gate_pass),
+        "failure_reason_counts": failure_reason_counts,
+        "failure_reason_counts_viable": failure_reason_counts_viable,
+        "dominant_failure_reason": dominant_failure_reason,
+        "dominant_failure_reason_viable": dominant_failure_reason_viable,
         "details": details,
         "failures": failures,
     }
@@ -867,14 +1163,46 @@ def build_promotion_verdict(
         str(val_core_reject_ctx.get("top_entry_rejection_reason", "")).startswith("blocked_risk_gate")
         or str(val_core_reject_ctx.get("top_entry_rejection_reason", "")) == "blocked_second_stage_confirmation"
         or str(val_core_reject_ctx.get("top_entry_risk_gate_component_reason", "")).startswith("blocked_risk_gate")
-        or str(val_core_reject_ctx.get("top_entry_risk_gate_component_reason", "")) == "blocked_second_stage_confirmation"
+        or str(val_core_reject_ctx.get("top_entry_risk_gate_component_reason", "")).startswith(
+            "blocked_second_stage_confirmation"
+        )
     ):
         risk_component = str(val_core_reject_ctx.get("top_entry_risk_gate_component_reason", ""))
         if risk_component.startswith("blocked_risk_gate_entry_quality"):
-            if risk_component == "blocked_risk_gate_entry_quality_rr":
+            if risk_component == "blocked_risk_gate_entry_quality_rr_base":
+                recommendation = "hold_candidate_calibrate_risk_gate_rr_baseline_floor"
+            elif risk_component == "blocked_risk_gate_entry_quality_rr_adaptive_history":
+                recommendation = "hold_candidate_calibrate_risk_gate_rr_adaptive_history_adders"
+            elif risk_component == "blocked_risk_gate_entry_quality_rr_adaptive_regime":
+                recommendation = "hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders"
+            elif risk_component == "blocked_risk_gate_entry_quality_rr_adaptive_mixed":
+                recommendation = "hold_candidate_calibrate_risk_gate_rr_adaptive_mixed_adders"
+            elif risk_component == "blocked_risk_gate_entry_quality_rr_adaptive":
+                recommendation = "hold_candidate_calibrate_risk_gate_rr_adaptive_adders"
+            elif risk_component == "blocked_risk_gate_entry_quality_rr":
                 recommendation = "hold_candidate_calibrate_risk_gate_entry_quality_rr"
+            elif risk_component == "blocked_risk_gate_entry_quality_edge_base":
+                recommendation = "hold_candidate_calibrate_risk_gate_edge_baseline_floor"
+            elif risk_component == "blocked_risk_gate_entry_quality_edge_adaptive_history":
+                recommendation = "hold_candidate_calibrate_risk_gate_edge_adaptive_history_adders"
+            elif risk_component == "blocked_risk_gate_entry_quality_edge_adaptive_regime":
+                recommendation = "hold_candidate_calibrate_risk_gate_edge_adaptive_regime_adders"
+            elif risk_component == "blocked_risk_gate_entry_quality_edge_adaptive_mixed":
+                recommendation = "hold_candidate_calibrate_risk_gate_edge_adaptive_mixed_adders"
+            elif risk_component == "blocked_risk_gate_entry_quality_edge_adaptive":
+                recommendation = "hold_candidate_calibrate_risk_gate_edge_adaptive_adders"
             elif risk_component == "blocked_risk_gate_entry_quality_edge":
                 recommendation = "hold_candidate_calibrate_risk_gate_entry_quality_edge"
+            elif risk_component == "blocked_risk_gate_entry_quality_rr_edge_base":
+                recommendation = "hold_candidate_calibrate_risk_gate_rr_baseline_floor"
+            elif risk_component == "blocked_risk_gate_entry_quality_rr_edge_adaptive_history":
+                recommendation = "hold_candidate_calibrate_risk_gate_rr_adaptive_history_adders"
+            elif risk_component == "blocked_risk_gate_entry_quality_rr_edge_adaptive_regime":
+                recommendation = "hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders"
+            elif risk_component == "blocked_risk_gate_entry_quality_rr_edge_adaptive_mixed":
+                recommendation = "hold_candidate_calibrate_risk_gate_rr_adaptive_mixed_adders"
+            elif risk_component == "blocked_risk_gate_entry_quality_rr_edge_adaptive":
+                recommendation = "hold_candidate_calibrate_risk_gate_rr_adaptive_adders"
             elif risk_component == "blocked_risk_gate_entry_quality_rr_edge":
                 recommendation = "hold_candidate_calibrate_risk_gate_entry_quality_rr_edge"
             elif risk_component == "blocked_risk_gate_entry_quality_invalid_levels":
@@ -887,7 +1215,27 @@ def build_promotion_verdict(
             recommendation = "hold_candidate_calibrate_risk_gate_regime_alignment"
         elif risk_component == "blocked_risk_gate_strategy_ev":
             recommendation = "hold_candidate_calibrate_risk_gate_strategy_ev_alignment"
-        elif risk_component == "blocked_second_stage_confirmation":
+        elif risk_component == "blocked_second_stage_confirmation_rr_margin":
+            recommendation = "hold_candidate_calibrate_second_stage_confirmation_rr_margin_consistency"
+        elif risk_component == "blocked_second_stage_confirmation_edge_margin":
+            recommendation = "hold_candidate_calibrate_second_stage_confirmation_edge_margin_consistency"
+        elif risk_component == "blocked_second_stage_confirmation_hostile_regime_safety_adders":
+            recommendation = "hold_candidate_calibrate_second_stage_confirmation_hostile_regime_consistency"
+        elif risk_component == "blocked_second_stage_confirmation_hostile_liquidity_safety_adders":
+            recommendation = "hold_candidate_calibrate_second_stage_confirmation_hostile_liquidity_consistency"
+        elif risk_component == "blocked_second_stage_confirmation_hostile_history_mild_safety_adders":
+            recommendation = "hold_candidate_calibrate_second_stage_confirmation_hostile_history_mild_consistency"
+        elif risk_component == "blocked_second_stage_confirmation_hostile_history_moderate_safety_adders":
+            recommendation = "hold_candidate_calibrate_second_stage_confirmation_hostile_history_moderate_consistency"
+        elif risk_component == "blocked_second_stage_confirmation_hostile_history_severe_safety_adders":
+            recommendation = "hold_candidate_calibrate_second_stage_confirmation_hostile_history_severe_consistency"
+        elif risk_component == "blocked_second_stage_confirmation_hostile_history_safety_adders":
+            recommendation = "hold_candidate_calibrate_second_stage_confirmation_hostile_history_consistency"
+        elif risk_component == "blocked_second_stage_confirmation_hostile_dynamic_tighten_safety_adders":
+            recommendation = "hold_candidate_calibrate_second_stage_confirmation_hostile_dynamic_tighten_consistency"
+        elif risk_component == "blocked_second_stage_confirmation_hostile_safety_adders":
+            recommendation = "hold_candidate_calibrate_second_stage_confirmation_hostile_safety_consistency"
+        elif risk_component.startswith("blocked_second_stage_confirmation"):
             recommendation = "hold_candidate_calibrate_second_stage_confirmation_consistency"
         else:
             recommendation = "hold_candidate_investigate_risk_gate_breakdown"
@@ -936,19 +1284,31 @@ def build_promotion_verdict(
 
 def main(argv=None) -> int:
     args = parse_args(argv)
+    if int(getattr(args, "matrix_max_workers", 1)) > 1:
+        print(
+            "[TrainEvalCycle] Parallel matrix workers are disabled; "
+            "forcing --matrix-max-workers=1."
+        )
+    args.matrix_max_workers = 1
     state_dir = Path(args.state_dir).resolve()
     snapshot_root = Path(args.state_snapshot_root).resolve()
     report_path = Path(args.gate_report_json).resolve()
     summary_path = Path(args.summary_json).resolve()
     split_manifest_path = Path(args.split_manifest_json).resolve()
     real_data_dir = Path(args.real_data_dir).resolve()
+    real_live_data_dir = Path(args.real_live_data_dir).resolve()
     entry_rejection_output_root = Path(args.entry_rejection_output_root).resolve()
     live_signal_funnel_source_path = Path(args.live_signal_funnel_taxonomy_json).resolve()
 
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     entry_rejection_output_root.mkdir(parents=True, exist_ok=True)
 
-    all_datasets = list_real_primary_datasets(real_data_dir, bool(args.require_higher_tf_companions))
+    real_data_dirs: List[Path] = run_realdata_candidate_loop.build_real_data_roots(
+        real_data_dir,
+        real_live_data_dir,
+    )
+
+    all_datasets = list_real_primary_datasets(real_data_dirs, bool(args.require_higher_tf_companions))
     if len(all_datasets) < 2:
         raise RuntimeError(
             "Need at least 2 real primary datasets to split train/validation (current: "
@@ -960,6 +1320,12 @@ def main(argv=None) -> int:
         train_ratio=float(args.train_market_ratio),
         validation_ratio=float(args.validation_market_ratio),
         max_markets=int(args.max_markets),
+        reserve_newest_holdout_markets=int(args.reserve_newest_markets_for_holdout),
+        fixed_holdout_markets=[
+            token.strip()
+            for token in str(getattr(args, "fixed_holdout_markets", "")).split(",")
+            if token.strip()
+        ],
     )
     split_manifest = split_info["manifest"]
     split_datasets = split_info["datasets"]
@@ -974,10 +1340,14 @@ def main(argv=None) -> int:
         {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "real_data_dir": str(real_data_dir),
+            "real_live_data_dir": str(real_live_data_dir),
+            "real_data_dirs": [str(x) for x in real_data_dirs],
             "require_higher_tf_companions": bool(args.require_higher_tf_companions),
             "train_market_ratio": float(args.train_market_ratio),
             "validation_market_ratio": float(args.validation_market_ratio),
             "max_markets": int(args.max_markets),
+            "reserve_newest_markets_for_holdout": int(args.reserve_newest_markets_for_holdout),
+            "fixed_holdout_markets": str(getattr(args, "fixed_holdout_markets", "")),
             **split_manifest,
         },
     )
@@ -987,6 +1357,7 @@ def main(argv=None) -> int:
         "train_iterations": int(args.train_iterations),
         "state_dir": str(state_dir),
         "split_manifest_json": str(split_manifest_path),
+        "real_data_dirs": [str(x) for x in real_data_dirs],
         "entry_rejection_output_root": str(entry_rejection_output_root),
         "live_signal_funnel_source_json": str(live_signal_funnel_source_path),
         "split": split_manifest,

@@ -106,24 +106,24 @@ python scripts/assess_wave_b_readiness.py --run-refresh-checks
 ### Wave B3 Bootstrap Progress (2026-02-16)
 - First unit readiness opened:
   - `StrategyConfig` unit is now sourced from:
-    - `include/v2/strategy/StrategyConfig.h`
-    - `src/v2/strategy/StrategyConfig.cpp`
+    - `include/strategy/StrategyConfig.h`
+    - `src/strategy/StrategyConfig.cpp`
   - `include/common/Config.h` switched include from:
-    - `strategy/StrategyConfig.h` -> `v2/strategy/StrategyConfig.h`
+    - `strategy/StrategyConfig.h` -> `strategy/StrategyConfig.h`
 - Readiness assessor robustness fix:
   - `scripts/assess_wave_b_readiness.py` path matching changed from raw substring to token-boundary matching.
-  - Purpose: prevent false-positive reference hits where `v2/strategy/Foo.h` was counted as legacy `strategy/Foo.h`.
+  - Purpose: prevent false-positive reference hits where nested strategy paths were counted as shorter legacy candidates.
 
 ### Wave B3 Partial Stage-1 Move (2026-02-16)
 - Moved to archive:
   - `include/strategy/BreakoutStrategy.h`
   - `src/strategy/BreakoutStrategy.cpp`
 - Active v2 replacement wiring:
-  - `include/v2/strategy/BreakoutStrategy.h`
-  - `src/v2/strategy/BreakoutStrategy.cpp`
+  - `include/strategy/BreakoutStrategy.h`
+  - `src/strategy/BreakoutStrategy.cpp`
   - `src/runtime/LiveTradingRuntime.cpp`
   - `src/runtime/BacktestRuntime.cpp`
-  - `CMakeLists.txt` (`src/v2/strategy/BreakoutStrategy.cpp` linked)
+  - `CMakeLists.txt` (`src/strategy/BreakoutStrategy.cpp` linked)
 
 ### Wave B3 Stage-1 Expansion (2026-02-16)
 - Additional moved strategy files:
@@ -139,29 +139,29 @@ python scripts/assess_wave_b_readiness.py --run-refresh-checks
   - `src/strategy/MeanReversionStrategy.cpp`
   - `src/strategy/GridTradingStrategy.cpp`
 - Active v2 strategy replacements:
-  - `include/v2/strategy/IStrategy.h`
-  - `include/v2/strategy/StrategyManager.h`
-  - `include/v2/strategy/ScalpingStrategy.h`
-  - `include/v2/strategy/MomentumStrategy.h`
-  - `include/v2/strategy/MeanReversionStrategy.h`
-  - `include/v2/strategy/GridTradingStrategy.h`
-  - `src/v2/strategy/StrategyManager.cpp`
-  - `src/v2/strategy/ScalpingStrategy.cpp`
-  - `src/v2/strategy/MomentumStrategy.cpp`
-  - `src/v2/strategy/MeanReversionStrategy.cpp`
-  - `src/v2/strategy/GridTradingStrategy.cpp`
+  - `include/strategy/IStrategy.h`
+  - `include/strategy/StrategyManager.h`
+  - `include/strategy/ScalpingStrategy.h`
+  - `include/strategy/MomentumStrategy.h`
+  - `include/strategy/MeanReversionStrategy.h`
+  - `include/strategy/GridTradingStrategy.h`
+  - `src/strategy/StrategyManager.cpp`
+  - `src/strategy/ScalpingStrategy.cpp`
+  - `src/strategy/MomentumStrategy.cpp`
+  - `src/strategy/MeanReversionStrategy.cpp`
+  - `src/strategy/GridTradingStrategy.cpp`
 - Wiring updates:
-  - `src/runtime/LiveTradingRuntime.cpp` strategy includes switched to `v2/strategy/*`
-  - `src/runtime/BacktestRuntime.cpp` strategy includes switched to `v2/strategy/*`
-  - `include/runtime/LiveTradingRuntime.h` / `include/runtime/BacktestRuntime.h` now include `v2/strategy/StrategyManager.h`
-  - core/risk/engine contracts switched to `v2/strategy/IStrategy.h`:
+  - `src/runtime/LiveTradingRuntime.cpp` strategy includes switched to `strategy/*`
+  - `src/runtime/BacktestRuntime.cpp` strategy includes switched to `strategy/*`
+  - `include/runtime/LiveTradingRuntime.h` / `include/runtime/BacktestRuntime.h` now include `strategy/StrategyManager.h`
+  - core/risk/engine contracts switched to `strategy/IStrategy.h`:
     - `include/risk/RiskManager.h`
     - `include/engine/AdaptivePolicyController.h`
     - `include/core/model/PlaneTypes.h`
     - `include/core/contracts/IPolicyLearningPlane.h`
     - `include/core/contracts/IRiskCompliancePlane.h`
     - `include/core/orchestration/TradingCycleCoordinator.h`
-  - `CMakeLists.txt` strategy compilation paths switched to `src/v2/strategy/*.cpp`
+  - `CMakeLists.txt` strategy compilation paths switched to `src/strategy/*.cpp`
 - Final stage-1 completion marker:
   - `include/strategy/StrategyConfig.h` moved to `legacy_archive/include/strategy/StrategyConfig.h`
   - active `include/strategy/` now has no v1 strategy unit headers
@@ -184,12 +184,12 @@ python scripts/assess_wave_b_readiness.py --run-refresh-checks
 - Dedicated compile-guard target added:
   - `AutoLifeV2CompileObjects`
 - Scope of wiring:
-  - `src/v2/orchestration/DecisionKernel.cpp`
-  - `src/v2/engine/TradingEngineV2.cpp`
-  - `src/v2/backtest/BacktestEngineV2.cpp`
+  - `src/core/orchestration/DecisionKernel.cpp`
+  - `src/engine/TradingEngineV2.cpp`
+  - `src/backtest/BacktestEngineV2.cpp`
   - `tests/TestV2DecisionKernel.cpp`
   - `tests/TestV2EngineBacktestScaffold.cpp`
-  - `src/v2/adapters/*.cpp`
+  - `src/core/adapters/Legacy*PlaneAdapter.cpp`
 - Verification:
   - build: `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeV2CompileObjects AutoLifeV2KernelSmokeTest AutoLifeV2EngineBacktestSmokeTest`
   - run: `.\build\Release\AutoLifeV2KernelSmokeTest.exe`
@@ -217,7 +217,7 @@ python scripts/assess_wave_b_readiness.py --run-refresh-checks
   - build: `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeV2ShadowParityTest`
   - run: `python scripts/validate_v2_shadow_parity.py -Strict`
   - runtime strict: `python scripts/validate_v2_shadow_parity.py -CheckRuntimeShadow -Strict`
-  - runtime strict (live 포함): `python scripts/validate_v2_shadow_parity.py -CheckRuntimeShadow -CheckRuntimeLiveShadow -Strict`
+  - runtime strict (live ?�함): `python scripts/validate_v2_shadow_parity.py -CheckRuntimeShadow -CheckRuntimeLiveShadow -Strict`
   - note: live strict requires at least one `LiveTradingRuntime::executeSignals` cycle to populate `v2_shadow_policy_parity_live.jsonl`.
   - artifact: `build/Release/logs/v2_shadow_parity_report.json`
   - result: PASS

@@ -16,10 +16,6 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--run-live-probe", "-RunLiveProbe", action="store_true")
     parser.add_argument("--allow-live-probe-order", "-AllowLiveProbeOrder", action="store_true")
     parser.add_argument("--strict-execution-parity", "-StrictExecutionParity", action="store_true")
-    parser.add_argument("--include-v2-shadow-parity", "-IncludeV2ShadowParity", action="store_true")
-    parser.add_argument("--strict-v2-shadow-parity", "-StrictV2ShadowParity", action="store_true")
-    parser.add_argument("--check-runtime-v2-shadow-parity", "-CheckRuntimeV2ShadowParity", action="store_true")
-    parser.add_argument("--check-runtime-live-v2-shadow-parity", "-CheckRuntimeLiveV2ShadowParity", action="store_true")
     parser.add_argument("--backtest-prime-csv", "-BacktestPrimeCsv", default="data/backtest/simulation_large.csv")
     parser.add_argument(
         "--backtest-prime-fallback-csv",
@@ -44,9 +40,18 @@ def main(argv=None) -> int:
 
     if not exe_path.exists():
         raise FileNotFoundError(f"Executable not found: {exe_path}")
-    if not backtest_prime_csv.exists():
-        raise FileNotFoundError(f"Backtest prime dataset not found: {backtest_prime_csv}")
+    prime_available = backtest_prime_csv.exists()
     fallback_available = backtest_prime_fallback_csv.exists()
+    if not prime_available and not fallback_available:
+        raise FileNotFoundError(
+            "Backtest prime dataset not found and fallback missing: "
+            f"prime={backtest_prime_csv}, fallback={backtest_prime_fallback_csv}"
+        )
+    if not prime_available and fallback_available:
+        print(
+            "[CIGate] Backtest prime dataset missing, using fallback first: "
+            f"{backtest_prime_fallback_csv}"
+        )
     if not fallback_available:
         print(f"[CIGate] Backtest fallback dataset missing, continuing without it: {backtest_prime_fallback_csv}")
 
@@ -64,8 +69,10 @@ def main(argv=None) -> int:
             raise RuntimeError(f"Backtest prewarm failed with exit code {prewarm_exit}")
 
     backtest_artifact_path = resolve_repo_path("build/Release/logs/execution_updates_backtest.jsonl")
-    prime_candidates = [backtest_prime_csv]
-    if fallback_available and backtest_prime_fallback_csv != backtest_prime_csv:
+    prime_candidates = []
+    if prime_available:
+        prime_candidates.append(backtest_prime_csv)
+    if fallback_available and backtest_prime_fallback_csv not in prime_candidates:
         prime_candidates.append(backtest_prime_fallback_csv)
     artifact_populated = False
     for prime_csv in prime_candidates:
@@ -114,14 +121,6 @@ def main(argv=None) -> int:
         operational_args.append("-IncludeBacktest")
     if args.strict_execution_parity:
         operational_args.append("-StrictExecutionParity")
-    if args.include_v2_shadow_parity:
-        operational_args.append("-IncludeV2ShadowParity")
-    if args.strict_v2_shadow_parity:
-        operational_args.append("-StrictV2ShadowParity")
-    if args.check_runtime_v2_shadow_parity:
-        operational_args.append("-CheckRuntimeV2ShadowParity")
-    if args.check_runtime_live_v2_shadow_parity:
-        operational_args.append("-CheckRuntimeLiveV2ShadowParity")
 
     operational_exit = validate_operational_readiness.main(operational_args)
     if operational_exit != 0:

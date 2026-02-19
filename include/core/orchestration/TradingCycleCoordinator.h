@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <memory>
 #include <string>
@@ -9,7 +9,7 @@
 #include "core/contracts/IRiskCompliancePlane.h"
 #include "core/model/PlaneTypes.h"
 #include "risk/RiskManager.h"
-#include "v2/strategy/IStrategy.h"
+#include "strategy/IStrategy.h"
 
 namespace autolife {
 namespace core {

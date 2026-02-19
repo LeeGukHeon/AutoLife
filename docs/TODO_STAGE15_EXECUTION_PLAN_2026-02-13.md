@@ -1,551 +1,118 @@
-# Stage 15 Execution TODO (Active)
+﻿# Stage 15 Execution TODO (Reset Baseline)
 
-Last updated: 2026-02-17 (overfit guard maintained + entry-quality gate ownership decomposition)
+Last updated: 2026-02-19
+Status: `RESET_BASELINE_ACTIVE`
 
-## Goal
-Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
-The system must:
-- follow Upbit API/WebSocket call rules,
-- train on high-quality data,
-- persist learning state across restarts,
-- run backtests that match live decision flow.
+## Reset Intent
+- End log-heavy operation and rebuild validation reliability first.
+- Prioritize validation integrity over repeated parameter tuning.
+- Scope:
+  - `run_realdata_candidate_loop`
+  - `run_profitability_matrix`
+  - `run_candidate_train_eval_cycle`
+  - `walk_forward_validate`
 
-## Principles
-- Keep strict safety chain and strict live approval process.
-- Keep legacy fallback until core path is fully proven.
-- Prefer robust logic changes over narrow parameter overfitting.
-- If market data is hostile, do not force trade count.
-- Never accept train-only gains: promotion requires validation/holdout generalization evidence.
+## Archived History
+- Full execution log moved to:
+  - `docs/archive/TODO_STAGE15_EXECUTION_PLAN_2026-02-13_FULLLOG_2026-02-19.md`
+- One-off large script audit docs moved to:
+  - `docs/archive/SCRIPT_READING_TUNE_CANDIDATE_GATE_2026-02-19.md`
+  - `docs/archive/TUNE_CANDIDATE_GATE_LINE_AUDIT_2026-02-19.md`
 
-## Execution Discipline (Context Handoff)
-- Every completed subtask must update this TODO immediately with:
-  - what changed (files/functions),
-  - what was verified (build/tests/commands),
-  - next subtask and expected artifact path.
-- Keep one active in-progress item only to avoid context drift.
-- If a run fails, record the exact failing command + first root-cause clue before any new patch.
+## Minimal Active Docs
+- `docs/TODO_STAGE15_EXECUTION_PLAN_2026-02-13.md`
+- `docs/ADAPTIVE_ENGINE_REBUILD_PLAN_2026-02-19.md`
+- `docs/VALIDATION_METHOD_REVIEW_2026-02-19.md`
+- `docs/VERIFICATION_RESET_BASELINE_2026-02-19.md`
+- `docs/FOUNDATION_ENGINE_STRATEGY_REVIEW_2026-02-19.md`
+- `docs/CHAPTER_CURRENT.md`
+- `docs/CHAPTER_HISTORY_BRIEF.md`
+- `docs/STRICT_GATE_RUNBOOK_2026-02-13.md`
+- `docs/TARGET_ARCHITECTURE.md`
+- `docs/FILE_USAGE_MAP.md`
+- `docs/DELETE_WAVE_MANIFEST.md`
 
-## Active Snapshot (2026-02-16)
-- Historical progress logs were archived to:
-  - `legacy_archive/docs/archive/STAGE15_WORKLOG_ARCHIVE_2026-02-16.md`
-- Current execution baseline:
-  - Latest completed branch updates: `Stage-2.1` to `Stage-2.6`
-  - Current major bottlenecks: `filtered_out_by_manager_ev_quality_floor`, `blocked_risk_gate`
-  - Next action order: risk-gate ownership calibration -> signal generation bottleneck recovery
-  - Stage cleanup Wave A executed (2026-02-16):
-    - moved research-aux assets to `legacy_archive/` (two-stage delete policy)
-    - added `docs/FILE_USAGE_MAP.md`, `docs/DELETE_WAVE_MANIFEST.md`, `legacy_archive/manifest.json`
-    - added migration skeleton directories `src/v2/`, `include/v2/`
-    - updated `.vscode/settings.json` excludes for build/log/state/large data folders
-  - v2 bootstrap scaffold added (2026-02-16):
-    - added decoupled v2 kernel model/contracts: `include/v2/model/KernelTypes.h`, `include/v2/contracts/*`
-    - added v2 orchestration skeleton: `include/v2/orchestration/DecisionKernel.h`, `src/v2/orchestration/DecisionKernel.cpp`
-    - added legacy bridge adapters for staged migration: `include/v2/adapters/*`, `src/v2/adapters/*`
-    - added v2 engine/backtest scaffold:
-      - `include/v2/engine/TradingEngineV2.h`, `src/v2/engine/TradingEngineV2.cpp`
-      - `include/v2/backtest/BacktestEngineV2.h`, `src/v2/backtest/BacktestEngineV2.cpp`
-    - added repeatable Wave A verification command/script: `scripts/verify_cleanup_wave_a.py`
-  - v2 bootstrap smoke wiring verified (2026-02-16):
-    - added dedicated CMake smoke target: `AutoLifeV2KernelSmokeTest`
-    - added dedicated v2 engine/backtest smoke target: `AutoLifeV2EngineBacktestSmokeTest`
-    - added dedicated v2 compile-guard target: `AutoLifeV2CompileObjects`
-    - added v2 kernel smoke test: `tests/TestV2DecisionKernel.cpp`
-    - added v2 engine/backtest scaffold smoke test: `tests/TestV2EngineBacktestScaffold.cpp`
-    - verification PASS:
-      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeV2CompileObjects AutoLifeV2KernelSmokeTest AutoLifeV2EngineBacktestSmokeTest`
-      - `.\build\Release\AutoLifeV2KernelSmokeTest.exe`
-      - `.\build\Release\AutoLifeV2EngineBacktestSmokeTest.exe`
-  - v2 shadow parity harness verified (2026-02-16):
-    - added dedicated CMake parity target: `AutoLifeV2ShadowParityTest`
-    - added parity test/scenario: `tests/TestV2ShadowParity.cpp`
-    - added parity report script: `scripts/validate_v2_shadow_parity.py`
-    - connected runtime shadow probe to backtest policy input:
-      - `BacktestEngine` now writes per-candle policy parity log to `build/Release/logs/v2_shadow_policy_parity_backtest.jsonl`
-      - static parity + runtime parity strict check:
-        - `python scripts/validate_v2_shadow_parity.py -CheckRuntimeShadow -Strict`
-    - connected runtime shadow probe to live policy input:
-      - `LiveTradingRuntime::executeSignals` now writes policy parity log to `build/Release/logs/v2_shadow_policy_parity_live.jsonl`
-      - live runtime strict check option added:
-        - `python scripts/validate_v2_shadow_parity.py -CheckRuntimeLiveShadow -Strict`
-      - note: strict-live requires at least one live/paper scan cycle that reaches `executeSignals`.
-    - integrated optional gate hooks:
-      - `scripts/validate_operational_readiness.py --include-v2-shadow-parity --strict-v2-shadow-parity`
-      - `scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity`
-      - runtime-aware strict option:
-        - `--check-runtime-v2-shadow-parity` (`validate_operational_readiness` / `run_ci_operational_gate`)
-        - `--check-runtime-live-v2-shadow-parity` (`validate_operational_readiness` / `run_ci_operational_gate`)
-    - verification PASS:
-      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeV2ShadowParityTest`
-      - `python scripts/validate_v2_shadow_parity.py -Strict`
-      - artifact: `build/Release/logs/v2_shadow_parity_report.json`
-  - live-order safety lock hardened (2026-02-16):
-    - default `trading.allow_live_orders=false` (explicit opt-in required)
-    - `TradingEngine` live branches now block real submits when `allow_live_orders=false` and use simulation path
-    - no-arg/non-input startup no longer falls through to live mode; now exits safely
-    - `AutoLifeLiveExecutionProbe` now requires explicit `--allow-live-order` flag
-    - CI gate live probe also requires explicit `--allow-live-probe-order` opt-in
-  - Wave B readiness assessor added (2026-02-16):
-    - added `scripts/assess_wave_b_readiness.py`
-    - report artifact: `build/Release/logs/wave_b_readiness_report.json`
-    - latest assessment:
-      - `global_ready=true`
-      - `B1=true` (legacy core adapters moved to archive and replacement wiring active)
-      - `B2=true` (legacy engine/backtest moved to archive and runtime replacement wiring active)
-      - `B3_any=true`, `B3_all=true` (no remaining v1 strategy units detected)
-      - `ready_for_full_wave_b=true`
-      - retention override: immediate final delete executed (no date wait)
-  - Wave B1 stage-1 move executed (2026-02-16):
-    - moved to archive:
-      - `include/core/adapters/LegacyExecutionPlaneAdapter.h`
-      - `include/core/adapters/LegacyPolicyLearningPlaneAdapter.h`
-      - `src/core/adapters/LegacyExecutionPlaneAdapter.cpp`
-      - `src/core/adapters/LegacyPolicyLearningPlaneAdapter.cpp`
-    - replacement files added/wired:
-      - `include/core/adapters/ExecutionPlaneAdapter.h`
-      - `include/core/adapters/PolicyLearningPlaneAdapter.h`
-      - `src/core/adapters/ExecutionPlaneAdapter.cpp`
-      - `src/core/adapters/PolicyLearningPlaneAdapter.cpp`
-    - verification PASS:
-      - `AutoLifeTrading`, `AutoLifeV2*` build targets
-      - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity`
-      - `python scripts/assess_wave_b_readiness.py --run-refresh-checks` (`B1=true`)
-  - Wave B2 stage-1 move executed (2026-02-16):
-    - moved to archive:
-      - `include/engine/TradingEngine.h`
-      - `src/engine/TradingEngine.cpp`
-      - `include/backtest/BacktestEngine.h`
-      - `src/backtest/BacktestEngine.cpp`
-    - runtime replacement files added/wired:
-      - `include/runtime/LiveTradingRuntime.h`
-      - `src/runtime/LiveTradingRuntime.cpp`
-      - `include/runtime/BacktestRuntime.h`
-      - `src/runtime/BacktestRuntime.cpp`
-    - include/source wiring updates:
-      - `src/main.cpp`
-      - `CMakeLists.txt`
-      - `include/strategy/ScalpingStrategy.h`
-      - `include/strategy/MomentumStrategy.h`
-      - `include/strategy/GridTradingStrategy.h`
-    - verification PASS:
-      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading AutoLifeV2CompileObjects AutoLifeV2KernelSmokeTest AutoLifeV2EngineBacktestSmokeTest AutoLifeV2ShadowParityTest`
-      - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity`
-      - `python scripts/assess_wave_b_readiness.py --run-refresh-checks` (`B2=true`)
-  - Wave B3 first-unit readiness opened (2026-02-16):
-    - `StrategyConfig` v2 replacement signal added:
-      - `include/v2/strategy/StrategyConfig.h`
-      - `src/v2/strategy/StrategyConfig.cpp`
-      - `include/common/Config.h` include switched to `v2/strategy/StrategyConfig.h`
-    - readiness assessor false-positive fix:
-      - `scripts/assess_wave_b_readiness.py` path match now uses token-boundary matching
-      - avoids counting `v2/strategy/Foo.h` as legacy `strategy/Foo.h`
-    - verification PASS:
-      - `python scripts/assess_wave_b_readiness.py --run-refresh-checks` (`B3_any=true`)
-  - Wave B3 partial stage-1 move executed (2026-02-16):
-    - moved to archive:
-      - `include/strategy/BreakoutStrategy.h`
-      - `src/strategy/BreakoutStrategy.cpp`
-    - v2 replacement wiring:
-      - `include/v2/strategy/BreakoutStrategy.h`
-      - `src/v2/strategy/BreakoutStrategy.cpp`
-      - `src/runtime/LiveTradingRuntime.cpp`
-      - `src/runtime/BacktestRuntime.cpp`
-      - `CMakeLists.txt` (runtime source switched to v2 breakout cpp)
-    - verification PASS:
-      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading AutoLifeV2CompileObjects AutoLifeV2KernelSmokeTest AutoLifeV2EngineBacktestSmokeTest AutoLifeV2ShadowParityTest`
-      - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity`
-      - `python scripts/assess_wave_b_readiness.py --run-refresh-checks` (`B3_any=true`)
-  - Wave B3 stage-1 expansion executed (2026-02-16):
-    - additional moved strategy headers:
-      - `include/strategy/IStrategy.h`
-      - `include/strategy/StrategyManager.h`
-      - `include/strategy/ScalpingStrategy.h`
-      - `include/strategy/MomentumStrategy.h`
-      - `include/strategy/MeanReversionStrategy.h`
-      - `include/strategy/GridTradingStrategy.h`
-    - additional moved strategy sources:
-      - `src/strategy/StrategyManager.cpp`
-      - `src/strategy/ScalpingStrategy.cpp`
-      - `src/strategy/MomentumStrategy.cpp`
-      - `src/strategy/MeanReversionStrategy.cpp`
-      - `src/strategy/GridTradingStrategy.cpp`
-    - v2 replacement wiring switched:
-      - `include/v2/strategy/*.h` (IStrategy/StrategyManager/Scalping/Momentum/MeanReversion/Grid/Breakout)
-      - `src/v2/strategy/*.cpp` (StrategyManager/Scalping/Momentum/MeanReversion/Grid/Breakout/StrategyConfig)
-      - `src/runtime/LiveTradingRuntime.cpp`
-      - `src/runtime/BacktestRuntime.cpp`
-      - `include/runtime/LiveTradingRuntime.h`
-      - `include/runtime/BacktestRuntime.h`
-      - `include/risk/RiskManager.h`
-      - `include/engine/AdaptivePolicyController.h`
-      - `include/core/model/PlaneTypes.h`
-      - `include/core/contracts/IPolicyLearningPlane.h`
-      - `include/core/contracts/IRiskCompliancePlane.h`
-      - `include/core/orchestration/TradingCycleCoordinator.h`
-      - `CMakeLists.txt` (strategy compilation path switched to `src/v2/strategy/*.cpp`)
-    - verification PASS:
-      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading AutoLifeV2CompileObjects AutoLifeV2KernelSmokeTest AutoLifeV2EngineBacktestSmokeTest AutoLifeV2ShadowParityTest`
-      - `python scripts/verify_cleanup_wave_a.py --run-tests --run-help-checks`
-      - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity`
-      - `python scripts/assess_wave_b_readiness.py --run-refresh-checks` (`B3_any=true`, `B3_all=true`)
-  - Wave B3 final stage-1 marker (2026-02-16):
-    - moved to archive:
-      - `include/strategy/StrategyConfig.h`
-    - readiness script update:
-      - `scripts/assess_wave_b_readiness.py` now treats zero remaining v1 strategy units as:
-        - `B3_any=true`, `B3_all=true` (when global gates are ready)
-      - report note: `no_remaining_v1_strategy_units_detected`
-    - IDE tree readability update:
-      - `.vscode/settings.json` excludes `legacy_archive`
-  - Final delete executed (2026-02-16):
-    - operator requested no date wait; retention window overridden to `0 days`
-    - `legacy_archive` payload files hard-deleted (Wave A + Wave B)
-    - archive audit metadata retained:
-      - `legacy_archive/manifest.json`
-    - verification compatibility update:
-      - `scripts/verify_cleanup_wave_a.py` now treats `wave_a.final_delete_executed=true` as valid when archive payload files are absent
+## Documentation Discipline
+- At end of every work batch, update:
+  - `docs/CHAPTER_CURRENT.md` with detailed completed items and remaining tasks.
+  - `docs/CHAPTER_HISTORY_BRIEF.md` with a short chapter-level summary.
+- Keep old details in archive docs only. Do not append long logs to active TODO docs.
 
-## P0 (Must do first)
-1. Upbit compliance hardening
-- Enforce shared rate budget across scanner/live/backtest fetch tools.
-- Respect `Remaining-Req`, and implement deterministic handling for `429` and `418`.
-- Add compliance telemetry to logs:
-  - request bucket usage,
-  - throttle/degrade events,
-  - recover timestamps.
+## Current Batch Order (Enforced)
+1. Documentation sync first.
+  - update plan/todo/chapter docs before code changes
+2. Runtime legacy-path disconnect hardening.
+  - remove unreachable legacy selection logic from active C++ path
+3. Verification alignment.
+  - adaptive profile default
+  - legacy gate only for compatibility checks
+4. Build and smoke verification.
+  - release build + adaptive smoke (+ optional legacy compatibility smoke)
+5. Chapter close update.
+  - completed items + remaining tasks only
 
-2. Live-backtest parity (critical)
-- Use same candle inputs and same decision path in live and backtest:
-  - `1m`, `5m`, `15m`, `1h`, `4h` (when available).
-- Enforce identical candle ordering/normalization before strategy logic.
-- Backtest must use rolling-window semantics equivalent to live cache updates.
-- Status update (2026-02-15):
-  - `15m` companion timeframe is now provided on both paths:
-    - live scanner derives `15m` from cached `1m` (fallback from `5m`) and stores into `candles_by_tf`.
-    - trading engine enforces `15m` parity companion fill before strategy collection.
-    - backtest now loads `15m` companion csv when present and exposes `candles_by_tf["15m"]` with rolling cursor semantics.
-  - changed files:
-    - `src/analytics/MarketScanner.cpp`
-    - `src/runtime/LiveTradingRuntime.cpp`
-    - `src/runtime/BacktestRuntime.cpp`
-  - next:
-    - completed: parity invariant check/report linked into realdata profitability artifact chain.
-    - next: apply dataset quality gate policy using parity diagnostics (`gap/dup/stale`) before tuning selection.
+## Non-Negotiable Rules
+- Keep validation sequential: `--max-workers 1`.
+- No coin hardcoding. Use pattern/regime level logic only.
+- Re-run matrix validation after every tuning application.
+- Use adaptive validation profile as primary (`--validation-profile adaptive`).
+- Keep legacy threshold gate only for compatibility checks (`--validation-profile legacy_gate`).
+- Use `--data-mode fixed` as gate baseline; `refresh_if_missing/refresh_force` only for robustness checks.
+- Keep anti-overfitting safeguards:
+  - dedicated latest holdout slice
+  - walk-forward required before promotion
+  - no promotion from single-dataset gain
 
-3. Data quality gate
-- Validate each dataset before tuning:
-  - timestamp order,
-  - duplicate ratio,
-  - gap ratio,
-  - stale tail,
-  - companion TF coverage.
-- Compute and store `market_hostility_score` and apply adaptive gate floors from hostility band.
+## P0: Verification Integrity Recovery (Must Pass First)
+1. Add post-tune matrix re-run in `run_realdata_candidate_loop`.
+2. Pass explicit source/build config paths from loop to matrix script.
+3. Separate promotion decision for `core_full` from combined overall gate logic.
+4. Enforce latest-time holdout split in `run_candidate_train_eval_cycle`.
+5. Add explicit adaptive state I/O mode control in `walk_forward_validate`.
 
-4. Learning persistence
-- Keep adaptive state in `state/learning_state.json` with atomic write.
-- Add schema version + migration guard.
-- Persist per-bucket performance stats used by core policy scoring.
-- Restart must warm-load state without silent reset.
-- Status update (2026-02-15):
-  - `LearningStateStoreJson` now enforces `kCurrentSchemaVersion` and validates required fields on load.
-  - Legacy/unversioned payloads are migrated to current schema (policy params normalization) and written back atomically.
-  - Unsupported/future schema payloads are rejected with warning logs instead of silent fallback parse.
+Definition of Done (P0):
+- Gate outputs are reproducible on repeated runs.
+- Final gate report reflects tuned config state.
+- Split and walk-forward modes are explicit in artifacts.
 
-5. Verification split enforcement (started)
-- Use `train/validation/holdout` market split before any candidate promotion decision.
-- Keep tuning/learning on `train` split only, and force deterministic eval on `validation/holdout` with `skip-tune`.
-- Enforce walk-forward checks per split before promotion.
+## P1: Structure Simplification
+1. Split `tune_candidate_gate_trade_density.py` into clear phases.
+2. Move objective and selector-veto policy into dedicated modules.
+3. Freeze artifact schema contracts for JSON/CSV outputs.
 
-## P1 (After P0)
-1. Strategy pipeline refactor (5 strategies)
-- Audit end-to-end path per strategy:
-  - filter -> signal -> entry -> risk sizing -> exit.
-- Remove duplicated ad-hoc thresholds and move shared logic into core adaptive utilities.
-- Add consistent rejection reason codes for every strategy decision.
-- Stage-2 started:
-  - `use_strategy_alpha_head_mode` added (strategy prefilter minimization, final gating in engine/core).
-  - `NO_TRADE` journal event added for hostile/policy/execution rejection visibility.
-  - Alpha-head mode now bypasses strategy auto-disable by historical EV gate in live loop.
-- Stage-2.1 update (2026-02-16):
-  - Structural contradiction fix in `ScalpingStrategy`:
-    - removed unconditional `RANGING/UNKNOWN` early exits that made lower regime-quality logic unreachable,
-    - aligned `shouldEnter` with the same `ranging/unknown` quality gates used by `generateSignal`.
-  - Regime ownership fix in `GridTradingStrategy`:
-    - `shouldEnter` no longer ignores regime,
-    - both `generateSignal` and `shouldEnter` now block weak `TRENDING_DOWN` entries and allow `TRENDING_UP` only under stronger liquidity/volume conditions,
-    - `generateSignal` now also enforces `shouldGenerateGridSignal(...)` so invalid/non-profitable grid opportunities cannot bypass through score-only path.
-  - Entry gate consistency fix in `MomentumStrategy`:
-    - `shouldEnter` MACD gate relaxed from strict positive-only to `positive OR histogram-rising`,
-    - minimum momentum floor aligned to exploratory candidate generation (`0.2%+`).
-  - verification:
-    - build PASS:
-      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release`
-    - runtime PASS:
-      - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions`
-  - current bottleneck remains:
-    - `entry_rejection_top_reason=no_signal_generated` still dominant, so next step is manager/engine-side candidate recovery and gate ownership cleanup.
-- Stage-2.2 update (2026-02-16):
-  - Strategy-manager ownership refactor:
-    - `StrategyManager` now supports `core_rescue_candidate` path:
-      - if strategy `generateSignal(...)` returns `NONE` but `shouldEnter(...)` is true, manager builds a recoverable candidate for core-layer final gating,
-      - preserves strategy-specific stop/take-profit/position sizing calls while moving final reject authority to engine core gates.
-    - manager hard policy block is softened in core mode:
-      - `selectRobustSignalWithDiagnostics(...)` no longer hard-drops `BLOCK` roles when core bridge+risk plane is active,
-      - `filterSignalsWithDiagnostics(...)` also softens `BLOCK` to stricter `HOLD`-like requirements in core mode.
-  - Code cleanup (unused API removal):
-    - removed unused `StrategyManager::synthesizeSignals(...)` declaration/definition,
-    - removed unused `StrategyManager::getOverallWinRate()` declaration/definition.
-  - verification:
-    - build PASS:
-      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release`
-    - runtime PASS:
-      - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions`
-- Stage-2.3 update (2026-02-16):
-  - Additional unused-code cleanup in `StrategyManager`:
-    - removed unused wrapper APIs:
-      - `selectRobustSignal(...)`
-      - `filterSignals(...)`
-    - removed unused strategy state toggling/read APIs:
-      - `enableStrategy(...)`
-      - `getActiveStrategies()`
-  - cleanup principle:
-    - remove only functions with repo-wide reference count `0` (declaration/definition only),
-    - preserve active interfaces used by engine/backtest (`collectSignals`, `filterSignalsWithDiagnostics`, `selectRobustSignalWithDiagnostics`, `getStrategy`, `getStrategies`).
-  - verification:
-    - build PASS:
-      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release`
-- Stage-2.4 update (2026-02-16):
-  - Strategy API surface cleanup (unused accessor removal):
-    - removed `getRollingStatistics()` declaration/definition from:
-      - `ScalpingStrategy`
-      - `MomentumStrategy`
-      - `BreakoutStrategy`
-      - `MeanReversionStrategy`
-      - `GridTradingStrategy`
-  - cleanup basis:
-    - repo-wide search showed no production/test call sites for these methods.
-  - verification:
-    - build PASS (`Release`)
-    - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions` PASS
-- Stage-2.5 update (2026-02-16):
-  - Comment/encoding stabilization for strategy refactor files:
-    - restored strategy files to clean baseline and reapplied only intended logic changes,
-    - removed accidental text-noise churn from previous bulk rewrite attempt,
-    - added Korean context comments around newly relaxed/realigned regime-entry gates.
-  - verification:
-    - build PASS:
-      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release`
-    - runtime PASS:
-      - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions`
-  - current readout (same bottleneck class):
-    - `entry_rejection_top_reason=no_signal_generated` remains dominant.
-- Stage-2.6 update (2026-02-16):
-  - Bottom-line priority execution (`2/16` latest branch first):
-    - candidate tuning rerun:
-      - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions`
-    - result:
-      - `best_combo=scenario_quality_focus_004`
-      - all combos `overall_gate_pass=false`, `profile_gate_pass=false`
-      - effective hostility/quality blend:
-        - `hostility_blended_level=low`, `hostility_blended_score=31.7817`
-      - top scenario family remained `signal_generation_boost` (bottleneck priority active).
-  - train/eval split cycle rerun:
-    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
-    - split summary:
-      - train(7): `avg_profit_factor=0.5422`, `avg_expectancy_krw=-7.7148`, top rejection `no_signal_generated`
-      - validation(2): `avg_profit_factor=0.5384`, `avg_expectancy_krw=-6.6658`, top rejection `filtered_out_by_manager_ev_quality_floor`
-      - holdout(3): `avg_profit_factor=0.5066`, `avg_expectancy_krw=-7.2827`, top rejection `skipped_due_to_open_position`
-    - walk-forward:
-      - validation ready ratio `0.0` (min `0.55`) -> fail
-      - holdout ready ratio `0.0` (min `0.55`) -> fail
-    - promotion verdict:
-      - `promotion_gate_pass=false`
-      - recommendation: `hold_candidate_improve_validation_bottlenecks`
-  - next bottleneck target by bottom-line chain:
-    - manager prefilter EV floor calibration (`filtered_out_by_manager_ev_quality_floor`)
-    - position state/open-slot policy calibration (`skipped_due_to_open_position`)
-- Stage-2.7 update (2026-02-16):
-  - Runtime bottleneck calibration patch applied:
-    - manager EV prefilter calibration:
-      - `src/v2/strategy/StrategyManager.cpp`
-      - `filterSignalsWithDiagnostics(...)` now applies bounded EV-floor relief when live bottleneck hint top group is `manager_prefilter`.
-    - open-position skip policy calibration:
-      - `include/runtime/LiveTradingRuntime.h`
-      - `src/runtime/LiveTradingRuntime.cpp`
-      - live telemetry now counts `skipped_due_to_open_position` once per market holding episode (entry block behavior unchanged).
-  - verification:
-    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
-    - `python scripts/validate_v2_shadow_parity.py -CheckRuntimeShadow -CheckRuntimeLiveShadow -Strict` PASS
-    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
-    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
-  - latest split readout (core_full):
-    - train(7): `avg_profit_factor=0.5095`, `avg_expectancy_krw=-8.9636`, top rejection `no_signal_generated`
-    - validation(2): `avg_profit_factor=0.5352`, `avg_expectancy_krw=-6.7473`, top rejection `blocked_risk_gate`
-    - holdout(3): `avg_profit_factor=0.4753`, `avg_expectancy_krw=-7.9406`, top rejection `blocked_risk_gate`
-    - `skipped_due_to_open_position` count observed as `0` in current split summaries (`core_full`).
-  - promotion verdict:
-    - recommendation: `hold_candidate_improve_signal_generation_or_dataset_quality`
-  - build verification:
-    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
-    - `./build/Release/AutoLifeV2ShadowParityTest.exe` PASS
-    - `./build/Release/AutoLifeV2EngineBacktestSmokeTest.exe` PASS
-- Stage-2.8 update (2026-02-16):
-  - Overfit-guard hardening:
-    - updated promotion verdict logic in `scripts/run_candidate_train_eval_cycle.py`:
-      - added explicit generalization checks (`validation_vs_train`, `holdout_vs_train`, `holdout_vs_validation`)
-      - added `base_promotion_gate_pass` vs `generalization_guard_pass` separation
-      - added overfit-block recommendation code: `hold_candidate_avoid_overfit_generalization_gap`
-  - execution note:
-    - temporary risk-gate relaxation experiment was rejected and rolled back (no runtime behavior change retained) because holdout quality did not improve consistently.
-  - verification:
-    - `python -m py_compile scripts/run_candidate_train_eval_cycle.py` PASS
-    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
-    - promotion verdict artifact now includes:
-      - `base_promotion_gate_pass`
-      - `generalization_guard_pass`
-      - `generalization_checks[]`
-- Stage-2.9 update (2026-02-17):
-  - Overfit-prevention principle kept as hard rule:
-    - no promotion when `generalization_guard_pass=false`
-    - no temporary runtime threshold relaxation while holdout quality is unstable
-  - Risk-gate ownership diagnostics decomposition (runtime behavior intent unchanged):
-    - backtest funnel counters/reasons expanded:
-      - `blocked_risk_gate_strategy_ev`
-      - `blocked_risk_gate_regime`
-      - `blocked_risk_gate_entry_quality`
-      - `blocked_risk_gate_other`
-      - `blocked_second_stage_confirmation`
-    - changed files:
-      - `include/runtime/BacktestRuntime.h`
-      - `src/runtime/BacktestRuntime.cpp`
-      - `src/main.cpp`
-      - `scripts/generate_strategy_rejection_taxonomy_report.py`
-  - Artifact chain propagation for split diagnostics:
-    - `scripts/run_profitability_matrix.py` now emits:
-      - `entry_risk_gate_breakdown_json`
-      - `top_entry_risk_gate_component_reason`
-      - `top_entry_risk_gate_component_count`
-    - `scripts/run_realdata_candidate_loop.py` console snapshot now prints top risk-gate component reason.
-    - `scripts/run_candidate_train_eval_cycle.py` now ingests core-profile risk-gate component context and routes recommendation codes for risk-gate ownership classes.
-  - verification:
-    - `python -m py_compile scripts/run_profitability_matrix.py scripts/generate_strategy_rejection_taxonomy_report.py scripts/run_candidate_train_eval_cycle.py` PASS
-    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
-    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
-    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
-    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
-  - latest split readout (`core_full`):
-    - train(7): `avg_profit_factor=0.5095`, `avg_expectancy_krw=-8.9636`, top rejection `no_signal_generated`
-    - validation(2): `avg_profit_factor=0.5352`, `avg_expectancy_krw=-6.7473`, top rejection `blocked_risk_gate_entry_quality`
-    - holdout(3): `avg_profit_factor=0.4753`, `avg_expectancy_krw=-7.9406`, top rejection `blocked_risk_gate_entry_quality`
-  - next:
-    - calibrate risk-gate entry-quality ownership and dataset-quality policy linkage without loosening global promotion floors.
-- Stage-2.10 update (2026-02-17):
-  - Holdout-driven risk-gate bottleneck routing 강화(과적합 방지 방향):
-    - `scripts/tune_candidate_gate_trade_density.py`에서 train/eval verdict의 holdout rejection context를 읽어
-      `top_risk_gate_component_reason`를 컨텍스트로 승격.
-    - holdout recommendation이 `hold_candidate_calibrate_risk_gate_*` 계열이면
-      live top-group보다 우선해 `top_group=risk_gate`로 라우팅(override).
-    - risk-gate focus 분기 추가:
-      - `entry_quality` / `second_stage_confirmation`는 quality-heavy 우선순위 스코어 적용
-      - 적응 시나리오 family로 `risk_gate_quality_rebalance` 추가
-      - 해당 family는 완화(relax) 대신 quality 강화 파라미터(엣지/RR/전략 PF/신호강도/hostility pause) 중심으로 조정
-  - verification:
-    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
-    - smoke run:
-      - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate`
-      - runtime log:
-        - `top_group=risk_gate`, `source=holdout_recommendation_override`, `risk_gate_focus=entry_quality`
-        - `scenario_family_counts={'risk_gate_quality_rebalance': 1}`
-- Stage-2.11 update (2026-02-17):
-  - Realdata quality-focus 재실행으로 새 라우팅 효과 검증:
-    - command:
-      - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions`
-    - key result:
-      - `dataset_quality_gate`: passed `8`, failed `4` (gap ratio invariant fail)
-      - `bottleneck context`: `top_group=risk_gate`, `source=holdout_recommendation_override`, `risk_gate_focus=entry_quality`
-      - all adapted families: `risk_gate_quality_rebalance` (6/6)
-      - `best_combo=scenario_quality_focus_002` (but `overall_gate_pass=false`, `profile_gate_pass=false` persisted)
-  - split cycle consistency re-check:
-    - command:
-      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
-    - promotion verdict:
-      - `base_promotion_gate_pass=false`
-      - `generalization_guard_pass=true`
-      - `promotion_gate_pass=false`
-      - `recommendation=hold_candidate_calibrate_risk_gate_entry_quality_ownership`
-    - holdout/validation core top rejection remains:
-      - `blocked_risk_gate_entry_quality`
-  - next:
-    - tune parameter exploration보다 먼저 `entry_quality` 게이트 자체의 ownership/feature 정의를 구조적으로 정리하고,
-      이후 동일 split에서 재평가.
+Definition of Done (P1):
+- Start removing 2k+ line single-function blocks.
+- Enable phase-level isolated tests.
 
-- Stage-2.12 update (2026-02-17):
-  - Entry-quality gate ownership decomposition implemented:
-    - backtest runtime now classifies `blocked_risk_gate_entry_quality` into:
-      - `blocked_risk_gate_entry_quality_rr`
-      - `blocked_risk_gate_entry_quality_edge`
-      - `blocked_risk_gate_entry_quality_rr_edge`
-      - `blocked_risk_gate_entry_quality_invalid_levels`
-    - changed files:
-      - `include/runtime/BacktestRuntime.h`
-      - `src/runtime/BacktestRuntime.cpp`
-      - `src/main.cpp`
-      - `scripts/run_profitability_matrix.py`
-      - `scripts/run_realdata_candidate_loop.py`
-      - `scripts/generate_strategy_rejection_taxonomy_report.py`
-      - `scripts/run_candidate_train_eval_cycle.py`
-      - `scripts/tune_candidate_gate_trade_density.py`
-  - verification:
-    - `python -m py_compile scripts/generate_strategy_rejection_taxonomy_report.py scripts/run_profitability_matrix.py scripts/run_realdata_candidate_loop.py scripts/run_candidate_train_eval_cycle.py scripts/tune_candidate_gate_trade_density.py` PASS
-    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
-    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
-    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
-    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
-    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
-  - latest split readout (`core_full`):
-    - train(7) risk top component: `blocked_risk_gate_entry_quality_rr:14174`
-    - validation(2) risk top component: `blocked_risk_gate_entry_quality_rr:7655`
-    - holdout(3) risk top component: `blocked_risk_gate_entry_quality_rr:7999`
-    - promotion recommendation: `hold_candidate_calibrate_risk_gate_entry_quality_rr`
-  - next:
-    - tighten ownership around RR threshold construction (`min_reward_risk` baseline vs adaptive adders) before any new relaxation experiments.
+## P2: Strategy Improvement (After P0/P1)
+1. Stabilize multi-TF signal combination (1m, 15m, 1h, 4h).
+2. Validate risk-control paths by regime (downtrend, range, high-vol).
+3. Run integrated shadow parity and dry-run before live promotion.
 
-2. Expectancy-first improvement loop
-- Optimize for:
-  - `avg_expectancy_krw`,
-  - `profitable_ratio`,
-  - drawdown stability.
-- Keep a minimum trade floor, but make it hostility-adaptive instead of fixed-only.
+## Local Build Baseline
+- CMake path:
+  - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe`
+- Build command:
+```powershell
+D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release --target AutoLifeTrading
+```
 
-3. Candidate promotion readiness
-- Repeat matrix/tuning on expanded real datasets.
-- Record baseline vs candidate delta with explicit failure attribution.
-
-## P2 (Migration closure)
-1. Core migration finalization
-- Make core path default for all decision planes in production profile.
-- Keep one explicit rollback preset during burn-in.
-- Remove legacy-only branches after burn-in evidence is complete.
-
-2. Documentation and CI alignment
-- Keep only active operational docs.
-- Ensure CI PR Gate includes exploratory profitability report upload path checks.
-
-## Validation Commands
-- Exploratory profitability:
-  - `python scripts/run_profitability_exploratory.py`
-- Real-data candidate loop:
-  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune`
-- Candidate tuning:
-  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions`
-- Split train/eval cycle with walk-forward gate:
-  - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
-- v2 shadow parity gate:
-  - `python scripts/validate_v2_shadow_parity.py -Strict`
-  - `python scripts/validate_v2_shadow_parity.py -CheckRuntimeShadow -Strict`
-  - `python scripts/validate_v2_shadow_parity.py -CheckRuntimeShadow -CheckRuntimeLiveShadow -Strict`
+## Active Progress Board
+- [x] R0.1 Doc-first batch applied + StrategyManager legacy select dead-path prune + README baseline normalization (2026-02-19)
+- [x] R0.2 Runtime strategy registration hard-switched to foundation-only path (legacy pack disconnected) (2026-02-19)
+- [x] R0.3 Legacy v2 strategy files compile-excluded and physically deleted from active tree (2026-02-19)
+- [x] R0.4 `include/v2`, `src/v2` folder flatten 완료 (경로 재배치 + CMake/tests/scripts 반영 + smoke 검증) (2026-02-19)
+- [x] R0.5 Remaining legacy shadow/v2 stack fully removed from runtime + CMake + tests/scripts (2026-02-19)
+- [x] R0.6 V2 naming cleanup + residual legacy preset removal (`run_verification.py`, `legacy_fallback` 삭제, runtime `getPrimaryTakeProfit` 명명 정리) (2026-02-19)
+- [x] P0.1 Fix tune-before-final-report mismatch (2026-02-19)
+- [x] P0.2 Fix source config path wiring (2026-02-19)
+- [ ] P0.3 Split promotion gate logic
+- [ ] P0.4 Enforce latest-time holdout split
+- [ ] P0.5 Add explicit walk-forward state I/O mode
+- [ ] P1.1 Split tuner phases
+- [ ] P1.2 Modularize objective and selector
+- [ ] P1.3 Freeze artifact schema contracts
 
 ## Exit Criteria
-- Backtest/live parity checks pass on decision-path and candle-path invariants.
-- Adaptive learning state survives restart and remains usable.
-- Candidate gate passes expectancy/profitable-ratio focused thresholds on real-data matrix.
-- Core path is proven and legacy cleanup can proceed in controlled PR batches.
+- Distinguish whether `overall_gate_pass=false` is caused by strategy/data or by validation design.
+- Do not run long tuning batches before P0 completion.

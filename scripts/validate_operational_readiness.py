@@ -6,7 +6,6 @@ import validate_execution_parity
 import validate_readiness
 import validate_recovery_e2e
 import validate_replay_reconcile_diff
-import validate_v2_shadow_parity
 from _script_common import dump_json, load_json_or_none, resolve_repo_path
 
 
@@ -16,10 +15,6 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--strict-log-check", "-StrictLogCheck", action="store_true")
     parser.add_argument("--no-strict-log-check", "-NoStrictLogCheck", action="store_true")
     parser.add_argument("--strict-execution-parity", "-StrictExecutionParity", action="store_true")
-    parser.add_argument("--include-v2-shadow-parity", "-IncludeV2ShadowParity", action="store_true")
-    parser.add_argument("--strict-v2-shadow-parity", "-StrictV2ShadowParity", action="store_true")
-    parser.add_argument("--check-runtime-v2-shadow-parity", "-CheckRuntimeV2ShadowParity", action="store_true")
-    parser.add_argument("--check-runtime-live-v2-shadow-parity", "-CheckRuntimeLiveV2ShadowParity", action="store_true")
     parser.add_argument("--snapshot-path", "-SnapshotPath", default="build/Release/state/snapshot_state.json")
     parser.add_argument("--legacy-state-path", "-LegacyStatePath", default="build/Release/state/state.json")
     parser.add_argument("--journal-path", "-JournalPath", default="build/Release/state/event_journal.jsonl")
@@ -40,11 +35,6 @@ def parse_args(argv=None) -> argparse.Namespace:
         "-ExecutionParityOutputJson",
         default="build/Release/logs/execution_parity_report.json",
     )
-    parser.add_argument(
-        "--v2-shadow-parity-output-json",
-        "-V2ShadowParityOutputJson",
-        default="build/Release/logs/v2_shadow_parity_report.json",
-    )
     parser.add_argument("--backtest-output-json", "-BacktestOutputJson", default="build/Release/logs/readiness_report.json")
     parser.add_argument("--output-json", "-OutputJson", default="build/Release/logs/operational_readiness_report.json")
     return parser.parse_args(argv)
@@ -60,7 +50,6 @@ def main(argv=None) -> int:
     recovery_state_validation_path = resolve_repo_path(args.recovery_state_validation_json)
     replay_reconcile_output_path = resolve_repo_path(args.replay_reconcile_output_json)
     execution_parity_output_path = resolve_repo_path(args.execution_parity_output_json)
-    v2_shadow_parity_output_path = resolve_repo_path(args.v2_shadow_parity_output_json)
     backtest_output_path = resolve_repo_path(args.backtest_output_json)
 
     strict_log_check_enabled = True
@@ -106,17 +95,6 @@ def main(argv=None) -> int:
         parity_argv.append("-Strict")
     parity_exit = validate_execution_parity.main(parity_argv)
 
-    v2_shadow_exit = None
-    if args.include_v2_shadow_parity:
-        v2_shadow_argv = ["-OutputJson", str(v2_shadow_parity_output_path)]
-        if args.check_runtime_v2_shadow_parity:
-            v2_shadow_argv.append("-CheckRuntimeShadow")
-        if args.check_runtime_live_v2_shadow_parity:
-            v2_shadow_argv.append("-CheckRuntimeLiveShadow")
-        if args.strict_v2_shadow_parity:
-            v2_shadow_argv.append("-Strict")
-        v2_shadow_exit = validate_v2_shadow_parity.main(v2_shadow_argv)
-
     backtest_exit = None
     if args.include_backtest:
         backtest_argv = ["-OutputJson", str(backtest_output_path)]
@@ -126,7 +104,6 @@ def main(argv=None) -> int:
     recovery_state_report = load_json_or_none(recovery_state_validation_path)
     replay_report = load_json_or_none(replay_reconcile_output_path)
     parity_report = load_json_or_none(execution_parity_output_path)
-    v2_shadow_report = load_json_or_none(v2_shadow_parity_output_path) if args.include_v2_shadow_parity else None
     backtest_report = load_json_or_none(backtest_output_path) if args.include_backtest else None
 
     errors = []
@@ -136,8 +113,6 @@ def main(argv=None) -> int:
         errors.append("replay_reconcile_validation_failed")
     if parity_exit != 0:
         errors.append("execution_parity_validation_failed")
-    if args.include_v2_shadow_parity and v2_shadow_exit != 0:
-        errors.append("v2_shadow_parity_validation_failed")
     if args.include_backtest and backtest_exit != 0:
         errors.append("backtest_readiness_failed")
 
@@ -147,17 +122,11 @@ def main(argv=None) -> int:
             "include_backtest": bool(args.include_backtest),
             "strict_log_check": bool(strict_log_check_enabled),
             "strict_execution_parity": bool(args.strict_execution_parity),
-            "include_v2_shadow_parity": bool(args.include_v2_shadow_parity),
-            "strict_v2_shadow_parity": bool(args.strict_v2_shadow_parity),
-            "check_runtime_v2_shadow_parity": bool(args.check_runtime_v2_shadow_parity),
-            "check_runtime_live_v2_shadow_parity": bool(args.check_runtime_live_v2_shadow_parity),
         },
         "checks": {
             "recovery_e2e_passed": recovery_exit == 0,
             "replay_reconcile_diff_passed": replay_exit == 0,
             "execution_parity_passed": parity_exit == 0,
-            "v2_shadow_parity_executed": bool(args.include_v2_shadow_parity),
-            "v2_shadow_parity_passed": (v2_shadow_exit == 0) if args.include_v2_shadow_parity else None,
             "backtest_readiness_executed": bool(args.include_backtest),
             "backtest_readiness_passed": (backtest_exit == 0) if args.include_backtest else None,
         },
@@ -166,14 +135,12 @@ def main(argv=None) -> int:
             "recovery_state_validation_report": str(recovery_state_validation_path),
             "replay_reconcile_report": str(replay_reconcile_output_path),
             "execution_parity_report": str(execution_parity_output_path),
-            "v2_shadow_parity_report": str(v2_shadow_parity_output_path) if args.include_v2_shadow_parity else None,
             "backtest_readiness_report": str(backtest_output_path) if args.include_backtest else None,
         },
         "recovery": recovery_report,
         "recovery_state_validation": recovery_state_report,
         "replay_reconcile": replay_report,
         "execution_parity": parity_report,
-        "v2_shadow_parity": v2_shadow_report,
         "backtest": backtest_report,
         "errors": errors,
     }

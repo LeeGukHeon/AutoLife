@@ -1,10 +1,10 @@
-﻿#pragma once
+#pragma once
 
 #include <string>
 
 #include "core/model/PlaneTypes.h"
 #include "risk/RiskManager.h"
-#include "v2/strategy/IStrategy.h"
+#include "strategy/IStrategy.h"
 
 namespace autolife {
 namespace core {

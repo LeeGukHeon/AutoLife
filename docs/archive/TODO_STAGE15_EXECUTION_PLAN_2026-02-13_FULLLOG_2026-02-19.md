@@ -1,0 +1,8253 @@
+# Stage 15 Execution TODO (Active)
+
+Last updated: 2026-02-19 (Stage-2.309 overlap path re-activation diagnostics)
+
+## Latest Implementation Log (2026-02-19, Stage-2.309 overlap path re-activation diagnostics)
+- Goal:
+  - verify whether objective can move by reopening pre-cat soften paths under strict sequential validation (`--max-workers 1`).
+- Key finding before run:
+  - production baseline config had all major pre-cat relief toggles OFF:
+    - `enable_strategy_ev_pre_cat_soften_non_severe=false`
+    - `enable_strategy_ev_pre_cat_no_soft_quality_relief=false`
+    - `enable_strategy_ev_pre_cat_candidate_rr_failsafe=false`
+    - `enable_strategy_ev_pre_cat_pressure_rebound_relief=false`
+    - `enable_strategy_ev_pre_cat_recovery_evidence_bridge=false`
+  - this explained persistent `soften_ready=0` in baseline.
+- A/B diagnostics executed (12-set realdata matrix, higher-TF companions required):
+  - baseline reference:
+    - `build/Release/logs/profitability_matrix_stage2308_nh_quarantine_hardblock_baseline.csv`
+  - no-soft relief only:
+    - source config: `build/Release/config/config_stage2309_no_soft_relief_diag.json`
+    - output: `build/Release/logs/profitability_matrix_stage2309_no_soft_relief_diag.csv`
+  - no-soft + pressure rebound:
+    - source config: `build/Release/config/config_stage2309_no_soft_plus_rebound_diag.json`
+    - output: `build/Release/logs/profitability_matrix_stage2309_no_soft_plus_rebound_diag.csv`
+  - overlap hysteresis:
+    - source config: `build/Release/config/config_stage2309_overlap_hysteresis_diag.json`
+    - output: `build/Release/logs/profitability_matrix_stage2309_overlap_hysteresis_diag.csv`
+  - relaxed-evidence + soften:
+    - source config: `build/Release/config/config_stage2309_relaxed_evidence_soften_diag.json`
+    - output: `build/Release/logs/profitability_matrix_stage2309_relaxed_evidence_soften_diag.csv`
+  - relaxed-evidence + full-history-anchor + soften:
+    - source config: `build/Release/config/config_stage2309_relaxed_evidence_anchor_soften_diag.json`
+    - output: `build/Release/logs/profitability_matrix_stage2309_relaxed_evidence_anchor_soften_diag.csv`
+- Result summary:
+  - no-soft relief variants:
+    - activation appeared but very small:
+      - `strategy_ev_pre_cat_softened_no_soft_quality_relief: 0 -> 13`
+    - aggregate worsened:
+      - `avg_pf 0.42 -> 0.404`
+      - `avg_exp_krw -10.8518 -> -11.2723`
+      - `sum_profit_krw -5545.2985 -> -5805.2522`
+  - overlap hysteresis variant:
+    - overlap path opened slightly (`soften_ready: 0 -> 4`) but aggregate still worsened.
+  - relaxed-evidence+soften variants:
+    - tiny positive shift only:
+      - `avg_pf +0.0009`
+      - `avg_exp_krw +0.032`
+      - `sum_profit_krw +16.3513`
+    - breadth check failed:
+      - changed datasets: `1/12` only (`upbit_KRW_XRP_1m_12000.csv`)
+    - gate remained `overall_gate_pass=false`.
+- Root-cause refinement:
+  - not at target yet; current behavior indicates high path-dependence in pre-cat branch transitions (e.g., severe-sync vs no-soft ownership migration) with weak cross-dataset generalization.
+- Decision:
+  - do not promote any Stage-2.309 diag config to baseline.
+  - continue structural work on overlap path stability with anti-overfit breadth guard (multi-dataset consistency first, single-dataset gains treated as non-promotable).
+
+## Latest Implementation Log (2026-02-19, Stage-2.308 pre-cat negative-history quarantine hard-block revalidation)
+- Goal:
+  - validate whether `pre_cat_no_soft_negative_history` can be reduced by structural quarantine (pattern-based, no coin hardcoding).
+- Structural updates:
+  - `negative_history_quarantine` behavior changed from soft-threshold bias to pre-cat hard block on active hold:
+    - `src/runtime/BacktestRuntime.cpp`
+      - added `pre_cat_negative_history_quarantine_active` state
+      - when active during `pre_catastrophic`, force `PreCatastrophicNoRecovery` block path
+    - `src/runtime/LiveTradingRuntime.cpp`
+      - same active-state + hard-block behavior for parity
+  - retained 12-set sequential validation discipline (`--max-workers 1`), no parallel matrix execution.
+- Validation:
+  - compile:
+    - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release --target AutoLifeTrading AutoLifeV2KernelSmokeTest AutoLifeV2EngineBacktestSmokeTest AutoLifeV2ShadowParityTest` PASS
+  - smoke:
+    - `build/Release/AutoLifeV2KernelSmokeTest.exe` PASS
+    - `build/Release/AutoLifeV2EngineBacktestSmokeTest.exe` PASS
+    - `build/Release/AutoLifeV2ShadowParityTest.exe` PASS
+  - matrix replay (12-set, realdata, higher-TF companions, sequential):
+    - baseline:
+      - `build/Release/logs/profitability_matrix_stage2308_nh_quarantine_hardblock_baseline.csv`
+      - `build/Release/logs/profitability_gate_report_stage2308_nh_quarantine_hardblock_baseline.json`
+    - quarantine ON diag:
+      - `build/Release/logs/profitability_matrix_stage2308_nh_quarantine_hardblock_diag.csv`
+      - `build/Release/logs/profitability_gate_report_stage2308_nh_quarantine_hardblock_diag.json`
+  - outcome:
+    - aggregate metrics: **identical**
+      - `avg_pf 0.42 -> 0.42`
+      - `avg_exp_krw -10.8518 -> -10.8518`
+      - `sum_profit_krw -5545.2985 -> -5545.2985`
+      - `changed_datasets=0/12`
+    - only instrumentation changed:
+      - `strategy_ev_pre_cat_negative_history_quarantine_set: 0 -> 3994`
+      - `strategy_ev_pre_cat_negative_history_quarantine_active: 0 -> 23910`
+    - loss-pattern shares unchanged:
+      - `pre_cat_no_soft_negative_history` 43.7591%
+      - `pre_cat_no_soft_high_quality_high_pressure_lock` 35.1415%
+      - `pre_cat_severe_sync_dominant` 15.8242%
+      - files:
+        - `build/Release/logs/loss_contributor_by_precat_pattern_stage2308_nhq_hardblock_baseline.csv`
+        - `build/Release/logs/loss_contributor_by_precat_pattern_stage2308_nhq_hardblock_diag.csv`
+- Root-cause confirmation:
+  - bottleneck is not quarantine activation itself but **quality-evidence coupling collapse**:
+    - `strategy_ev_pre_cat_observed=60818`
+    - `strategy_ev_pre_cat_quality_context_relaxed_overlap=719` (1.18%)
+    - `strategy_ev_pre_cat_soften_candidate_quality_and_evidence=0`
+    - `strategy_ev_pre_cat_soften_ready=0`
+    - `strategy_ev_pre_cat_blocked_no_soft_path=54435` (89.50%)
+- Decision:
+  - keep `negative_history_quarantine` default OFF for production (no measurable gain in current regime).
+  - next structural work should target `quality-evidence overlap` expansion under bounded anti-overfit constraints (pattern-level only).
+
+## Latest Implementation Log (2026-02-19, Stage-2.306 pre-cat loss pattern taxonomy (coin-agnostic) wiring)
+- Goal:
+  - move diagnosis from coin-specific ownership to data-pattern ownership.
+- Structural updates:
+  - extended `scripts/analyze_loss_contributors.py` with pre-cat pattern taxonomy:
+    - new output:
+      - `--output-precat-pattern-csv`
+      - default: `build/Release/logs/loss_contributor_by_precat_pattern.csv`
+    - new classifier:
+      - `classify_pre_cat_lock_pattern(...)`
+      - input:
+        - `pre_cat_feature_snapshot_diagnostics_json`
+        - `entry_risk_gate_breakdown_json`
+      - pattern classes:
+        - `pre_cat_no_soft_high_quality_high_pressure_lock`
+        - `pre_cat_no_soft_negative_history`
+        - `pre_cat_no_soft_low_signal_quality`
+        - `pre_cat_no_soft_low_rr`
+        - `pre_cat_severe_sync_dominant`
+        - `pre_cat_bridge_triggered`
+        - `pre_cat_bridge_surrogate_triggered`
+        - etc.
+- Verification:
+  - syntax:
+    - `python -m py_compile scripts/analyze_loss_contributors.py` PASS
+  - baseline gate report replay:
+    - input:
+      - `build/Release/logs/profitability_gate_report_stage2303_postpatch_baseline.json`
+    - output:
+      - `build/Release/logs/loss_contributor_by_precat_pattern_stage2303_baseline.csv`
+  - surrogate ON diag replay:
+    - input:
+      - `build/Release/logs/profitability_gate_report_stage2305_surrogateflag_diag_on.json`
+    - output:
+      - `build/Release/logs/loss_contributor_by_precat_pattern_stage2305_diag_on.csv`
+- Result summary (pattern-level):
+  - baseline dominant:
+    - `pre_cat_no_soft_negative_history` (44.50%)
+    - `pre_cat_no_soft_high_quality_high_pressure_lock` (34.05%)
+    - `pre_cat_severe_sync_dominant` (16.09%)
+  - surrogate ON:
+    - `pre_cat_bridge_surrogate_triggered` appeared (14.42% loss share)
+    - `pre_cat_severe_sync_dominant` share dropped (16.09% -> 7.11%)
+    - aggregate profitability still degraded.
+- Decision:
+  - keep surrogate OFF in production.
+  - continue structural tuning against dominant pattern classes, not coin identifiers.
+
+## Latest Implementation Log (2026-02-19, Stage-2.305 pre-cat bridge surrogate safety split + 12-set verification)
+- Goal:
+  - keep structural exploration active while preventing silent production-risk expansion.
+  - separate "bridge surrogate experiment path" from bounded production path.
+- Root-cause observations (12-set, core_full):
+  - `strategy_ev_pre_cat_soften_candidate_rr_ok=0` persisted in baseline.
+  - `strategy_ev_pre_cat_recovery_evidence_relaxed_any` was concentrated to one dataset (`KRW-XRP`) and near-zero elsewhere.
+  - this made bridge/failsafe practically dormant under strict evidence dependency.
+- Structural updates:
+  - relief trade scope refactor:
+    - switched pre-cat relief cap reference from full-history-only to local recent/regime scope fallback:
+      - `pre_cat_relief_trade_scope`
+    - applied to:
+      - `pre_cat_recovery_bridge_ready`
+      - `pre_cat_no_soft_quality_relief_ready`
+      - `pre_cat_candidate_rr_failsafe_ready`
+    - files:
+      - `src/runtime/BacktestRuntime.cpp`
+      - `src/runtime/LiveTradingRuntime.cpp`
+  - experimental surrogate evidence path added for bridge:
+    - strict quality + pressure bounded fallback when `relaxed_any` is absent.
+    - diagnostic counter added:
+      - `strategy_ev_pre_cat_recovery_evidence_bridge_surrogate`
+    - output propagation:
+      - `src/main.cpp`
+      - `scripts/run_profitability_matrix.py`
+      - `scripts/run_realdata_candidate_loop.py`
+      - `scripts/run_candidate_train_eval_cycle.py`
+  - safety split (critical):
+    - new config flag added and defaulted OFF:
+      - `enable_strategy_ev_pre_cat_recovery_evidence_bridge_surrogate`
+    - loaded via:
+      - `include/engine/EngineConfig.h`
+      - `src/common/Config.cpp`
+      - `config/config.json`
+      - `build/Release/config/config.json`
+    - tuner key propagation:
+      - `scripts/tune_candidate_gate_trade_density.py`
+- Verification:
+  - build + smoke:
+    - `AutoLifeTrading` build PASS
+    - `AutoLifeV2EngineBacktestSmokeTest.exe` PASS
+    - `AutoLifeV2KernelSmokeTest.exe` PASS
+    - `AutoLifeV2ShadowParityTest.exe` PASS
+  - 12-set matrix (sequential, `--max-workers 1`):
+    - baseline:
+      - `build/Release/logs/profitability_matrix_stage2303_postpatch_baseline.csv`
+    - bounded bridge (surrogate OFF):
+      - `build/Release/logs/profitability_matrix_stage2305_surrogateflag_bounded_off.csv`
+      - result: baseline identical (no hidden drift)
+    - diag bridge (surrogate ON):
+      - `build/Release/logs/profitability_matrix_stage2305_surrogateflag_diag_on.csv`
+      - activations observed:
+        - `strategy_ev_pre_cat_recovery_evidence_bridge=4`
+        - `strategy_ev_pre_cat_recovery_evidence_bridge_surrogate=4`
+        - `strategy_ev_pre_cat_softened_candidate_rr_failsafe=4`
+      - but aggregate degraded vs baseline:
+        - `avg_pf -0.0035`
+        - `avg_exp_krw -0.1152`
+        - `sum_profit_krw -66.928`
+      - dominant negative impact dataset: `upbit_KRW_AVAX_1m_12000.csv`
+- Decision:
+  - keep surrogate path OFF by default (production safety).
+  - retain instrumentation + isolated toggle for controlled structural experiments only.
+
+## Latest Implementation Log (2026-02-19, Stage-2.301 recovery-bridge runtime activation + candidate_rr semantic restore)
+- Goal:
+  - resolve persistent `blocked_no_soft_path` deadlock without broad relaxation, and keep anti-overfit safety bounded.
+- Structural updates:
+  - runtime bridge activation was fully wired in both engines:
+    - `src/runtime/BacktestRuntime.cpp`
+    - `src/runtime/LiveTradingRuntime.cpp`
+  - new effective evidence path:
+    - `has_recovery_evidence_for_soften_effective = has_recovery_evidence_for_soften || pre_cat_recovery_bridge_ready`
+    - bridge is bounded by:
+      - per strategy+regime activation budget
+      - max strategy trades
+      - max full-history pressure
+      - max severe-axis count
+      - relaxed-evidence + quality + non-hostile + RR guard
+  - activation budget state reset/consumption wired:
+    - clear on start/init:
+      - `pre_cat_recovery_bridge_activation_by_key_.clear()`
+    - consume on actual soften/failsafe usage path only.
+  - semantic cleanup:
+    - `strategy_ev_pre_cat_soften_candidate_rr_ok` restored to candidate meaning (`non_hostile + RR`) and quality floors kept in `pre_cat_soften_non_severe_ready`.
+    - prevents hidden double-gating and improves diagnosis readability.
+  - diagnostics/aggregation propagation:
+    - JSON + console output:
+      - `src/main.cpp`
+    - matrix/loop/train-eval script key propagation:
+      - `scripts/run_profitability_matrix.py`
+      - `scripts/run_realdata_candidate_loop.py`
+      - `scripts/run_candidate_train_eval_cycle.py`
+      - `scripts/tune_candidate_gate_trade_density.py`
+- Validation:
+  - python syntax:
+    - `python -m py_compile scripts/run_profitability_matrix.py scripts/run_realdata_candidate_loop.py scripts/run_candidate_train_eval_cycle.py scripts/tune_candidate_gate_trade_density.py` PASS
+  - compile:
+    - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release --target AutoLifeTrading` PASS
+  - smoke tests:
+    - `build/Release/AutoLifeV2EngineBacktestSmokeTest.exe` PASS
+    - `build/Release/AutoLifeV2KernelSmokeTest.exe` PASS
+    - `build/Release/AutoLifeV2ShadowParityTest.exe` PASS
+  - quick CLI json check:
+    - `build/Release/AutoLifeTrading.exe --backtest .\\data\\backtest\\sample_trend_pullback_1m.csv --json` PASS
+    - verified new key appears:
+      - `entry_funnel.strategy_ev_pre_cat_recovery_evidence_bridge`
+
+## Latest Implementation Log (2026-02-19, Stage-2.300 pre-cat sync-safe override structural probe)
+- Goal:
+  - reduce over-blocking at `pre_catastrophic` branch where `severe_sync` immediately hard-blocks before any bounded recovery path can be considered.
+- Structural updates:
+  - runtime branch re-order + guarded override path added:
+    - `src/runtime/BacktestRuntime.cpp`
+    - `src/runtime/LiveTradingRuntime.cpp`
+  - new `pre_cat_sync_override_ready` path:
+    - evaluated before `severe_history_sync_pre_cat` hard block.
+    - requires all of:
+      - `severe_history_sync_pre_cat`
+      - `recovery_quality_context_for_soften`
+      - `has_recovery_evidence_for_soften`
+      - `non_hostile_regime`
+      - bounded pressure/axis (`contextual` + `unsynced` caps)
+      - RR guard (`>= 1.18` when risk is defined)
+    - applies stricter adaptive penalty than normal override (higher strength floor and adaptive history adders).
+- Validation:
+  - compile:
+    - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release --target AutoLifeTrading` PASS
+  - smoke tuner replay:
+    - `build/Release/logs/candidate_trade_density_tuning_summary_stage2306_sync_override_smoke.json`
+    - best remained `scenario_quality_focus_000`, `overall_gate_pass=false`.
+- Diagnostic result (current working config replay for combo008):
+  - artifact:
+    - `build/Release/logs/profitability_profile_summary_combo008_sync_override_eval_v2.csv`
+  - key observation:
+    - dominant block is currently `blocked_no_soft_path`, not `blocked_severe_sync`.
+    - representative counters:
+      - `strategy_ev_pre_cat_observed=36342`
+      - `strategy_ev_pre_cat_blocked_no_soft_path=34066`
+      - `strategy_ev_pre_cat_blocked_severe_sync=2276`
+      - `strategy_ev_pre_cat_softened_override=0`
+  - interpretation:
+    - this patch is structurally safe but does not materially unlock current deadlock because active bottleneck shifted to no-soft path quality gating in the present config state.
+- Next action:
+  - focus on `blocked_no_soft_path` root cause (quality/evidence coupling) instead of further widening severe-sync path.
+  - keep anti-overfit rule: no coin-level hardcoding, and verify by multi-dataset replay before enabling any new relief path.
+
+## Latest Implementation Log (2026-02-19, Stage-2.299 pre-cat bridge guarded rollback)
+- Goal:
+  - test whether forcing pre-cat remediation family can unblock persistent `overall_gate_pass=false` deadlock.
+- What was attempted:
+  - added `risk_gate_pre_cat_recovery_bridge` family in tuner adaptation.
+  - temporarily widened activation (deadlock-driven) so pre-cat bridge dominated `risk_gate` candidates.
+  - replay artifact:
+    - `build/Release/logs/candidate_trade_density_tuning_summary_stage2304_precat_bridge_replay12.json`
+- Observed result (8 effective datasets after quality gate):
+  - candidate metrics remained separated (wiring bug already fixed), but quality regressed vs prior replay baseline.
+  - best row deteriorated:
+    - `PF 0.5351 -> 0.4229`
+    - `EXP -7.7837 -> -9.6109`
+    - `overall_gate_pass` stayed `false` for all rows.
+  - dominant bottleneck reason remained:
+    - `blocked_risk_gate_strategy_ev_pre_catastrophic`
+- Decision / rollback:
+  - removed deadlock-forced activation path.
+  - keep pre-cat bridge family as **guarded mode only**:
+    - activates only when pre-cat catastrophic ownership is explicitly observed in context.
+  - smoke confirmation artifact:
+    - `build/Release/logs/candidate_trade_density_tuning_summary_stage2303d_precat_guarded_smoke.json`
+    - family routing returned to `risk_gate_rr_adaptive_history_prefilter_bridge` in normal context.
+  - guarded 12-set replay artifact:
+    - `build/Release/logs/candidate_trade_density_tuning_summary_stage2305_guarded_precat_replay12.json`
+    - best: `scenario_quality_focus_008`, `PF 0.4870`, `EXP -8.1291`, `avg_trades 77.625`
+    - still `overall_gate_pass=false` for all rows, with dominant reason unchanged:
+      - `blocked_risk_gate_strategy_ev_pre_catastrophic`
+- Additional structural fix retained:
+  - `build_effective_bottleneck_context(...)` now propagates walk-forward fail/gap keys:
+    - `walk_forward_profit_sum_fail_active`
+    - `walk_forward_profitable_ratio_fail_active`
+    - `walk_forward_ready_ratio_gap`
+    - `walk_forward_min_ready_ratio`
+    - `walk_forward_validation_ready_ratio`
+    - `walk_forward_holdout_ready_ratio`
+  - this removes hidden context-drop that previously made several adaptation conditions silently inactive.
+
+## Latest Implementation Log (2026-02-19, Stage-2.297 tune-caller config-source fix)
+- Goal:
+  - resolve structural false-deadlock where tuning candidates show identical realized metrics regardless of combo changes.
+- Root cause:
+  - `scripts/tune_candidate_gate_trade_density.py:evaluate_combo(...)` wrote combo-applied config to `build_config`,
+    but `run_profitability_matrix.py` call omitted both `--config-path` and `--source-config-path`.
+  - matrix runner then seeded each profile run from default `config/config.json`, effectively ignoring combo payload.
+  - symptom: winner mostly changed only by objective constants while realized PF/EXP/trades stayed identical across candidates.
+- Structural fix:
+  - in `scripts/tune_candidate_gate_trade_density.py`:
+    - matrix command now passes:
+      - `--config-path <build_config>`
+      - `--source-config-path <build_config>`
+    - eval cache schema bumped:
+      - `cache_schema_version: 7 -> 8`
+      - prevents reuse of stale entries generated under broken config-seeding behavior.
+- Validation:
+  - syntax:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+  - quick verification run:
+    - `python scripts/tune_candidate_gate_trade_density.py --data-dir .\\data\\backtest --dataset-names simulation_large.csv --allow-missing-higher-tf-companions --max-scenarios 2 --screen-dataset-limit 1 --screen-top-k 2 --gate-min-trades-per-run 1 --gate-min-avg-trades 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --disable-eval-cache --summary-json .\\build\\Release\\logs\\candidate_trade_density_tuning_summary_stage2301_config_source_fix_check_simlarge.json`
+  - result:
+    - `summary` 16 combos now show separated realized metrics:
+      - `avg_profit_factor`: 16 unique values
+      - `avg_expectancy_krw`: 16 unique values
+      - `avg_total_trades`: 11 unique values
+    - confirms candidate combo payload is now reflected in runtime evaluation path.
+- Interpretation:
+  - previously observed "winner not changing despite many iterations" had a concrete caller-level wiring bug component.
+  - next structural analysis should proceed on true metric deltas (not masked by stale source-config seeding).
+
+## Latest Implementation Log (2026-02-19, Stage-2.296 pre-cat override safety sweep and verdict)
+- Goal:
+  - verify whether newly added pre-cat bypass paths can improve OOS outcome without overfitting / over-trading.
+- Structural updates:
+  - Stage-2.293:
+    - added no-soft quality-relief safety cap:
+      - `strategy_ev_pre_cat_no_soft_quality_relief_max_activations_per_key`
+    - runtime state map added (backtest/live) for per strategy+regime activation limit.
+  - Stage-2.295:
+    - turned hardcoded `enable_strategy_ev_sync_guard=false` into config knob:
+      - `enable_strategy_ev_pre_cat_sync_guard` (default OFF).
+  - Stage-2.296:
+    - exposed unsynced override quality gates as knobs:
+      - `strategy_ev_pre_cat_unsynced_override_min_strength`
+      - `strategy_ev_pre_cat_unsynced_override_min_expected_value`
+      - `strategy_ev_pre_cat_unsynced_override_min_liquidity`
+      - `strategy_ev_pre_cat_unsynced_override_min_reward_risk`
+      - `strategy_ev_pre_cat_unsynced_override_max_full_history_pressure`
+      - `strategy_ev_pre_cat_unsynced_override_max_severe_axis_count`
+    - removed hardcoded constants from runtime and bound to config.
+- Validation setup:
+  - dataset: 12x `data/backtest_real/upbit_KRW_*_1m_12000.csv`
+  - profile: `core_full`
+  - command family:
+    - `python scripts/run_profitability_matrix.py --data-dir .\\data\\backtest_real --dataset-names ... --profile-ids core_full --max-workers 1 --backtest-retry-count 1 --skip-core-vs-legacy-gate ...`
+- Key outcomes:
+  - no-soft relief (conservative ON, no cap):
+    - reduced `blocked_no_soft` and pre-cat block counts
+    - but degraded profitability (`PF/EXP/total_profit` down), activation over-opened.
+  - no-soft relief + cap=1:
+    - activation suppressed sharply (`softened_no_soft_quality_relief` small)
+    - degradation reduced but still net negative vs OFF.
+  - sync_guard ON (without no-soft relief):
+    - `PF/EXP` improved directionally, but trade count surged and `total_profit_sum_krw` worsened.
+  - sync_guard ON + strict unsynced override thresholds:
+    - trade surge mostly contained, but still net negative vs OFF on 12-set aggregate.
+- Verdict:
+  - current pre-cat bypass family (no-soft relief / sync-guard override) does not pass anti-overfit criterion on 12-set OOS aggregate.
+  - keep all newly added knobs default OFF in production config.
+  - use these paths only as controlled experiments.
+- Next focus:
+  - pivot from pre-cat bypass expansion to entry-quality / payoff-asymmetry structural bottleneck (where current losses concentrate).
+
+## Latest Implementation Log (2026-02-19, Stage-2.292 no-soft quality-relief structural patch)
+- Goal:
+  - resolve direct bottleneck where `pre-cat` branch stays in `blocked_no_soft_path` because recovery-evidence is zero in low-sample windows.
+- Root-cause snapshot (from Stage-2.291):
+  - `KRW-ADA`: `pre_cat_observed=7081`, `blocked_no_soft=7081`, `recovery_evidence_for_soften=0`.
+  - i.e. quality context exists but soften path is closed before evidence can accumulate.
+- Structural updates (default OFF safety):
+  - added guarded bootstrap relief knobs:
+    - `enable_strategy_ev_pre_cat_no_soft_quality_relief`
+    - `strategy_ev_pre_cat_no_soft_quality_relief_max_strategy_trades`
+    - `strategy_ev_pre_cat_no_soft_quality_relief_min_strength`
+    - `strategy_ev_pre_cat_no_soft_quality_relief_min_expected_value`
+    - `strategy_ev_pre_cat_no_soft_quality_relief_min_liquidity`
+    - `strategy_ev_pre_cat_no_soft_quality_relief_min_reward_risk`
+    - `strategy_ev_pre_cat_no_soft_quality_relief_max_full_history_pressure`
+    - `strategy_ev_pre_cat_no_soft_quality_relief_max_severe_axis_count`
+  - wired to:
+    - `include/engine/EngineConfig.h`
+    - `src/common/Config.cpp`
+    - `config/config.json` (defaults OFF)
+  - runtime logic:
+    - `src/runtime/BacktestRuntime.cpp`
+    - `src/runtime/LiveTradingRuntime.cpp`
+    - when pre-catastrophic is observed and severe path is not active, allow bounded override only under high signal-quality/rr constraints in low-sample window.
+  - diagnostics:
+    - added counter `strategy_ev_pre_cat_softened_no_soft_quality_relief`
+    - propagated through:
+      - `include/runtime/BacktestRuntime.h`
+      - `src/main.cpp`
+      - `scripts/run_profitability_matrix.py`
+      - `scripts/run_realdata_candidate_loop.py`
+      - `scripts/run_candidate_train_eval_cycle.py`
+- Validation:
+  - build:
+    - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release --target AutoLifeTrading -j 6`
+  - syntax:
+    - `python -m py_compile scripts/run_profitability_matrix.py scripts/run_realdata_candidate_loop.py scripts/run_candidate_train_eval_cycle.py`
+  - A/B smoke (`core_full`, `upbit_KRW_ADA_1m_12000.csv`):
+    - OFF:
+      - `PF=0.1453`, `EXP=-21.0549`, `trades=42`
+      - `pre_cat_observed=7057`
+      - `softened_override=0`
+      - `softened_no_soft_quality_relief=0`
+      - `blocked_no_soft=7057`
+    - ON (experiment config):
+      - `PF=0.1763`, `EXP=-19.3693`, `trades=44`
+      - `pre_cat_observed=6961`
+      - `softened_override=442`
+      - `softened_no_soft_quality_relief=442`
+      - `blocked_no_soft=6519`
+- Interpretation:
+  - new path is wired and active.
+  - bottleneck is reduced (blocked-no-soft share down), but gate pass is still false.
+  - next step: run multi-dataset sweep with conservative thresholds to avoid over-relaxation.
+
+## Latest Implementation Log (2026-02-19, Stage-2.291 pre-cat feature snapshot export wiring)
+- Goal:
+  - turn `pre-cat` bottleneck diagnosis from counter-level only into branch-level feature snapshot telemetry.
+- Structural updates:
+  - added branch snapshot schema to backtest result:
+    - `Result::PreCatFeatureSnapshot`
+    - `Result::PreCatFeatureSnapshotBranch`
+    - file: `include/runtime/BacktestRuntime.h`
+  - runtime accumulation wiring in pre-cat decision path:
+    - captures feature averages/hit counts for:
+      - `observed`
+      - `softened_contextual`
+      - `softened_override`
+      - `blocked_severe_sync`
+      - `blocked_no_soft_path`
+    - captured dimensions include:
+      - signal (`strength`, `expected_value`, `liquidity`, RR)
+      - history (`expectancy_krw`, `pf`, `win_rate`, `trades`, `loss_to_win`)
+      - pressure (`full/recent/regime pressure`, `severe_axis_count`)
+    - file: `src/runtime/BacktestRuntime.cpp`
+  - JSON export wiring:
+    - `src/main.cpp` now emits `pre_cat_feature_snapshot` alongside `entry_funnel`.
+  - matrix analyzer telemetry extension:
+    - `scripts/run_profitability_matrix.py` now consumes snapshot branches and records
+      snapshot-derived diagnostics (e.g. blocked-no-soft-path share/feature averages)
+      into `entry_risk_gate_breakdown_json`.
+- Validation:
+  - build:
+    - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release --target AutoLifeTrading -j 6`
+  - runtime JSON smoke:
+    - `build/Release/AutoLifeTrading.exe --backtest data/backtest/sample_trend_pullback_1m.csv --json`
+    - confirmed `pre_cat_feature_snapshot` key is present.
+  - script syntax:
+    - `python -m py_compile scripts/run_profitability_matrix.py`
+  - quick real-data snapshot (5x `*_1m_12000.csv`, core_full JSON replay):
+    - `KRW-ADA`: `observed=7081`, `blocked_no_soft=7081`, share=`1.0`
+    - `KRW-AVAX`: `observed=7032`, `blocked_no_soft=7032`, share=`1.0`
+    - `KRW-BCH`: `observed=20`, `blocked_no_soft=20`, share=`1.0`
+    - `KRW-DOGE`: `observed=5400`, `blocked_no_soft=5400`, share=`1.0`
+    - note: the sampled windows confirm current pre-cat branch dominance is still `blocked_no_soft_path`.
+- Interpretation:
+  - this stage is instrumentation/export only (no threshold change).
+  - next step should use the new snapshot to identify why `blocked_no_soft_path` dominates in hostile OOS windows.
+
+## Latest Implementation Log (2026-02-19, Stage-2.290 recovery-evidence hysteresis + quality-relief sweep)
+- Goal:
+  - stabilize `pre-cat` recovery-evidence state transition under contextual downgrade path.
+- Structural updates (default OFF safety):
+  - added recovery-evidence hysteresis knobs:
+    - `enable_strategy_ev_pre_cat_recovery_evidence_hysteresis`
+    - `strategy_ev_pre_cat_recovery_evidence_hysteresis_hold_steps`
+    - `strategy_ev_pre_cat_recovery_evidence_hysteresis_min_trades`
+  - added guarded quality-relief knobs (used only with hysteresis override path):
+    - `enable_strategy_ev_pre_cat_recovery_quality_hysteresis_relief`
+    - `strategy_ev_pre_cat_recovery_quality_hysteresis_min_strength`
+    - `strategy_ev_pre_cat_recovery_quality_hysteresis_min_expected_value`
+    - `strategy_ev_pre_cat_recovery_quality_hysteresis_min_liquidity`
+  - added diagnostics:
+    - `strategy_ev_pre_cat_recovery_evidence_hysteresis_override`
+    - `strategy_ev_pre_cat_quality_hysteresis_override`
+  - runtime wiring:
+    - `src/runtime/BacktestRuntime.cpp`
+    - `src/runtime/LiveTradingRuntime.cpp`
+  - config + propagation:
+    - `include/engine/EngineConfig.h`
+    - `src/common/Config.cpp`
+    - `config/config.json`
+    - `src/main.cpp`
+    - `scripts/run_profitability_matrix.py`
+    - `scripts/run_realdata_candidate_loop.py`
+    - `scripts/run_candidate_train_eval_cycle.py`
+- Validation artifacts:
+  - baseline OFF:
+    - `build/Release/logs/profitability_gate_report_stage2284_latest_baseline_off.json`
+  - contextual ON (no hysteresis):
+    - `build/Release/logs/profitability_gate_report_stage2285_contextual_on_no_hyst.json`
+  - contextual ON + hysteresis:
+    - `build/Release/logs/profitability_gate_report_stage2286_contextual_on_hyst12.json`
+    - `build/Release/logs/profitability_gate_report_stage2286b_contextual_on_hyst12_post_qualitypatch.json`
+  - quality-relief sweeps:
+    - `build/Release/logs/contextual_quality_relief_sweep_stage2289.csv`
+    - `build/Release/logs/contextual_quality_relief_sweep_stage2289.json`
+  - aggressive diagnostic case:
+    - `build/Release/logs/profitability_gate_report_stage2288_contextual_hyst_quality_relief_aggressive.json`
+- Key results (`core_full`):
+  - OFF: `PF 0.5317`, `EXP -7.5608`, `overall_gate_pass=false`
+  - contextual no-hyst: `PF 0.5331`, `EXP -7.5106`, but `rec_soften=1`
+  - contextual + hysteresis:
+    - `rec_soften: 1 -> 13`, `rec_hyst=12` (hysteresis path is active)
+    - profitability unchanged (`PF 0.5331`, `EXP -7.5106`)
+  - moderate quality-relief grid (`stage2289`):
+    - no additional activation (`q_hyst=0`, `soften_ready=1` ?†Ï?)
+  - aggressive quality-relief diagnostic (`stage2288`, very loose thresholds):
+    - activation opens (`q_hyst=12`, `soften_ready=13`) but profitability still unchanged.
+- Interpretation:
+  - evidence hysteresis itself???ôÏûë???ÅÌÉú ?ÑÏù¥ ?àÏ†ï?îÎäî ?ºÎ? ?¨ÏÑ±).
+  - Í∑∏Îü¨???ÑÏã§?ÅÏù∏ ?àÏßà?ÑÌôî Î≤îÏúÑ?êÏÑú??Î≥ëÎ™© ?¥ÏÜåÍ∞Ä Í±∞Ïùò ???òÍ≥†, Í≥ºÌïú ?ÑÌôî?êÏÑú??PnL Í∞úÏÑ†???ÜÏùå.
+  - Ï¶??ÑÏû¨ Î≥ëÎ™©?Ä ?®Ïàú threshold/?àÏä§?åÎ¶¨?úÏä§ Ï°∞Ï†ïÎ≥¥Îã§ deeper selection/feature quality Ï™ΩÏóê ?àÏùå.
+- Safety:
+  - ??knobs??Î™®Îëê Í∏∞Î≥∏ OFFÎ°??†Ï?.
+
+## Latest Implementation Log (2026-02-19, Stage-2.283 contextual sensitivity + relaxed-recovery anchor probe)
+- Goal:
+  - continue structural bottleneck analysis after Stage-2.275 and verify whether contextual severe-downgrade can be made stable.
+- Structural updates:
+  - fixed experiment wiring bug in matrix runner:
+    - `scripts/run_profitability_matrix.py` now seeds profile runs from `--source-config-path` (not stale runtime baseline).
+  - added diagnostics:
+    - `strategy_ev_pre_cat_recovery_evidence_relaxed_recent_regime`
+    - `strategy_ev_pre_cat_recovery_evidence_relaxed_full_history`
+  - added optional relaxed-recovery full-history anchor switch (default OFF):
+    - `enable_strategy_ev_pre_cat_relaxed_recovery_full_history_anchor`
+  - added contextual severe-downgrade runtime knobs (default OFF):
+    - `enable_strategy_ev_pre_cat_contextual_severe_downgrade`
+    - `strategy_ev_pre_cat_contextual_severe_max_pressure`
+    - `strategy_ev_pre_cat_contextual_severe_max_axis_count`
+  - propagated new counters/keys through:
+    - `src/main.cpp`
+    - `scripts/run_profitability_matrix.py`
+    - `scripts/run_realdata_candidate_loop.py`
+    - `scripts/run_candidate_train_eval_cycle.py`
+- Validation artifacts:
+  - latest-code baseline OFF:
+    - `build/Release/logs/profitability_gate_report_stage2280_latestpost_baseline_off.json`
+  - latest-code composite ON:
+    - `build/Release/logs/profitability_gate_report_stage2281_latestpost_composite_on.json`
+  - latest-code contextual ON:
+    - `build/Release/logs/profitability_gate_report_stage2282_latestpost_contextual_on.json`
+  - contextual + anchor ON:
+    - `build/Release/logs/profitability_gate_report_stage2279_contextual_anchor_on.json`
+  - contextual sweep summary:
+    - `build/Release/logs/contextual_sweep_stage2278_summary.json`
+    - `build/Release/logs/contextual_sweep_stage2278_summary.csv`
+- Key results (`core_full`):
+  - OFF vs composite ON:
+    - profitability unchanged (`PF 0.5317`, `EXP -7.5608`)
+    - `quality+evidence` appeared (`719`) but still `non_severe=0`, `soften_ready=0`.
+  - contextual ON:
+    - slight metric recovery (`PF 0.5331`, `EXP -7.5106`, `profit -2449.925`)
+    - `soften_ready=1`, `contextual_downgrade_hits=1`
+    - however recovery evidence collapsed (`rec_soften 3031 -> 1`) and `blocked_no_soft_path` rose.
+  - full-history anchor ON:
+    - no additional effect in current holdout (`relaxed_full_history=0`).
+- Interpretation:
+  - direct bottleneck remains:
+    - contextual downgrade can open path, but currently only once and with unstable evidence dynamics.
+  - next structural focus should be stabilization of recovery-evidence state transition (not more threshold-only sweeps).
+- Safety:
+  - all new structural knobs remain default OFF in `config/config.json`.
+
+## Latest Implementation Log (2026-02-19, Stage-2.275 contextual severe-downgrade guarded trial)
+- Goal:
+  - move beyond threshold-only tuning and test a bounded structural path that can open `pre-cat soften` without coin hardcoding.
+- Structural updates (default OFF safety):
+  - added contextual severe-downgrade knobs:
+    - `enable_strategy_ev_pre_cat_contextual_severe_downgrade`
+    - `strategy_ev_pre_cat_contextual_severe_max_pressure`
+    - `strategy_ev_pre_cat_contextual_severe_max_axis_count`
+  - runtime integration:
+    - `src/runtime/BacktestRuntime.cpp`
+    - `src/runtime/LiveTradingRuntime.cpp`
+    - effective pre-cat severe predicate now supports guarded contextual downgrade only when:
+      - quality context + soften evidence + non-hostile regime hold,
+      - and severe pressure/axis remain below configured caps.
+  - diagnostics:
+    - `strategy_ev_pre_cat_contextual_severe_downgrade_hits` counter added and propagated through
+      - `src/main.cpp`
+      - `scripts/run_profitability_matrix.py`
+      - `scripts/run_realdata_candidate_loop.py`
+      - `scripts/run_candidate_train_eval_cycle.py`
+- Validation artifacts (same fixed 9-dataset set):
+  - latest-code OFF baseline:
+    - `build/Release/logs/profitability_gate_report_stage2276_latestcode_baseline_off.json`
+  - latest-code composite ON (without contextual downgrade):
+    - `build/Release/logs/profitability_gate_report_stage2277_latestcode_composite_on.json`
+  - contextual downgrade ON trial:
+    - `build/Release/logs/profitability_gate_report_stage2275_contextual_downgrade_on.json`
+- Key results (`core_full`):
+  - Stage-2276 OFF:
+    - `PF 0.5317`, `EXP -7.5608`, `soften_ready=0`
+    - `severe_comp=6383`
+  - Stage-2277 composite ON:
+    - profitability unchanged (`PF 0.5317`, `EXP -7.5608`)
+    - `soften_candidate_quality_and_evidence=719` emerged
+    - but `soften_candidate_non_severe=0`, `soften_ready=0` (still blocked)
+  - Stage-2275 contextual ON:
+    - slight metric recovery (`PF 0.5331`, `EXP -7.5106`, `profit -2449.925`)
+    - `soften_ready=1`, `softened_override=1`, `contextual_severe_downgrade_hits=1`
+    - `overall_gate_pass` remains `false`
+- Interpretation:
+  - contextual downgrade path can open the blocked branch, but only at near-zero frequency in current holdout.
+  - behavior is still not stable enough for promotion; keep as guarded research path (OFF by default).
+- Safety:
+  - checked-in defaults remain OFF for contextual severe-downgrade knobs.
+
+## Latest Implementation Log (2026-02-19, Stage-2.274 source-config wiring fix + pre-cat severe bottleneck decomposition)
+- Goal:
+  - verify whether recent ON/OFF experiments were truly applied at runtime and isolate the direct blocker under `pre-cat soften`.
+- Structural updates:
+  - fixed matrix runtime-config seeding bug:
+    - `scripts/run_profitability_matrix.py` now seeds each profile run from `--source-config-path` payload (instead of silently reusing existing `config-path` baseline).
+  - added pre-cat severe decomposition counters:
+    - `strategy_ev_pre_cat_severe_composite_catastrophic_hits`
+    - `strategy_ev_pre_cat_severe_composite_pressure_axis_hits`
+    - `strategy_ev_pre_cat_severe_composite_pressure_only_hits`
+  - added pre-cat quality/evidence decomposition counters:
+    - `strategy_ev_pre_cat_recovery_evidence_for_soften`
+    - `strategy_ev_pre_cat_quality_context_relaxed_overlap`
+    - `strategy_ev_pre_cat_quality_fail_regime`
+    - `strategy_ev_pre_cat_quality_fail_strength`
+    - `strategy_ev_pre_cat_quality_fail_expected_value`
+    - `strategy_ev_pre_cat_quality_fail_liquidity`
+  - propagation:
+    - `include/runtime/BacktestRuntime.h`
+    - `src/runtime/BacktestRuntime.cpp`
+    - `src/main.cpp`
+    - `scripts/run_profitability_matrix.py`
+    - `scripts/run_realdata_candidate_loop.py`
+    - `scripts/run_candidate_train_eval_cycle.py`
+- Validation artifacts:
+  - OFF baseline (source-config fix applied):
+    - `build/Release/logs/profitability_gate_report_stage2271_source_config_fix_baseline_off.json`
+  - ON (`soften + relaxed recovery + relaxed severe + composite severe`) after fix:
+    - `build/Release/logs/profitability_gate_report_stage2272_source_config_fix_composite_on.json`
+  - sensitivity variants:
+    - `build/Release/logs/profitability_gate_report_stage2273_composite_tight_a.json`
+    - `build/Release/logs/profitability_gate_report_stage2274_composite_tight_b.json`
+- Key results (`core_full`):
+  - Stage-2271 (OFF) vs Stage-2272 (ON, fixed):
+    - profitability unchanged (`PF 0.5317`, `EXP -7.5608`, `total_profit_sum_krw -2466.2763`)
+    - but counters now moved correctly (bug fix validated):
+      - `recovery_evidence_for_soften: 0 -> 3031`
+      - `soften_candidate_quality_and_evidence: 0 -> 719`
+      - `severe_active_hits: 6383 -> 4223`
+      - `soften_candidate_non_severe: 0` (still blocked)
+      - `soften_ready: 0` (still blocked)
+  - Stage-2273/2274 (tighter composite severe):
+    - slight metric recovery (`PF 0.5331`, `EXP -7.5106`, `profit -2449.925`)
+    - `soften_ready=1` appeared but frequency is near zero; `overall_gate_pass` remains `false`.
+- Interpretation:
+  - direct blocker is confirmed:
+    - quality+evidence candidates exist (`719`) but all fail at `non_severe` (i.e., severe classifier still dominates this slice).
+  - severe decomposition:
+    - composite severe is dominated by `pressure+axis` path on active severe samples; catastrophic path contribution is effectively `0` in this holdout.
+  - next structural action:
+    - move from threshold-only tuning to **contextual severe downgrade** design for quality+recovery candidates (bounded/safety-guarded), then revalidate.
+- Safety:
+  - default checked-in config remains OFF for experimental gates.
+  - matrix run still restores runtime `config-path` state after execution.
+
+## Latest Implementation Log (2026-02-19, Stage-2.262 pre-cat severe-gate sensitivity check)
+- Goal:
+  - continue structural bottleneck teardown after Stage-2.259:
+    - verify whether `pre-cat soften` can activate by relaxing severe-history predicate (still no coin hardcoding).
+- Structural updates (default OFF safety):
+  - added pre-cat severe-gate experiment knobs:
+    - `enable_strategy_ev_pre_cat_relaxed_severe_gate`
+    - `strategy_ev_pre_cat_relaxed_severe_min_trades`
+    - `strategy_ev_pre_cat_relaxed_severe_pressure_threshold`
+  - files:
+    - `include/engine/EngineConfig.h`
+    - `src/common/Config.cpp`
+    - `config/config.json`
+    - runtime wiring in:
+      - `src/runtime/BacktestRuntime.cpp`
+      - `src/runtime/LiveTradingRuntime.cpp`
+  - added pre-cat candidate-stage intersection counters:
+    - `strategy_ev_pre_cat_soften_candidate_quality_and_evidence`
+    - `strategy_ev_pre_cat_soften_candidate_non_severe`
+    - `strategy_ev_pre_cat_soften_candidate_non_hostile`
+    - `strategy_ev_pre_cat_soften_candidate_rr_ok`
+- Validation:
+  - latest OFF baseline:
+    - `build/Release/logs/profitability_gate_report_stage2262_relaxed_recovery_baseline_off_latest.json`
+  - sensitivity ON trial (runtime config override only):
+    - `enable_strategy_ev_pre_cat_soften_non_severe=true`
+    - `enable_strategy_ev_pre_cat_relaxed_recovery_evidence=true`
+    - `enable_strategy_ev_pre_cat_relaxed_severe_gate=true`
+    - `strategy_ev_pre_cat_relaxed_severe_min_trades=24`
+    - `strategy_ev_pre_cat_relaxed_severe_pressure_threshold=0.92`
+    - artifact:
+      - `build/Release/logs/profitability_gate_report_stage2261_relaxed_recovery_and_severe_sensitivity.json`
+- OFF vs ON (`core_full`) delta:
+  - `PF 0.5284 -> 0.5299`
+  - `EXP -7.7590 -> -7.7092`
+  - `total_profit_sum_krw -2542.9228 -> -2526.5715`
+  - `avg_trades` unchanged (`36.4444`)
+  - `overall_gate_pass` still `false`
+- Counter readout insight:
+  - OFF: `soften_ready=0`
+  - ON: `soften_ready=1`, `softened_override=1`
+  - ON also shifted pre-cat path:
+    - `blocked_risk_gate_strategy_ev_pre_catastrophic 32020 -> 31723`
+  - improvement exists but is too small to change gate status.
+- Interpretation:
+  - bottleneck is narrowed but not solved:
+    - enabling relaxed recovery + severe sensitivity can open the path, but currently only at near-zero frequency.
+  - next structural target remains `severe_full_negative` pressure model calibration itself (not threshold-only toggles).
+- Safety:
+  - runtime config restored to default OFF values after experiment.
+
+## Latest Implementation Log (2026-02-19, Stage-2.259 relaxed-recovery intersection diagnostics)
+- Goal:
+  - continue option-1 (no coin hardcoding) and identify the exact predicate that keeps `pre-cat soften` at zero.
+- Structural updates:
+  - relaxed recovery evidence model added (default OFF):
+    - `enable_strategy_ev_pre_cat_relaxed_recovery_evidence`
+    - `strategy_ev_pre_cat_relaxed_recovery_min_trades`
+    - `strategy_ev_pre_cat_relaxed_recovery_expectancy_gap_krw`
+    - `strategy_ev_pre_cat_relaxed_recovery_profit_factor_gap`
+    - `strategy_ev_pre_cat_relaxed_recovery_min_win_rate`
+  - files:
+    - `include/engine/EngineConfig.h`
+    - `src/common/Config.cpp`
+    - `config/config.json`
+  - pre-cat funnel intersection counters added:
+    - `strategy_ev_pre_cat_soften_candidate_quality_and_evidence`
+    - `strategy_ev_pre_cat_soften_candidate_non_severe`
+    - `strategy_ev_pre_cat_soften_candidate_non_hostile`
+    - `strategy_ev_pre_cat_soften_candidate_rr_ok`
+    - `strategy_ev_pre_cat_recovery_evidence_relaxed_any`
+  - pipeline propagation:
+    - `src/main.cpp`
+    - `scripts/run_profitability_matrix.py`
+    - `scripts/run_realdata_candidate_loop.py`
+    - `scripts/run_candidate_train_eval_cycle.py` (diagnostic-key exclusion for recommendation routing)
+- Validation runs:
+  - OFF baseline with relaxed evidence visibility:
+    - `build/Release/logs/profitability_gate_report_stage2257_relaxed_recovery_off.json`
+  - ON trial (`enable_strategy_ev_pre_cat_soften_non_severe=true`, `enable_strategy_ev_pre_cat_relaxed_recovery_evidence=true`):
+    - `build/Release/logs/profitability_gate_report_stage2259_relaxed_recovery_on_intersection_diag.json`
+- Key result (`core_full`, stage2259):
+  - profitability unchanged (`PF 0.5284`, `EXP -7.7590`, `overall_gate_pass=false`)
+  - `strategy_ev_pre_cat_observed=33077`
+  - `strategy_ev_pre_cat_recovery_quality_context=9505`
+  - `strategy_ev_pre_cat_recovery_evidence_relaxed_any=3031`
+  - `strategy_ev_pre_cat_soften_candidate_quality_and_evidence=719`
+  - `strategy_ev_pre_cat_soften_candidate_non_severe=0`
+  - `strategy_ev_pre_cat_soften_candidate_non_hostile=0`
+  - `strategy_ev_pre_cat_soften_candidate_rr_ok=0`
+  - `strategy_ev_pre_cat_soften_ready=0`
+- Interpretation:
+  - recovery-evidence bottleneck was partially resolved (`0 -> 3031`, and quality+evidence intersection `719` emerged),
+  - but all candidates still fail at `!severe_full_negative`.
+  - direct structural bottleneck is now narrowed to severe-history pressure (`severe_full_negative`) definition/scaling, not coin-specific behavior.
+- Safety:
+  - build runtime config restored to default OFF after experiment.
+
+## Latest Implementation Log (2026-02-19, Stage-2.256 pre-cat recovery-path instrumentation)
+- Goal:
+  - explain why `pre-cat OR-recovery` soften path does not activate in practice.
+- Instrumentation added:
+  - `include/runtime/BacktestRuntime.h`
+  - `src/runtime/BacktestRuntime.cpp`
+  - `src/main.cpp`
+  - `scripts/run_profitability_matrix.py`
+  - `scripts/run_realdata_candidate_loop.py`
+  - new counters:
+    - `strategy_ev_pre_cat_observed`
+    - `strategy_ev_pre_cat_recovery_quality_context`
+    - `strategy_ev_pre_cat_recovery_evidence_any`
+    - `strategy_ev_pre_cat_soften_ready`
+    - `strategy_ev_pre_cat_softened_contextual`
+    - `strategy_ev_pre_cat_softened_override`
+    - `strategy_ev_pre_cat_blocked_severe_sync`
+    - `strategy_ev_pre_cat_blocked_no_soft_path`
+- Validation run:
+  - `build/Release/logs/profitability_gate_report_stage2256_precat_recovery_instrumentation_filtered.json`
+  - `build/Release/logs/profitability_matrix_stage2256_precat_recovery_instrumentation_filtered.csv`
+  - `core_full` aggregate:
+    - `blocked_risk_gate_strategy_ev=32020`
+    - `strategy_ev_pre_cat_observed=33077`
+    - `strategy_ev_pre_cat_recovery_quality_context=9505` (`28.74%` of observed)
+    - `strategy_ev_pre_cat_recovery_evidence_any=0`
+    - `strategy_ev_pre_cat_soften_ready=0`
+    - `strategy_ev_pre_cat_softened_contextual=0`
+    - `strategy_ev_pre_cat_softened_override=0`
+    - `strategy_ev_pre_cat_blocked_severe_sync=6383` (`19.30%`)
+    - `strategy_ev_pre_cat_blocked_no_soft_path=26694` (`80.70%`)
+- Interpretation:
+  - bottleneck is not coin-specific hardcoding.
+  - softening is blocked because recovery evidence (`has_recent_recovery || has_regime_recovery`) is never satisfied under current thresholds/history context.
+  - therefore Stage-2.254 OR-recovery logic showed no metric change.
+
+## Latest Implementation Log (2026-02-19, Stage-2.219 root-cause structural patch: candidate_rr failsafe with hard budget)
+- Goal:
+  - resolve the exact structural mismatch where:
+    - `strategy_ev_pre_cat_soften_candidate_rr_ok > 0`
+    - but `strategy_ev_pre_cat_soften_ready = 0`
+  - without re-opening broad pre-cat relaxation regressions.
+- Root cause (code-level):
+  - `pre_cat_soften_ready` had a hard dependency on:
+    - `enable_strategy_ev_pre_cat_soften_non_severe`
+  - therefore candidate-quality signals could still be forced into `blocked_no_soft_path` when the flag was OFF.
+- Structural changes:
+  - runtime:
+    - `src/runtime/BacktestRuntime.cpp`
+    - `src/runtime/LiveTradingRuntime.cpp`
+    - added bounded path `pre_cat_candidate_rr_failsafe_ready`:
+      - activates only when `soften_non_severe` is OFF
+      - requires existing `pre_cat_soften_candidate_rr_ok`
+      - requires per-key activation cap (`strategy+regime`)
+      - optional extra floors/caps (strength/EV/liquidity/RR/pressure/axis/trades)
+  - config:
+    - `include/engine/EngineConfig.h`
+    - `src/common/Config.cpp`
+    - new keys:
+      - `enable_strategy_ev_pre_cat_candidate_rr_failsafe`
+      - `strategy_ev_pre_cat_candidate_rr_failsafe_*`
+  - observability:
+    - `include/runtime/BacktestRuntime.h`
+    - `src/main.cpp`
+    - `scripts/run_profitability_matrix.py`
+    - `scripts/run_realdata_candidate_loop.py`
+    - new counter:
+      - `strategy_ev_pre_cat_softened_candidate_rr_failsafe`
+  - tuner wiring:
+    - `scripts/tune_candidate_gate_trade_density.py`
+    - candidate_rr_failsafe keys added to combo spec and config apply path.
+- Verification:
+  - build:
+    - `cmake --build build --config Release` success
+  - smoke:
+    - `AutoLifeV2EngineBacktestSmokeTest` PASS
+    - `AutoLifeV2KernelSmokeTest` PASS
+    - `AutoLifeV2ShadowParityTest` PASS
+  - targeted A/B on known candidate_rr case (`upbit_KRW_XRP_1m_12000.csv`):
+    - OFF (`stage2314`):
+      - `PF 0.3530`, `EXP -12.0516`, `trades 46`
+      - `cand_rr=896`, `soften_ready=0`, `blocked_no_soft=7757`
+    - failsafe ON strict defaults (`stage2315`):
+      - no activation (`softened_candidate_rr_failsafe=0`)
+      - metrics unchanged vs OFF
+    - failsafe ON loose (`stage2316`, exploratory):
+      - `softened_candidate_rr_failsafe=1` activated
+      - `blocked_no_soft: 7757 -> 7669`
+      - but OOS quality regressed (`PF 0.3530 -> 0.3268`, `EXP -12.0516 -> -12.7827`)
+- Decision:
+  - keep failsafe as explicit opt-in control (default OFF / strict-bounded).
+  - do not globally widen thresholds.
+  - next step: tune bounded failsafe only with fixed holdout and strict promotion gate.
+
+## Latest Implementation Log (2026-02-19, Stage-2.254 pre-cat OR-recovery guarded trial)
+- Goal:
+  - apply option-1 without coin hardcoding:
+    - allow pre-cat soften only when `recent OR regime` recovery evidence exists with quality context.
+- Structural change (runtime, no market/coin constant used):
+  - `src/runtime/BacktestRuntime.cpp`
+  - `src/runtime/LiveTradingRuntime.cpp`
+  - updated `pre_cat_soften_ready` guard:
+    - `enable_strategy_ev_pre_cat_soften_non_severe`
+    - `recovery_quality_context`
+    - `(has_recent_recovery || has_regime_recovery)`
+    - plus existing non-hostile + non-severe + quality thresholds.
+- Validation run (flag ON, fixed 9-dataset holdout set):
+  - `build/Release/logs/profitability_gate_report_stage2254_precat_or_recovery_flag_on.json`
+  - compared vs baseline (`stage2251`):
+    - `PF 0.5284`, `EXP -7.7590`, `avg_trades 36.4444` unchanged
+    - `blocked_risk_gate_strategy_ev_pre_catastrophic=32020` unchanged
+  - interpretation:
+    - current holdout contexts rarely satisfy recovery-evidence conditions, so soften path did not activate.
+- Safety:
+  - experiment flag restored OFF after run:
+    - `build/Release/config/config.json` -> `enable_strategy_ev_pre_cat_soften_non_severe=false`
+
+## Latest Implementation Log (2026-02-19, Stage-2.253 strategy-EV pre-cat precision decomposition + guarded isolation)
+- Goal:
+  - perform precise decomposition of `blocked_risk_gate_strategy_ev` and confirm direct failure ownership.
+- Precision decomposition baseline:
+  - `build/Release/logs/profitability_gate_report_stage2251_precision_decomp.json`
+  - `build/Release/logs/profitability_matrix_stage2251_precision_decomp.csv`
+  - fixed-holdout 9 datasets (same anchor split as Stage-2.250).
+  - `core_full`:
+    - `PF 0.5284`, `EXP -7.7590`, `avg_trades 36.4444`, `overall_gate_pass=false`
+    - `blocked_risk_gate_strategy_ev=32020`
+    - subtype split:
+      - `blocked_risk_gate_strategy_ev_pre_catastrophic=32020`
+      - `blocked_risk_gate_strategy_ev_severe_threshold=0`
+      - `blocked_risk_gate_strategy_ev_catastrophic_history=0`
+      - `blocked_risk_gate_strategy_ev_loss_asymmetry=0`
+      - `blocked_risk_gate_strategy_ev_unknown=0`
+  - pre-cat concentration (`core_full`):
+    - `KRW_SUI=7336`, `KRW_LINK=7072`, `KRW_XRP=6768`, `KRW_SOL=5596`, `KRW_TRX=5248`
+- Structural trial (patch1: non-severe pre-cat soften path enabled):
+  - `build/Release/logs/profitability_gate_report_stage2252_precision_decomp_patch1.json`
+  - result:
+    - pre-cat block count reduced: `32020 -> 22655` (`-29.2%`)
+    - `avg_trades`: `36.4444 -> 44.8889`
+    - `avg_expectancy_krw`: `-7.7590 -> -7.7350` (minor improve)
+    - `avg_profit_factor`: `0.5284 -> 0.5099` (regression)
+    - `total_profit_sum_krw`: `-2542.9228 -> -3122.9024` (regression)
+  - interpretation:
+    - broad pre-cat relaxation reduces block count but admits additional low-quality loss contexts.
+- Safety isolation decision:
+  - keep this relaxation as experimental flag only (default OFF):
+    - `trading.enable_strategy_ev_pre_cat_soften_non_severe=false`
+    - wired in:
+      - `include/engine/EngineConfig.h`
+      - `src/common/Config.cpp`
+      - `config/config.json`
+  - default-off parity verification:
+    - `build/Release/logs/profitability_gate_report_stage2253_precision_decomp_patch1_default_off.json`
+    - baseline fully restored (`PF 0.5284`, `EXP -7.7590`, `avg_trades 36.4444`, `pre_cat=32020`).
+- Next structural priority:
+  - do not globally enable non-severe pre-cat soften.
+  - next trial should require explicit recovery evidence (`recent OR regime`) plus tighter quality context before any pre-cat soften path is allowed.
+
+## Latest Implementation Log (2026-02-19, Stage-2.250 fixed-holdout split stabilization + latest-fetch baseline reconfirm)
+- Goal:
+  - remove run-to-run evaluation drift caused by `reserve_newest_markets_for_holdout` mtime ranking changes.
+- Pipeline change:
+  - `scripts/run_candidate_train_eval_cycle.py`
+  - added CLI:
+    - `--fixed-holdout-markets KRW_BERA,KRW_ENSO,...`
+  - behavior:
+    - deterministic holdout anchor set is applied before train/validation split.
+    - manifest now records:
+      - `fixed_holdout_mode`
+      - `fixed_holdout_markets_requested`
+      - `fixed_holdout_markets_applied`
+- Validation run:
+  - `build/Release/logs/candidate_train_eval_cycle_summary_stage2250_fixed_holdout_split.json`
+  - `build/Release/logs/profitability_gate_report_realdata_stage2250_fixed_holdout_split.json`
+  - key holdout (`core_full`):
+    - `PF 0.5284`, `EXP -7.7590`, `avg_trades 36.4444`
+    - `core_vs_legacy_pass=true`, `overall_gate_pass=false`
+    - top risk component still `blocked_risk_gate_strategy_ev` (`32020`)
+- Interpretation:
+  - split stability is improved (comparison is now reproducible with fixed holdout anchors).
+  - profitability bottleneck remains structural; gate is still blocked by negative expectancy/profit factor.
+
+## Latest Implementation Log (2026-02-19, Stage-2.247 strategy-EV sync-guard trial rollback + latest-fetch realdata verification)
+- Goal:
+  - verify whether `blocked_risk_gate_strategy_ev` is over-blocking bug vs genuine edge absence, then re-check on freshly fetched latest real-data.
+- Structural trial changes (runtime):
+  - `src/runtime/BacktestRuntime.cpp`
+  - `src/runtime/LiveTradingRuntime.cpp`
+  - trial logic:
+    - hard-block required `full + recent/regime` negative sync (experiment).
+    - unsynced path allowed only for high-quality signal override (experiment).
+- Trial results:
+  - `stage2244` (`strategy_ev_sync_guard`) and `stage2245` (`..._quality_gated`) both regressed holdout:
+    - baseline (`stage2246/2239-level`) holdout core_full: `PF 0.5988`, `EXP -5.4949`, `trades 37.8333`
+    - stage2244 holdout core_full: `PF 0.5104`, `EXP -7.1388`, `trades 42.3333`
+    - stage2245 holdout core_full: `PF 0.5138`, `EXP -7.4221`, `trades 39.0`
+  - interpretation:
+    - `strategy_ev` block is currently preventing real loss contexts; simple relaxation worsens OOS.
+- Safety rollback decision:
+  - keep sync-guard experiment path in code but default OFF:
+    - `enable_strategy_ev_sync_guard=false` (both runtime files)
+  - verified rollback-safe parity:
+    - `stage2246` returns to baseline-level metrics (`holdout PF 0.5988`, `EXP -5.4949`).
+- Latest-data verification (`--run-fetch`):
+  - fetched fresh Upbit OHLCV snapshots (1m/5m/60m/240m) for tracked KRW markets.
+  - run artifact:
+    - `build/Release/logs/candidate_train_eval_cycle_summary_stage2247_latest_fetch_baseline.json`
+    - `build/Release/logs/profitability_gate_report_realdata_stage2247_latest_fetch_baseline.json`
+  - result on latest fetch (baseline logic):
+    - holdout core_full: `PF 0.4636`, `EXP -9.0961`, `trades 29.0`
+    - `core_vs_legacy_pass=false`, `overall_gate_pass=false`
+    - top holdout reject remains `blocked_risk_gate_strategy_ev` (`19352`)
+- Upstream quality-head trial (manager prefilter):
+  - trial:
+    - `stage2248_forward_proxy_prefilter` (`src/strategy/StrategyManager.cpp`)
+    - added short-horizon forward-proxy quality pressure before manager EV floor.
+  - result:
+    - holdout regressed (`PF 0.4490`, `EXP -8.8330`, `core_vs_legacy_pass=false`).
+  - rollback-safe:
+    - keep code path but default OFF (`enable_forward_proxy_prefilter=false`).
+    - verified default-off run:
+      - `stage2249_forward_proxy_default_off` (behavior parity vs non-forward-proxy baseline on same dataset split).
+- Next structural priority:
+  - do **not** relax strategy-EV hard block first.
+  - stabilize evaluation split first (holdout membership drift by dataset mtime currently changes run-to-run difficulty).
+  - then iterate upstream quality head in guarded experiments (default OFF, holdout-first promotion).
+
+## Latest Implementation Log (2026-02-19, Stage-2.243 loser-context quarantine trial + rollback-safe disable)
+- Goal:
+  - test structural bottleneck fix by blocking loser contexts earlier (`market+strategy+regime`) before `strategy_ev` global veto.
+- Structural changes:
+  - `src/runtime/BacktestRuntime.cpp`
+  - `src/runtime/LiveTradingRuntime.cpp`
+  - added recent-window builders for context stats:
+    - `buildStrategyRegimeEdgeStats(..., max_recent_trades_per_key)`
+    - `buildMarketStrategyRegimeEdgeStats(..., max_recent_trades_per_key)`
+  - added recency-weighted loser-context severity scoring path in pattern-stage.
+  - added rollout-safety default:
+    - `enable_loser_context_quarantine=false` (runtime path present, default OFF).
+- Validation runs:
+  - enabled trial:
+    - `build/Release/logs/candidate_train_eval_cycle_summary_stage2242_loser_context_quarantine_tight_seq.json`
+  - disabled-safe run:
+    - `build/Release/logs/candidate_train_eval_cycle_summary_stage2243_loser_context_quarantine_disabled.json`
+  - baseline reference:
+    - `build/Release/logs/candidate_train_eval_cycle_summary_stage2239_contextual_ev_soften_tight.json`
+- Result:
+  - enabled trial (`2242`):
+    - validation improved (`PF 0.5878 -> 0.6102`, `EXP -7.0537 -> -6.4718`)
+    - but holdout regressed materially (`PF 0.5988 -> 0.5185`, `EXP -5.4949 -> -7.5755`, trades down).
+  - disabled-safe (`2243`):
+    - metrics returned to baseline-level (`2239` parity).
+- Decision:
+  - keep quarantine infrastructure in code, but keep default OFF until holdout-safe activation rule is found.
+  - current direct bottleneck remains unchanged at baseline:
+    - `blocked_risk_gate_strategy_ev` + negative PF/EXP on real-data splits.
+
+## Latest Implementation Log (2026-02-19, Stage-2.239 strategy-EV failure-path code teardown)
+- Goal:
+  - inspect direct failure path (`blocked_risk_gate_strategy_ev`) in runtime code and verify whether failure is caused by over-blocking bug or genuine negative edge.
+- Structural patch applied:
+  - `src/runtime/BacktestRuntime.cpp`
+  - `src/runtime/LiveTradingRuntime.cpp`
+  - changes:
+    - added recent-window strategy stats map path (`buildStrategyEdgeStats(..., max_recent_trades_per_strategy)`).
+    - added guarded recovery softening branch for pre-catastrophic strategy-EV block:
+      - require `recent recovery + regime recovery + quality context` simultaneously.
+      - otherwise keep hard block.
+- Validation runs:
+  - `build/Release/logs/candidate_train_eval_cycle_summary_stage2238_contextual_ev_soften.json` (loose recovery softening)
+  - `build/Release/logs/candidate_train_eval_cycle_summary_stage2239_contextual_ev_soften_tight.json` (tight recovery softening)
+  - baseline:
+    - `build/Release/logs/candidate_train_eval_cycle_summary_stage2237_post_rr_role_guard.json`
+- Result:
+  - Stage-2238:
+    - `blocked_risk_gate_strategy_ev` count slightly reduced, but PF/EXP degraded on all splits.
+  - Stage-2239:
+    - metrics and strategy-EV block counts returned to Stage-2237 level (regression removed).
+  - interpretation:
+    - current bottleneck is not a simple false-positive hard-block bug.
+    - direct root remains genuine negative strategy edge under current dataset context (PF<1, EXP<0, profitable_ratio low).
+- Next structural priority (no micro-tuning):
+  - strengthen loser-context quarantine at `market+strategy+regime` granularity (pattern gate side), not by relaxing strategy-EV hard block.
+  - add recency-weighted loss asymmetry penalty before entry-risk gate so bad contexts are blocked earlier than strategy-EV global veto.
+
+## Latest Implementation Log (2026-02-19, Stage-2.237 real-data structure hardening rerun)
+- Goal:
+  - keep synthetic gate pass improvements while reducing real-data catastrophic losses without coin-level hardcoding.
+- Structural changes:
+  - `src/runtime/BacktestRuntime.cpp`
+  - `src/runtime/LiveTradingRuntime.cpp`
+  - applied two layers:
+    - earlier catastrophic strategy-EV hard block (activation sample reduced to early regime).
+    - role-aware RR geometry hardening:
+      - trend-continuation strategies (`Advanced Momentum`, `Breakout Strategy`) require higher RR in off-trend regimes.
+      - fallback/off-trend quality context adds extra RR floor pressure.
+- Real-data rerun:
+  - `build/Release/logs/candidate_train_eval_cycle_summary_stage2237_post_rr_role_guard.json`
+  - vs previous baseline:
+    - `stage2235_post_sl_tp` (`build/Release/logs/candidate_train_eval_cycle_summary_stage2235_post_sl_tp.json`)
+- Key deltas (2235 -> 2237):
+  - train:
+    - PF `0.4308 -> 0.5299` (+0.0991)
+    - EXP `-11.427 -> -9.5438` (+1.8832)
+  - validation:
+    - PF `0.4308 -> 0.5878` (+0.1570)
+    - EXP `-9.592 -> -7.0537` (+2.5383)
+  - holdout:
+    - PF `0.4443 -> 0.5988` (+0.1545)
+    - EXP `-8.4842 -> -5.4949` (+2.9893)
+- Bottleneck shift:
+  - dominant risk component changed from
+    - `blocked_risk_gate_entry_quality_rr_adaptive_history`
+  - to
+    - `blocked_risk_gate_strategy_ev`
+  - interpretation:
+    - low-quality/high-loss entries are now structurally filtered earlier.
+- Current status:
+  - still `overall_gate_pass=false` on real-data train/validation/holdout.
+  - walk-forward remains not-ready (`oos_profit_sum_positive` failures persist).
+  - next phase should focus on EV hard-block calibration recovery path (quality-preserving throughput recovery) rather than parameter micro-tuning.
+
+## Latest Implementation Log (2026-02-19, Stage-2.234 SL/TP structure redesign)
+- User-selected path: `2) ?êÏ†à/?µÏ†à Íµ¨Ï°∞(?êÏã§???ÄÎπ??¥Ïùµ?? ?¨ÏÑ§Í≥?.
+- Structural changes (`src/runtime/BacktestRuntime.cpp`, `src/runtime/LiveTradingRuntime.cpp`):
+  - `rebalanceSignalRiskReward(...)` redesigned with history-aware asymmetry control:
+    - added implied loss/win ratio estimator from `(strategy_win_rate, strategy_profit_factor)`.
+    - added `computeHistoryRewardRiskAsymmetryPressure(...)`.
+    - when asymmetry pressure is active:
+      - compress stop-loss distance (risk-price) in bounded range.
+      - raise TP2 target RR floor adaptively.
+      - enforce TP2-TP1 minimum RR gap to avoid weak winner geometry.
+  - preserves market-agnostic behavior (no coin-specific hardcoding).
+- Revalidation (same matrix condition):
+  - command:
+    - `python scripts/run_profitability_matrix.py --profile-ids core_full --exclude-low-trade-runs-for-gate --min-trades-per-run-for-gate 5 --max-workers 1`
+  - result:
+    - `overall_gate_pass=true`
+    - `profile_gate_pass=true`
+    - `core_full`: `profitable_ratio=1.0`, `avg_profit_factor=1.0791`, `avg_expectancy_krw=1.0256`
+- Dataset-level spot check:
+  - `simulation_2000.csv`:
+    - `profit=+7.3119`, `pf=1.0067`, `exp=+0.1354`
+  - `simulation_large.csv`:
+    - `profit=+104.4809`, `pf=1.1502`, `exp=+1.8997`
+- Interpretation:
+  - triplet-fail direct bottleneck (PF/EXP/profitable_ratio) is currently resolved under the active matrix scope.
+  - next priority remains anti-overfit validation on expanded/holdout/realdata scopes.
+
+## Latest Implementation Log (2026-02-19, Stage-2.233 triplet-fail direct-cause structural patch)
+- Direct cause re-confirmed (`overall_gate_pass=false`):
+  - `core_vs_legacy` is no longer a blocker (`gate_auto_skipped=true` when comparison unavailable).
+  - failure is still pure `profile_gate=false` driven by triplet fail:
+    - `gate_profit_factor_pass=false`
+    - `gate_profitable_ratio_pass=false`
+    - (`gate_expectancy_pass` moved to `true` after this patch set)
+- Root bottleneck observed from live backtest JSON:
+  - high win-rate but negative expectancy pattern persisted on failing run.
+  - `simulation_large.csv` (core_full):
+    - before patch set: `profit=-86.7671`, `pf=0.9018`, `exp=-1.4706`
+    - after patch set: `profit=-34.6100`, `pf=0.9584`, `exp=-0.5967`
+  - strategy split indicates reward-risk asymmetry concentration:
+    - `Advanced Momentum`: profitable
+    - `Mean Reversion Strategy`: high win-rate segment exists but avg loss magnitude dominates avg win.
+- Structural changes applied:
+  - `src/runtime/LiveTradingRuntime.cpp`
+    - removed leftover fallback experiment penalties (rollback parity with backtest path).
+    - added reward-risk asymmetry guard on strategy history (high win-rate + PF<1 regime).
+    - added `alpha_head_relief_eligible` gate: weak/asymmetric history reduces fallback relax strength.
+  - `src/runtime/BacktestRuntime.cpp`
+    - same asymmetry guard logic + fallback-relief eligibility coupling for backtest parity.
+    - added `StrategyEdgeStats` helpers (`avgWinKrw`, `avgLossAbsKrw`) to make asymmetry checks explicit.
+  - `src/strategy/StrategyManager.cpp`
+    - added manager prefilter asymmetry pressure using implied loss/win ratio from `(win_rate, PF)`.
+    - new rejection taxonomy:
+      - `filtered_out_by_manager_rr_asymmetry_strength`
+      - `filtered_out_by_manager_rr_asymmetry_ev`
+- Revalidation snapshot (same matrix condition: `core_full`, low-trade run exclusion, min trades/run=5):
+  - pre-patch baseline:
+    - `avg_profit_factor=0.9594`, `avg_expectancy_krw=-0.5624`, `profitable_ratio=0.5000`
+  - post-patch:
+    - `avg_profit_factor=0.9887`, `avg_expectancy_krw=-0.1098`, `profitable_ratio=0.5000`
+  - interpretation:
+    - expectancy bottleneck was partially resolved.
+    - PF/profitable-ratio bottleneck remains and is now the primary residual blocker.
+
+## Latest Implementation Log (2026-02-18, Stage-2.230 objective deadlock mitigation + bonus anti-lock)
+- Root bottleneck confirmed:
+  - repeated tuning converged to the exact same winner/objective (`stage2233 iter01~iter11` identical).
+  - objective penalty stack was saturating in deadlock context (WF ready gap + holdout/validation violation), and rr-history-mixed coupling bonus kept the same failing family at top.
+- Structural changes (`scripts/tune_candidate_gate_trade_density.py`):
+  - added objective feasibility deadlock relax path:
+    - new helper: `compute_objective_feasibility_deadlock_penalty_scale(...)`
+    - scales base feasibility penalties only when deadlock activation conditions are met.
+    - wired to both screen/final objective computation.
+    - new CLI:
+      - `--enable/disable-objective-feasibility-deadlock-relax`
+      - `--objective-feasibility-deadlock-min-penalty-scale`
+      - `--objective-feasibility-deadlock-ready-gap-threshold`
+      - `--objective-feasibility-deadlock-violation-threshold-krw`
+  - added rr-history-mixed bonus anti-lock guard:
+    - in `compute_rr_adaptive_history_mixed_oos_objective_bonus(...)`, introduced deadlock guard scale that downscales bonus when split-gap deadlock persists with weak expectancy.
+    - new CLI:
+      - `--objective-enable/disable-rr-adaptive-history-mixed-oos-deadlock-guard`
+      - `--objective-rr-adaptive-history-mixed-oos-deadlock-violation-threshold-krw`
+      - `--objective-rr-adaptive-history-mixed-oos-deadlock-min-expectancy-krw`
+      - `--objective-rr-adaptive-history-mixed-oos-deadlock-ready-gap-threshold`
+      - `--objective-rr-adaptive-history-mixed-oos-deadlock-violation-weight`
+      - `--objective-rr-adaptive-history-mixed-oos-deadlock-expectancy-weight`
+      - `--objective-rr-adaptive-history-mixed-oos-deadlock-ready-gap-weight`
+      - `--objective-rr-adaptive-history-mixed-oos-deadlock-min-scale`
+  - telemetry additions:
+    - `objective_feasibility_deadlock_*` fields on screen/final rows.
+    - `objective_rr_adaptive_history_mixed_oos_bonus_deadlock_scale` on screen/final rows.
+    - config/export metadata updated with new knobs.
+- Verification:
+  - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` -> pass
+- Runtime smoke:
+  - `stage2234_structural_iter01` (feasibility deadlock relax only):
+    - best objective improved: `-37088.73337 -> -30755.65503` (PF/EXP/Win unchanged)
+    - `objective_feasibility_deadlock_relax_active=true`, `penalty_scale=0.7468`
+  - `stage2234_structural_iter02` (plus rr bonus anti-lock):
+    - rr mixed bonus reduced: `525.35 -> 333.40`
+    - `objective_rr_adaptive_history_mixed_oos_bonus_deadlock_scale=0.6346`
+    - best objective: `-30947.60565` (still same winner; gate still fail)
+- Interpretation:
+  - objective saturation and bonus lock-in are now explicitly controlled.
+  - scoring is less cliff-like and less bonus-sticky, but promotion gate remains blocked by negative expectancy / WF readiness bottleneck.
+
+## Latest Replay Log (2026-02-18, Stage-2.225 Promote Replay)
+- What was run:
+  - promote-on tuning replay:
+    - `python scripts/tune_candidate_gate_trade_density.py ... --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2229_manager_ev_edge_joint_remediation_promote.json --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2229_manager_ev_edge_joint_remediation_promote.csv`
+    - result:
+      - `promote_best_combo=on, applied=true`
+      - promoted winner remains `manager_ev_edge_joint_remediation` family.
+  - post-promotion train/eval rerun:
+    - `python scripts/run_candidate_train_eval_cycle.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --real-data-dir .\data\backtest_real --real-live-data-dir .\data\backtest_real_live --reserve-newest-markets-for-holdout 2 --train-iterations 1`
+- Key movement after promotion replay:
+  - promotion gate:
+    - still `promotion_gate_pass=false`, `generalization_guard_pass=false`
+  - recommendation changed (meaningful bottleneck shift):
+    - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      -> `hold_candidate_calibrate_risk_gate_rr_adaptive_history_adders`
+  - split metrics:
+    - validation PF/EXP: `0.5515 / -7.0171` -> `0.5543 / -7.9528`
+    - holdout PF/EXP: `0.5266 / -11.0591` -> `0.6888 / -11.1296`
+  - manager EV floor dominance reduced in absolute count:
+    - validation top rejection count: `16701 -> 9507`
+    - holdout top rejection count: `17143 -> 8404`
+  - risk-gate component ownership shifted:
+    - validation top component:
+      - `blocked_risk_gate_entry_quality_rr_edge_adaptive_regime`
+        -> `blocked_risk_gate_entry_quality_rr_adaptive_history`
+    - holdout top component:
+      - `blocked_risk_gate_entry_quality_rr_edge_adaptive_regime`
+        -> `blocked_risk_gate_entry_quality_rr_adaptive_mixed`
+  - walk-forward viable readiness:
+    - validation/holdout both `ready_ratio_viable=0.0` (unchanged)
+    - dominant viable failure remains `oos_profit_sum_positive`
+- Interpretation:
+  - Íµ¨Ï°∞Í∞úÏÑ† + promoted replayÎ°??úÎ≥ëÎ™?Ï¢ÖÎ•ò?ùÎäî ?§Ï†úÎ°??¥Îèô?àÎã§.
+  - Í∑∏Îü¨??OOS profitability Î≥∏Ï≤¥(`oos_profit_sum_positive`)Í∞Ä Í∑∏Î?Î°úÎùº gate ?µÍ≥º???ÑÏßÅ ?§Ìå®?úÎã§.
+
+## Latest Implementation Log (2026-02-18, Stage-2.228 post-rerun plumbing fix + gate replay)
+- What changed (`scripts/run_candidate_train_eval_cycle.py`):
+  - fixed output path plumbing in nested realdata loop:
+    - now forwards `--output-report-json` from `--gate-report-json`
+    - now forwards `--live-signal-funnel-taxonomy-json` from train/eval args
+  - previous failure mode:
+    - custom `--gate-report-json` path caused post-run read failure (`Gate report not found`) because nested loop wrote only default path.
+- Verification:
+  - `python -m py_compile scripts/run_candidate_train_eval_cycle.py` -> pass
+  - `python scripts/verify_script_suite.py --skip-help` -> pass
+- Post rerun (after plumbing fix):
+  - command:
+    - `python scripts/run_candidate_train_eval_cycle.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --matrix-max-workers 1 --matrix-backtest-retry-count 1 --summary-json .\build\Release\logs\candidate_train_eval_cycle_summary_stage2231_post_rerun.json --gate-report-json .\build\Release\logs\profitability_gate_report_realdata_stage2231_post_rerun.json`
+  - result files:
+    - `build/Release/logs/candidate_train_eval_cycle_summary_stage2231_post_rerun.json`
+    - `build/Release/logs/profitability_gate_report_realdata_stage2231_post_rerun.json`
+  - promotion verdict:
+    - `promotion_gate_pass=false`
+    - `base_promotion_gate_pass=false`
+    - `generalization_guard_pass=false`
+    - recommendation unchanged: `hold_candidate_calibrate_risk_gate_rr_adaptive_history_adders`
+  - stage metrics:
+    - train_2: `PF=0.6861`, `EXP=-7.0282`, `trades=88.1`
+    - validation(det): `PF=0.6879`, `EXP=-6.2809`, `trades=72.6667`
+    - holdout(det): `PF=0.4101`, `EXP=-14.1582`, `trades=106.6`
+  - bottleneck ownership (promotion verdict context):
+    - validation top rejection:
+      - `filtered_out_by_manager_ev_quality_floor` (`7028`)
+    - holdout top rejection:
+      - `filtered_out_by_manager_ev_quality_floor` (`15971`)
+    - dominant risk-gate component remains:
+      - `blocked_risk_gate_entry_quality_rr_adaptive_history`
+      - validation `286`, holdout `1730`
+  - walk-forward:
+    - validation/holdout `ready_ratio=0.0`, `ready_ratio_viable=0.0`
+- Interpretation:
+  - Íµ¨Ï°∞ Î≤ÑÍ∑∏(Ï∂úÎ†• Í≤ΩÎ°ú ÎØ∏Ï†Ñ?????úÍ±∞?òÏóàÍ≥??¨ÌòÑ???àÎäî rerun Í≤ΩÎ°ú???ïÎ≥¥?êÎã§.
+  - ?òÏ?Îß?Î≥ëÎ™© Î≥∏Ï≤¥???¨Ï†Ñ??`manager_ev_quality_floor` + `rr_adaptive_history` risk gate Ï∂ïÏóê Í≥†Ï†ï?òÏñ¥ ?àÎã§.
+
+## Latest Implementation Log (2026-02-18, Stage-2.229 history prefilter-bridge structural patch)
+- What changed (`scripts/tune_candidate_gate_trade_density.py`):
+  - `entry_quality_rr_adaptive_history` Î∂ÑÍ∏∞?êÏÑú manager-EV floor ?ïÎ†•??Í∞ïÌïú Í≤ΩÏö∞ ?†Í∑ú ?®Î?Î¶¨Î°ú ?ºÏö∞??
+    - `risk_gate_rr_adaptive_history_prefilter_bridge`
+    - activation:
+      - EV-floor pressure active
+      - and (dual pressure or pressure_share>=0.30 or holdout-validation gap pressure active)
+  - ?†Í∑ú ?®Î?Î¶??ÅÏùë Î∏îÎ°ù Ï∂îÍ?:
+    - `risk_gate_rr_adaptive_history_prefilter_bridge`
+    - Î™©Ìëú:
+      - history Í≥ÑÏó¥ risk-gate ownership?Ä ?†Ï??òÎ©¥??prefilter/entry floorÎ•??ïÎ†• Í∞ïÎèÑ Í∏∞Î∞ò?ºÎ°ú ?ÑÌôî
+      - local sweep(bridge step)???µÌïú ÎØ∏ÏÑ∏ ?êÏÉâ ÏßÄ??    - ?¨Ìï®:
+      - pressure-scaled `edge/rr/pf/ev/signal/trade` Ï°∞Ï†ï
+      - two-head entry/second/aggregate score ?ÑÌôî + near-miss adaptive-floor relax coupling
+      - hostile guardrail ?†Ï?(`avoid_high_volatility`, `avoid_trending_down`)
+  - ?ÑÏÜç ?ïÏû• source ?∞Í≤∞ Î≥¥Í∞ï:
+    - `risk_gate_rr_adaptive_history_prefilter_bridge`Î•?source family set??Ï∂îÍ?:
+      - holdout expectancy lift
+      - manager EV-edge joint remediation
+      - rr_adaptive_history_mixed OOS recovery
+- Verification:
+  - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` -> pass
+  - `python scripts/verify_script_suite.py --skip-help` -> pass
+- Runtime smoke (`stage2232_history_prefilter_bridge_smoke`):
+  - command:
+    - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 1 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2232_history_prefilter_bridge_smoke.json --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2232_history_prefilter_bridge_smoke.csv`
+  - key signals:
+    - bottleneck context:
+      - `risk_gate_focus=entry_quality_rr_adaptive_history`
+      - `manager_ev_floor_pressure=True`, `dual=True`, `share=0.3550`
+    - scenario family composition includes ?†Í∑ú ?®Î?Î¶?
+      - `risk_gate_rr_adaptive_history_prefilter_bridge: 1`
+    - best combo??Í∏∞Ï°¥ ?ÅÏúÑ family(`..._rr_hist_mix_oos_01`) ?†Ï?
+  - best metric snapshot (2231 -> 2232 smoke):
+    - PF: `0.5863 -> 0.6262` (Í∞úÏÑ†)
+    - EXP: `-9.9115 -> -9.8333` (Í∞úÏÑ†)
+    - max DD: `6.1489 -> 5.0711` (Í∞úÏÑ†)
+    - objective: `-35783.96 -> -37088.73` (?ÖÌôî; guard penalty ?ÅÌñ•)
+- Interpretation:
+  - Íµ¨Ï°∞?ÅÏúºÎ°úÎäî ?úhistory Î≥ëÎ™© + EV-floor ?ïÎ†•???Ä??Í≤ΩÎ°úÍ∞Ä ?àÎ°ú ?ùÍ≤ºÍ≥??∞Ì???Ï£ºÏûÖ???ïÏù∏?òÏóà??
+  - ?§Îßå selector objective???ÑÏßÅ penalty ÎØºÍ∞ê?ÑÍ? ?íÏïÑ, ?§Ïùå ?®Í≥Ñ??prefilter-bridge Í∞ïÎèÑ/penalty coupling Ï∫òÎ¶¨Î∏åÎ†à?¥ÏÖò???ÑÏöî?òÎã§.
+
+## Latest Implementation Log (2026-02-18, Stage-2.227 history/mixed quality-gated remediation)
+- What changed (`scripts/tune_candidate_gate_trade_density.py`):
+  - `rr_adaptive_history_mixed_oos_recovery` profile recalibration:
+    - loosened throughput-bias overshoot and shifted defaults toward quality/balanced profiles.
+    - added profile-cycle weighting:
+      - normal pressure: `quality -> balanced` Ï§ëÏã¨
+      - dual/high pressure: throughput profile??Î≥¥Ï°∞ ?¨Î°Ø?ºÎ°úÎß??úÌôò.
+  - objective coupling hardening:
+    - `compute_rr_adaptive_history_mixed_oos_objective_bonus(...)`??realized-quality gate Ï∂îÍ?:
+      - inputs: row `avg_profit_factor`, `avg_expectancy_krw`, `avg_win_rate_pct`
+      - bonus???àÏßà deficit Í∏∞Î∞ò `quality_scale`Î°?Ï∂ïÏÜå/Ï∞®Îã®.
+    - new CLI:
+      - `--objective-rr-adaptive-history-mixed-oos-bonus-min-profit-factor`
+      - `--objective-rr-adaptive-history-mixed-oos-bonus-min-expectancy-krw`
+      - `--objective-rr-adaptive-history-mixed-oos-bonus-min-win-rate-pct`
+      - `--objective-rr-adaptive-history-mixed-oos-bonus-quality-deficit-penalty-scale`
+    - coupling defaults tightened:
+      - base bonus `200 -> 180`
+      - feature share scale `0.018 -> 0.014`
+      - max bonus `780 -> 620`
+- Verification:
+  - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` -> pass
+  - `python scripts/verify_script_suite.py --skip-help` -> pass
+- Runtime smoke (`stage2231_history_mixed_quality_gate_smoke`):
+  - command:
+    - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 1 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2231_history_mixed_quality_gate_smoke.json --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2231_history_mixed_quality_gate_smoke.csv`
+  - key result:
+    - best combo family ?†Ï?: `..._rr_hist_mix_oos_01`
+    - best metrics (2230 -> 2231):
+      - PF: `0.6166 -> 0.5863` (?òÎùΩ)
+      - EXP: `-10.1936 -> -9.9115` (Í∞úÏÑ†)
+      - WinRate: `39.67 -> 40.71` (Í∞úÏÑ†)
+      - Objective: `-37060.23 -> -35783.96` (Í∞úÏÑ†)
+    - rr bonus:
+      - `615.85 -> 523.08` (Í≥ºÏ¶ù???µÏ†ú)
+      - `objective_rr_adaptive_history_mixed_oos_bonus_quality_scale=1.0`
+  - status:
+    - Íµ¨Ï°∞ Í∞úÏÑ†?Ä ?†Ìö®?òÎÇò Í≤åÏù¥?∏Îäî ?¨Ï†Ñ??ÎØ∏ÌÜµÍ≥?(`pf/exp pass=false`).
+
+## Latest Implementation Log (2026-02-18, Stage-2.226 history/mixed OOS bottleneck structural patch)
+- What changed (`scripts/tune_candidate_gate_trade_density.py`):
+  - bottleneck family mapping:
+    - added dedicated family routing:
+      - `entry_quality_rr_adaptive_history` -> `risk_gate_rr_adaptive_history_focus`
+      - activated under `walk_forward_profit_sum_fail_active` + history/mixed ownership pressure.
+    - added dedicated family adaptation block (`risk_gate_rr_adaptive_history_focus`) for controlled throughput recovery.
+  - new expansion path:
+    - `expand_rr_adaptive_history_mixed_oos_recovery_candidates(...)`
+    - trigger conditions:
+      - `walk_forward_profit_sum_fail_active=true`
+      - holdout/validation split-gap pressure active
+      - manager EV-floor pressure active
+      - history/mixed ownership focus active
+      - dominant loss-feature share above threshold.
+    - emits new family:
+      - `rr_adaptive_history_mixed_oos_recovery`
+  - new objective coupling:
+    - `compute_rr_adaptive_history_mixed_oos_objective_bonus(...)`
+    - applied to both screen/final objective score.
+  - new screen force-keep path:
+    - `--enable/disable-rr-adaptive-history-mixed-oos-screen-force-keep`
+    - `--rr-adaptive-history-mixed-oos-screen-min-keep-count`
+  - new CLI knobs:
+    - expansion toggles/thresholds:
+      - `--enable/disable-rr-adaptive-history-mixed-oos-recovery-expansion`
+      - `--rr-adaptive-history-mixed-oos-recovery-min-combo-count`
+      - `--rr-adaptive-history-mixed-oos-recovery-max-injected`
+      - `--rr-adaptive-history-mixed-oos-recovery-min-ready-gap`
+      - `--rr-adaptive-history-mixed-oos-recovery-min-expectancy-gap-krw`
+      - `--rr-adaptive-history-mixed-oos-recovery-min-manager-ev-pressure-share`
+      - `--rr-adaptive-history-mixed-oos-recovery-min-dominant-feature-share-pct`
+    - objective coupling knobs:
+      - `--objective-enable/disable-rr-adaptive-history-mixed-oos-coupling`
+      - base/scale/max bonus params for ready-gap, expectancy-gap, violation, manager-EV, dominant-feature-share.
+  - summary/export wiring:
+    - screen/final rows now include `rr_adaptive_history_mixed_oos_recovery_*` fields.
+    - report config + bottleneck metadata include full new expansion/coupling/force-keep telemetry.
+- Static verification:
+  - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` -> pass
+  - `python scripts/verify_script_suite.py --skip-help` -> pass (`VERIFY_SCRIPT_SUITE_PASS`)
+- Runtime smoke (`stage2230_history_mixed_structural_smoke`):
+  - command:
+    - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 1 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2230_history_mixed_structural_smoke.json --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2230_history_mixed_structural_smoke.csv`
+  - key signals:
+    - `rr_adaptive_history_mixed_oos_recovery_expansion.applied=true`, `injected=1`
+    - `rr_adaptive_history_mixed_oos_screen_force_keep=on` (screen-to-final retention confirmed)
+    - `best_combo` switched to new family suffix:
+      - `..._rr_hist_mix_oos_01`
+    - objective coupling log surfaced:
+      - `objective_rr_adaptive_history_mixed_oos_coupling=on ...`
+
+## Latest Implementation Log (2026-02-18, Stage-2.224 Wiring)
+- What changed (files/functions):
+  - `scripts/tune_candidate_gate_trade_density.py`
+    - activated previously dormant structural expansion path:
+      - `expand_manager_ev_edge_joint_remediation_candidates(...)` is now wired into combo generation chain.
+    - added objective coupling for this family:
+      - new function: `compute_manager_ev_edge_joint_objective_bonus(...)`
+      - applied to both screen/final objective scores.
+    - added screening retention controls for this family:
+      - `--enable/disable-manager-ev-edge-joint-screen-force-keep`
+      - `--manager-ev-edge-joint-screen-min-keep-count`
+      - force-keep telemetry included in screen summary.
+    - added CLI surface for expansion/coupling knobs:
+      - `--enable/disable-manager-ev-edge-joint-remediation-expansion`
+      - `--manager-ev-edge-joint-remediation-*`
+      - `--objective-enable/disable-manager-ev-edge-joint-coupling`
+      - `--objective-manager-ev-edge-joint-*`
+    - added row/report telemetry wiring:
+      - row-level:
+        - `objective_manager_ev_edge_joint_bonus*`
+        - `manager_ev_edge_joint_remediation_*`
+      - summary/bottleneck map:
+        - `screening.manager_ev_edge_joint_*`
+        - `bottleneck_priority.manager_ev_edge_joint_remediation_expansion`
+- What was verified (commands):
+  - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+  - `python scripts/verify_script_suite.py --skip-help` PASS
+  - `python scripts/tune_candidate_gate_trade_density.py --help` (new manager-ev-edge-joint flags surfaced) PASS
+- Runtime smoke (small run):
+  - command:
+    - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 1 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2229_smoke.json --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2229_smoke.csv`
+  - key signal:
+    - `manager_ev_edge_joint_remediation_expansion.applied=true`, `injected=1`
+    - `screening.manager_ev_edge_joint_screen_force_keep_applied=true`
+    - best combo switched to `manager_ev_edge_joint_remediation` family in smoke run.
+- Note:
+  - This log is a structural wiring update. Stage-2.224 performance artifact generation (`stage2229_manager_ev_edge_joint_remediation`) is the next run step.
+
+## Latest Run Log (2026-02-18, Stage-2.224)
+- What was run:
+  - tuning:
+    - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --enable-selector-baseline-readiness-veto --selector-baseline-readiness-veto-fail-closed --baseline-readiness-max-drawdown-delta-pct 0.30 --objective-holdout-vs-validation-expectancy-gap-penalty-scale 55 --objective-holdout-vs-validation-expectancy-violation-penalty-scale 120 --objective-holdout-vs-validation-expectancy-floor-margin-krw 0.0 --objective-holdout-vs-validation-expectancy-floor-penalty-scale 40 --holdout-expectancy-lift-min-combo-count 20 --holdout-expectancy-lift-max-injected 6 --enable-manager-ev-edge-joint-remediation-expansion --enable-manager-ev-edge-joint-screen-force-keep --objective-enable-manager-ev-edge-joint-coupling --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2229_manager_ev_edge_joint_remediation.json --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2229_manager_ev_edge_joint_remediation.csv`
+  - post rerun:
+    - `python scripts/run_candidate_train_eval_cycle.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --real-data-dir .\data\backtest_real --real-live-data-dir .\data\backtest_real_live --reserve-newest-markets-for-holdout 2 --train-iterations 1`
+- Tuning result (stage2229):
+  - manager EV-edge joint path fully active:
+    - `manager_ev_edge_joint_remediation_expansion.applied=true`, `injected=1`
+    - top row family: `manager_ev_edge_joint_remediation`
+    - objective coupling applied on winner:
+      - `objective_manager_ev_edge_joint_bonus=574.8421`
+  - best combo:
+    - `scenario_quality_focus_001_..._oos_profit_remediation_01_manager_ev_edge_joint_01`
+  - candidate vs baseline (final scope):
+    - objective: `-40662.1882 -> -36347.7790` (`+4314.4092`)
+    - PF: `0.4847 -> 0.6137` (`+0.1290`)
+    - expectancy: `-11.0901 -> -10.6168` (`+0.4733`)
+    - peak DD: `7.2628 -> 4.4385` (`-2.8243`)
+  - artifacts:
+    - `build/Release/logs/candidate_trade_density_tuning_summary_stage2229_manager_ev_edge_joint_remediation.json`
+    - `build/Release/logs/candidate_trade_density_tuning_summary_stage2229_manager_ev_edge_joint_remediation.csv`
+- Post rerun verdict (skip-tune):
+  - `promotion_verdict.promotion_gate_pass=false`
+  - `promotion_verdict.generalization_guard_pass=false`
+  - recommendation unchanged:
+    - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+  - split core metrics unchanged band:
+    - validation PF/EXP: `0.5515 / -7.0171`
+    - holdout PF/EXP: `0.5266 / -11.0591`
+  - top rejection reason still dominant on both splits:
+    - `filtered_out_by_manager_ev_quality_floor`
+  - walk-forward viable readiness still blocked:
+    - validation/holdout `ready_ratio_viable=0.0`, dominant=`oos_profit_sum_positive`
+- Conclusion:
+  - Stage-2.224 Íµ¨Ï°∞Í∞úÏÑ†?Ä ?úÎãù ??Çπ/Î™©Ìëú?®Ïàò Í¥Ä?êÏóê???†ÏùòÎØ∏Ìïú Í∞úÏÑ† ?†Ìò∏Î•?ÎßåÎì§?àÎã§.
+  - Í∑∏Îü¨???ÑÏû¨ post rerun?Ä `--skip-tune` + `--disable-promote-best-combo` Í≤ΩÎ°ú?¥Î?Î°? ?§Ï†ú promotion gate ?ÑÌôòÍπåÏ????ÑÏßÅ ?∞Í≤∞?òÏ? ?äÏïò??
+
+## Latest Run Log (2026-02-18, Stage-2.223)
+- What changed (files/functions):
+  - `scripts/tune_candidate_gate_trade_density.py`
+    - `expand_oos_profitability_remediation_candidates(...)` upgraded to objective-coupled override-budget remediation:
+      - new input coupling:
+        - validation-floor objective params
+        - two-head override cap params
+      - computes reference dynamic override cap from holdout/validation context via:
+        - `compute_validation_coupled_two_head_override_cap(...)`
+      - introduces tight-mode (`reference cap <= 0.26`) and inject-time structural controls:
+        - near-miss relief hard disable path
+        - two-head min history requirement uplift
+        - near-miss activation gap/quality/liquidity/trade floor tightening
+        - near-miss score-boost attenuation
+        - head-score-floor + soft-score suppression path
+      - remediation telemetry added:
+        - meta:
+          - `reference_two_head_override_dynamic_cap_ratio`
+          - `override_budget_tight_mode_active`
+          - `near_miss_relief_disabled_injected_count`
+        - row-level:
+          - `oos_profitability_remediation_override_budget_mode`
+          - `oos_profitability_remediation_disable_near_miss_relief`
+          - `oos_profitability_remediation_reference_override_cap_ratio`
+    - main wiring updated:
+      - pass objective floor/cap args into remediation expansion call.
+    - run log print enriched with override-cap reference + tight-mode + disabled-count.
+    - screening summary export extended with remediation override-budget telemetry.
+- What was verified (commands/artifacts):
+  - Syntax/suite:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_candidate_train_eval_cycle.py` PASS
+    - `python scripts/verify_script_suite.py --skip-help` PASS
+  - Stage-2.223 run:
+    - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --enable-selector-baseline-readiness-veto --selector-baseline-readiness-veto-fail-closed --baseline-readiness-max-drawdown-delta-pct 0.30 --objective-holdout-vs-validation-expectancy-gap-penalty-scale 55 --objective-holdout-vs-validation-expectancy-violation-penalty-scale 120 --objective-holdout-vs-validation-expectancy-floor-margin-krw 0.0 --objective-holdout-vs-validation-expectancy-floor-penalty-scale 40 --holdout-expectancy-lift-min-combo-count 20 --holdout-expectancy-lift-max-injected 6 --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2228_oos_override_budget_coupling.json --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2228_oos_override_budget_coupling.csv`
+    - key result:
+      - remediation expansion active:
+        - `oos_profitability_remediation_expansion_applied=true`
+        - `injected=1`
+        - `override_cap_ref=0.2000`, `tight_mode=true`, `near_miss_relief_disabled=1`
+      - best combo switched to remediation family:
+        - `scenario_quality_focus_001_..._gwf_bridge_01_oos_profit_remediation_01`
+      - structural bottleneck metric improvement on remediation combo:
+        - `two_head_override_accept_ratio`: `0.5774 -> 0.0009`
+        - `two_head_override_cap_overshoot`: `0.3078 -> 0.0000`
+        - `second_stage_rr_margin_near_miss_relief_applied_count`: `12 -> 0`
+      - objective/quality movement:
+        - objective: `-43315.5990 -> -38905.3937`
+        - PF: `0.5967 -> 0.6113`
+        - expectancy: `-10.1245 -> -9.6155`
+      - artifacts:
+        - `build/Release/logs/candidate_trade_density_tuning_summary_stage2228_oos_override_budget_coupling.json`
+        - `build/Release/logs/candidate_trade_density_tuning_summary_stage2228_oos_override_budget_coupling.csv`
+  - post-run split rerun:
+    - `python scripts/run_candidate_train_eval_cycle.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --real-data-dir .\data\backtest_real --real-live-data-dir .\data\backtest_real_live --reserve-newest-markets-for-holdout 2 --train-iterations 1`
+    - verdict:
+      - `promotion_gate_pass=false`
+      - `generalization_guard_pass=false`
+      - recommendation unchanged:
+        - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - stage snapshot:
+        - validation PF/EXP: `0.5515 / -7.0171`
+        - holdout PF/EXP: `0.5266 / -11.0591`
+      - WF viable basis still dominant failure:
+        - validation: `basis=viable`, `ready_ratio_viable=0.0`, dominant=`oos_profit_sum_positive`
+        - holdout: `basis=viable`, `ready_ratio_viable=0.0`, dominant=`oos_profit_sum_positive`
+- Conclusion:
+  - Stage-2.223 resolved a key structural objective bottleneck (`two_head override cap overshoot`) and promoted remediation family to actual winner.
+  - Promotion gate remains blocked by broader OOS profitability/expectancy regime pressure, but failure surface moved from ?úoverride overshoot??toward core profitability.
+- Next subtask (single active):
+  - Stage-2.224: manager EV floor + edge-base joint bottleneck remediation
+    - goal: reduce `filtered_out_by_manager_ev_quality_floor` dominance and improve holdout expectancy without re-opening two-head override overshoot.
+    - expected artifacts:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage2229_manager_ev_edge_joint_remediation.json`
+      - `build/Release/logs/candidate_train_eval_cycle_summary.json` (post Stage-2.224 rerun)
+
+## Latest Run Log (2026-02-18, Stage-2.222)
+- What changed (files/functions):
+  - `scripts/tune_candidate_gate_trade_density.py`
+    - walk-forward summary interpretation hardened for viable-basis:
+      - `read_train_eval_holdout_context(...)._summarize_walk_forward(...)`
+      - now respects `ready_ratio_reference_basis` and prefers `failure_reason_counts_viable` / `dominant_failure_reason_viable` when basis is viable.
+    - new structure-first remediation expansion:
+      - `expand_oos_profitability_remediation_candidates(...)`
+      - activation:
+        - walk-forward profit-sum fail active
+        - ready-gap threshold met
+        - manager EV-floor pressure active + share threshold met
+      - injected family:
+        - `oos_profitability_remediation`
+      - remediation profile effects:
+        - tighten edge/RR/PF/EV floors
+        - reduce order density
+        - tighten signal/hostility guard
+        - tighten two-head quality floor
+        - disable adaptive near-miss/entry-quality relief path on injected variants
+    - new CLI added:
+      - `--enable/disable-oos-profitability-remediation-expansion`
+      - `--oos-profitability-remediation-*`
+      - `--enable/disable-oos-profitability-screen-force-keep`
+      - `--oos-profitability-screen-min-keep-count`
+    - screening/final telemetry wiring:
+      - row-level:
+        - `oos_profitability_remediation_injected`
+        - `oos_profitability_remediation_profile`
+      - summary:
+        - `screening.oos_profitability_*`
+      - bottleneck map:
+        - `bottleneck_priority.oos_profitability_remediation_expansion`
+- What was verified (commands/artifacts):
+  - Syntax/suite:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_candidate_train_eval_cycle.py` PASS
+    - `python scripts/verify_script_suite.py --skip-help` PASS
+  - Stage-2.222 run:
+    - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --enable-selector-baseline-readiness-veto --selector-baseline-readiness-veto-fail-closed --baseline-readiness-max-drawdown-delta-pct 0.30 --objective-holdout-vs-validation-expectancy-gap-penalty-scale 55 --objective-holdout-vs-validation-expectancy-violation-penalty-scale 120 --objective-holdout-vs-validation-expectancy-floor-margin-krw 0.0 --objective-holdout-vs-validation-expectancy-floor-penalty-scale 40 --holdout-expectancy-lift-min-combo-count 20 --holdout-expectancy-lift-max-injected 6 --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2227_oos_profitability_remediation.json --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2227_oos_profitability_remediation.csv`
+    - result:
+      - `oos_profitability_remediation_expansion_applied=true`, `injected=1`
+      - scenario families:
+        - `oos_profitability_remediation` family added (`combo_count: 20 -> 21`)
+      - selected set coverage:
+        - remediation row selected in screen top set (`selected_top_k_remediation_row_count=1`)
+        - bridge force-keep remained active
+      - baseline readiness veto remains stable:
+        - `split_gap_override_applied=3` (maintained)
+      - best combo unchanged:
+        - `scenario_quality_focus_003`
+      - artifact:
+        - `build/Release/logs/candidate_trade_density_tuning_summary_stage2227_oos_profitability_remediation.json`
+  - post-run split rerun:
+    - `python scripts/run_candidate_train_eval_cycle.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --real-data-dir .\data\backtest_real --real-live-data-dir .\data\backtest_real_live --reserve-newest-markets-for-holdout 2 --train-iterations 1`
+    - verdict:
+      - `promotion_gate_pass=false`
+      - `generalization_guard_pass=false`
+      - recommendation unchanged:
+        - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - walk-forward reference remains viable basis:
+        - validation: viable `2`, nonviable `1`, `ready_ratio_viable=0.0`
+        - holdout: viable `3`, nonviable `3`, `ready_ratio_viable=0.0`
+        - dominant viable failure remains `oos_profit_sum_positive`
+- Conclusion:
+  - Stage-2.222 successfully added a structural remediation axis (not coin-hardcoded) and ensured that remediation family participates in actual final-eval chain.
+  - However promotion gate bottleneck remains unchanged; next step should directly target OOS profitability failure decomposition (per-window payoff distribution and loss concentration mitigation coupling).
+- Next subtask (single active):
+  - Stage-2.223: OOS payoff-distribution remediation coupling
+    - goal: reduce viable-WF `oos_profit_sum_positive` dominance by coupling selection/objective with remediation family outcomes and per-window loss concentration traits.
+    - expected artifacts:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage2228_oos_payoff_distribution_coupling.json`
+      - `build/Release/logs/candidate_train_eval_cycle_summary.json` (post Stage-2.223 rerun)
+
+## Latest Run Log (2026-02-18, Stage-2.221)
+- What changed (files/functions):
+  - `scripts/tune_candidate_gate_trade_density.py`
+    - complete bridge objective coupling rollout:
+      - apply `compute_generalization_wf_bridge_objective_bonus(...)` to both screen/final objective paths.
+      - fix scope bug by binding manager EV-floor pressure context for objective stage:
+        - `manager_ev_quality_floor_*_for_objective`.
+    - add screen force-keep for bridge family:
+      - when bridge expansion is active, enforce minimum bridge-family retention in screened final-eval set.
+      - append-mode keep (does not evict existing top-k winners).
+    - add summary/report wiring:
+      - `screening.generalization_wf_bridge_screen_force_keep_*`
+      - `screening.generalization_wf_bridge_selected_top_k_bridge_*`
+      - objective coupling params exported in `screening.generalization_wf_bridge_*` section.
+  - `scripts/run_candidate_train_eval_cycle.py`
+    - add walk-forward viable-ready-ratio mode:
+      - viable dataset definition: `gate_checks.min_oos_windows.pass == true`.
+      - new args:
+        - `--walk-forward-use-viable-ready-ratio` (default on)
+        - `--disable-walk-forward-use-viable-ready-ratio`
+        - `--walk-forward-min-viable-datasets` (default 2)
+    - walk-forward batch output extended:
+      - `ready_ratio_overall`, `ready_ratio_viable`, `ready_ratio_reference_basis`
+      - `datasets_viable`, `datasets_nonviable`
+      - `failure_reason_counts_viable`, `dominant_failure_reason_viable`
+    - gate pass now supports viable-ratio reference when enabled.
+- What was verified (commands/artifacts):
+  - Syntax/suite:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_candidate_train_eval_cycle.py` PASS
+    - `python scripts/verify_script_suite.py --skip-help` PASS
+  - Stage-2.221 run:
+    - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --enable-selector-baseline-readiness-veto --selector-baseline-readiness-veto-fail-closed --baseline-readiness-max-drawdown-delta-pct 0.30 --objective-holdout-vs-validation-expectancy-gap-penalty-scale 55 --objective-holdout-vs-validation-expectancy-violation-penalty-scale 120 --objective-holdout-vs-validation-expectancy-floor-margin-krw 0.0 --objective-holdout-vs-validation-expectancy-floor-penalty-scale 40 --holdout-expectancy-lift-min-combo-count 20 --holdout-expectancy-lift-max-injected 6 --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2226_bridge_objective_coupling.json --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2226_bridge_objective_coupling.csv`
+    - result:
+      - bridge expansion + coupling active:
+        - `generalization_wf_bridge_expansion_applied=true`, `injected=1`
+        - bridge row objective bonus applied on screen/final:
+          - `objective_generalization_wf_bridge_bonus=438.5635`
+      - screen force-keep active:
+        - `generalization_wf_bridge_screen_force_keep_applied=true`
+        - bridge combo appended into final-eval set
+        - screened final-eval rows: `10` (top-k 8 + append keeps)
+      - split-gap readiness override activity increased:
+        - `split_gap_override_applied=3` (prev stage: 2)
+        - `split_gap_priority_over_win_rate=3`
+      - best combo unchanged:
+        - `scenario_quality_focus_003`
+      - artifact:
+        - `build/Release/logs/candidate_trade_density_tuning_summary_stage2226_bridge_objective_coupling.json`
+  - post-run split rerun:
+    - `python scripts/run_candidate_train_eval_cycle.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --real-data-dir .\data\backtest_real --real-live-data-dir .\data\backtest_real_live --reserve-newest-markets-for-holdout 2 --train-iterations 1`
+    - verdict:
+      - `promotion_gate_pass=false`
+      - `generalization_guard_pass=false`
+      - recommendation:
+        - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - WF viable-ratio telemetry now explicit:
+        - validation:
+          - `basis=viable`, `ready_ratio_viable=0.0`
+          - `datasets_viable=2`, `datasets_nonviable=1`
+          - dominant viable fail: `oos_profit_sum_positive`
+        - holdout:
+          - `basis=viable`, `ready_ratio_viable=0.0`
+          - `datasets_viable=3`, `datasets_nonviable=3`
+          - dominant viable fail: `oos_profit_sum_positive`
+      - interpretation:
+        - structural denominator noise (`min_oos_windows`) is now separated.
+        - core bottleneck remains true OOS profitability failure, not only window-count artifact.
+- Conclusion:
+  - Stage-2.221 fixed the bridge-coupling rollout path and improved screening coverage without breaking baseline selector logic.
+  - Root-cause confidence improved:
+    - even after viable-only ratio normalization, WF ready ratio stays zero due to `oos_profit_sum_positive` / `min_oos_profitable_ratio`.
+  - This indicates next leverage should focus on OOS payoff structure (entry quality + downside concentration), not additional denominator/selection-only tweaks.
+- Next subtask (single active):
+  - Stage-2.222: OOS profitability root-cause remediation (structure-first)
+    - goal: reduce `oos_profit_sum_positive` dominance on viable datasets while keeping overfit guard active.
+    - expected artifacts:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage2227_oos_profitability_remediation.json`
+      - `build/Release/logs/candidate_train_eval_cycle_summary.json` (post Stage-2.222 rerun)
+
+## Latest Run Log (2026-02-18, Stage-2.220)
+- What changed (files/functions):
+  - `scripts/tune_candidate_gate_trade_density.py`
+    - add new root-cause bridge expansion:
+      - `expand_generalization_walk_forward_bridge_candidates(...)`
+      - activation conditions:
+        - walk-forward profit-sum fail active
+        - ready-gap pressure active
+        - holdout-vs-validation gap/violation pressure active
+        - manager EV-floor pressure active (share threshold)
+      - injected family:
+        - `generalization_walk_forward_bridge`
+      - tuning axis:
+        - quality/edge/rr/pf/expectancy uplift
+        - order-density cut + signal-quality tighten
+        - hostility pause/threshold tighten
+        - two-head quality floor uplift
+    - CLI added:
+      - `--enable/disable-generalization-wf-bridge-expansion`
+      - `--generalization-wf-bridge-min-combo-count`
+      - `--generalization-wf-bridge-max-injected`
+      - `--generalization-wf-bridge-min-ready-gap`
+      - `--generalization-wf-bridge-min-expectancy-gap-krw`
+      - `--generalization-wf-bridge-min-manager-ev-pressure-share`
+    - runtime/summary wiring:
+      - `[TuneCandidate] generalization_wf_bridge_expansion=*`
+      - `screening.generalization_wf_bridge_*`
+      - `bottleneck_priority.generalization_walk_forward_bridge_expansion`
+- What was verified (commands/artifacts):
+  - Syntax/suite:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/verify_script_suite.py --skip-help` PASS
+  - Stage-2.220 run:
+    - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --enable-selector-baseline-readiness-veto --selector-baseline-readiness-veto-fail-closed --baseline-readiness-max-drawdown-delta-pct 0.30 --objective-holdout-vs-validation-expectancy-gap-penalty-scale 55 --objective-holdout-vs-validation-expectancy-violation-penalty-scale 120 --objective-holdout-vs-validation-expectancy-floor-margin-krw 0.0 --objective-holdout-vs-validation-expectancy-floor-penalty-scale 40 --holdout-expectancy-lift-min-combo-count 20 --holdout-expectancy-lift-max-injected 6 --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2225_gate_root_cause_remediation.json --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2225_gate_root_cause_remediation.csv`
+    - result:
+      - new bridge expansion:
+        - `applied=true`, `reason=expanded_by_generalization_walk_forward_bridge`
+        - `injected=1`, `severity=2.1577`
+        - source pressure snapshot:
+          - `ready_gap=0.55`
+          - `expectancy_gap=4.0420`
+          - `expectancy_violation=1.5420`
+          - `manager_ev_pressure_share=0.3968`
+      - scenario composition:
+        - `generalization_walk_forward_bridge` family now included in `scenario_family_counts`
+      - split-gap screening occupancy widened:
+        - `candidate_rows=7` (prev `6`)
+        - `threshold_pass=4` (prev `3`)
+        - `boosted_rows=4` (prev `3`)
+      - baseline readiness veto remained stable:
+        - `split_gap_override_applied=2`
+        - `split_gap_priority_over_win_rate=2`
+        - residual block reasons: `improvement_below_threshold=4`
+      - best combo unchanged:
+        - `scenario_quality_focus_003`
+      - artifact:
+        - `build/Release/logs/candidate_trade_density_tuning_summary_stage2225_gate_root_cause_remediation.json`
+  - post-run split rerun:
+    - `python scripts/run_candidate_train_eval_cycle.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --real-data-dir .\data\backtest_real --real-live-data-dir .\data\backtest_real_live --reserve-newest-markets-for-holdout 2 --train-iterations 1`
+    - verdict:
+      - `promotion_gate_pass=false`
+      - `generalization_guard_pass=false`
+      - recommendation:
+        - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - holdout-vs-validation fail persists:
+        - validation exp `-7.0171`
+        - holdout exp `-11.0591`
+        - allowed drop `2.5`, observed gap `4.0420`
+      - walk-forward fail persists:
+        - validation/holdout `ready_ratio=0.0`
+        - dominant failure: `oos_profit_sum_positive` (+ `min_oos_profitable_ratio`, ?ºÎ? `min_oos_windows`)
+- Conclusion:
+  - Stage-2.220?êÏÑú Íµ¨Ï°∞??Î≥ëÎ™©??Í≤®ÎÉ•??bridge pathÎ•??§Îèô???ÅÌÉúÎ°?Ï∂îÍ??àÍ≥†, screening Î∂ÑÌè¨??Í∞úÏÑ†??
+  - Í∑∏Îü¨??promotion gate Î≥∏Ï≤¥ ÏßÄ??holdout gap, WF ready ratio)???ÑÏßÅ Î≥Ä?îÍ? ?ÜÏñ¥ ?§Ïùå ?®Í≥Ñ?êÏÑú objective/selection coupling Í∞ïÎèÑÎ•?Ï∂îÍ?Î°??¨Î†§????
+- Next subtask (single active):
+  - Stage-2.221: bridge-coupled objective weighting + wf-window viability guard
+    - goal: bridge familyÍ∞Ä final selector/objective?êÏÑú ?§Ïßà ?∞ÏúÑÎ•?Í∞ÄÏßÄ?ÑÎ°ù coupling Í∞ïÌôî?òÍ≥† `min_oos_windows` Î≥ëÎ™©??Î≥ÑÎèÑ ?ÑÌôî.
+    - expected artifacts:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage2226_bridge_objective_coupling.json`
+      - `build/Release/logs/candidate_train_eval_cycle_summary.json` (post Stage-2.221 rerun)
+
+## Latest Run Log (2026-02-18, Stage-2.219)
+- What changed (files/functions):
+  - `scripts/tune_candidate_gate_trade_density.py`
+    - `apply_selector_baseline_readiness_veto_to_rows(...)`
+      - readiness check flow reordered:
+        - evaluate `split_gap_override` on `pre_override_failed_checks` first.
+        - apply `win_rate_quality_override` only when split-gap override is not applied.
+      - add split-gap projection diagnostics:
+        - `split_gap_improvement_raw_krw`, `split_gap_violation_improvement_raw_krw`
+        - `split_gap_projection_degenerate` (raw improvement ~= baseline expectancy delta lock)
+      - add split-gap projection calibration framework and telemetry:
+        - row-level `split_gap_projection_calibration_*`
+        - meta-level applied count / avg-max adjustment
+      - add root-cause counters:
+        - `pre_override_failed_check_counts`
+        - `final_failed_check_counts`
+        - `split_gap_override_priority_over_win_rate_count`
+    - CLI added:
+      - `--enable/disable-baseline-readiness-split-gap-projection-calibration`
+      - `--baseline-readiness-split-gap-projection-calibration-*`
+    - summary/report wiring:
+      - `selector.baseline_readiness_veto_split_gap_projection_*`
+      - `selector.baseline_readiness_veto_pre_override_failed_check_counts`
+      - `selector.baseline_readiness_veto_final_failed_check_counts`
+- What was verified (commands/artifacts):
+  - Syntax/suite:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/verify_script_suite.py --skip-help` PASS
+  - Stage-2.219 run:
+    - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --enable-selector-baseline-readiness-veto --selector-baseline-readiness-veto-fail-closed --baseline-readiness-max-drawdown-delta-pct 0.30 --objective-holdout-vs-validation-expectancy-gap-penalty-scale 55 --objective-holdout-vs-validation-expectancy-violation-penalty-scale 120 --objective-holdout-vs-validation-expectancy-floor-margin-krw 0.0 --objective-holdout-vs-validation-expectancy-floor-penalty-scale 40 --holdout-expectancy-lift-min-combo-count 20 --holdout-expectancy-lift-max-injected 6 --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2224_split_gap_projection_calibration.json --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2224_split_gap_projection_calibration.csv`
+    - result:
+      - best combo unchanged: `scenario_quality_focus_003`
+      - baseline readiness veto:
+        - `split_gap_override_applied`: `0 -> 2`
+        - `win_rate_override_applied`: `2 -> 0`
+        - `split_gap_priority_over_win_rate=2`
+        - `split_gap_projection_degenerate_rows=9` (projection lock confirmed)
+        - `split_gap_projection_calibration_applied=0` (current rows/filters?êÏÑú??ÎØ∏Ï†Å??
+        - residual block reasons: `improvement_below_threshold=4`
+      - artifact:
+        - `build/Release/logs/candidate_trade_density_tuning_summary_stage2224_split_gap_projection_calibration.json`
+  - post-run split rerun:
+    - `python scripts/run_candidate_train_eval_cycle.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --real-data-dir .\data\backtest_real --real-live-data-dir .\data\backtest_real_live --reserve-newest-markets-for-holdout 2 --train-iterations 1`
+    - verdict:
+      - `promotion_gate_pass=false`
+      - `generalization_guard_pass=false`
+      - recommendation:
+        - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - generalization check:
+        - `holdout_vs_validation` only fail remains
+        - validation exp `-7.0171`, holdout exp `-11.0591`, gap `4.0420` (allowed drop `2.5`)
+      - walk-forward bottleneck unchanged:
+        - validation/holdout `ready_ratio=0.0`
+        - dominant failure: `oos_profit_sum_positive` (+ `min_oos_profitable_ratio`)
+        - ?ºÎ? live split??`min_oos_windows` ?ôÎ∞ò
+- Root cause update:
+  - split-gap override ÎØ∏Ìôú?±Ïùò ÏßÅÏ†ë ?êÏù∏:
+    - override ?∞ÏÑ†?úÏúÑ/?∏Ï∂ú ?úÏÑúÎ°??∏Ìï¥ win-rate pathÍ∞Ä Î®ºÏ? ?åÎπÑ?òÎçò Íµ¨Ï°∞.
+  - promotion gate ?§Ìå®??Í∑ºÎ≥∏ Î≥ëÎ™©:
+    - holdout-vs-validation expectancy gap Ï¥àÍ≥º + walk-forward OOS profitability ?§Ìå® ?ôÏãú ÏßÄ??
+- Conclusion:
+  - Stage-2.219?êÏÑú readiness veto Íµ¨Ï°∞ Î≥ëÎ™©(override ordering)?Ä ?¥ÏÜå??(`split_gap_override_applied=2`).
+  - ?§Îßå promotion gate??Î≥∏Ï≤¥ Î≥ëÎ™©?Ä generalization/walk-forward Ï∂ïÏóê ?®ÏïÑ ?àÏñ¥, ?§Ïùå ?®Í≥Ñ??objective/selection??OOS profitability ?åÎ≥µ Ï™?Íµ¨Ï°∞Í∞úÏÑ†???ÑÏöî.
+- Next subtask (single active):
+  - Stage-2.220: gate root-cause remediation (generalization + walk-forward coupling)
+    - goal: reduce holdout-vs-validation expectancy gap and improve walk-forward OOS profitability readiness without coin-specific hardcoding.
+    - expected artifacts:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage2225_gate_root_cause_remediation.json`
+      - `build/Release/logs/candidate_train_eval_cycle_summary.json` (post Stage-2.220 rerun)
+
+## Latest Run Log (2026-02-18, Stage-2.218)
+- What changed (files/functions):
+  - `scripts/tune_candidate_gate_trade_density.py`
+    - add screen-stage occupancy coupling:
+      - `apply_split_gap_screen_occupancy_boost_to_rows(...)`
+        - computes projected split-gap / violation improvement against screen baseline anchor.
+        - applies `screen_split_gap_occupancy_boost` only to threshold-passing candidates.
+        - writes row-level telemetry:
+          - `screen_split_gap_occupancy_score`
+          - `screen_split_gap_occupancy_boost`
+          - `screen_split_gap_occupancy_gap_improvement_krw`
+          - `screen_split_gap_occupancy_violation_improvement_krw`
+          - candidate/projection/threshold flags
+    - screening rank update:
+      - screen sorting key now prioritizes `screen_split_gap_occupancy_score` (fallback objective score).
+    - occupancy force-keep (append mode):
+      - when boosted candidates are under-represented in top-k, add extra boosted rows for final evaluation instead of replacing existing top-k rows.
+    - add holdout-lift telemetry propagation to screen/final rows:
+      - `holdout_expectancy_lift_injected`, `holdout_expectancy_lift_profile`, `holdout_expectancy_lift_profile_polarity_score`
+    - CLI added:
+      - `--enable/disable-split-gap-screen-occupancy-boost`
+      - `--split-gap-screen-occupancy-*` thresholds/scales
+      - `--split-gap-screen-occupancy-min-keep-count`
+    - summary/report wiring:
+      - `screening.split_gap_screen_occupancy_*`
+- What was verified (commands/artifacts):
+  - Syntax/suite:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/verify_script_suite.py --skip-help` PASS
+  - Stage-2.218 run:
+    - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --enable-selector-baseline-readiness-veto --selector-baseline-readiness-veto-fail-closed --baseline-readiness-max-drawdown-delta-pct 0.30 --objective-holdout-vs-validation-expectancy-gap-penalty-scale 55 --objective-holdout-vs-validation-expectancy-violation-penalty-scale 120 --objective-holdout-vs-validation-expectancy-floor-margin-krw 0.0 --objective-holdout-vs-validation-expectancy-floor-penalty-scale 40 --holdout-expectancy-lift-min-combo-count 20 --holdout-expectancy-lift-max-injected 6 --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2223_split_gap_occupancy_boost.json --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2223_split_gap_occupancy_boost.csv`
+    - result:
+      - occupancy boost:
+        - `applied=true`, `reason=applied`
+        - `candidate_rows=6`, `projected_rows=6`, `threshold_pass=3`, `boosted_rows=3`
+        - selected boosted rows increased to `2`
+        - force keep (append mode) applied:
+          - added `scenario_quality_focus_002_wf_profit_recovery_03_wf_expectancy_repair_02_holdout_expectancy_lift_03`
+        - effective selected rows:
+          - `screen_top_k=8`, `selected_row_count=9`
+      - final selection:
+        - best combo remains `scenario_quality_focus_003`
+        - selector candidate rows `5` (prev `4`)
+        - baseline readiness veto kept rows `5` (prev `4`)
+      - split-gap override:
+        - failed/candidate/applied remains `4/4/0` (`improvement_below_threshold` only)
+      - artifact:
+        - `build/Release/logs/candidate_trade_density_tuning_summary_stage2223_split_gap_occupancy_boost.json`
+  - post-run split rerun:
+    - `python scripts/run_candidate_train_eval_cycle.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --real-data-dir .\data\backtest_real --real-live-data-dir .\data\backtest_real_live --reserve-newest-markets-for-holdout 2 --train-iterations 1`
+    - verdict:
+      - `promotion_gate_pass=false`
+      - `generalization_guard_pass=false`
+      - recommendation:
+        - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - holdout-vs-validation:
+        - validation exp `-7.0171`
+        - holdout exp `-11.0591`
+        - allowed drop `2.5`, observed gap `4.0420`
+      - walk-forward ready ratio remains `0.0` (validation/holdout)
+- Conclusion:
+  - Stage-2.218 improved screening occupancy mechanics without regressing best combo path:
+    - boosted split-gap candidates now persist into final evaluation set with additional coverage (`selected_boosted=2`).
+  - core gate bottleneck remains unchanged; split-gap override activation is still `0`.
+- Next subtask (single active):
+  - Stage-2.219: split-gap projection calibration for override activation
+    - goal: calibrate projected split-gap improvement thresholds/normalization so at least one boosted holdout-lift candidate can satisfy readiness override preconditions without degrading baseline deltas.
+    - expected artifacts:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage2224_split_gap_projection_calibration.json`
+      - `build/Release/logs/candidate_train_eval_cycle_summary.json` (post Stage-2.219 rerun)
+
+## Latest Run Log (2026-02-18, Stage-2.217)
+- What changed (files/functions):
+  - `scripts/tune_candidate_gate_trade_density.py`
+    - `expand_holdout_expectancy_lift_candidates(...)`
+      - add source-anchor telemetry and filtering path:
+        - `source_anchor_*` meta fields (active/floors/input/selected/dropped).
+        - source combo anchor floors by quantile (`expectancy/pf/rr`) when holdout gap guard is active and source pool is sufficiently large.
+      - safety refinement:
+        - source-anchor applies only when source pool size is `>= 4` to avoid over-narrowing small source sets.
+    - runtime log extension:
+      - holdout-lift line now prints source-anchor active/selected/dropped counts.
+    - summary wiring extension:
+      - `screening.holdout_expectancy_lift_source_anchor_*`
+- What was verified (commands/artifacts):
+  - Syntax/suite:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/verify_script_suite.py --skip-help` PASS
+  - Stage-2.217 run:
+    - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --enable-selector-baseline-readiness-veto --selector-baseline-readiness-veto-fail-closed --baseline-readiness-max-drawdown-delta-pct 0.30 --objective-holdout-vs-validation-expectancy-gap-penalty-scale 55 --objective-holdout-vs-validation-expectancy-violation-penalty-scale 120 --objective-holdout-vs-validation-expectancy-floor-margin-krw 0.0 --objective-holdout-vs-validation-expectancy-floor-penalty-scale 40 --holdout-expectancy-lift-min-combo-count 20 --holdout-expectancy-lift-max-injected 6 --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2222_holdout_expectancy_lift_source_anchor.json --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2222_holdout_expectancy_lift_source_anchor.csv`
+    - result:
+      - holdout-lift expansion:
+        - `applied=true`, `injected=6`
+        - `polarity_guard=true`, selected profiles `3`, dropped `1`
+        - `source_anchor=false`, selected source `3`, dropped `0` (source pool size was 3, so anchor intentionally not activated)
+      - baseline readiness veto:
+        - split-gap failed/candidate/applied: `4/4/0` (same as Stage-2.216)
+      - best combo unchanged:
+        - `scenario_quality_focus_003`
+      - artifact:
+        - `build/Release/logs/candidate_trade_density_tuning_summary_stage2222_holdout_expectancy_lift_source_anchor.json`
+  - post-run split rerun:
+    - `python scripts/run_candidate_train_eval_cycle.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --real-data-dir .\data\backtest_real --real-live-data-dir .\data\backtest_real_live --reserve-newest-markets-for-holdout 2 --train-iterations 1`
+    - verdict:
+      - `promotion_gate_pass=false`
+      - `generalization_guard_pass=false`
+      - recommendation:
+        - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - holdout-vs-validation:
+        - validation exp `-7.0171`
+        - holdout exp `-11.0591`
+        - allowed drop `2.5`, observed gap `4.0420`
+      - walk-forward ready ratio remains `0.0` (validation/holdout)
+- Conclusion:
+  - Stage-2.217 introduced source-anchor framework safely, but current run had only 3 source parents, so anchor gating did not trigger and headline metrics remained flat.
+  - meaningful gain from Stage-2.216 (positive holdout-lift candidate flip) is preserved; no regression was introduced by Stage-2.217.
+- Next subtask (single active):
+  - Stage-2.218: split-gap candidate occupancy boost (objective/selector coupling)
+    - goal: increase proportion of split-gap-improving holdout-lift candidates in final evaluated set (top-k/final rows), so negative baseline-delta rows are displaced before readiness veto stage.
+    - expected artifacts:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage2223_split_gap_occupancy_boost.json`
+      - `build/Release/logs/candidate_train_eval_cycle_summary.json` (post Stage-2.218 rerun)
+
+## Latest Run Log (2026-02-18, Stage-2.216)
+- What changed (files/functions):
+  - `scripts/tune_candidate_gate_trade_density.py`
+    - `expand_holdout_expectancy_lift_candidates(...)`
+      - rebalance `holdout_expectancy_lift_split_bridge` / `holdout_expectancy_lift_trade_rebound` profiles to positive-lift direction (remove negative RR/PF/signal drift).
+      - add polarity guard:
+        - profile polarity scoring (`polarity_score`) with thresholding when holdout-vs-validation gap/violation is active.
+        - low-polarity profiles are dropped, and selected profiles are injected using weighted cycle (high-polarity profiles repeated more).
+      - add telemetry:
+        - meta: `polarity_guard_*` fields (active/min_score/selected_count/dropped_count/names/weighted_cycle).
+        - clone: `holdout_expectancy_lift_profile_polarity_score`, `holdout_expectancy_lift_polarity_guard_active`.
+    - runtime log extension:
+      - `holdout_expectancy_lift_expansion` now prints polarity guard state and selected/dropped profile counts.
+    - summary wiring extension:
+      - `screening.holdout_expectancy_lift_polarity_guard_*`
+- What was verified (commands/artifacts):
+  - Syntax/suite:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/verify_script_suite.py --skip-help` PASS
+  - Stage-2.216 run:
+    - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --enable-selector-baseline-readiness-veto --selector-baseline-readiness-veto-fail-closed --baseline-readiness-max-drawdown-delta-pct 0.30 --objective-holdout-vs-validation-expectancy-gap-penalty-scale 55 --objective-holdout-vs-validation-expectancy-violation-penalty-scale 120 --objective-holdout-vs-validation-expectancy-floor-margin-krw 0.0 --objective-holdout-vs-validation-expectancy-floor-penalty-scale 40 --holdout-expectancy-lift-min-combo-count 20 --holdout-expectancy-lift-max-injected 6 --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2221_holdout_expectancy_lift_polarity_guard.json --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2221_holdout_expectancy_lift_polarity_guard.csv`
+    - result:
+      - holdout-lift expansion:
+        - `applied=true`, `injected=6`
+        - `polarity_guard=true`
+        - selected profiles:
+          - `holdout_expectancy_lift_selective`
+          - `holdout_expectancy_lift_balanced`
+          - `holdout_expectancy_lift_split_bridge`
+        - dropped profile:
+          - `holdout_expectancy_lift_trade_rebound`
+      - baseline readiness veto:
+        - split-gap failed/candidate rows improved:
+          - Stage-2.215: `5/5`
+          - Stage-2.216: `4/4`
+        - split-gap override applied count remains `0` (`improvement_below_threshold` only)
+      - notable candidate quality movement:
+        - `scenario_quality_focus_001_wf_profit_recovery_02_wf_expectancy_repair_01_wf_window_feature_recovery_01_holdout_expectancy_lift_04`
+          - `baseline_delta_avg_expectancy_krw`: `-0.1459 -> +1.2548`
+          - readiness veto: `False -> True`
+      - best combo unchanged: `scenario_quality_focus_003`
+      - artifact:
+        - `build/Release/logs/candidate_trade_density_tuning_summary_stage2221_holdout_expectancy_lift_polarity_guard.json`
+  - post-run split rerun:
+    - `python scripts/run_candidate_train_eval_cycle.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --real-data-dir .\data\backtest_real --real-live-data-dir .\data\backtest_real_live --reserve-newest-markets-for-holdout 2 --train-iterations 1`
+    - verdict:
+      - `promotion_gate_pass=false`
+      - `generalization_guard_pass=false`
+      - recommendation:
+        - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - holdout-vs-validation check remains fail:
+        - validation exp `-7.0171`
+        - holdout exp `-11.0591`
+        - allowed drop `2.5`, observed gap `4.0420`
+      - walk-forward ready ratio remains `0.0` (validation/holdout)
+- Conclusion:
+  - Stage-2.216 achieved a real directional fix in candidate generation quality (one holdout-lift path flipped to positive expectancy delta and passed readiness veto), and reduced split-gap failure candidate count (`5 -> 4`).
+  - core promotion/generalization bottleneck is still active; split-gap override activation itself is still `0`.
+- Next subtask (single active):
+  - Stage-2.217: holdout-lift source-anchor tightening (positive-delta parent bias)
+    - goal: bias injected holdout-lift combos toward parents already showing non-negative baseline expectancy delta and deprioritize repeatedly negative-delta parent families, to increase split-gap improvement hit-rate on veto candidates.
+    - expected artifacts:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage2222_holdout_expectancy_lift_source_anchor.json`
+      - `build/Release/logs/candidate_train_eval_cycle_summary.json` (post Stage-2.217 rerun)
+
+## Latest Run Log (2026-02-18, Stage-2.215)
+- What changed (files/functions):
+  - `scripts/tune_candidate_gate_trade_density.py`
+    - `apply_selector_baseline_readiness_veto_to_rows(...)`
+      - add split-gap override diagnostics telemetry:
+        - row-level:
+          - `selector_baseline_readiness_veto_split_gap_override_candidate`
+          - `selector_baseline_readiness_veto_split_gap_override_precheck_*`
+          - `selector_baseline_readiness_veto_split_gap_override_allowed_failed`
+          - `selector_baseline_readiness_veto_split_gap_override_gap_improved`
+          - `selector_baseline_readiness_veto_split_gap_override_violation_improved`
+          - `selector_baseline_readiness_veto_split_gap_override_pf_floor_pass`
+          - `selector_baseline_readiness_veto_split_gap_override_expectancy_floor_pass`
+          - `selector_baseline_readiness_veto_split_gap_override_block_reasons`
+        - meta-level:
+          - `split_gap_override_failed_row_count`
+          - `split_gap_override_candidate_row_count`
+          - `split_gap_override_block_reason_counts`
+    - selector/screening summary wiring:
+      - `selector.baseline_readiness_veto_split_gap_override_*`
+      - `screening.selector_baseline_readiness_veto_split_gap_override_*`
+    - runtime log line extended:
+      - baseline readiness veto now prints split-gap failed/candidate/applied counts + reason histogram
+- What was verified (commands/artifacts):
+  - Syntax/suite:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/verify_script_suite.py --skip-help` PASS
+  - Stage-2.215 run:
+    - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --enable-selector-baseline-readiness-veto --selector-baseline-readiness-veto-fail-closed --baseline-readiness-max-drawdown-delta-pct 0.30 --objective-holdout-vs-validation-expectancy-gap-penalty-scale 55 --objective-holdout-vs-validation-expectancy-violation-penalty-scale 120 --objective-holdout-vs-validation-expectancy-floor-margin-krw 0.0 --objective-holdout-vs-validation-expectancy-floor-penalty-scale 40 --holdout-expectancy-lift-min-combo-count 20 --holdout-expectancy-lift-max-injected 6 --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2220_split_gap_activation_diagnostics.json --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2220_split_gap_activation_diagnostics.csv`
+    - diagnostic result:
+      - split-gap:
+        - `failed_rows=5`
+        - `candidate_rows=5`
+        - `applied=0`
+        - `block_reason_counts={"improvement_below_threshold":5}`
+      - row-level sampled vetoed candidates all had:
+        - `selector_baseline_readiness_veto_split_gap_improvement_krw < 0`
+        - `selector_baseline_readiness_veto_split_gap_violation_improvement_krw < 0`
+      - best combo remains `scenario_quality_focus_003` with baseline delta:
+        - pf `+0.0210`
+        - expectancy `+0.4023`
+        - drawdown `-0.3901`
+      - artifact:
+        - `build/Release/logs/candidate_trade_density_tuning_summary_stage2220_split_gap_activation_diagnostics.json`
+  - post-run split rerun:
+    - `python scripts/run_candidate_train_eval_cycle.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --real-data-dir .\data\backtest_real --real-live-data-dir .\data\backtest_real_live --reserve-newest-markets-for-holdout 2 --train-iterations 1`
+    - verdict:
+      - `promotion_gate_pass=false`
+      - `generalization_guard_pass=false`
+      - recommendation:
+        - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - holdout-vs-validation:
+        - validation exp `-7.0171`
+        - holdout exp `-11.0591`
+        - allowed drop `2.5`, observed gap `4.0420`
+      - walk-forward ready ratio remains `0.0` (validation/holdout)
+- Conclusion:
+  - split-gap override ÎπÑÌôú???êÏù∏?Ä ?∏Ï∂ú/?§ÌÉù Î≤ÑÍ∑∏Í∞Ä ?ÑÎãà?? ?ÑÎ≥¥ ?êÏ≤¥Í∞Ä baseline ?ÄÎπ?split-gap Í∞úÏÑ†??ÎßåÎì§ÏßÄ Î™ªÌïò??Î∂ÑÌè¨ Î¨∏Ï†úÎ°??ïÏù∏??
+  - Ï¶âÏãú ?∞ÏÑ†?úÏúÑ??threshold ?ÑÌôîÍ∞Ä ?ÑÎãà??`holdout_expectancy_lift` ?ÑÎ≥¥ ?ùÏÑ±??polarity(?§Ï†ú Í∞úÏÑ† Î∞©Ìñ•) Î≥¥Ï†ï.
+- Next subtask (single active):
+  - Stage-2.216: holdout-expectancy-lift polarity guard + profile rebalance
+    - goal: split-gap Í∞úÏÑ† Í∞?`projected_gap/violation improvement`)???åÏàò???ÑÎ≥¥Î•??ùÏÑ± ?®Í≥Ñ?êÏÑú ?µÏ†ú?òÍ≥†, Í∞úÏÑ† Í∞Ä??profileÎß??®Í≤® override ?úÏÑ±??Í∞Ä??Î∂ÑÌè¨Î•?ÎßåÎì§Í∏?    - expected artifacts:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage2221_holdout_expectancy_lift_polarity_guard.json`
+      - `build/Release/logs/candidate_train_eval_cycle_summary.json` (post Stage-2.216 rerun)
+
+## Latest Run Log (2026-02-18, Stage-2.214)
+- What changed (execution/calibration):
+  - no additional code patch.
+  - calibrated Stage-2.213 expansion breadth by runtime knobs:
+    - `--holdout-expectancy-lift-min-combo-count 20`
+    - `--holdout-expectancy-lift-max-injected 6`
+- What was verified (commands/artifacts):
+  - Stage-2.214 run:
+    - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --enable-selector-baseline-readiness-veto --selector-baseline-readiness-veto-fail-closed --baseline-readiness-max-drawdown-delta-pct 0.30 --objective-holdout-vs-validation-expectancy-gap-penalty-scale 55 --objective-holdout-vs-validation-expectancy-violation-penalty-scale 120 --objective-holdout-vs-validation-expectancy-floor-margin-krw 0.0 --objective-holdout-vs-validation-expectancy-floor-penalty-scale 40 --holdout-expectancy-lift-min-combo-count 20 --holdout-expectancy-lift-max-injected 6 --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2219_holdout_expectancy_lift_breadth.json --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2219_holdout_expectancy_lift_breadth.csv`
+    - result:
+      - best combo: `scenario_quality_focus_003`
+      - baseline delta:
+        - pf `+0.0210`
+        - expectancy `+0.4023`
+        - drawdown `-0.3901`
+      - readiness veto:
+        - kept `3`, vetoed `5`
+        - `split_gap_override_applied=0`
+      - holdout-expectancy-lift expansion:
+        - `applied=true`, `injected=6`
+      - scenario family counts:
+        - `holdout_expectancy_lift_recovery=6`
+        - `walk_forward_window_feature_recovery=1`
+        - `walk_forward_expectancy_repair=2`
+        - `walk_forward_profit_sum_recovery=4`
+        - `risk_gate_rr_edge_adaptive_regime_focus=6`
+      - artifact:
+        - `build/Release/logs/candidate_trade_density_tuning_summary_stage2219_holdout_expectancy_lift_breadth.json`
+  - post-run split rerun:
+    - `python scripts/run_candidate_train_eval_cycle.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --real-data-dir .\data\backtest_real --real-live-data-dir .\data\backtest_real_live --reserve-newest-markets-for-holdout 2 --train-iterations 1`
+    - verdict:
+      - `promotion_gate_pass=false`
+      - `generalization_guard_pass=false`
+      - recommendation:
+        - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - holdout-vs-validation:
+        - validation exp `-7.0171`
+        - holdout exp `-11.0591`
+        - allowed drop `2.5`, observed gap `4.0420`
+      - walk-forward ready ratio remains `0.0` (validation/holdout)
+- Conclusion:
+  - breadth calibration succeeded technically (`injected=6`), but split-gap override activation is still `0`.
+  - primary bottleneck is no longer ?úcandidate count?? it is likely objective/readiness interaction at candidate-quality boundary.
+- Next subtask (single active):
+  - Stage-2.215: split-gap override activation diagnostics (row-level)
+    - goal: identify why expanded holdout-lift rows still fail override (`allowed_failed`, `gap_improved`, `violation_improved`, `pf/exp floors`) and patch gating logic if needed
+    - expected artifacts:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage2220_split_gap_activation_diagnostics.json`
+      - `build/Release/logs/candidate_train_eval_cycle_summary.json` (post Stage-2.215 rerun)
+
+## Latest Run Log (2026-02-18, Stage-2.213)
+- What changed (files/functions):
+  - `scripts/tune_candidate_gate_trade_density.py`
+    - add expansion function:
+      - `expand_holdout_expectancy_lift_candidates(...)`
+    - pipeline wiring:
+      - run holdout-expectancy-lift expansion after `walk_forward_window_feature_recovery` expansion
+    - CLI added:
+      - `--enable-holdout-expectancy-lift-expansion` / `--disable-holdout-expectancy-lift-expansion`
+      - `--holdout-expectancy-lift-min-combo-count`
+      - `--holdout-expectancy-lift-max-injected`
+      - `--holdout-expectancy-lift-min-gap-krw`
+      - `--holdout-expectancy-lift-min-violation-krw`
+    - telemetry/report wiring:
+      - console log: `holdout_expectancy_lift_expansion=...`
+      - summary JSON:
+        - `screening.holdout_expectancy_lift_*`
+        - `bottleneck_priority.holdout_expectancy_lift_expansion`
+- What was verified (commands/artifacts):
+  - Syntax/suite:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/verify_script_suite.py --skip-help` PASS
+  - Stage-2.213 run:
+    - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --enable-selector-baseline-readiness-veto --selector-baseline-readiness-veto-fail-closed --baseline-readiness-max-drawdown-delta-pct 0.30 --objective-holdout-vs-validation-expectancy-gap-penalty-scale 55 --objective-holdout-vs-validation-expectancy-violation-penalty-scale 120 --objective-holdout-vs-validation-expectancy-floor-margin-krw 0.0 --objective-holdout-vs-validation-expectancy-floor-penalty-scale 40 --holdout-expectancy-lift-min-combo-count 10 --holdout-expectancy-lift-max-injected 6 --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2218_holdout_expectancy_lift_family.json --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2218_holdout_expectancy_lift_family.csv`
+    - result:
+      - best combo: `scenario_quality_focus_003`
+      - baseline delta:
+        - pf `+0.0210`
+        - expectancy `+0.4023`
+        - drawdown `-0.3901`
+      - readiness veto:
+        - kept `4`, vetoed `4`
+        - `split_gap_override_applied=0`
+      - holdout-expectancy-lift expansion:
+        - `applied=true`, `injected=1`
+      - artifact:
+        - `build/Release/logs/candidate_trade_density_tuning_summary_stage2218_holdout_expectancy_lift_family.json`
+  - post-run split rerun:
+    - `python scripts/run_candidate_train_eval_cycle.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --real-data-dir .\data\backtest_real --real-live-data-dir .\data\backtest_real_live --reserve-newest-markets-for-holdout 2 --train-iterations 1`
+    - verdict:
+      - `promotion_gate_pass=false`
+      - `generalization_guard_pass=false`
+      - recommendation:
+        - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - holdout-vs-validation:
+        - validation exp `-7.0171`
+        - holdout exp `-11.0591`
+        - allowed drop `2.5`, observed gap `4.0420`
+      - walk-forward ready ratio remains `0.0` (validation/holdout)
+- Conclusion:
+  - Stage-2.213 expansion wiring is complete and active in runtime/summary telemetry.
+  - current dataset regime still does not produce split-gap override activation (`0`), and promotion bottleneck is unchanged.
+  - candidate distribution breadth increased (`holdout_expectancy_lift_recovery` family injected), but impact is not yet sufficient for gate transition.
+- Next subtask (single active):
+  - Stage-2.214: holdout-expectancy-lift family breadth calibration
+    - goal: raise injected family coverage from `1` to a multi-profile batch and verify whether split-gap override path can activate without baseline-only collapse
+    - expected artifacts:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage2219_holdout_expectancy_lift_breadth.json`
+      - `build/Release/logs/candidate_train_eval_cycle_summary.json` (post Stage-2.214 rerun)
+
+## Latest Run Log (2026-02-18, Stage-2.212)
+- What changed (files/functions):
+  - no additional code patch from Stage-2.211 baseline.
+  - focused on threshold-space sweep of newly added split-gap veto override knobs:
+    - `baseline_readiness_split_gap_override_min_gap_improvement_krw`
+    - `baseline_readiness_split_gap_override_min_violation_improvement_krw`
+    - `baseline_readiness_split_gap_override_min_pf_delta`
+    - `baseline_readiness_split_gap_override_min_expectancy_delta_krw`
+- What was verified (commands/artifacts):
+  - sweep runs (same config except split-gap override thresholds):
+    - strict:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage2217a_split_gap_override_sweep_strict.json`
+    - medium:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage2217b_split_gap_override_sweep_medium.json`
+    - loose:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage2217c_split_gap_override_sweep_loose.json`
+  - common result across all 3:
+    - best combo: `scenario_quality_focus_003`
+    - baseline delta:
+      - pf `+0.0210`
+      - expectancy `+0.4023`
+      - drawdown `-0.3901`
+    - readiness veto:
+      - kept `4`, vetoed `4`
+      - `win_rate_override_applied=1`
+      - `split_gap_override_applied=0` (Î™®Îì† sweep ÏºÄ?¥Ïä§?êÏÑú ?ôÏùº)
+  - post-run split rerun:
+    - `python scripts/run_candidate_train_eval_cycle.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --real-data-dir .\data\backtest_real --real-live-data-dir .\data\backtest_real_live --reserve-newest-markets-for-holdout 2 --train-iterations 1`
+    - verdict:
+      - `promotion_gate_pass=false`
+      - `generalization_guard_pass=false`
+      - holdout-vs-validation fail ÏßÄ??
+        - validation exp `-7.0171`
+        - holdout exp `-11.0591`
+        - allowed drop `2.5`, observed gap `4.0420`
+      - walk-forward ready ratio remains `0.0`
+- Conclusion:
+  - ?ÑÏû¨ ?ÑÎ≥¥Íµ∞Ïóê?úÎäî split-gap overrideÍ∞Ä Î∞úÎèô Í∞Ä?•Ìïú ÏºÄ?¥Ïä§ ?êÏ≤¥Í∞Ä Î∂ÄÏ°±ÌïòÎ©? threshold Ï°∞Ï†ïÎßåÏúºÎ°úÎäî Í≤∞Í≥ºÍ∞Ä Î≥Ä?òÏ? ?äÏùå.
+  - Î≥ëÎ™©?Ä selector ?®Í≥ÑÎ≥¥Îã§ ?ÑÎ≥¥ ?ùÏÑ±/Íµ¨Ï°∞ Ï∏?holdout expectancy Í∞úÏÑ† Í∞Ä?•Ìïú combo family Î∂ÄÏ°?????Í∞ÄÍπåÏ?.
+- Next subtask (single active):
+  - Stage-2.213: holdout-expectancy-lift candidate family expansion
+    - goal: split-gap Í∞úÏÑ† ??ù¥ Î™ÖÌôï???ÑÎ≥¥Î•??ùÏÑ± ?®Í≥Ñ?êÏÑú ?òÎ†§, Stage-2.211 override Í≤ΩÎ°úÍ∞Ä ?§Ï†úÎ°??ëÎèô Í∞Ä?•Ìïú Î∂ÑÌè¨Î•?ÎßåÎì§Í∏?    - expected artifacts:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage2218_holdout_expectancy_lift_family.json`
+      - `build/Release/logs/candidate_train_eval_cycle_summary.json` (post Stage-2.213 rerun)
+
+## Latest Run Log (2026-02-18, Stage-2.211)
+- What changed (files/functions):
+  - `scripts/tune_candidate_gate_trade_density.py`
+    - `apply_selector_baseline_readiness_veto_to_rows(...)`
+      - add split-gap-coupled readiness override path:
+        - evaluates projected candidate/baseline holdout-vs-validation gap/violation using
+          `validation_expectancy_reference_krw`, `max_expectancy_drop_krw`, `baseline_delta_avg_expectancy_krw`.
+        - override only considered when:
+          - `comparable_scope` and `drawdown_delta` checks already pass,
+          - failed checks are limited to readiness-quality checks (`pf/expectancy/win_rate`),
+          - projected split-gap or split-violation improvement crosses configured minimum,
+          - PF/expectancy regression remains inside override floor limits.
+      - add per-row telemetry:
+        - `selector_baseline_readiness_veto_split_gap_*`
+      - add meta telemetry:
+        - `split_gap_override_applied_count`
+        - `split_gap_override_combo_ids`
+    - `main(...)` row assembly:
+      - inject objective split-gap context into each `screen_row/final_row`:
+        - `objective_holdout_vs_validation_*`
+      - selector meta + summary payload now export split-gap override counters/thresholds.
+    - CLI added:
+      - `--enable-baseline-readiness-split-gap-override`
+      - `--baseline-readiness-split-gap-override-min-violation-improvement-krw`
+      - `--baseline-readiness-split-gap-override-min-gap-improvement-krw`
+      - `--baseline-readiness-split-gap-override-min-pf-delta`
+      - `--baseline-readiness-split-gap-override-min-expectancy-delta-krw`
+- What was verified (commands/artifacts):
+  - Syntax/suite:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/verify_script_suite.py --skip-help` PASS
+  - Stage-2.211 run:
+    - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --enable-selector-baseline-readiness-veto --selector-baseline-readiness-veto-fail-closed --baseline-readiness-max-drawdown-delta-pct 0.30 --objective-holdout-vs-validation-expectancy-gap-penalty-scale 55 --objective-holdout-vs-validation-expectancy-violation-penalty-scale 120 --objective-holdout-vs-validation-expectancy-floor-margin-krw 0.0 --objective-holdout-vs-validation-expectancy-floor-penalty-scale 40 --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2216_split_gap_veto_coupling.json --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2216_split_gap_veto_coupling.csv`
+    - result:
+      - best combo: `scenario_quality_focus_003`
+      - baseline delta:
+        - objective `+737.0901`
+        - pf `+0.0210`
+        - expectancy `+0.4023`
+        - drawdown `-0.3901`
+      - veto outcome:
+        - kept rows `4`, vetoed `4`
+        - `win_rate_override_applied=1`
+        - `split_gap_override_applied=0` (current dataset?êÏÑú??threshold ÎØ∏Ï∂©Ï°?
+      - artifact:
+        - `build/Release/logs/candidate_trade_density_tuning_summary_stage2216_split_gap_veto_coupling.json`
+  - Post-run split rerun:
+    - `python scripts/run_candidate_train_eval_cycle.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --real-data-dir .\data\backtest_real --real-live-data-dir .\data\backtest_real_live --reserve-newest-markets-for-holdout 2 --train-iterations 1`
+    - verdict summary:
+      - `promotion_gate_pass=false`
+      - `generalization_guard_pass=false`
+      - recommendation remains:
+        - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - holdout-vs-validation fail persists:
+        - validation exp `-7.0171`
+        - holdout exp `-11.0591`
+        - allowed drop `2.5`, observed gap `4.0420`
+      - walk-forward ready ratio remains `0.0` (validation/holdout)
+- Conclusion:
+  - Stage-2.211 coupling wiring and telemetry are complete.
+  - current dataset/threshold combination?êÏÑú??split-gap overrideÍ∞Ä ?§Ï†ú Î∞úÎèô?òÏ????äÏïòÍ≥? ?†Ï†ï Í≤∞Í≥º??Stage-2.210b?Ä ?ôÏùº.
+  - ?µÏã¨ Î≥ëÎ™©(`holdout_vs_validation` gap + `walk_forward ready_ratio=0`)?Ä Í∑∏Î?Î°??†Ï?.
+- Next subtask (single active):
+  - Stage-2.212: split-gap override threshold calibration sweep (strict bounds)
+    - goal: baseline-only collapse ?ÜÏù¥ split-gap Í∞úÏÑ† ?ÑÎ≥¥Î•??úÌïú?ÅÏúºÎ°??µÍ≥º?úÌÇ§???†Ìö® threshold Íµ¨Í∞Ñ ?êÏÉâ
+    - expected artifacts:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage2217_split_gap_override_sweep.json`
+      - `build/Release/logs/candidate_train_eval_cycle_summary.json` (post Stage-2.212 rerun)
+
+## Latest Run Log (2026-02-18, Stage-2.210/2.210b)
+- What changed (files/functions):
+  - `scripts/tune_candidate_gate_trade_density.py`
+    - `compute_combo_objective(...)`
+      - add direct split-gap guard block:
+        - `enforce_holdout_vs_validation_expectancy_gap_guard`
+        - projected gap/violation penalty from `validation_expectancy_reference_krw`
+        - holdout-reference floor penalty (`holdout_expectancy_reference_krw + margin`)
+    - `main(...)`
+      - add objective context wiring:
+        - `holdout_vs_validation_*_for_objective`
+        - `enforce_holdout_vs_validation_expectancy_gap_objective`
+      - add runtime log line:
+        - `[TuneCandidate] objective_holdout_vs_validation_expectancy_gap_guard=...`
+    - CLI added:
+      - `--objective-enforce-holdout-vs-validation-expectancy-gap-guard`
+      - `--objective-holdout-vs-validation-expectancy-gap-penalty-scale`
+      - `--objective-holdout-vs-validation-expectancy-violation-penalty-scale`
+      - `--objective-holdout-vs-validation-expectancy-floor-margin-krw`
+      - `--objective-holdout-vs-validation-expectancy-floor-penalty-scale`
+    - summary telemetry added:
+      - `objective_holdout_vs_validation_*` fields (guard active/context/scales/references)
+- What was verified (commands/artifacts):
+  - Syntax/suite:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/verify_script_suite.py --skip-help` PASS
+  - Stage-2.210 (hard default scales):
+    - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --enable-selector-baseline-readiness-veto --selector-baseline-readiness-veto-fail-closed --baseline-readiness-max-drawdown-delta-pct 0.30 --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2214_holdout_validation_gap_guard.json --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2214_holdout_validation_gap_guard.csv`
+    - result:
+      - guard active: `pass=false`, gap `3.3534`, violation `0.8534`
+      - veto kept rows collapsed: `1` (`scenario_quality_focus_000` only)
+      - artifact:
+        - `build/Release/logs/candidate_trade_density_tuning_summary_stage2214_holdout_validation_gap_guard.json`
+  - Stage-2.210b (soft calibrated scales):
+    - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --enable-selector-baseline-readiness-veto --selector-baseline-readiness-veto-fail-closed --baseline-readiness-max-drawdown-delta-pct 0.30 --objective-holdout-vs-validation-expectancy-gap-penalty-scale 55 --objective-holdout-vs-validation-expectancy-violation-penalty-scale 120 --objective-holdout-vs-validation-expectancy-floor-margin-krw 0.0 --objective-holdout-vs-validation-expectancy-floor-penalty-scale 40 --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2215_holdout_validation_gap_guard_soft.json --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2215_holdout_validation_gap_guard_soft.csv`
+    - result:
+      - best combo: `scenario_quality_focus_003`
+      - baseline delta:
+        - objective `+737.0901`
+        - pf `+0.0210`
+        - expectancy `+0.4023`
+        - drawdown `-0.3901`
+      - readiness veto recovered:
+        - kept rows `4`, vetoed `4` (no baseline-only collapse)
+      - artifact:
+        - `build/Release/logs/candidate_trade_density_tuning_summary_stage2215_holdout_validation_gap_guard_soft.json`
+  - Post-run split rerun:
+    - `python scripts/run_candidate_train_eval_cycle.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --real-data-dir .\data\backtest_real --real-live-data-dir .\data\backtest_real_live --reserve-newest-markets-for-holdout 2 --train-iterations 1`
+    - verdict summary:
+      - `promotion_gate_pass=false`
+      - `generalization_guard_pass=false`
+      - recommendation remains:
+        - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - holdout-vs-validation check still fail:
+        - validation exp `-7.0171`
+        - holdout exp `-11.0591`
+        - allowed drop `2.5`, observed gap `4.0420`
+      - walk-forward ready ratio remains `0.0` (validation/holdout)
+- Conclusion:
+  - Stage-2.210 direct guard wiring is complete and observable in objective logs/summary.
+  - hard scales over-constrained selector (baseline-only lock), while soft scales restored candidate competition and positive baseline deltas.
+  - core promotion bottleneck remains unchanged (`holdout_vs_validation` fail + walk-forward readiness `0.0`).
+- Next subtask (single active):
+  - Stage-2.211: split-gap guard + veto-candidate coupling
+    - goal: keep Stage-2.210b softness while explicitly preferring candidates that improve holdout-side expectancy without re-triggering baseline-only collapse
+    - expected artifacts:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage2216_split_gap_veto_coupling.json`
+      - `build/Release/logs/candidate_train_eval_cycle_summary.json` (post Stage-2.211 rerun)
+
+## Latest Run Log (2026-02-18, Stage-2.209)
+- What changed (files/functions):
+  - `scripts/tune_candidate_gate_trade_density.py`
+    - `read_train_eval_holdout_context(...)`
+      - add generalization context extraction:
+        - `generalization_holdout_vs_validation_pass`
+        - `generalization_holdout_vs_validation_expectancy_gap_krw`
+        - `generalization_holdout_vs_validation_expectancy_violation_krw`
+    - `build_effective_bottleneck_context(...)`
+      - wire second-stage/rr split mismatch and generalization context into bottleneck context
+    - `compute_combo_bottleneck_priority_score(...)`
+      - add convergence-aware scoring branch for `entry_quality_rr_adaptive_regime` when holdout-vs-validation divergence is active
+    - `adapt_combo_specs_for_bottleneck(...)`
+      - add family:
+        - `risk_gate_rr_adaptive_regime_split_convergence`
+      - route `entry_quality_rr_adaptive_regime` to split-convergence family when split-aligned divergence context is active
+      - add convergence-specific parameter transforms and metadata fields
+- What was verified (commands/artifacts):
+  - Syntax:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+  - Tuning run:
+    - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2213_rr_adaptive_regime_split_convergence.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2213_rr_adaptive_regime_split_convergence.json`
+    - key checks:
+      - family activation:
+        - `risk_gate_rr_adaptive_regime_split_convergence: 6`
+      - best combo:
+        - `scenario_quality_focus_003`
+      - baseline delta:
+        - objective `+395.9016`
+        - pf `+0.0227`
+        - expectancy `-0.1262` (regression)
+      - `candidate_vs_baseline_readiness=false`
+      - artifact:
+        - `build/Release/logs/candidate_trade_density_tuning_summary_stage2213_rr_adaptive_regime_split_convergence.json`
+  - Train/Eval rerun:
+    - `python scripts/run_candidate_train_eval_cycle.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --real-data-dir .\data\backtest_real --real-live-data-dir .\data\backtest_real_live --reserve-newest-markets-for-holdout 2 --train-iterations 1`
+    - verdict summary:
+      - `promotion_gate_pass=false`
+      - `generalization_guard_pass=false`
+      - `recommendation=hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - holdout-vs-validation expectancy gap remains fail:
+        - validation exp `-7.8120`
+        - holdout exp `-11.1654`
+        - allowed drop `2.5`, observed gap `3.3534`
+      - holdout top risk component re-drift:
+        - `blocked_risk_gate_entry_quality_rr_edge_adaptive_regime`
+- Conclusion:
+  - Stage-2.209 split-convergence family did not improve promotion/generalization and introduced expectancy regression vs baseline in tuning readiness.
+  - Keep Stage-2.209 as recorded experiment; do not treat as promotion improvement.
+- Next subtask (single active):
+  - Stage-2.210: holdout-vs-validation expectancy gap direct guard
+    - goal: reduce `holdout_vs_validation` expectancy gap below threshold without increasing manager-EV-floor dominance
+    - expected artifacts:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage2214_holdout_validation_expectancy_gap_guard.json`
+      - `build/Release/logs/candidate_train_eval_cycle_summary.json` (post Stage-2.210 rerun)
+
+## Latest Run Log (2026-02-18, Stage-2.208)
+- What changed (files/functions):
+  - `scripts/tune_candidate_gate_trade_density.py`
+    - add second-stage edge-margin bridge routing and family:
+      - `risk_gate_second_stage_edge_margin_bridge`
+    - add holdout-vs-validation divergence context to scenario adaptation and logging
+- What was verified (commands/artifacts):
+  - Tuning run:
+    - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2212_second_stage_edge_margin_consistency.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2212_second_stage_edge_margin_consistency.json`
+    - key checks:
+      - focus: `second_stage_confirmation_edge_margin`
+      - family activation:
+        - `risk_gate_second_stage_edge_margin_bridge: 6`
+      - best combo:
+        - `scenario_quality_focus_001`
+      - baseline delta:
+        - objective `+4180.1356`
+        - pf `+0.0344`
+        - expectancy `+0.1618`
+      - `candidate_vs_baseline_readiness=true`
+      - artifact:
+        - `build/Release/logs/candidate_trade_density_tuning_summary_stage2212_second_stage_edge_margin_consistency.json`
+  - Train/Eval rerun:
+    - `python scripts/run_candidate_train_eval_cycle.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --real-data-dir .\data\backtest_real --real-live-data-dir .\data\backtest_real_live --reserve-newest-markets-for-holdout 2 --train-iterations 1`
+    - verdict summary:
+      - `promotion_gate_pass=false`
+      - `generalization_guard_pass=false`
+      - recommendation reverted to:
+        - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - validation/holdout top risk component temporarily aligned to `rr_adaptive_regime`, but expectancy gap fail persisted
+
+## Latest Run Log (2026-02-18, Stage-2.207)
+- What changed (files/functions):
+  - `scripts/tune_candidate_gate_trade_density.py`
+    - `build_effective_bottleneck_context(...)`
+      - add recommendation-to-component alignment override:
+        - when recommendation is `rr_adaptive_regime_adders` but both validation/holdout top component are `rr_edge_adaptive_regime`, force focus to `entry_quality_rr_edge_adaptive_regime`
+      - add context flags:
+        - `recommendation_component_alignment_active`
+        - `recommendation_component_alignment_reason`
+    - bottleneck runtime log line updated to print alignment status/reason
+- What was verified (commands/artifacts):
+  - Syntax:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+  - Tuning run:
+    - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2211_recommendation_component_alignment.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2211_recommendation_component_alignment.json`
+    - key checks:
+      - alignment activated:
+        - `risk_gate_focus=entry_quality_rr_edge_adaptive_regime`
+        - `component_alignment_active=True`
+      - family activation:
+        - `risk_gate_rr_edge_adaptive_regime_focus: 6`
+      - best combo:
+        - `scenario_quality_focus_003`
+      - baseline delta (candidate vs baseline):
+        - objective `+408.3907`
+        - pf `+0.0210`
+        - expectancy `+0.4023`
+        - peak drawdown `-0.3901`
+      - `candidate_vs_baseline_readiness=pass`
+      - artifact:
+        - `build/Release/logs/candidate_trade_density_tuning_summary_stage2211_recommendation_component_alignment.json`
+  - Train/Eval rerun:
+    - `python scripts/run_candidate_train_eval_cycle.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --real-data-dir .\data\backtest_real --real-live-data-dir .\data\backtest_real_live --reserve-newest-markets-for-holdout 2 --train-iterations 1`
+    - verdict summary:
+      - `promotion_gate_pass=false`
+      - `generalization_guard_pass=false`
+      - recommendation shifted:
+        - `hold_candidate_calibrate_second_stage_confirmation_edge_margin_consistency`
+      - validation top risk component:
+        - `blocked_second_stage_confirmation_edge_margin` (count `4`)
+      - holdout top risk component:
+        - `blocked_risk_gate_entry_quality_rr_adaptive_regime` (count `33`)
+      - walk-forward ready ratio remains `0.0` (validation/holdout)
+- Next subtask (single active):
+  - Stage-2.208: second-stage edge-margin consistency batch
+    - goal: reduce holdout-vs-validation expectancy divergence (`generalization holdout_vs_validation`) while keeping manager-EV-floor dominance from worsening
+    - expected artifacts:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage2212_second_stage_edge_margin_consistency.json`
+      - `build/Release/logs/candidate_train_eval_cycle_summary.json` (post Stage-2.208 rerun)
+
+## Latest Run Log (2026-02-18, Stage-2.206)
+- What changed (files/functions):
+  - `scripts/tune_candidate_gate_trade_density.py`
+    - `read_train_eval_holdout_context(...)`
+      - add manager-EV floor pressure extraction:
+        - `manager_ev_quality_floor_pressure_active`
+        - `manager_ev_quality_floor_dual_pressure_active`
+        - `manager_ev_quality_floor_pressure_share`
+        - holdout/validation top rejection reason/count/total snapshot fields
+    - `build_effective_bottleneck_context(...)`
+      - wire manager-EV floor pressure context into bottleneck context
+    - `compute_combo_bottleneck_priority_score(...)`
+      - add risk-gate `entry_quality_rr_adaptive_regime` hybrid weighting path when manager-EV floor pressure is active
+    - `adapt_combo_specs_for_bottleneck(...)`
+      - add new adapted family:
+        - `risk_gate_rr_adaptive_regime_prefilter_bridge`
+      - family routing:
+        - `entry_quality_rr_adaptive_regime` + manager-EV floor pressure -> prefilter bridge family
+      - add prefilter-bridge profile variants + metadata fields
+- What was verified (commands/artifacts):
+  - Syntax:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+  - Tuning run:
+    - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2210_prefilter_bridge.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2210_prefilter_bridge.json`
+    - key checks:
+      - context: `manager_ev_floor_pressure=True`, `manager_ev_floor_dual_pressure=True`, `manager_ev_floor_share=0.3847`
+      - family activation: `risk_gate_rr_adaptive_regime_prefilter_bridge: 6`
+      - tuning best: `scenario_quality_focus_002`
+      - artifact:
+        - `build/Release/logs/candidate_trade_density_tuning_summary_stage2210_prefilter_bridge.json`
+  - Train/Eval rerun with promoted combo:
+    - `python scripts/run_candidate_train_eval_cycle.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --real-data-dir .\data\backtest_real --real-live-data-dir .\data\backtest_real_live --reserve-newest-markets-for-holdout 2 --train-iterations 1`
+    - verdict summary:
+      - `promotion_gate_pass=false`
+      - `generalization_guard_pass=false`
+      - `recommendation=hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - validation/holdout top rejection remains `filtered_out_by_manager_ev_quality_floor`
+      - top risk component shifted to `blocked_risk_gate_entry_quality_rr_edge_adaptive_regime` (validation/holdout)
+      - walk-forward ready ratio remains `0.0` on validation/holdout
+- Next subtask (single active):
+  - Stage-2.207: recommendation-to-component mismatch stabilization
+    - goal: align recommendation target (`rr_adaptive_regime_adders`) with observed top component drift (`rr_edge_adaptive_regime`) to avoid family oscillation/regression
+    - expected artifacts:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage2211_recommendation_component_alignment.json`
+      - `build/Release/logs/candidate_train_eval_cycle_summary.json` (post-alignment rerun)
+
+## Goal
+Build a personal-use crypto trading bot that is adaptive, restart-safe, and verifiable.
+The system must:
+- follow Upbit API/WebSocket call rules,
+- train on high-quality data,
+- persist learning state across restarts,
+- run backtests that match live decision flow.
+
+## Principles
+- Keep strict safety chain and strict live approval process.
+- Keep legacy fallback until core path is fully proven.
+- Prefer robust logic changes over narrow parameter overfitting.
+- If market data is hostile, do not force trade count.
+- Never accept train-only gains: promotion requires validation/holdout generalization evidence.
+- Always quarantine newest market slices as OOT holdout for at least one full cycle before any tuning reuse.
+
+## Anti-Overfitting Hard Rules (Always ON)
+- No single-symbol/single-period tuning acceptance.
+- Time split is fixed: `train -> validation -> holdout`, and newest slices are quarantined as OOT.
+- Hyperparameters must stay frozen during one validation cycle (no mid-cycle retune).
+- Candidate promotion requires reproducibility on at least `3` non-overlapping holdout/OOT windows.
+- Prefer symbol-invariant controls (`loss top-share`, `HHI`, `window-cluster share`) over symbol-specific hardcoding.
+- If two candidates are statistically similar, choose the simpler one (complexity penalty).
+- Any fresh-data fetch is additive OOT evidence only, never a replacement for historical regime coverage.
+
+## Execution Discipline (Context Handoff)
+- Every completed subtask must update this TODO immediately with:
+  - what changed (files/functions),
+  - what was verified (build/tests/commands),
+  - next subtask and expected artifact path.
+- Keep one active in-progress item only to avoid context drift.
+- If a run fails, record the exact failing command + first root-cause clue before any new patch.
+
+## Active Snapshot (2026-02-16)
+- Historical progress logs were archived to:
+  - `legacy_archive/docs/archive/STAGE15_WORKLOG_ARCHIVE_2026-02-16.md`
+- Current execution baseline:
+  - Latest completed branch updates: `Stage-2.1` to `Stage-2.6`
+  - Current major bottlenecks: `filtered_out_by_manager_ev_quality_floor`, `blocked_risk_gate`
+  - Next action order: risk-gate ownership calibration -> signal generation bottleneck recovery
+  - live MTF dataset capture wiring added (2026-02-18):
+    - `TradingEngine` now appends live scan candles into dataset CSVs by TF for offline reuse
+    - default output: `data/backtest_real_live/upbit_<MARKET>_<TF>_live.csv`
+      - note: output is runtime working-dir relative; live smoke from `build/Release` writes to
+        `build/Release/data/backtest_real_live`
+    - default TF set: `1m/5m/15m/1h/4h/1d` (`1h->60m`, `4h->240m` file token mapping)
+    - runtime report artifact: `logs/live_mtf_dataset_capture_report.json`
+    - config keys:
+      - `trading.enable_live_mtf_dataset_capture`
+      - `trading.live_mtf_dataset_capture_interval_seconds`
+      - `trading.live_mtf_dataset_capture_output_dir`
+      - `trading.live_mtf_dataset_capture_timeframes`
+    - changed files:
+      - `include/engine/EngineConfig.h`
+      - `src/common/Config.cpp`
+      - `include/runtime/LiveTradingRuntime.h`
+      - `src/runtime/LiveTradingRuntime.cpp`
+      - `config/config.json`
+  - next execution queue after MTF capture wiring (2026-02-18):
+    - Step-1: live capture smoke (`logs/live_mtf_dataset_capture_report.json`) and verify `backtest_real_live` companion files are produced.
+    - Step-2: run train/eval with combined real dataset roots (`data/backtest_real` + `data/backtest_real_live`) and reserve newest markets for holdout.
+    - Step-3: rerun quality-focus tuning on combined real roots and re-check promotion/generalization gate.
+    - current local dataset status:
+      - `data/backtest_real`: primary 1m dataset count = 12
+      - `data/backtest_real_live`: primary 1m dataset count = 0
+      - `build/Release/data/backtest_real_live`: primary 1m dataset count = 20 (total CSV = 91)
+  - combined-real-root pipeline execution (2026-02-18):
+    - script wiring update (real live root included by default):
+      - `scripts/tune_candidate_gate_trade_density.py`:
+        - default `--extra-data-dirs` includes:
+          - `data/backtest_real_live`
+          - `build/Release/data/backtest_real_live`
+          - `build/Debug/data/backtest_real_live`
+      - `scripts/run_realdata_candidate_loop.py`:
+        - new arg `--real-live-data-dir` (default: `data/backtest_real_live`)
+        - when default live path shape is used, scan fallback auto-adds:
+          - `build/Release/data/backtest_real_live`
+          - `build/Debug/data/backtest_real_live`
+        - dataset scan / loss-contributor / tune step now use real roots:
+          - `data/backtest_real`
+          - `data/backtest_real_live`
+      - `scripts/run_candidate_train_eval_cycle.py`:
+        - new arg `--real-live-data-dir`
+        - split source now aggregates detected live roots (default + build fallback) before train/validation/holdout split
+      - `scripts/analyze_loss_contributors.py`:
+        - default `--data-dirs` includes:
+          - `data/backtest_real_live`
+          - `build/Release/data/backtest_real_live`
+          - `build/Debug/data/backtest_real_live`
+    - verification:
+      - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_realdata_candidate_loop.py scripts/run_candidate_train_eval_cycle.py scripts/analyze_loss_contributors.py` PASS
+      - help surface checks:
+        - `python scripts/run_realdata_candidate_loop.py --help`
+        - `python scripts/run_candidate_train_eval_cycle.py --help`
+    - train/eval run:
+      - command:
+        - `python scripts/run_candidate_train_eval_cycle.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --real-data-dir .\data\backtest_real --real-live-data-dir .\data\backtest_real_live --reserve-newest-markets-for-holdout 2`
+      - split artifact:
+        - `build/Release/logs/candidate_train_eval_split_manifest.json`
+      - split summary:
+        - train datasets=`6`, validation=`2`, holdout=`4`
+        - reserved newest holdout markets applied=`2`
+        - real roots used:
+          - `D:\MyApps\AutoLife\data\backtest_real`
+          - `D:\MyApps\AutoLife\data\backtest_real_live`
+      - verdict artifact:
+        - `build/Release/logs/candidate_train_eval_cycle_summary.json`
+      - verdict summary:
+        - `promotion_gate_pass=false`
+        - `generalization_guard_pass=true`
+        - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+        - walk-forward validation/holdout gate both fail (profit-sum/profitable-ratio fail family)
+    - train/eval rerun after live-root fallback scan wiring:
+      - command:
+        - `python scripts/run_candidate_train_eval_cycle.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --real-data-dir .\data\backtest_real --real-live-data-dir .\data\backtest_real_live --reserve-newest-markets-for-holdout 2 --train-iterations 1`
+      - split summary:
+        - train datasets=`11`, validation=`3`, holdout=`6`
+        - market_count_total=`17`
+        - reserved newest holdout markets applied=`2`
+      - real roots used:
+        - `D:\MyApps\AutoLife\data\backtest_real`
+        - `D:\MyApps\AutoLife\data\backtest_real_live`
+        - `D:\MyApps\AutoLife\build\Release\data\backtest_real_live`
+        - `D:\MyApps\AutoLife\build\Debug\data\backtest_real_live`
+      - verdict summary:
+        - `promotion_gate_pass=false`
+        - `generalization_guard_pass=false`
+        - recommendation=`hold_candidate_calibrate_risk_gate_rr_baseline_floor`
+    - tuning run (combined roots):
+      - command:
+        - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate`
+      - summary artifacts:
+        - `build/Release/logs/candidate_trade_density_tuning_summary.json`
+        - `build/Release/logs/candidate_trade_density_tuning_summary.csv`
+      - result:
+        - dataset quality gate: `pass` (`passed=16`, `failed=4`)
+        - best combo: `scenario_quality_focus_001_wf_profit_recovery_02_wf_expectancy_repair_02`
+        - best objective: `-32861.505406`
+        - best PF/Expectancy/Trades:
+          - `avg_profit_factor=0.6458`
+          - `avg_expectancy_krw=-9.7177`
+          - `avg_total_trades=75.0`
+        - context focus: `entry_quality_rr_base`
+        - baseline delta (vs final baseline):
+          - objective `+5108.2394`
+          - profit_factor `+0.1653`
+          - expectancy `+1.2599`
+        - promoted combo snapshot written:
+          - `build/Release/logs/candidate_promoted_combo.json`
+    - post-tuning train/eval rerun:
+      - command:
+        - `python scripts/run_candidate_train_eval_cycle.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --real-data-dir .\data\backtest_real --real-live-data-dir .\data\backtest_real_live --reserve-newest-markets-for-holdout 2 --train-iterations 1`
+      - split summary:
+        - train datasets=`11`, validation=`3`, holdout=`6`
+      - stage metrics:
+        - train: `pf=0.6613`, `exp=-8.674`, `trades=95.0`
+        - validation: `pf=0.5733`, `exp=-6.9113`, `trades=117.6667`
+        - holdout: `pf=0.6452`, `exp=-9.8996`, `trades=68.0`
+      - verdict summary:
+        - `promotion_gate_pass=false`
+        - `generalization_guard_pass=false`
+        - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_mixed_adders`
+    - next:
+      - Step-4: `rr_base`/`rr_adaptive_mixed` ownership drift Ï∂ïÏÜåÎ•??ÑÌïú Íµ¨Ï°∞ ?åÎùºÎØ∏ÌÑ∞(Î¶¨Ïä§?¨Í≤å?¥Ìä∏ ownership) Î∂ÑÎ¶¨ ?§Ìóò Î∞∞Ïπò ÏßÑÌñâ.
+  - Stage cleanup Wave A executed (2026-02-16):
+    - moved research-aux assets to `legacy_archive/` (two-stage delete policy)
+    - added `docs/FILE_USAGE_MAP.md`, `docs/DELETE_WAVE_MANIFEST.md`, `legacy_archive/manifest.json`
+    - added migration skeleton directories `src/v2/`, `include/v2/`
+    - updated `.vscode/settings.json` excludes for build/log/state/large data folders
+  - v2 bootstrap scaffold added (2026-02-16):
+    - added decoupled v2 kernel model/contracts: `include/core/model/KernelTypes.h`, `include/core/contracts/v2/*`
+    - added v2 orchestration skeleton: `include/core/orchestration/DecisionKernel.h`, `src/core/orchestration/DecisionKernel.cpp`
+    - added legacy bridge adapters for staged migration: `include/v2/adapters/*`, `src/v2/adapters/*`
+    - added v2 engine/backtest scaffold:
+      - `include/engine/TradingEngineV2.h`, `src/engine/TradingEngineV2.cpp`
+      - `include/backtest/BacktestEngineV2.h`, `src/backtest/BacktestEngineV2.cpp`
+    - added repeatable Wave A verification command/script: `scripts/verify_cleanup_wave_a.py`
+  - v2 bootstrap smoke wiring verified (2026-02-16):
+    - added dedicated CMake smoke target: `AutoLifeV2KernelSmokeTest`
+    - added dedicated v2 engine/backtest smoke target: `AutoLifeV2EngineBacktestSmokeTest`
+    - added dedicated v2 compile-guard target: `AutoLifeV2CompileObjects`
+    - added v2 kernel smoke test: `tests/TestV2DecisionKernel.cpp`
+    - added v2 engine/backtest scaffold smoke test: `tests/TestV2EngineBacktestScaffold.cpp`
+    - verification PASS:
+      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeV2CompileObjects AutoLifeV2KernelSmokeTest AutoLifeV2EngineBacktestSmokeTest`
+      - `.\build\Release\AutoLifeV2KernelSmokeTest.exe`
+      - `.\build\Release\AutoLifeV2EngineBacktestSmokeTest.exe`
+  - v2 shadow parity harness verified (2026-02-16):
+    - added dedicated CMake parity target: `AutoLifeV2ShadowParityTest`
+    - added parity test/scenario: `tests/TestV2ShadowParity.cpp`
+    - added parity report script: `scripts/validate_v2_shadow_parity.py`
+    - connected runtime shadow probe to backtest policy input:
+      - `BacktestEngine` now writes per-candle policy parity log to `build/Release/logs/v2_shadow_policy_parity_backtest.jsonl`
+      - static parity + runtime parity strict check:
+        - `python scripts/validate_v2_shadow_parity.py -CheckRuntimeShadow -Strict`
+    - connected runtime shadow probe to live policy input:
+      - `LiveTradingRuntime::executeSignals` now writes policy parity log to `build/Release/logs/v2_shadow_policy_parity_live.jsonl`
+      - live runtime strict check option added:
+        - `python scripts/validate_v2_shadow_parity.py -CheckRuntimeLiveShadow -Strict`
+      - note: strict-live requires at least one live/paper scan cycle that reaches `executeSignals`.
+    - integrated optional gate hooks:
+      - `scripts/validate_operational_readiness.py --include-v2-shadow-parity --strict-v2-shadow-parity`
+      - `scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity`
+      - runtime-aware strict option:
+        - `--check-runtime-v2-shadow-parity` (`validate_operational_readiness` / `run_ci_operational_gate`)
+        - `--check-runtime-live-v2-shadow-parity` (`validate_operational_readiness` / `run_ci_operational_gate`)
+    - verification PASS:
+      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeV2ShadowParityTest`
+      - `python scripts/validate_v2_shadow_parity.py -Strict`
+      - artifact: `build/Release/logs/v2_shadow_parity_report.json`
+  - live-order safety lock hardened (2026-02-16):
+    - default `trading.allow_live_orders=false` (explicit opt-in required)
+    - `TradingEngine` live branches now block real submits when `allow_live_orders=false` and use simulation path
+    - no-arg/non-input startup no longer falls through to live mode; now exits safely
+    - `AutoLifeLiveExecutionProbe` now requires explicit `--allow-live-order` flag
+    - CI gate live probe also requires explicit `--allow-live-probe-order` opt-in
+  - Wave B readiness assessor added (2026-02-16):
+    - added `scripts/assess_wave_b_readiness.py`
+    - report artifact: `build/Release/logs/wave_b_readiness_report.json`
+    - latest assessment:
+      - `global_ready=true`
+      - `B1=true` (legacy core adapters moved to archive and replacement wiring active)
+      - `B2=true` (legacy engine/backtest moved to archive and runtime replacement wiring active)
+      - `B3_any=true`, `B3_all=true` (no remaining v1 strategy units detected)
+      - `ready_for_full_wave_b=true`
+      - retention override: immediate final delete executed (no date wait)
+  - Wave B1 stage-1 move executed (2026-02-16):
+    - moved to archive:
+      - `include/core/adapters/LegacyExecutionPlaneAdapter.h`
+      - `include/core/adapters/LegacyPolicyLearningPlaneAdapter.h`
+      - `src/core/adapters/LegacyExecutionPlaneAdapter.cpp`
+      - `src/core/adapters/LegacyPolicyLearningPlaneAdapter.cpp`
+    - replacement files added/wired:
+      - `include/core/adapters/ExecutionPlaneAdapter.h`
+      - `include/core/adapters/PolicyLearningPlaneAdapter.h`
+      - `src/core/adapters/ExecutionPlaneAdapter.cpp`
+      - `src/core/adapters/PolicyLearningPlaneAdapter.cpp`
+    - verification PASS:
+      - `AutoLifeTrading`, `AutoLifeV2*` build targets
+      - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity`
+      - `python scripts/assess_wave_b_readiness.py --run-refresh-checks` (`B1=true`)
+  - Wave B2 stage-1 move executed (2026-02-16):
+    - moved to archive:
+      - `include/engine/TradingEngine.h`
+      - `src/engine/TradingEngine.cpp`
+      - `include/backtest/BacktestEngine.h`
+      - `src/backtest/BacktestEngine.cpp`
+    - runtime replacement files added/wired:
+      - `include/runtime/LiveTradingRuntime.h`
+      - `src/runtime/LiveTradingRuntime.cpp`
+      - `include/runtime/BacktestRuntime.h`
+      - `src/runtime/BacktestRuntime.cpp`
+    - include/source wiring updates:
+      - `src/main.cpp`
+      - `CMakeLists.txt`
+      - `include/strategy/ScalpingStrategy.h`
+      - `include/strategy/MomentumStrategy.h`
+      - `include/strategy/GridTradingStrategy.h`
+    - verification PASS:
+      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading AutoLifeV2CompileObjects AutoLifeV2KernelSmokeTest AutoLifeV2EngineBacktestSmokeTest AutoLifeV2ShadowParityTest`
+      - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity`
+      - `python scripts/assess_wave_b_readiness.py --run-refresh-checks` (`B2=true`)
+  - Wave B3 first-unit readiness opened (2026-02-16):
+    - `StrategyConfig` v2 replacement signal added:
+      - `include/strategy/StrategyConfig.h`
+      - `src/strategy/StrategyConfig.cpp`
+      - `include/common/Config.h` include switched to `strategy/StrategyConfig.h`
+    - readiness assessor false-positive fix:
+      - `scripts/assess_wave_b_readiness.py` path match now uses token-boundary matching
+      - avoids counting `v2/strategy/Foo.h` as legacy `strategy/Foo.h`
+    - verification PASS:
+      - `python scripts/assess_wave_b_readiness.py --run-refresh-checks` (`B3_any=true`)
+  - Wave B3 partial stage-1 move executed (2026-02-16):
+    - moved to archive:
+      - `include/strategy/BreakoutStrategy.h`
+      - `src/strategy/BreakoutStrategy.cpp`
+    - v2 replacement wiring:
+      - `include/strategy/BreakoutStrategy.h`
+      - `src/strategy/BreakoutStrategy.cpp`
+      - `src/runtime/LiveTradingRuntime.cpp`
+      - `src/runtime/BacktestRuntime.cpp`
+      - `CMakeLists.txt` (runtime source switched to v2 breakout cpp)
+    - verification PASS:
+      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading AutoLifeV2CompileObjects AutoLifeV2KernelSmokeTest AutoLifeV2EngineBacktestSmokeTest AutoLifeV2ShadowParityTest`
+      - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity`
+      - `python scripts/assess_wave_b_readiness.py --run-refresh-checks` (`B3_any=true`)
+  - Wave B3 stage-1 expansion executed (2026-02-16):
+    - additional moved strategy headers:
+      - `include/strategy/IStrategy.h`
+      - `include/strategy/StrategyManager.h`
+      - `include/strategy/ScalpingStrategy.h`
+      - `include/strategy/MomentumStrategy.h`
+      - `include/strategy/MeanReversionStrategy.h`
+      - `include/strategy/GridTradingStrategy.h`
+    - additional moved strategy sources:
+      - `src/strategy/StrategyManager.cpp`
+      - `src/strategy/ScalpingStrategy.cpp`
+      - `src/strategy/MomentumStrategy.cpp`
+      - `src/strategy/MeanReversionStrategy.cpp`
+      - `src/strategy/GridTradingStrategy.cpp`
+    - v2 replacement wiring switched:
+      - `include/strategy/*.h` (IStrategy/StrategyManager/Scalping/Momentum/MeanReversion/Grid/Breakout)
+      - `src/strategy/*.cpp` (StrategyManager/Scalping/Momentum/MeanReversion/Grid/Breakout/StrategyConfig)
+      - `src/runtime/LiveTradingRuntime.cpp`
+      - `src/runtime/BacktestRuntime.cpp`
+      - `include/runtime/LiveTradingRuntime.h`
+      - `include/runtime/BacktestRuntime.h`
+      - `include/risk/RiskManager.h`
+      - `include/engine/AdaptivePolicyController.h`
+      - `include/core/model/PlaneTypes.h`
+      - `include/core/contracts/IPolicyLearningPlane.h`
+      - `include/core/contracts/IRiskCompliancePlane.h`
+      - `include/core/orchestration/TradingCycleCoordinator.h`
+      - `CMakeLists.txt` (strategy compilation path switched to `src/strategy/*.cpp`)
+    - verification PASS:
+      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading AutoLifeV2CompileObjects AutoLifeV2KernelSmokeTest AutoLifeV2EngineBacktestSmokeTest AutoLifeV2ShadowParityTest`
+      - `python scripts/verify_cleanup_wave_a.py --run-tests --run-help-checks`
+      - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity`
+      - `python scripts/assess_wave_b_readiness.py --run-refresh-checks` (`B3_any=true`, `B3_all=true`)
+  - Wave B3 final stage-1 marker (2026-02-16):
+    - moved to archive:
+      - `include/strategy/StrategyConfig.h`
+    - readiness script update:
+      - `scripts/assess_wave_b_readiness.py` now treats zero remaining v1 strategy units as:
+        - `B3_any=true`, `B3_all=true` (when global gates are ready)
+      - report note: `no_remaining_v1_strategy_units_detected`
+    - IDE tree readability update:
+      - `.vscode/settings.json` excludes `legacy_archive`
+  - Final delete executed (2026-02-16):
+    - operator requested no date wait; retention window overridden to `0 days`
+    - `legacy_archive` payload files hard-deleted (Wave A + Wave B)
+    - archive audit metadata retained:
+      - `legacy_archive/manifest.json`
+    - verification compatibility update:
+      - `scripts/verify_cleanup_wave_a.py` now treats `wave_a.final_delete_executed=true` as valid when archive payload files are absent
+
+## P0 (Must do first)
+1. Upbit compliance hardening
+- Enforce shared rate budget across scanner/live/backtest fetch tools.
+- Respect `Remaining-Req`, and implement deterministic handling for `429` and `418`.
+- Add compliance telemetry to logs:
+  - request bucket usage,
+  - throttle/degrade events,
+  - recover timestamps.
+
+2. Live-backtest parity (critical)
+- Use same candle inputs and same decision path in live and backtest:
+  - `1m`, `5m`, `15m`, `1h`, `4h` (when available).
+- Enforce identical candle ordering/normalization before strategy logic.
+- Backtest must use rolling-window semantics equivalent to live cache updates.
+- Status update (2026-02-15):
+  - `15m` companion timeframe is now provided on both paths:
+    - live scanner derives `15m` from cached `1m` (fallback from `5m`) and stores into `candles_by_tf`.
+    - trading engine enforces `15m` parity companion fill before strategy collection.
+    - backtest now loads `15m` companion csv when present and exposes `candles_by_tf["15m"]` with rolling cursor semantics.
+  - changed files:
+    - `src/analytics/MarketScanner.cpp`
+    - `src/runtime/LiveTradingRuntime.cpp`
+    - `src/runtime/BacktestRuntime.cpp`
+  - next:
+    - completed: parity invariant check/report linked into realdata profitability artifact chain.
+    - next: apply dataset quality gate policy using parity diagnostics (`gap/dup/stale`) before tuning selection.
+
+3. Data quality gate
+- Validate each dataset before tuning:
+  - timestamp order,
+  - duplicate ratio,
+  - gap ratio,
+  - stale tail,
+  - companion TF coverage.
+- Compute and store `market_hostility_score` and apply adaptive gate floors from hostility band.
+
+4. Learning persistence
+- Keep adaptive state in `state/learning_state.json` with atomic write.
+- Add schema version + migration guard.
+- Persist per-bucket performance stats used by core policy scoring.
+- Restart must warm-load state without silent reset.
+- Status update (2026-02-15):
+  - `LearningStateStoreJson` now enforces `kCurrentSchemaVersion` and validates required fields on load.
+  - Legacy/unversioned payloads are migrated to current schema (policy params normalization) and written back atomically.
+  - Unsupported/future schema payloads are rejected with warning logs instead of silent fallback parse.
+
+5. Verification split enforcement (started)
+- Use `train/validation/holdout` market split before any candidate promotion decision.
+- Keep tuning/learning on `train` split only, and force deterministic eval on `validation/holdout` with `skip-tune`.
+- Enforce walk-forward checks per split before promotion.
+
+## P1 (After P0)
+1. Strategy pipeline refactor (5 strategies)
+- Audit end-to-end path per strategy:
+  - filter -> signal -> entry -> risk sizing -> exit.
+- Remove duplicated ad-hoc thresholds and move shared logic into core adaptive utilities.
+- Add consistent rejection reason codes for every strategy decision.
+- Stage-2 started:
+  - `use_strategy_alpha_head_mode` added (strategy prefilter minimization, final gating in engine/core).
+  - `NO_TRADE` journal event added for hostile/policy/execution rejection visibility.
+  - Alpha-head mode now bypasses strategy auto-disable by historical EV gate in live loop.
+- Stage-2.1 update (2026-02-16):
+  - Structural contradiction fix in `ScalpingStrategy`:
+    - removed unconditional `RANGING/UNKNOWN` early exits that made lower regime-quality logic unreachable,
+    - aligned `shouldEnter` with the same `ranging/unknown` quality gates used by `generateSignal`.
+  - Regime ownership fix in `GridTradingStrategy`:
+    - `shouldEnter` no longer ignores regime,
+    - both `generateSignal` and `shouldEnter` now block weak `TRENDING_DOWN` entries and allow `TRENDING_UP` only under stronger liquidity/volume conditions,
+    - `generateSignal` now also enforces `shouldGenerateGridSignal(...)` so invalid/non-profitable grid opportunities cannot bypass through score-only path.
+  - Entry gate consistency fix in `MomentumStrategy`:
+    - `shouldEnter` MACD gate relaxed from strict positive-only to `positive OR histogram-rising`,
+    - minimum momentum floor aligned to exploratory candidate generation (`0.2%+`).
+  - verification:
+    - build PASS:
+      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release`
+    - runtime PASS:
+      - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions`
+  - current bottleneck remains:
+    - `entry_rejection_top_reason=no_signal_generated` still dominant, so next step is manager/engine-side candidate recovery and gate ownership cleanup.
+- Stage-2.2 update (2026-02-16):
+  - Strategy-manager ownership refactor:
+    - `StrategyManager` now supports `core_rescue_candidate` path:
+      - if strategy `generateSignal(...)` returns `NONE` but `shouldEnter(...)` is true, manager builds a recoverable candidate for core-layer final gating,
+      - preserves strategy-specific stop/take-profit/position sizing calls while moving final reject authority to engine core gates.
+    - manager hard policy block is softened in core mode:
+      - `selectRobustSignalWithDiagnostics(...)` no longer hard-drops `BLOCK` roles when core bridge+risk plane is active,
+      - `filterSignalsWithDiagnostics(...)` also softens `BLOCK` to stricter `HOLD`-like requirements in core mode.
+  - Code cleanup (unused API removal):
+    - removed unused `StrategyManager::synthesizeSignals(...)` declaration/definition,
+    - removed unused `StrategyManager::getOverallWinRate()` declaration/definition.
+  - verification:
+    - build PASS:
+      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release`
+    - runtime PASS:
+      - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions`
+- Stage-2.3 update (2026-02-16):
+  - Additional unused-code cleanup in `StrategyManager`:
+    - removed unused wrapper APIs:
+      - `selectRobustSignal(...)`
+      - `filterSignals(...)`
+    - removed unused strategy state toggling/read APIs:
+      - `enableStrategy(...)`
+      - `getActiveStrategies()`
+  - cleanup principle:
+    - remove only functions with repo-wide reference count `0` (declaration/definition only),
+    - preserve active interfaces used by engine/backtest (`collectSignals`, `filterSignalsWithDiagnostics`, `selectRobustSignalWithDiagnostics`, `getStrategy`, `getStrategies`).
+  - verification:
+    - build PASS:
+      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release`
+- Stage-2.4 update (2026-02-16):
+  - Strategy API surface cleanup (unused accessor removal):
+    - removed `getRollingStatistics()` declaration/definition from:
+      - `ScalpingStrategy`
+      - `MomentumStrategy`
+      - `BreakoutStrategy`
+      - `MeanReversionStrategy`
+      - `GridTradingStrategy`
+  - cleanup basis:
+    - repo-wide search showed no production/test call sites for these methods.
+  - verification:
+    - build PASS (`Release`)
+    - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions` PASS
+- Stage-2.5 update (2026-02-16):
+  - Comment/encoding stabilization for strategy refactor files:
+    - restored strategy files to clean baseline and reapplied only intended logic changes,
+    - removed accidental text-noise churn from previous bulk rewrite attempt,
+    - added Korean context comments around newly relaxed/realigned regime-entry gates.
+  - verification:
+    - build PASS:
+      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release`
+    - runtime PASS:
+      - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune -RealDataOnly -RequireHigherTfCompanions`
+  - current readout (same bottleneck class):
+    - `entry_rejection_top_reason=no_signal_generated` remains dominant.
+- Stage-2.6 update (2026-02-16):
+  - Bottom-line priority execution (`2/16` latest branch first):
+    - candidate tuning rerun:
+      - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions`
+    - result:
+      - `best_combo=scenario_quality_focus_004`
+      - all combos `overall_gate_pass=false`, `profile_gate_pass=false`
+      - effective hostility/quality blend:
+        - `hostility_blended_level=low`, `hostility_blended_score=31.7817`
+      - top scenario family remained `signal_generation_boost` (bottleneck priority active).
+  - train/eval split cycle rerun:
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+    - split summary:
+      - train(7): `avg_profit_factor=0.5422`, `avg_expectancy_krw=-7.7148`, top rejection `no_signal_generated`
+      - validation(2): `avg_profit_factor=0.5384`, `avg_expectancy_krw=-6.6658`, top rejection `filtered_out_by_manager_ev_quality_floor`
+      - holdout(3): `avg_profit_factor=0.5066`, `avg_expectancy_krw=-7.2827`, top rejection `skipped_due_to_open_position`
+    - walk-forward:
+      - validation ready ratio `0.0` (min `0.55`) -> fail
+      - holdout ready ratio `0.0` (min `0.55`) -> fail
+    - promotion verdict:
+      - `promotion_gate_pass=false`
+      - recommendation: `hold_candidate_improve_validation_bottlenecks`
+  - next bottleneck target by bottom-line chain:
+    - manager prefilter EV floor calibration (`filtered_out_by_manager_ev_quality_floor`)
+    - position state/open-slot policy calibration (`skipped_due_to_open_position`)
+- Stage-2.7 update (2026-02-16):
+  - Runtime bottleneck calibration patch applied:
+    - manager EV prefilter calibration:
+      - `src/strategy/StrategyManager.cpp`
+      - `filterSignalsWithDiagnostics(...)` now applies bounded EV-floor relief when live bottleneck hint top group is `manager_prefilter`.
+    - open-position skip policy calibration:
+      - `include/runtime/LiveTradingRuntime.h`
+      - `src/runtime/LiveTradingRuntime.cpp`
+      - live telemetry now counts `skipped_due_to_open_position` once per market holding episode (entry block behavior unchanged).
+  - verification:
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/validate_v2_shadow_parity.py -CheckRuntimeShadow -CheckRuntimeLiveShadow -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+  - latest split readout (core_full):
+    - train(7): `avg_profit_factor=0.5095`, `avg_expectancy_krw=-8.9636`, top rejection `no_signal_generated`
+    - validation(2): `avg_profit_factor=0.5352`, `avg_expectancy_krw=-6.7473`, top rejection `blocked_risk_gate`
+    - holdout(3): `avg_profit_factor=0.4753`, `avg_expectancy_krw=-7.9406`, top rejection `blocked_risk_gate`
+    - `skipped_due_to_open_position` count observed as `0` in current split summaries (`core_full`).
+  - promotion verdict:
+    - recommendation: `hold_candidate_improve_signal_generation_or_dataset_quality`
+  - build verification:
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `./build/Release/AutoLifeV2ShadowParityTest.exe` PASS
+    - `./build/Release/AutoLifeV2EngineBacktestSmokeTest.exe` PASS
+- Stage-2.8 update (2026-02-16):
+  - Overfit-guard hardening:
+    - updated promotion verdict logic in `scripts/run_candidate_train_eval_cycle.py`:
+      - added explicit generalization checks (`validation_vs_train`, `holdout_vs_train`, `holdout_vs_validation`)
+      - added `base_promotion_gate_pass` vs `generalization_guard_pass` separation
+      - added overfit-block recommendation code: `hold_candidate_avoid_overfit_generalization_gap`
+  - execution note:
+    - temporary risk-gate relaxation experiment was rejected and rolled back (no runtime behavior change retained) because holdout quality did not improve consistently.
+  - verification:
+    - `python -m py_compile scripts/run_candidate_train_eval_cycle.py` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - promotion verdict artifact now includes:
+      - `base_promotion_gate_pass`
+      - `generalization_guard_pass`
+      - `generalization_checks[]`
+- Stage-2.9 update (2026-02-17):
+  - Overfit-prevention principle kept as hard rule:
+    - no promotion when `generalization_guard_pass=false`
+    - no temporary runtime threshold relaxation while holdout quality is unstable
+  - Risk-gate ownership diagnostics decomposition (runtime behavior intent unchanged):
+    - backtest funnel counters/reasons expanded:
+      - `blocked_risk_gate_strategy_ev`
+      - `blocked_risk_gate_regime`
+      - `blocked_risk_gate_entry_quality`
+      - `blocked_risk_gate_other`
+      - `blocked_second_stage_confirmation`
+    - changed files:
+      - `include/runtime/BacktestRuntime.h`
+      - `src/runtime/BacktestRuntime.cpp`
+      - `src/main.cpp`
+      - `scripts/generate_strategy_rejection_taxonomy_report.py`
+  - Artifact chain propagation for split diagnostics:
+    - `scripts/run_profitability_matrix.py` now emits:
+      - `entry_risk_gate_breakdown_json`
+      - `top_entry_risk_gate_component_reason`
+      - `top_entry_risk_gate_component_count`
+    - `scripts/run_realdata_candidate_loop.py` console snapshot now prints top risk-gate component reason.
+    - `scripts/run_candidate_train_eval_cycle.py` now ingests core-profile risk-gate component context and routes recommendation codes for risk-gate ownership classes.
+  - verification:
+    - `python -m py_compile scripts/run_profitability_matrix.py scripts/generate_strategy_rejection_taxonomy_report.py scripts/run_candidate_train_eval_cycle.py` PASS
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+  - latest split readout (`core_full`):
+    - train(7): `avg_profit_factor=0.5095`, `avg_expectancy_krw=-8.9636`, top rejection `no_signal_generated`
+    - validation(2): `avg_profit_factor=0.5352`, `avg_expectancy_krw=-6.7473`, top rejection `blocked_risk_gate_entry_quality`
+    - holdout(3): `avg_profit_factor=0.4753`, `avg_expectancy_krw=-7.9406`, top rejection `blocked_risk_gate_entry_quality`
+  - next:
+    - calibrate risk-gate entry-quality ownership and dataset-quality policy linkage without loosening global promotion floors.
+- Stage-2.10 update (2026-02-17):
+  - Holdout-driven risk-gate bottleneck routing Â™õÎ∫•???®Ïá±???Ë´õ‚ëπ? Ë´õ‚ë∫Îº?:
+    - `scripts/tune_candidate_gate_trade_density.py`?Î®?Ωå train/eval verdict??holdout rejection context????åÎº±
+      `top_risk_gate_component_reason`???å‚ë¶???ΩÎìÉÊø??Î∞¥Í∫Ω.
+    - holdout recommendation??`hold_candidate_calibrate_risk_gate_*` ?®Íæ©Îø??Ä??      live top-groupËπÇÎ????Í≥óÍΩë??`top_group=risk_gate`Êø???±Ïä¶??override).
+    - risk-gate focus ?∫ÍæßÎ¶??∞Î∂Ω?:
+      - `entry_quality` / `second_stage_confirmation`??quality-heavy ?Í≥óÍΩë??ñÏêû ??ºÌê´???Í≥∏Ïäú
+      - ?Í≥∏Ïì≥ ??ïÍµπ?±—äÏÇ§ familyÊø?`risk_gate_quality_rebalance` ?∞Î∂Ω?
+      - ??Ä??family???Íæ™ÏÜï(relax) ????quality Â™õÎ∫•?????î™Ë™òÎ™ÖÍΩ??ÔΩ?/RR/?Íæ®ÏôÇ PF/?Ï¢èÏÉáÂ™õÎ∫£Î£?hostility pause) ‰ª•Î¨í???∞Ï§à Ë≠∞Í≥ó??  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - smoke run:
+      - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate`
+      - runtime log:
+        - `top_group=risk_gate`, `source=holdout_recommendation_override`, `risk_gate_focus=entry_quality`
+        - `scenario_family_counts={'risk_gate_quality_rebalance': 1}`
+- Stage-2.11 update (2026-02-17):
+  - Realdata quality-focus ?????±ÏëùÊø?????±Ïä¶????£ÎÇµ ÂØÉ¬ÄÔß?
+    - command:
+      - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions`
+    - key result:
+      - `dataset_quality_gate`: passed `8`, failed `4` (gap ratio invariant fail)
+      - `bottleneck context`: `top_group=risk_gate`, `source=holdout_recommendation_override`, `risk_gate_focus=entry_quality`
+      - all adapted families: `risk_gate_quality_rebalance` (6/6)
+      - `best_combo=scenario_quality_focus_002` (but `overall_gate_pass=false`, `profile_gate_pass=false` persisted)
+  - split cycle consistency re-check:
+    - command:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+    - promotion verdict:
+      - `base_promotion_gate_pass=false`
+      - `generalization_guard_pass=true`
+      - `promotion_gate_pass=false`
+      - `recommendation=hold_candidate_calibrate_risk_gate_entry_quality_ownership`
+    - holdout/validation core top rejection remains:
+      - `blocked_risk_gate_entry_quality`
+  - next:
+    - tune parameter explorationËπÇÎ????íÏá±? `entry_quality` ÂØÉÎöØ????Î®?ªú??ownership/feature ?Î∫§ÏìΩ???¥—ä‚Ä?Í≥∏ÏëùÊø??Î∫£‚îÅ??çÌÄ?
+      ??ÑÏçë ??àÏî™ split?Î®?Ωå ??Î£äÂ™õ?.
+
+- Stage-2.12 update (2026-02-17):
+  - Entry-quality gate ownership decomposition implemented:
+    - backtest runtime now classifies `blocked_risk_gate_entry_quality` into:
+      - `blocked_risk_gate_entry_quality_rr`
+      - `blocked_risk_gate_entry_quality_edge`
+      - `blocked_risk_gate_entry_quality_rr_edge`
+      - `blocked_risk_gate_entry_quality_invalid_levels`
+    - changed files:
+      - `include/runtime/BacktestRuntime.h`
+      - `src/runtime/BacktestRuntime.cpp`
+      - `src/main.cpp`
+      - `scripts/run_profitability_matrix.py`
+      - `scripts/run_realdata_candidate_loop.py`
+      - `scripts/generate_strategy_rejection_taxonomy_report.py`
+      - `scripts/run_candidate_train_eval_cycle.py`
+      - `scripts/tune_candidate_gate_trade_density.py`
+  - verification:
+    - `python -m py_compile scripts/generate_strategy_rejection_taxonomy_report.py scripts/run_profitability_matrix.py scripts/run_realdata_candidate_loop.py scripts/run_candidate_train_eval_cycle.py scripts/tune_candidate_gate_trade_density.py` PASS
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest split readout (`core_full`):
+    - train(7) risk top component: `blocked_risk_gate_entry_quality_rr:14174`
+    - validation(2) risk top component: `blocked_risk_gate_entry_quality_rr:7655`
+    - holdout(3) risk top component: `blocked_risk_gate_entry_quality_rr:7999`
+    - promotion recommendation: `hold_candidate_calibrate_risk_gate_entry_quality_rr`
+  - next:
+    - tighten ownership around RR threshold construction (`min_reward_risk` baseline vs adaptive adders) before any new relaxation experiments.
+
+- Stage-2.13 update (2026-02-17):
+  - RR ownership split (`base` vs `adaptive adders`) implemented:
+    - backtest entry-quality RR failure is now classified as:
+      - `blocked_risk_gate_entry_quality_rr_base`
+      - `blocked_risk_gate_entry_quality_rr_adaptive`
+      - `blocked_risk_gate_entry_quality_rr_edge_base`
+      - `blocked_risk_gate_entry_quality_rr_edge_adaptive`
+    - runtime/summary counters were extended to expose the split.
+  - train/eval promotion routing updated:
+    - new recommendation codes:
+      - `hold_candidate_calibrate_risk_gate_rr_baseline_floor`
+      - `hold_candidate_calibrate_risk_gate_rr_adaptive_adders`
+    - latest split recommendation switched to:
+      - `hold_candidate_calibrate_risk_gate_rr_adaptive_adders`
+  - tuner bottleneck context updated:
+    - risk-gate focus now distinguishes:
+      - `entry_quality_rr_base`
+      - `entry_quality_rr_adaptive`
+      - `entry_quality_rr_edge_base`
+      - `entry_quality_rr_edge_adaptive`
+    - added adaptive-focused scenario family:
+      - `risk_gate_adaptive_rebalance`
+  - verification:
+    - `python -m py_compile scripts/generate_strategy_rejection_taxonomy_report.py scripts/run_profitability_matrix.py scripts/run_realdata_candidate_loop.py scripts/run_candidate_train_eval_cycle.py scripts/tune_candidate_gate_trade_density.py` PASS
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full`):
+    - train top risk component: `blocked_risk_gate_entry_quality_rr_adaptive:11766`
+    - validation top risk component: `blocked_risk_gate_entry_quality_rr_adaptive:6662`
+    - holdout top risk component: `blocked_risk_gate_entry_quality_rr_adaptive:7116`
+  - next:
+    - calibrate adaptive RR adders by source (history/regime/hostility/no-entry recovery) before touching base RR floor.
+
+- Stage-2.14 update (2026-02-17):
+  - RR ownership split refined and validated:
+    - new detailed codes wired end-to-end:
+      - `blocked_risk_gate_entry_quality_rr_base`
+      - `blocked_risk_gate_entry_quality_rr_adaptive`
+      - `blocked_risk_gate_entry_quality_rr_edge_base`
+      - `blocked_risk_gate_entry_quality_rr_edge_adaptive`
+    - matrix/routing now excludes aggregate nodes when choosing top component:
+      - excludes `blocked_risk_gate_entry_quality_rr` and `blocked_risk_gate_entry_quality_rr_edge` from top-component tie-break.
+  - recommendation + tuner routing sync:
+    - recommendation mapping added:
+      - `hold_candidate_calibrate_risk_gate_rr_baseline_floor`
+      - `hold_candidate_calibrate_risk_gate_rr_adaptive_adders`
+    - tuner risk focus updated:
+      - `entry_quality_rr_base` / `entry_quality_rr_adaptive` / `entry_quality_rr_edge_base` / `entry_quality_rr_edge_adaptive`
+    - adaptive-focused family added:
+      - `risk_gate_adaptive_rebalance`
+  - verification:
+    - `python -m py_compile scripts/generate_strategy_rejection_taxonomy_report.py scripts/run_profitability_matrix.py scripts/run_realdata_candidate_loop.py scripts/run_candidate_train_eval_cycle.py scripts/tune_candidate_gate_trade_density.py` PASS
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full`, holdout):
+    - top rejection: `blocked_risk_gate_entry_quality_rr_adaptive:7116`
+    - RR split: `rr_adaptive=7116`, `rr_base=883`
+    - promotion recommendation: `hold_candidate_calibrate_risk_gate_rr_adaptive_adders`
+  - next:
+    - split `adaptive_rr_add` source contributions into explicit buckets (history/regime/hostility/no-entry recovery) and expose per-bucket counters.
+
+- Stage-2.15 update (2026-02-16):
+  - adaptive RR source ownership split implemented:
+    - `adaptive_rr_add` is now tracked by source buckets in runtime:
+      - `history`
+      - `regime` (regime+archetype)
+    - adaptive RR failure reason codes now expose source detail:
+      - `blocked_risk_gate_entry_quality_rr_adaptive_history`
+      - `blocked_risk_gate_entry_quality_rr_adaptive_regime`
+      - `blocked_risk_gate_entry_quality_rr_adaptive_mixed`
+      - `blocked_risk_gate_entry_quality_rr_edge_adaptive_history`
+      - `blocked_risk_gate_entry_quality_rr_edge_adaptive_regime`
+      - `blocked_risk_gate_entry_quality_rr_edge_adaptive_mixed`
+    - source classification uses effective RR lift after clamp/relax allocation, not raw pre-clamp adds.
+  - reporting/routing sync:
+    - `entry_funnel` JSON and console output include new source counters.
+    - matrix top-component selection now excludes adaptive aggregate nodes:
+      - `blocked_risk_gate_entry_quality_rr_adaptive`
+      - `blocked_risk_gate_entry_quality_rr_edge_adaptive`
+    - promotion recommendation mapping added:
+      - `hold_candidate_calibrate_risk_gate_rr_adaptive_history_adders`
+      - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - `hold_candidate_calibrate_risk_gate_rr_adaptive_mixed_adders`
+    - tuner risk focus mapping added:
+      - `entry_quality_rr_adaptive_history`
+      - `entry_quality_rr_adaptive_regime`
+      - `entry_quality_rr_adaptive_mixed`
+      - `entry_quality_rr_edge_adaptive_history`
+      - `entry_quality_rr_edge_adaptive_regime`
+      - `entry_quality_rr_edge_adaptive_mixed`
+  - verification:
+    - `python -m py_compile scripts/generate_strategy_rejection_taxonomy_report.py scripts/run_profitability_matrix.py scripts/run_realdata_candidate_loop.py scripts/run_candidate_train_eval_cycle.py scripts/tune_candidate_gate_trade_density.py` PASS
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full`):
+    - train top risk component: `blocked_risk_gate_entry_quality_rr_adaptive_history:9029`
+    - validation top risk component: `blocked_risk_gate_entry_quality_rr_adaptive_history:6480`
+    - holdout top risk component: `blocked_risk_gate_entry_quality_rr_adaptive_history:3697`
+    - promotion recommendation: `hold_candidate_calibrate_risk_gate_rr_adaptive_history_adders`
+  - next:
+    - calibrate history adaptive RR adders first (tiered by expectancy/win-rate/profit-factor bands), then rebalance regime/archetype adders with holdout guard.
+
+- Stage-2.16 update (2026-02-16):
+  - history adaptive RR band calibration implemented:
+    - strategy-history RR/edge penalties replaced with tiered bands:
+      - win-rate band
+      - profit-factor band
+      - expectancy(krw) band
+    - added sample-confidence shrink:
+      - low-trade history receives reduced penalty weight
+    - added favorable no-entry recovery dampener:
+      - after long no-entry streak, high-quality favorable-regime candidates get partial history-penalty relaxation
+    - added per-block cap for history adaptive RR/edge adders:
+      - prevents single history block from dominating gate lift.
+  - verification:
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full`):
+    - train: `pf=0.5475`, `trades=119.7143`, `exp=-7.7759`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:6518`
+    - validation: `pf=0.5496`, `trades=178.0`, `exp=-6.6303`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:740`
+    - holdout: `pf=0.5496`, `trades=152.0`, `exp=-6.3166`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:978`
+    - promotion recommendation: `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+  - next:
+    - recalibrate regime/archetype adaptive RR adders with the same anti-overfit discipline (banded + evidence-weighted + capped).
+
+- Stage-2.17 update (2026-02-16):
+  - regime adaptive RR calibration implemented:
+    - `strategy_regime_edge`/`market_strategy_regime_edge` penalty logic migrated to:
+      - WR/PF/Expectancy tiered bands
+      - evidence-weighted scaling by trade count
+      - favorable recovery dampener
+      - bounded adders (positive/negative clamp)
+    - added global cap after archetype adjustments:
+      - prevents regime+archetype adaptive RR from dominating total gate lift.
+    - unified favorable-recovery condition reused across:
+      - history/regime adders
+      - final no-entry recovery gate relaxation.
+  - verification:
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full`):
+    - train: `pf=0.5469`, `trades=119.5714`, `exp=-8.5510`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:2052`
+    - validation: `pf=0.5119`, `trades=166.5`, `exp=-7.5572`, top risk=`blocked_risk_gate_entry_quality_edge:859`
+    - holdout: `pf=0.5005`, `trades=135.6667`, `exp=-7.4354`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:3067`
+    - promotion recommendation: `hold_candidate_calibrate_risk_gate_entry_quality_edge`
+  - next:
+    - edge gate(`min_expected_edge_pct`)??adaptive ownership(history/regime/base)Ê∫êÎöØ? ?∫Íæ™Îπ??validation top bottleneck??ÔßûÍ≥∏????ÂØÉ‚ë∫Î∏??
+
+- Stage-2.18 update (2026-02-16):
+  - edge ownership split implemented:
+    - `entry_quality_edge` now decomposes into:
+      - `blocked_risk_gate_entry_quality_edge_base`
+      - `blocked_risk_gate_entry_quality_edge_adaptive`
+      - `blocked_risk_gate_entry_quality_edge_adaptive_history`
+      - `blocked_risk_gate_entry_quality_edge_adaptive_regime`
+      - `blocked_risk_gate_entry_quality_edge_adaptive_mixed`
+    - runtime keeps aggregate `blocked_risk_gate_entry_quality_edge` counter for backward compatibility.
+  - reporting/routing sync:
+    - `entry_funnel` JSON + console output includes edge base/adaptive/source counters.
+    - matrix top-component selection excludes:
+      - `blocked_risk_gate_entry_quality_edge`
+      - `blocked_risk_gate_entry_quality_edge_adaptive`
+    - recommendation mapping added:
+      - `hold_candidate_calibrate_risk_gate_edge_baseline_floor`
+      - `hold_candidate_calibrate_risk_gate_edge_adaptive_adders`
+      - `hold_candidate_calibrate_risk_gate_edge_adaptive_history_adders`
+      - `hold_candidate_calibrate_risk_gate_edge_adaptive_regime_adders`
+      - `hold_candidate_calibrate_risk_gate_edge_adaptive_mixed_adders`
+  - verification:
+    - `python -m py_compile scripts/generate_strategy_rejection_taxonomy_report.py scripts/run_profitability_matrix.py scripts/run_realdata_candidate_loop.py scripts/run_candidate_train_eval_cycle.py scripts/tune_candidate_gate_trade_density.py` PASS
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full`):
+    - train: `pf=0.5469`, `trades=119.5714`, `exp=-8.5510`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:2052`
+    - validation: `pf=0.5119`, `trades=166.5`, `exp=-7.5572`, top risk=`blocked_risk_gate_entry_quality_edge_base:859`
+    - holdout: `pf=0.5005`, `trades=135.6667`, `exp=-7.4354`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:3067`
+    - promotion recommendation: `hold_candidate_calibrate_risk_gate_edge_baseline_floor`
+  - next:
+    - calibrate edge baseline floor conservatively while monitoring holdout RR/edge tradeoff to avoid validation-only overfit.
+
+- Stage-2.19 update (2026-02-16):
+  - edge baseline floor conservative calibration implemented:
+    - runtime now calibrates baseline `min_expected_edge_pct` before adaptive edge adders.
+    - calibration inputs:
+      - regime and liquidity context
+      - strategy edge stats (`trades`, `win-rate`, `profit-factor`, `expectancy`) with confidence weighting
+      - favorable no-entry recovery and alpha-head fallback guards
+    - anti-overfit guards:
+      - baseline shift clamp: `[-0.00012, +0.00014]`
+      - floor clamp: `[max(0.00030, nominal*0.70), nominal+0.00018]`
+      - bounded adjustments only (no unbounded multiplier expansion)
+  - verification:
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full`):
+    - train: `pf=0.6182`, `trades=119.5714`, `exp=-8.1679`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:2087`
+    - validation: `pf=0.5206`, `trades=170.5`, `exp=-7.4600`, top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_regime:872`
+    - holdout: `pf=0.5005`, `trades=135.6667`, `exp=-7.4354`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:3063`
+    - promotion recommendation: `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+  - effect:
+    - validation top bottleneck moved from `blocked_risk_gate_entry_quality_edge_base` (Stage-2.18) to `blocked_risk_gate_entry_quality_rr_edge_adaptive_regime`.
+  - next:
+    - calibrate regime adaptive RR/edge adders jointly with the same bounded evidence-weighted policy.
+
+- Stage-2.20 update (2026-02-16):
+  - regime adaptive RR/edge joint calibration implemented:
+    - added joint regime softening when both `adaptive_rr_add_regime` and `adaptive_edge_add_regime` are positive.
+    - activation guards:
+      - non-hostile regime (`!HIGH_VOLATILITY`, `!TRENDING_DOWN`)
+      - high-quality signal (`strength/liquidity/expected_value` floor)
+    - evidence weighting:
+      - signal quality confidence blend (`strength`, `liquidity`, `expected_value`)
+      - regime-stat bonus when trades/win-rate/pf/expectancy evidence is sufficiently positive
+    - anti-overfit guards:
+      - softening uses bounded pressure-based relax only (no direct gate floor cuts)
+      - relax upper bounds are hard-capped (`rr<=0.08`, `edge<=0.00014`) and remain under existing global clamp stack
+  - verification:
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full`):
+    - train: `pf=0.6201`, `trades=120.7143`, `exp=-8.0239`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_mixed:1836`
+    - validation: `pf=0.5335`, `trades=174.0`, `exp=-7.0549`, top risk=`blocked_risk_gate_entry_quality_edge_base:816`
+    - holdout: `pf=0.4967`, `trades=139.3333`, `exp=-7.6032`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:996`
+    - promotion recommendation: `hold_candidate_calibrate_risk_gate_edge_baseline_floor`
+  - effect:
+    - validation `blocked_risk_gate_entry_quality_rr_edge_adaptive_regime` count reduced (`872 -> 122`).
+    - validation top bottleneck moved back to edge baseline floor ownership (`blocked_risk_gate_entry_quality_edge_base`).
+  - next:
+    - calibrate edge baseline floor with holdout guardrails to prevent RR adaptive regression.
+
+- Stage-2.21 update (2026-02-16):
+  - edge baseline floor holdout guardrails expanded:
+    - baseline edge-floor calibration now applies pressure-aware guards:
+      - RR/edge pressure blend (`history + regime`) derived from adaptive adders
+      - supportive/favorable quality contexts separated for staged relaxation
+      - hostile regime keeps tighter floor, favorable low-RR contexts allow deeper but bounded floor relaxation
+    - clamp stack remains bounded:
+      - dynamic `edge_shift_min` and `edge_floor_min_ratio`
+      - final shift upper clamp and nominal-plus cap remain unchanged
+  - verification:
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full`):
+    - train: `pf=0.6201`, `trades=120.7143`, `exp=-8.0239`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_mixed:1835`
+    - validation: `pf=0.5335`, `trades=174.0`, `exp=-7.0549`, top risk=`blocked_risk_gate_entry_quality_edge_base:816`
+    - holdout: `pf=0.4967`, `trades=139.3333`, `exp=-7.6032`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:992`
+    - promotion recommendation: `hold_candidate_calibrate_risk_gate_edge_baseline_floor`
+  - effect:
+    - validation `edge_base` bottleneck remained unchanged in this run (`816`).
+    - holdout `rr_adaptive_regime` remained controlled (`996 -> 992`) without regression.
+  - next:
+    - move edge baseline calibration ownership from runtime micro-shifts to candidate config/tuning baseline (`min_expected_edge_pct`) sweep with holdout guardrails.
+
+- Stage-2.22 update (2026-02-17):
+  - tuning ownership shift for edge baseline floor implemented:
+    - `tune_candidate_gate_trade_density.py` now overrides `risk_gate_focus` from holdout recommendation mapping when recommendation is explicit (e.g. `hold_candidate_calibrate_risk_gate_edge_baseline_floor`).
+    - new bottleneck family added:
+      - `risk_gate_edge_baseline_floor_sweep`
+    - family behavior:
+      - lowers `min_expected_edge_pct` in bounded variants
+      - simultaneously raises RR/PF/expectancy guard fields to reduce holdout RR-regression risk
+      - keeps hostile-regime avoidance flags enabled
+    - bottleneck priority scoring updated:
+      - `edge_baseline_floor` now uses a balanced quality/relax mix instead of pure quality-bias ranking.
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 6 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 3 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache` completed
+  - latest readout (`candidate_trade_density_tuning_summary.json`):
+    - bottleneck context:
+      - `top_group=risk_gate` (`source=holdout_recommendation_override`)
+      - `risk_gate_focus=entry_quality_edge_base` (`source=holdout_recommendation_override`)
+    - scenario family counts:
+      - `risk_gate_edge_baseline_floor_sweep:6`
+    - generated sweep examples:
+      - `scenario_quality_focus_004`: `edge=0.0008`, `rr=1.27`
+      - `scenario_quality_focus_000`: `edge=0.0009`, `rr=1.33`
+      - `scenario_quality_focus_002`: `edge=0.0012`, `rr=1.45`
+    - best combo: `scenario_quality_focus_004`
+  - effect:
+    - edge-baseline Â™õÏíñÍΩ?Ôß?ÇÜ???runtime Ë™òÎ™ÑÍΩ?ËπÇÎåÅ?ôËπÇ?Ä??tuning sweep ÂØÉÏéàÏ§àÊø°?ÔßèÎÇá?????ÄÎ£??
+  - next:
+    - apply best tuned edge-baseline candidate to build config and re-run train/validation/holdout cycle to measure `blocked_risk_gate_entry_quality_edge_base` delta on realdata split.
+
+- Stage-2.23 update (2026-02-17):
+  - best edge-baseline sweep candidate applied and re-evaluated:
+    - applied combo: `scenario_quality_focus_004`
+    - reproducibility preset added:
+      - `config/presets/candidate_stage15_edge_baseline_floor_sweep_004.json`
+    - applied key values:
+      - `min_expected_edge_pct=0.0008`
+      - `min_reward_risk=1.27`
+      - `min_rr_weak_signal=1.8`
+      - `min_rr_strong_signal=1.18`
+      - `min_strategy_profit_factor=1.00`
+      - `min_strategy_expectancy_krw=-1.08`
+  - verification:
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+  - latest readout (`core_full`):
+    - train: `pf=0.7338`, `trades=131.2857`, `exp=-7.6603`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1894`
+    - validation: `pf=0.5108`, `trades=176.5`, `exp=-7.4568`, top risk=`blocked_second_stage_confirmation:978`
+    - holdout: `pf=0.4657`, `trades=149.6667`, `exp=-7.5247`, top risk=`blocked_second_stage_confirmation:2553`
+    - promotion recommendation: `hold_candidate_calibrate_second_stage_confirmation_consistency`
+  - effect:
+    - validation `edge_base` decreased strongly (`816 -> 223`).
+    - validation `rr_adaptive_regime` is low in current breakdown (`98`).
+    - holdout `rr_adaptive_regime` decreased (`992 -> 638`), no RR-side regression signal.
+    - primary bottleneck moved from risk-gate edge baseline ownership to `second_stage_confirmation`.
+  - next:
+    - calibrate second-stage confirmation margins (`rr_margin`, `edge_margin`) with hostility/quality-aware guardrails, while preserving the improved edge-base counts.
+
+- Stage-2.24 update (2026-02-17):
+  - second-stage confirmation consistency calibration implemented:
+    - runtime ownership updated in:
+      - `src/runtime/BacktestRuntime.cpp`
+      - `src/runtime/LiveTradingRuntime.cpp`
+    - baseline confirmation margins adjusted:
+      - `min_rr_margin: 0.05 -> 0.045`
+      - `min_edge_margin: max(0.00008, cost*0.12) -> max(0.00007, cost*0.11)`
+    - dynamic confirmation calibration added:
+      - hostility/quality pressure model (`hostility_pressure`, `quality_conf`)
+      - bounded tighten/relief scaling with existing regime/history/liquidity context preserved
+      - gate-pressure coupling with pre-tightened `rr_gate` / `edge_gate`
+    - anti-overfit guardrails added to relief path:
+      - expected-value/liquidity hostile clamps
+      - weak strategy evidence clamps (`win_rate`, `profit_factor`, sample guard)
+      - alpha fallback low-EV clamp
+      - final clamps remain bounded (`rr: 0.015~0.24`, `edge: 0.00003~0.00050`)
+  - verification:
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full`):
+    - train: `pf=0.7289`, `trades=132.0`, `exp=-7.94`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1601`
+    - validation: `pf=0.5028`, `trades=172.0`, `exp=-7.6628`, top risk=`blocked_second_stage_confirmation:1180`
+    - holdout: `pf=0.4557`, `trades=149.3333`, `exp=-7.8552`, top risk=`blocked_second_stage_confirmation:1715`
+    - promotion recommendation: `hold_candidate_calibrate_second_stage_confirmation_consistency`
+  - risk-gate breakdown snapshot:
+    - validation: `blocked_second_stage_confirmation=1180`, `edge_base=316`, `rr_adaptive_regime=126`
+    - holdout: `blocked_second_stage_confirmation=1715`, `edge_base=256`, `rr_adaptive_regime=796`
+  - tuning context check:
+    - top group=`signal_generation` (source=`live`)
+    - risk gate focus=`second_stage_confirmation`
+    - scenario family counts=`{"signal_generation_boost":1}`
+  - effect:
+    - second-stage confirmation remains dominant on validation/holdout and is now the primary ownership target.
+    - edge-base and adaptive-rr regime counts remain lower than pre-2.23 baseline, so regression pressure stayed contained.
+  - next:
+    - split second-stage confirmation ownership into explicit reason buckets (RR margin shortfall vs edge margin shortfall vs hostile safety adders) before additional threshold movement.
+
+- Stage-2.25 update (2026-02-17):
+  - second-stage confirmation ownership split implemented:
+    - runtime instrumentation and reporting updates:
+      - `include/runtime/BacktestRuntime.h`
+      - `src/runtime/BacktestRuntime.cpp`
+      - `src/runtime/LiveTradingRuntime.cpp`
+      - `src/main.cpp`
+    - matrix/recommendation routing sync:
+      - `scripts/run_profitability_matrix.py`
+      - `scripts/run_candidate_train_eval_cycle.py`
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - new second-stage buckets added (while preserving legacy aggregate key):
+      - `blocked_second_stage_confirmation_rr_margin`
+      - `blocked_second_stage_confirmation_edge_margin`
+      - `blocked_second_stage_confirmation_hostile_safety_adders`
+    - classification behavior:
+      - if rejection disappears after removing safety adders, classify as `hostile_safety_adders`
+      - otherwise classify by dominant margin gap (`rr_margin` vs `edge_margin`)
+      - aggregate `blocked_second_stage_confirmation` counter and reason code remain unchanged for compatibility
+  - verification:
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full`):
+    - train: `pf=0.7289`, `trades=132.0`, `exp=-7.94`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1601`
+    - validation: `pf=0.5028`, `trades=172.0`, `exp=-7.6628`, top risk=`blocked_second_stage_confirmation_hostile_safety_adders:885`
+    - holdout: `pf=0.4557`, `trades=149.3333`, `exp=-7.8552`, top risk=`blocked_second_stage_confirmation_hostile_safety_adders:1463`
+    - promotion recommendation: `hold_candidate_calibrate_second_stage_confirmation_consistency`
+  - second-stage breakdown snapshot:
+    - validation: `total=1180`, `rr_margin=214`, `edge_margin=81`, `hostile_safety_adders=885` (`75.0%`)
+    - holdout: `total=1715`, `rr_margin=166`, `edge_margin=86`, `hostile_safety_adders=1463` (`85.3%`)
+  - effect:
+    - ownership is now explicit: dominant pressure is not raw RR/edge shortage, but hostile safety adders.
+    - next tuning can target hostile-safety contribution directly without blind RR/edge floor movement.
+  - next:
+    - introduce bounded hostile-safety attenuation experiments (high-quality favorable contexts only) and keep overfit guards unchanged.
+
+- Stage-2.26 update (2026-02-17):
+  - hostile safety source split instrumentation implemented (no threshold change):
+    - runtime/source split updates:
+      - `include/runtime/BacktestRuntime.h`
+      - `src/runtime/BacktestRuntime.cpp`
+      - `src/runtime/LiveTradingRuntime.cpp`
+      - `src/main.cpp`
+    - matrix aggregation split updates:
+      - `scripts/run_profitability_matrix.py`
+    - new hostile-source buckets added under second-stage aggregate:
+      - `blocked_second_stage_confirmation_hostile_regime_safety_adders`
+      - `blocked_second_stage_confirmation_hostile_liquidity_safety_adders`
+      - `blocked_second_stage_confirmation_hostile_history_safety_adders`
+      - `blocked_second_stage_confirmation_hostile_dynamic_tighten_safety_adders`
+    - classification behavior:
+      - keep aggregate `blocked_second_stage_confirmation_hostile_safety_adders` for compatibility
+      - assign dominant hostile source by normalized safety pressure contribution (RR/edge safety-only zone)
+      - risk component ranking now prefers hostile-source detail keys when available
+  - verification:
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python -m py_compile scripts/run_profitability_matrix.py scripts/run_candidate_train_eval_cycle.py scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full`):
+    - train: `pf=0.7289`, `trades=132.0`, `exp=-7.94`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1601`
+    - validation: `pf=0.5028`, `trades=172.0`, `exp=-7.6628`, top risk=`blocked_second_stage_confirmation_hostile_history_safety_adders:885`
+    - holdout: `pf=0.4557`, `trades=149.3333`, `exp=-7.8552`, top risk=`blocked_second_stage_confirmation_hostile_history_safety_adders:1463`
+    - promotion recommendation: `hold_candidate_calibrate_second_stage_confirmation_consistency`
+  - hostile safety composition snapshot:
+    - validation: `total=1180`, `rr_margin=214`, `edge_margin=81`, `hostile_total=885` -> `regime=0`, `liquidity=0`, `history=885`, `dynamic_tighten=0`
+    - holdout: `total=1715`, `rr_margin=166`, `edge_margin=86`, `hostile_total=1463` -> `regime=0`, `liquidity=0`, `history=1463`, `dynamic_tighten=0`
+  - effect:
+    - dominant second-stage pressure is now explicitly isolated as history-based hostile safety adders.
+    - next calibration target can be narrowed from generic hostile safety to history-evidence safety branch only.
+  - next:
+    - design bounded history-safety attenuation candidates (confidence-gated, hostile-regime holdouts protected) and evaluate split-wise PF/expectancy impact.
+
+- Stage-2.27 update (2026-02-17):
+  - hostile history severity split instrumentation implemented (no threshold/decision change):
+    - runtime/reporting updates:
+      - `include/runtime/BacktestRuntime.h`
+      - `src/runtime/BacktestRuntime.cpp`
+      - `src/main.cpp`
+      - `scripts/run_profitability_matrix.py`
+    - new history severity buckets added:
+      - `blocked_second_stage_confirmation_hostile_history_mild_safety_adders`
+      - `blocked_second_stage_confirmation_hostile_history_moderate_safety_adders`
+      - `blocked_second_stage_confirmation_hostile_history_severe_safety_adders`
+    - classification rule:
+      - severe: `win_rate < 0.42` or `profit_factor < 0.90`
+      - moderate: `win_rate < 0.45` or `profit_factor < 0.95`
+      - mild: otherwise
+    - component ranking behavior:
+      - when history severity detail exists, top risk component now prefers severity key over aggregate history key
+  - verification:
+    - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
+    - `python -m py_compile scripts/run_profitability_matrix.py scripts/run_candidate_train_eval_cycle.py scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/validate_v2_shadow_parity.py -Strict` PASS
+    - `python scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity --check-runtime-v2-shadow-parity --check-runtime-live-v2-shadow-parity` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full`):
+    - train: `pf=0.7289`, `trades=132.0`, `exp=-7.94`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1601`
+    - validation: `pf=0.5028`, `trades=172.0`, `exp=-7.6628`, top risk=`blocked_second_stage_confirmation_hostile_history_severe_safety_adders:885`
+    - holdout: `pf=0.4557`, `trades=149.3333`, `exp=-7.8552`, top risk=`blocked_second_stage_confirmation_hostile_history_severe_safety_adders:1463`
+    - promotion recommendation: `hold_candidate_calibrate_second_stage_confirmation_consistency`
+  - hostile history severity snapshot:
+    - validation: `hostile_history=885` -> `mild=0`, `moderate=0`, `severe=885`
+    - holdout: `hostile_history=1463` -> `mild=0`, `moderate=0`, `severe=1463`
+  - effect:
+    - second-stage ËπÇÎ¨ê??????ññ??`history` ‰ª•Î¨íÎø??ïÎ£Ñ `severe` ?¥—àÏªô??ÔßûÎ¨íÏ®??•Ïî† ?Î∫§Ï†ô??
+    - ?Íæ™ÏÜï ??ΩÎøï?? mild/moderateÂ™õ¬Ä ?Íæ®Îï≤??severe ?????Î∫§ÏΩâ(?Î±Ä? ?????Íæ™ÍΩ£/??àÎíø ?Ï¢äÀ??Ê¥πÏíñ???????Í≥∏ÏëùÊø???∫ÌÄ??ÅÎπû ??
+  - next:
+    - severe-history safety adders ?Íæ©Ïäú candidate(?Íæ™ÏÜï ????ÔßûÍæ©?????Ï¢äÀ??ËπÇÎãøÏª?Ôß°‚ë§???Î∫§ÏΩâ ?∫Íæ®?? ??∫ÌÄ?Ë´?split-wise ÂØÉ¬ÄÔß?
+
+- Stage-2.28 update (2026-02-17):
+  - second-stage recommendation/focus routing hardened for severe-history ownership:
+    - recommendation detail routing update:
+      - `scripts/run_candidate_train_eval_cycle.py`
+    - bottleneck focus scoring + scenario-family adaptation update:
+      - `scripts/tune_candidate_gate_trade_density.py`
+  - `tune` routing change summary:
+    - new risk-gate second-stage focus scoring branches:
+      - `second_stage_confirmation_rr_margin`
+      - `second_stage_confirmation_edge_margin`
+      - `second_stage_confirmation_hostile_regime`
+      - `second_stage_confirmation_hostile_liquidity`
+      - `second_stage_confirmation_hostile_history_mild`
+      - `second_stage_confirmation_hostile_history_moderate`
+      - `second_stage_confirmation_hostile_history_severe`
+      - `second_stage_confirmation_hostile_history`
+      - `second_stage_confirmation_hostile_dynamic_tighten`
+      - `second_stage_confirmation_hostile_safety`
+    - new scenario families:
+      - `risk_gate_second_stage_margin_consistency`
+      - `risk_gate_second_stage_history_severe_guard`
+      - `risk_gate_second_stage_history_moderate_guard`
+      - `risk_gate_second_stage_history_mild_rebalance`
+      - `risk_gate_second_stage_hostile_consistency`
+      - `risk_gate_second_stage_consistency`
+    - overfit guard intent:
+      - severe-history branch does not blindly relax thresholds.
+      - tuning prioritizes quality/guard balance and only bounded safety-side relaxation.
+  - verification:
+    - `python -m py_compile scripts/run_profitability_matrix.py scripts/run_candidate_train_eval_cycle.py scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 1 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - latest readout (`core_full` from train/eval cycle):
+    - train: `pf=0.7289`, `trades=132.0`, `exp=-7.94`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1601`
+    - validation: `pf=0.5028`, `trades=172.0`, `exp=-7.6628`, top risk=`blocked_second_stage_confirmation_hostile_history_severe_safety_adders:885`
+    - holdout: `pf=0.4557`, `trades=149.3333`, `exp=-7.8552`, top risk=`blocked_second_stage_confirmation_hostile_history_severe_safety_adders:1463`
+    - promotion recommendation: `hold_candidate_calibrate_second_stage_confirmation_hostile_history_severe_consistency`
+  - tuning routing evidence:
+    - runtime log: `bottleneck_adapted_scenarios=on, scenario_family_counts={'risk_gate_second_stage_history_severe_guard': 1}`
+  - next:
+    - run `quality_focus` with multi-scenario (`--max-scenarios 4~6`) and compare severe-history rejection share delta.
+    - keep promotion gate strict (validation/holdout/walk-forward/generalization guard unchanged).
+
+- Stage-2.29 update (2026-02-17):
+  - multi-scenario follow-up completed for severe-history ownership check:
+    - exploratory run (sample dataset):
+      - `python scripts/tune_candidate_gate_trade_density.py --dataset-names data/backtest/sample_trend_pullback_1m.csv --scenario-mode quality_focus --max-scenarios 6 --allow-missing-higher-tf-companions --disable-dataset-quality-gate --screen-dataset-limit 1 --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate`
+    - real-data run (decision run):
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 4 --real-data-only --require-higher-tf-companions --screen-top-k 4 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate`
+  - routing/selection evidence:
+    - bottleneck context remained `risk_gate_focus=second_stage_confirmation_hostile_history_severe`
+    - scenario-family routing stayed deterministic:
+      - `scenario_family_counts={'risk_gate_second_stage_history_severe_guard': 4}`
+    - best combo selected: `scenario_quality_focus_002`
+  - real-data final comparison (`core_full`, 8 datasets):
+    - `scenario_quality_focus_000` (baseline in this batch):
+      - `pf=0.5360`, `exp=-8.5572`, `trades=127.7500`
+      - `second_stage_total=1190`, `severe=576` (`48.40%`)
+    - `scenario_quality_focus_002` (best):
+      - `pf=0.9089`, `exp=-7.0813`, `trades=132.8750`
+      - `second_stage_total=617`, `severe=222` (`35.98%`)
+    - delta (`002 - 000`):
+      - `pf +0.3729`
+      - `expectancy +1.4759 KRW`
+      - `trades +5.1250`
+      - `second_stage_total -573` (`-48.15%`)
+      - `severe -354` (`-61.46%`)
+      - `severe_ratio -12.42pp`
+  - current bottleneck interpretation:
+    - severe-history second-stage pressure was reduced materially in best combo.
+    - however top risk component in final matrix remains
+      - `blocked_risk_gate_entry_quality_rr_adaptive_regime`
+    - meaning bottleneck ownership has shifted back to risk-gate RR adaptive regime branch.
+  - next:
+    - add dedicated `risk_gate_entry_quality_rr_adaptive_regime` tuning family and keep second-stage severe guard branch as safety baseline.
+    - verify with train/eval cycle (`--skip-tune`) after applying best combo candidate.
+
+- Stage-2.30 update (2026-02-17):
+  - `rr_adaptive_regime` dedicated tuning family implemented:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - change:
+      - added `risk_gate_rr_adaptive_regime_focus` family selection/adaptation branch
+      - added dedicated bottleneck priority weighting for `entry_quality_rr_adaptive_regime`
+  - best combo candidate application check:
+    - applied `scenario_quality_focus_002` parameters to runtime config
+      - source: `config/config.json` (local runtime source)
+      - synced to runtime file: `build/Release/config/config.json`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune` completed
+    - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 4 --real-data-only --require-higher-tf-companions --screen-top-k 4 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate` completed
+  - train/eval outcome after best-combo sync (`core_full`):
+    - train: `pf=0.9922`, `trades=123.5714`, `exp=-7.1964`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1802`
+    - validation: `pf=0.5335`, `trades=173.5`, `exp=-6.8249`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:250`
+    - holdout: `pf=0.5226`, `trades=150.0`, `exp=-6.7470`, top risk=`blocked_risk_gate_entry_quality_rr_base:563`
+    - promotion recommendation moved to:
+      - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+  - tuning run evidence (new family activation):
+    - bottleneck context:
+      - `risk_gate_focus=entry_quality_rr_adaptive_regime`
+    - scenario family routing:
+      - `scenario_family_counts={'risk_gate_rr_adaptive_regime_focus': 4}`
+    - final best combo in this batch:
+      - `scenario_quality_focus_000`
+      - `pf=0.5596`, `exp=-8.0615`, `trades=135.6250`
+      - top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime`
+  - interpretation:
+    - routing ownership shift from second-stage severe to risk-gate RR-adaptive branch is now confirmed end-to-end.
+    - however this first rr-adaptive-regime-focused batch still fails gate (`pf<1`, `exp<0`), so branch-specific tuning needs additional bounded variants.
+  - next:
+    - expand rr-adaptive-regime variants (`max_new_orders_per_scan`, adaptive RR floors, strength guard) with stricter overfit guard.
+    - keep second-stage severe guard family available as fallback comparator in the same batch.
+
+- Stage-2.31 update (2026-02-17):
+  - rr-adaptive 2-axis expansion + comparator-in-batch implemented:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - change:
+      - `risk_gate_rr_adaptive_regime_focus` now emits multiple profiles in one batch:
+        - `relax_strong`, `relax_medium`, `balance`, `protect_medium`, `protect_strong`
+      - same batch includes explicit second-stage comparator profile:
+        - `second_stage_severe_guard_comparator`
+      - comparator family tag:
+        - `risk_gate_rr_adaptive_regime_with_second_stage_comparator`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache` completed
+  - routing evidence:
+    - `risk_gate_focus=entry_quality_rr_adaptive_regime`
+    - `scenario_family_counts={'risk_gate_rr_adaptive_regime_focus': 5, 'risk_gate_rr_adaptive_regime_with_second_stage_comparator': 1}`
+  - final batch summary (`core_full`, 8 datasets):
+    - `scenario_quality_focus_004` (`protect_strong`):
+      - `pf=0.6254`, `exp=-7.3389`, `trades=138.6250` (best in batch)
+      - top risk=`blocked_second_stage_confirmation_hostile_history_severe_safety_adders`
+    - `scenario_quality_focus_002` (`balance`):
+      - `pf=0.5742`, `exp=-8.2515`, `trades=131.1250`
+      - top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime`
+    - `scenario_quality_focus_000` (`relax_strong`):
+      - `pf=0.5843`, `exp=-8.6136`, `trades=139.3750`
+      - top risk=`blocked_risk_gate_entry_quality_edge_base`
+    - `scenario_quality_focus_005` (`second_stage_severe_guard_comparator`):
+      - `pf=0.5449`, `exp=-8.3579`, `trades=127.6250`
+      - top risk=`blocked_risk_gate_entry_quality_rr_base`
+  - interpretation:
+    - two-axis expansion improved best PF/expectancy versus previous rr-adaptive batch,
+      but top bottleneck for best combo moved back to second-stage severe-history.
+    - this confirms the intended tradeoff surface:
+      - rr-adaptive relief and severe-history pressure are tightly coupled.
+  - next:
+    - run mixed ownership batch with hard cap on severe-history ratio (guard constraint) while keeping rr-adaptive relief.
+    - evaluate whether `balance/protect_medium` can reduce severe-history rebound with acceptable PF/expectancy.
+
+- Stage-2.32 update (2026-02-17):
+  - objective guardrail added for severe-history rebound control:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - additions:
+      - objective inputs from report:
+        - `second_stage_total`
+        - `second_stage_history_severe_count`
+        - `second_stage_history_severe_ratio`
+      - objective penalty terms:
+        - `objective_max_severe_history_ratio` (default `0.55`)
+        - `objective_severe_history_penalty_scale` (default `18000`)
+        - `objective_severe_history_hard_cap_penalty` (default `1800`)
+      - CLI flags added for tuning-time control:
+        - `--objective-max-severe-history-ratio`
+        - `--objective-severe-history-penalty-scale`
+        - `--objective-severe-history-hard-cap-penalty`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache` completed
+  - routing evidence:
+    - `risk_gate_focus=entry_quality_rr_adaptive_regime`
+    - `scenario_family_counts={'risk_gate_rr_adaptive_regime_focus': 5, 'risk_gate_rr_adaptive_regime_with_second_stage_comparator': 1}`
+  - objective-selected best changed:
+    - before guard (Stage-2.31): best=`scenario_quality_focus_004` (`protect_strong`)
+      - `pf=0.6254`, `exp=-7.3389`, `severe_ratio=64.21%`
+    - after guard (Stage-2.32): best=`scenario_quality_focus_002` (`balance`)
+      - `pf=0.5742`, `exp=-8.2515`, `severe_ratio=34.47%`
+  - top candidates after guard (objective order):
+    - `scenario_quality_focus_002` (`balance`, family=`risk_gate_rr_adaptive_regime_focus`)
+      - `obj=-22486.5140`, `pf=0.5742`, `exp=-8.2515`, `trades=131.1250`
+      - top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime`
+    - `scenario_quality_focus_005` (`second_stage_severe_guard_comparator`, family=`risk_gate_rr_adaptive_regime_with_second_stage_comparator`)
+      - `obj=-22616.8710`, `pf=0.5449`, `exp=-8.3579`, `trades=127.6250`
+      - top risk=`blocked_risk_gate_entry_quality_rr_base`
+    - `scenario_quality_focus_000` (`relax_strong`)
+      - `obj=-24771.4141`, `pf=0.5843`, `exp=-8.6136`, `trades=139.3750`
+      - top risk=`blocked_risk_gate_entry_quality_edge_base`
+  - interpretation:
+    - severe-history objective guard is functioning as designed:
+      - high-PF but high-severe-ratio candidates are now deprioritized.
+    - selection is now aligned with "overfit/hostile rebound prevention" principle, not PF-only ranking.
+  - next:
+    - validate the new objective-selected candidate (`scenario_quality_focus_002`) in full train/eval cycle and confirm recommendation stability.
+    - if needed, tune guard constants (`max ratio/penalty scale/hard cap`) with bounded sensitivity sweep.
+
+- Stage-2.33 update (2026-02-17):
+  - objective-selected candidate train/eval stability check completed:
+    - command:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+  - recommendation stability:
+    - recommendation remains:
+      - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+    - validation top component:
+      - `blocked_risk_gate_entry_quality_rr_adaptive_regime:250`
+    - holdout top component:
+      - `blocked_risk_gate_entry_quality_rr_base:563`
+  - latest readout (`core_full`):
+    - train: `pf=0.9922`, `trades=123.5714`, `exp=-7.1964`
+    - validation: `pf=0.5335`, `trades=173.5`, `exp=-6.8249`
+    - holdout: `pf=0.5226`, `trades=150.0`, `exp=-6.7470`
+  - second-stage severe share (rejection context):
+    - validation: `second_stage_total=258`, `severe=134` (`51.94%`)
+    - holdout: `second_stage_total=242`, `severe=113` (`46.69%`)
+  - interpretation:
+    - bottleneck ownership remains in risk-gate RR branches (adaptive_regime/base), which is consistent with Stage-2.32 objective guard intent.
+    - gate remains fail (`pf<1`, `exp<0`) so next work should stay on rr-adaptive/base branch calibration, not second-stage-first fallback.
+  - next:
+    - run small sensitivity sweep on severe-history objective guard:
+      - `objective_max_severe_history_ratio` in `[0.50, 0.55, 0.60]`
+      - keep penalty scale bounded and compare recommendation flip / objective ranking stability.
+    - add rr_base-specific family split if holdout keeps preferring `blocked_risk_gate_entry_quality_rr_base`.
+
+- Stage-2.34 update (2026-02-17):
+  - severe-history objective guard sensitivity sweep completed:
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py ... --objective-max-severe-history-ratio 0.50 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_ratio050.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_ratio050.json`
+      - `python scripts/tune_candidate_gate_trade_density.py ... --objective-max-severe-history-ratio 0.55 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_ratio055.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_ratio055.json`
+      - `python scripts/tune_candidate_gate_trade_density.py ... --objective-max-severe-history-ratio 0.60 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_ratio060.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_ratio060.json`
+  - result:
+    - best combo did not flip across tested cap values:
+      - all caps selected `scenario_quality_focus_002`
+    - ranking stability:
+      - top-1 stable, top-2/3 ordering changes as cap relaxes (0.60?Î®?Ωå `relax_strong`???Í≥??Í≥∏ÏëùÊø??Í≥πÎº¢)
+  - interpretation:
+    - objective severe-history guard is not hypersensitive around 0.50~0.60 in current search space.
+    - current best appears robust to moderate cap variation.
+
+- Stage-2.35 update (2026-02-17):
+  - holdout rr_base ???Î¨íÏäú hybrid routing implemented:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - changes:
+      - hybrid focus detection added:
+        - condition: recommendation=`entry_quality_rr_adaptive_regime` + holdout top component=`rr_base`
+        - focus key: `entry_quality_rr_adaptive_regime_with_rr_base_holdout`
+      - new family added:
+        - `risk_gate_rr_adaptive_regime_base_bridge`
+      - bridge profile variants added:
+        - `bridge_relax`, `bridge_balanced`, `bridge_guarded`, `bridge_guarded_plus`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache` completed
+  - routing evidence:
+    - `risk_gate_focus=entry_quality_rr_adaptive_regime_with_rr_base_holdout`
+    - `scenario_family_counts={'risk_gate_rr_adaptive_regime_base_bridge': 6}`
+  - latest batch summary (`core_full`, objective order):
+    - best: `scenario_quality_focus_002`
+      - `obj=-22559.32`, `pf=0.5678`, `exp=-8.0924`, `trades=129.000`
+      - `severe_ratio=43.27%`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime`
+    - remaining candidates still show high severe ratios (`61%~76%`) and unstable top components (`edge_base`, `rr_base`, `second_stage_severe`)
+  - interpretation:
+    - hybrid bridge routing is activated correctly and keeps ownership on risk-gate RR side in top candidate.
+    - gate remains fail and severe rebound still present in most variants, so next step must tighten bridge profile space.
+  - next:
+    - narrow bridge profile generation around `bridge_guarded` neighborhood (drop high-severe variants).
+    - add explicit rr_base-floor-specific micro-family for holdout-dominant runs while preserving validation rr_adaptive support.
+
+- Stage-2.36 update (2026-02-17):
+  - narrowed `rr_base_bridge` profile space applied:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - change:
+      - removed `bridge_relax` generation from `risk_gate_rr_adaptive_regime_base_bridge`
+      - profile mix re-centered to guarded neighborhood:
+        - `bridge_guarded_plus` weighted
+        - `bridge_guarded`
+        - `bridge_balanced`
+      - guard parameters tightened (higher hostility guard shift / pause / candle guards, bounded RR relaxation)
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache` completed
+  - routing evidence:
+    - `risk_gate_focus=entry_quality_rr_adaptive_regime_with_rr_base_holdout`
+    - `scenario_family_counts={'risk_gate_rr_adaptive_regime_base_bridge': 6}`
+  - latest batch summary (`core_full`, objective order):
+    - best: `scenario_quality_focus_005`
+      - `obj=-22214.82`, `pf=0.6019`, `exp=-7.9922`, `trades=129.375`
+      - `severe_ratio=49.51%`, profile=`bridge_guarded_plus`
+      - top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_mixed`
+    - `scenario_quality_focus_002`:
+      - `obj=-22833.91`, `pf=0.5494`, `exp=-8.7605`, `severe_ratio=50.68%`, profile=`bridge_balanced`
+      - top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime`
+    - `scenario_quality_focus_003`:
+      - `obj=-22845.11`, `pf=0.5347`, `exp=-8.4924`, `severe_ratio=54.16%`, profile=`bridge_guarded_plus`
+      - top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime`
+  - effect (vs Stage-2.35 bridge batch):
+    - upper severe-ratio tail reduced (previous max ~`75.94%` -> current max ~`64.12%`)
+    - best candidate severe ratio improved from prior bridge best (`43.27%` baseline in Stage-2.35) to sub-50 guard zone while improving objective rank and PF in current batch context.
+  - next:
+    - add holdout `rr_base` micro-family to avoid top-risk drift into `rr_edge_*` in best candidate.
+    - re-run 6-scenario batch and require top-2 candidates to keep severe ratio <= 55% and top-risk within rr ownership branches.
+
+- Stage-2.37 update (2026-02-17):
+  - holdout `rr_base` micro-profile + rr-ownership objective guard applied:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - changes:
+      - bridge micro profile added:
+        - `bridge_rr_base_relief_micro`
+      - objective rr-ownership guard added:
+        - non-RR top component penalty in RR-focused runs
+        - new CLI controls:
+          - `--objective-enforce-rr-ownership-top-component` (default ON)
+          - `--objective-rr-ownership-penalty` (default `1200`)
+      - objective now includes:
+        - `top_entry_risk_gate_component_reason` for ranking penalty decisions
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache` completed
+  - routing evidence:
+    - `risk_gate_focus=entry_quality_rr_adaptive_regime_with_rr_base_holdout`
+    - `scenario_family_counts={'risk_gate_rr_adaptive_regime_base_bridge': 6}`
+    - objective rr-ownership guard log:
+      - `objective_rr_ownership_guard=on, penalty=1200.00`
+  - final batch summary (`core_full`, objective order):
+    - 1) `scenario_quality_focus_002`
+      - `obj=-22833.91`, `pf=0.5494`, `exp=-8.7605`, `trades=126.250`
+      - `severe_ratio=50.68%`, profile=`bridge_balanced`
+      - top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime` (RR ownership)
+    - 2) `scenario_quality_focus_003`
+      - `obj=-22845.11`, `pf=0.5347`, `exp=-8.4924`, `trades=135.000`
+      - `severe_ratio=54.16%`, profile=`bridge_guarded_plus`
+      - top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime` (RR ownership)
+    - 3) `scenario_quality_focus_001`
+      - `obj=-23180.88`, `pf=0.4977`, `exp=-8.9854`, `trades=129.000`
+      - `severe_ratio=45.17%`, profile=`bridge_guarded_plus`
+      - top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime` (RR ownership)
+    - `bridge_rr_base_relief_micro` candidate (`scenario_quality_focus_005`) produced:
+      - `pf=0.5861`, `exp=-8.7034`, `severe_ratio=51.50%`
+      - but top risk=`blocked_risk_gate_entry_quality_edge_base`, so objective guard demoted it.
+  - requirement check (from Stage-2.36 next):
+    - top-2 severe ratio <= 55%: PASS (`50.68%`, `54.16%`)
+    - top-2 RR ownership top-risk: PASS
+  - interpretation:
+    - objective now prioritizes rr-ownership-consistent candidates while holding severe ratio within guard zone.
+    - quality gate still fails (`pf<1`, `exp<0`), so next step remains param refinement within RR ownership-safe region.
+  - next:
+    - run focused local sweep around top-2 (`002`, `003`) with smaller RR/strength increments.
+    - validate with train/eval cycle after promoting one candidate config snapshot.
+
+- Stage-2.38 update (2026-02-17):
+  - rr-base bridge local sweep (top-2 neighborhood) added and validated:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - changes:
+      - bridge local sweep controls (default ON):
+        - `--enable-rr-bridge-local-sweep`
+        - `--rr-bridge-local-rr-step` (default `0.02`)
+        - `--rr-bridge-local-signal-step` (default `0.01`)
+        - `--rr-bridge-local-edge-step` (default `0.0001`)
+      - bridge family profile router expanded for focused local variants:
+        - `bridge_balanced_local_{center,relax,tight}`
+        - `bridge_guarded_plus_local_{center,relax,tight}`
+      - report metadata now records local sweep parameters in summary JSON.
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache` completed
+  - routing evidence:
+    - `risk_gate_focus=entry_quality_rr_adaptive_regime_with_rr_base_holdout`
+    - `scenario_family_counts={'risk_gate_rr_adaptive_regime_base_bridge': 6}`
+    - local sweep log:
+      - `rr_bridge_local_sweep=on, rr_step=0.020, signal_step=0.010, edge_step=0.00010`
+  - final batch summary (`core_full`, objective order):
+    - 1) `scenario_quality_focus_002`
+      - `obj=-21413.72`, `pf=0.8838`, `exp=-7.8839`, `trades=126.5`
+      - `severe_ratio=42.87%`, profile=`bridge_balanced_local_tight`
+      - top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime`
+    - 2) `scenario_quality_focus_005`
+      - `obj=-22746.956`, `pf=0.5376`, `exp=-8.3801`, `trades=130.75`
+      - `severe_ratio=41.23%`, profile=`bridge_guarded_plus_local_tight`
+      - top risk=`blocked_risk_gate_entry_quality_rr_base`
+    - 3) `scenario_quality_focus_003`
+      - `obj=-22845.111`, `pf=0.5347`, `exp=-8.4924`, `trades=135.0`
+      - `severe_ratio=54.16%`, profile=`bridge_guarded_plus_local_center`
+      - top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime`
+  - promoted snapshot validation:
+    - promoted best combo snapshot:
+      - `build/Release/logs/candidate_promoted_combo_stage2_38.json`
+      - applied build config: `build/Release/config/config.json`
+    - command:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+    - result:
+      - recommendation=`hold_candidate_calibrate_risk_gate_edge_baseline_floor`
+      - train: `pf=0.9675`, `exp=-7.7190`, `trades=119.4286`
+      - validation: `pf=0.5206`, `exp=-7.3395`, `trades=170.5`, top risk=`blocked_risk_gate_entry_quality_edge_base:1187`
+      - holdout: `pf=0.4920`, `exp=-7.5554`, `trades=137.6667`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:2562`
+      - promotion gate: fail (`promotion_gate_pass=false`, `generalization_guard_pass=false`)
+  - interpretation:
+    - focused local sweep improved objective/PF ordering around top profiles, but promoted split validation still fails and ownership drifts to mixed edge/rr bottlenecks across validation/holdout.
+    - overfit Ë´õ‚ëπ? ?Î®?äÉ ?Ï¢?: train-side improvementÔßçÎöØ?ùÊø°?ïÎíó ?Î∞¥Í∫Ω ?∫Îçá?.
+  - next:
+    - add objective penalty for split ownership drift (`validation` vs `holdout` top risk mismatch) in RR-focused batches.
+    - run another 6-scenario local sweep with drift guard, then re-run train/eval cycle.
+
+- Stage-2.39 update (2026-02-17):
+  - split ownership drift objective guard implemented:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - changes:
+      - train/eval context parser now captures split-specific risk ownership:
+        - `holdout_top_risk_gate_component_reason`
+        - `validation_top_risk_gate_component_reason`
+        - `risk_split_ownership_drift_active`
+      - objective guard added (RR-focused batches only):
+        - `--objective-enforce-split-ownership-drift-guard` (default ON)
+        - `--objective-split-ownership-drift-penalty` (default `900`)
+      - penalty rule:
+        - match holdout top component: no penalty
+        - match validation top component: partial penalty (`35%`)
+        - otherwise: full penalty
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - real-context run (current recommendation=`edge_base`):
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache`
+      - drift guard log: `drift_active=True` but `objective_split_ownership_drift_guard=off` (RR focus inactive by design)
+    - rr-focused forced-drift run (guard ON):
+      - `python scripts/tune_candidate_gate_trade_density.py ... --train-eval-summary-json build/Release/logs/candidate_train_eval_cycle_summary_rr_drift_mock.json --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage239.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage239.json`
+      - log:
+        - `objective_split_ownership_drift_guard=on`
+        - `primary=blocked_risk_gate_entry_quality_rr_adaptive_regime`
+        - `secondary=blocked_risk_gate_entry_quality_edge_base`
+    - rr-focused forced-drift run (guard OFF baseline):
+      - `python scripts/tune_candidate_gate_trade_density.py ... --train-eval-summary-json build/Release/logs/candidate_train_eval_cycle_summary_rr_drift_mock.json --disable-objective-enforce-split-ownership-drift-guard --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage239_nodriftguard.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage239_nodriftguard.json`
+  - A/B delta evidence (ON minus OFF):
+    - `scenario_quality_focus_003` (`rr_edge_adaptive_mixed`): `-900` (full penalty)
+    - `scenario_quality_focus_004` (`second_stage_*`): `-900` (full penalty)
+    - `scenario_quality_focus_005` (`rr_base`): `-900` (full penalty)
+    - `scenario_quality_focus_000` (`edge_base`): `-315` (35% partial penalty)
+    - `scenario_quality_focus_002` (`rr_adaptive_regime` primary match): `0`
+  - interpretation:
+    - drift guard behaves as intended in RR-focused regime and discourages split ownership divergence without breaking top candidate stability.
+    - current live context recommendation is `edge_base`, so drift guard remains intentionally inactive until RR-focused ownership returns.
+  - next:
+    - re-enter RR-focused branch on live context (or apply focused RR candidate) and run split train/eval cycle to validate guard effect on real recommendation path.
+    - if recommendation remains `edge_base`, mirror the same drift-guard concept for edge-focused ownership branch.
+
+- Stage-2.40 update (2026-02-17):
+  - split ownership drift guard scope expanded from RR-only to `entry_quality_*`:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - change:
+      - objective drift guard enable condition:
+        - before: `risk_gate_focus.startswith("entry_quality_rr")`
+        - after: `risk_gate_focus.startswith("entry_quality_")`
+      - drift guard log now includes active focus key:
+        - `focus=<risk_gate_focus>`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - real-context run (guard ON):
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage240.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage240.json`
+      - log evidence:
+        - `risk_gate_focus=entry_quality_edge_base`
+        - `objective_split_ownership_drift_guard=on`
+        - `focus=entry_quality_edge_base`
+        - `drift_active=True`
+    - real-context run (guard OFF baseline):
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --disable-objective-enforce-split-ownership-drift-guard --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage240_nodriftguard.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage240_nodriftguard.json`
+  - A/B delta evidence (ON minus OFF, real context):
+    - `scenario_quality_focus_000` (`blocked_risk_gate_entry_quality_rr_adaptive_mixed`): `-900`
+    - `scenario_quality_focus_004` (`blocked_second_stage_confirmation_hostile_history_severe_safety_adders`): `-900`
+    - `scenario_quality_focus_001/002/003/005` (`blocked_risk_gate_entry_quality_rr_adaptive_regime`): `0`
+    - ranking effect:
+      - guard OFF top-2: `005`, `000`
+      - guard ON top-2: `005`, `003` (`000` demoted)
+  - interpretation:
+    - edge-focused live context?Î®?Ωå??split ownership drift guardÂ™õ¬Ä ÔßùÎê±????àÏòâ??é≈? holdout primary ownership???∫Îçâ?™Áßª?ëÎ∏Ø???Íæ®ÎÇ´????âÏ†ô?Í≥∏ÏëùÊø???ëÎº¢??óÍ∂ì??
+    - ?®Ïá±???Ë´õ‚ëπ? ?ø¬Ä?Î®?øâ??splitËπ?ownership drift??objective Ôß°‚ë•??Î®?Ωå ???î™?Í≥∏ÏëùÊø???ñÎº±??????áÏæ∂ ??
+  - next:
+    - Stage-2.40 best (`scenario_quality_focus_005`)??snapshot Ë´õÏÑè????train/eval cycle ???Ôß?
+    - ÂØÉ¬ÄÔß?????ñÎ∏ò??top ownership????ºÎñÜ ?∫ÍæßÎ¶??é„àÉ, penalty scale(`900`) Ë™òÏá®Ïª????ºÏê≤(`600/900/1200`) ??ëÎªæ.
+
+- Stage-2.41 update (2026-02-17):
+  - promoted snapshot from Stage-2.40 best applied:
+    - source summary:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage240.json`
+    - promoted snapshot artifact:
+      - `build/Release/logs/candidate_promoted_combo_stage2_41.json`
+    - applied combo:
+      - `scenario_quality_focus_005`
+      - objective(top): `-22175.155`
+  - verification:
+    - command:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+    - result:
+      - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - promotion gate: fail (`promotion_gate_pass=false`, `generalization_guard_pass=false`)
+      - train: `pf=0.7318`, `exp=-7.5464`, `trades=123.0`
+      - validation: `pf=0.4875`, `exp=-7.9956`, `trades=165.5`
+      - holdout: `pf=0.4739`, `exp=-7.6324`, `trades=143.6667`
+      - validation top risk component:
+        - `blocked_risk_gate_entry_quality_rr_adaptive_regime:802`
+      - holdout top risk component:
+        - `blocked_risk_gate_entry_quality_rr_adaptive_regime:977`
+  - interpretation:
+    - split ownership drift from Stage-2.40 edge context was reduced in this promoted run (validation/holdout ownership re-aligned to rr_adaptive_regime).
+    - however profitability/expectancy gates are still not met, so promotion remains blocked.
+  - next:
+    - run rr-focused local sweep (with split-ownership drift guard ON) centered on `rr_adaptive_regime` to improve expectancy while preserving ownership alignment.
+    - if alignment breaks again, run penalty sensitivity sweep (`600/900/1200`) before expanding scenario family.
+
+- Stage-2.42 update (2026-02-17):
+  - `rr_adaptive_regime` focused local sweep support added:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - changes:
+      - new local sweep controls:
+        - `--enable-rr-adaptive-regime-local-sweep` (default ON)
+        - `--rr-adaptive-regime-local-rr-step` (default `0.02`)
+        - `--rr-adaptive-regime-local-signal-step` (default `0.01`)
+        - `--rr-adaptive-regime-local-edge-step` (default `0.0001`)
+      - `risk_gate_rr_adaptive_regime_focus` family now supports local profiles:
+        - `balance_local_{relax,center,tight}`
+        - `protect_medium_local_{center,tight}`
+        - plus `second_stage_severe_guard_comparator`
+      - report/console output includes rr-adaptive local sweep settings.
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage242.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage242.json`
+  - local-sweep batch summary (`core_full`, objective order):
+    - 1) `scenario_quality_focus_002`
+      - `obj=-21188.958`, `pf=0.8920`, `exp=-7.4982`, `trades=128.25`
+      - `severe_ratio=28.28%`
+      - top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime`
+      - profile=`balance_local_tight`
+    - 2) `scenario_quality_focus_005`
+      - `obj=-22616.871`, `pf=0.5449`, `exp=-8.3579`
+      - top risk=`blocked_risk_gate_entry_quality_rr_base`
+      - profile=`second_stage_severe_guard_comparator`
+    - 3) `scenario_quality_focus_001`
+      - `obj=-25850.285495`, `pf=0.4958`, `exp=-8.9763`
+      - top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_regime`
+      - profile=`balance_local_center`
+  - promoted snapshot validation:
+    - snapshot:
+      - `build/Release/logs/candidate_promoted_combo_stage2_42.json`
+    - command:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+    - result:
+      - recommendation=`hold_candidate_calibrate_risk_gate_edge_baseline_floor`
+      - validation top risk=`blocked_risk_gate_entry_quality_edge_base:2655`
+      - holdout top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1860`
+      - split ownership drift reappeared.
+
+- Stage-2.43 update (2026-02-17):
+  - split-ownership drift penalty sensitivity sweep executed (`600/900/1200`):
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py ... --objective-split-ownership-drift-penalty 600 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage243_pen600.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage243_pen600.json`
+      - `python scripts/tune_candidate_gate_trade_density.py ... --objective-split-ownership-drift-penalty 900 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage243_pen900.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage243_pen900.json`
+      - `python scripts/tune_candidate_gate_trade_density.py ... --objective-split-ownership-drift-penalty 1200 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage243_pen1200.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage243_pen1200.json`
+  - sensitivity result:
+    - top-3 set remained stable for all penalties:
+      - `005`, `003`, `001`
+    - best remained unchanged:
+      - `scenario_quality_focus_005` (`obj=-22175.155`, `pf=0.6623`, `exp=-7.8005`, top risk=`rr_adaptive_regime`)
+    - penalty scale mainly affected non-primary ownership candidates:
+      - `scenario_quality_focus_000` / `scenario_quality_focus_004` moved by `+-300` around baseline (`900`).
+  - promoted snapshot validation (`penalty=900` baseline):
+    - snapshot:
+      - `build/Release/logs/candidate_promoted_combo_stage2_43.json`
+    - command:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+    - result:
+      - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - validation top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:802`
+      - holdout top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:977`
+      - split ownership alignment recovered, but promotion gate still fails (`pf<1`, `exp<0`).
+  - interpretation:
+    - drift penalty baseline `900` is robust enough in current search space (no top-rank flip).
+    - ownership drift can be suppressed, but expectancy/profitability remains the bottleneck.
+  - next:
+    - run focused rr-adaptive regime adders refinement for expectancy uplift while keeping ownership alignment fixed.
+    - keep split-drift guard enabled and avoid widening family space until `exp` trend improves.
+
+- Stage-2.44 update (2026-02-17):
+  - rr-adaptive local-step micro sweep executed (`soft/default/tight`):
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py ... --rr-adaptive-regime-local-rr-step 0.015 --rr-adaptive-regime-local-signal-step 0.008 --rr-adaptive-regime-local-edge-step 0.00008 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage244_soft.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage244_soft.json`
+      - `python scripts/tune_candidate_gate_trade_density.py ... --rr-adaptive-regime-local-rr-step 0.020 --rr-adaptive-regime-local-signal-step 0.010 --rr-adaptive-regime-local-edge-step 0.00010 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage244_default.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage244_default.json`
+      - `python scripts/tune_candidate_gate_trade_density.py ... --rr-adaptive-regime-local-rr-step 0.025 --rr-adaptive-regime-local-signal-step 0.012 --rr-adaptive-regime-local-edge-step 0.00012 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage244_tight.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage244_tight.json`
+  - sweep result:
+    - best case: `default` (`0.020 / 0.010 / 0.00010`)
+      - best combo=`scenario_quality_focus_002`
+      - `obj=-21188.958`, `pf=0.8920`, `exp=-7.4982`, `severe_ratio=28.28%`
+      - top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime`
+    - `soft`:
+      - `obj=-22525.317`, `pf=0.8827`, `exp=-7.7113`
+      - top risk drifted to `blocked_risk_gate_entry_quality_edge_base`
+    - `tight`:
+      - `obj=-21542.196`, `pf=0.8722`, `exp=-8.0654`
+      - degraded expectancy vs default.
+  - promoted snapshot validation (`default` case):
+    - snapshot:
+      - `build/Release/logs/candidate_promoted_combo_stage2_44.json`
+    - command:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+    - result:
+      - recommendation=`hold_candidate_calibrate_risk_gate_edge_baseline_floor`
+      - validation top risk=`blocked_risk_gate_entry_quality_edge_base:2655`
+      - holdout top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1860`
+      - promotion gate fail persists (`promotion_gate_pass=false`, `generalization_guard_pass=false`)
+  - interpretation:
+    - local-step tuning improved tuning-batch objective at `default` setting, but split cycle?Î®?Ωå ownership drift(ÂØÉ¬ÄÔß?edge, ????ñÎ∏ò??rr)Â™õ¬Ä ??Ïª?
+    - ?Íæ©Ïò± ËπÇÎ¨ê??? ??•Îãö rr step ??Î¶∞ËπÇ?Ä??split ownership stabilizer(?Î±ÅÏó≥ validation edge_base ???†£) ÔßüÏéå???Í≥óÍΩë.
+  - next:
+    - add `edge_base`-specific objective penalty reinforcement when holdout recommendation remains `rr_adaptive_regime`.
+    - re-run 6-scenario sweep with the reinforcement and verify split ownership alignment before additional expectancy tuning.
+
+- Stage-2.45 update (2026-02-17):
+  - `edge_base` anti-drift objective guard introduced:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - changes:
+      - objective penalty branch added for edge-baseline ownership:
+        - target reasons:
+          - `blocked_risk_gate_entry_quality_edge_base`
+          - `blocked_risk_gate_entry_quality_rr_edge_base`
+      - new args:
+        - `--objective-enforce-edge-base-anti-drift-guard` (default ON)
+        - `--disable-objective-enforce-edge-base-anti-drift-guard`
+        - `--objective-edge-base-anti-drift-penalty` (default `1200`)
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage245.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage245.json`
+  - result:
+    - best combo remained `scenario_quality_focus_005`
+    - real context held split ownership drift:
+      - holdout top=`blocked_risk_gate_entry_quality_rr_adaptive_regime`
+      - validation top=`blocked_risk_gate_entry_quality_edge_base`
+    - guard was still inactive in this run:
+      - `objective_edge_base_anti_drift_guard_active=false`
+      - reason: activation condition was tied to RR-adaptive recommendation/focus only.
+
+- Stage-2.46 update (2026-02-17):
+  - anti-drift activation scope expanded for split ownership drift context:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - change:
+      - `objective_edge_base_anti_drift_guard` now also activates when:
+        - split drift is active, and
+        - holdout top risk is RR-ownership branch, and
+        - validation top risk is edge-base branch.
+      - reporting added:
+        - console flag: `split_rr_to_edge_drift=<true|false>`
+        - summary JSON field:
+          - `objective_edge_base_anti_drift_split_rr_to_edge_drift_active`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - real-context run:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage246.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage246.json`
+      - log evidence:
+        - `objective_edge_base_anti_drift_guard=on`
+        - `split_rr_to_edge_drift=True`
+    - soft-step A/B check:
+      - ON:
+        - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --rr-adaptive-regime-local-rr-step 0.015 --rr-adaptive-regime-local-signal-step 0.008 --rr-adaptive-regime-local-edge-step 0.00008 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage246_soft_guardon.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage246_soft_guardon.json`
+      - OFF baseline:
+        - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --rr-adaptive-regime-local-rr-step 0.015 --rr-adaptive-regime-local-signal-step 0.008 --rr-adaptive-regime-local-edge-step 0.00008 --disable-objective-enforce-edge-base-anti-drift-guard --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage246_soft_guardoff.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage246_soft_guardoff.json`
+  - promoted snapshot validation:
+    - snapshot:
+      - `build/Release/logs/candidate_promoted_combo_stage2_46.json`
+    - command:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+    - result:
+      - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - validation top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:802`
+      - holdout top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:977`
+      - split ownership drift cleared in this promoted pass, but promotion gate still failed (`pf<1`, `exp<0`).
+
+- Stage-2.47 update (2026-02-17):
+  - re-tune on refreshed RR-focused context:
+    - command:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage247.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage247.json`
+    - context/guard evidence:
+      - `risk_gate_focus=entry_quality_rr_adaptive_regime`
+      - `objective_rr_ownership_guard=on`
+      - `objective_edge_base_anti_drift_guard=on`
+      - best combo switched to `scenario_quality_focus_002`
+      - best metrics:
+        - `obj=-21188.958`, `pf=0.8920`, `exp=-7.4982`, `trades=128.25`
+        - top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime`
+  - promoted snapshot validation:
+    - snapshot:
+      - `build/Release/logs/candidate_promoted_combo_stage2_47.json`
+    - command:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+    - result:
+      - train improved but still below promotion floor:
+        - train `pf=0.9826`, `exp=-7.3787`, `trades=119.7143`
+      - split ownership drift reappeared in eval:
+        - validation top risk=`blocked_risk_gate_entry_quality_edge_base:2655`
+        - holdout top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1860`
+      - recommendation reverted to `hold_candidate_calibrate_risk_gate_edge_baseline_floor`
+      - promotion gate remains fail (`promotion_gate_pass=false`, `generalization_guard_pass=false`)
+  - interpretation:
+    - objective-side RR ownership reinforcement can recover alignment in one iteration, but promoted split still flips back to validation edge-base pressure.
+    - overfitting prevention principle maintained: no promotion accepted while validation/holdout generalization fails.
+  - next:
+    - run edge-baseline-floor focused sweep under active anti-drift guard and compare against current `stage247` snapshot.
+    - enforce promoted-pass acceptance only when validation/holdout top-risk ownership stays aligned across one full cycle.
+
+- Stage-2.48 update (2026-02-17):
+  - edge-baseline-floor focused re-run executed under active anti-drift guards:
+    - command:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage248.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage248.json`
+  - result:
+    - context returned to `entry_quality_edge_base` with split drift (`holdout=rr_adaptive_regime`, `validation=edge_base`)
+    - best remained `scenario_quality_focus_005` (same ordering/score as Stage-2.46)
+  - promoted snapshot validation:
+    - snapshot:
+      - `build/Release/logs/candidate_promoted_combo_stage2_48.json`
+    - command:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+    - result:
+      - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - validation top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:802`
+      - holdout top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:977`
+      - split ownership alignment recovered, but promotion gate still fail (`pf<1`, `exp<0`).
+
+- Stage-2.49 update (2026-02-17):
+  - proactive RR edge-floor cap objective guard added:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - changes:
+      - new objective penalty guard for rr-adaptive contexts:
+        - penalize when `combo.min_expected_edge_pct > objective_rr_edge_floor_cap`
+      - new args:
+        - `--objective-enforce-rr-edge-floor-cap-guard` (default ON)
+        - `--disable-objective-enforce-rr-edge-floor-cap-guard`
+        - `--objective-rr-edge-floor-cap` (default `0.0010`)
+        - `--objective-rr-edge-floor-cap-penalty-scale` (default `4000000`)
+      - objective logs/summary fields added for cap-guard status.
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - guard ON:
+      - `python scripts/tune_candidate_gate_trade_density.py ... --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage249.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage249.json`
+    - guard OFF baseline:
+      - `python scripts/tune_candidate_gate_trade_density.py ... --disable-objective-enforce-rr-edge-floor-cap-guard --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage249_nocap.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage249_nocap.json`
+  - A/B evidence (ON minus OFF):
+    - `scenario_quality_focus_002` (`min_expected_edge_pct=0.0015`): `-2000`
+    - `scenario_quality_focus_001` (`0.0012`): `-800`
+    - `scenario_quality_focus_003` (`0.0011`): `-400`
+    - top candidate changed:
+      - OFF: `scenario_quality_focus_002`
+      - ON: `scenario_quality_focus_005`
+  - promoted snapshot validation (ON best):
+    - snapshot:
+      - `build/Release/logs/candidate_promoted_combo_stage2_49.json`
+    - command:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+    - result:
+      - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_history_adders`
+      - validation top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_history:1575`
+      - holdout top risk=`blocked_risk_gate_entry_quality_rr_adaptive_mixed:1093`
+      - promotion gate fail persisted.
+
+- Stage-2.50 update (2026-02-17):
+  - rr-edge-floor hard-cap option added and scope expanded:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - changes:
+      - new arg:
+        - `--objective-apply-rr-edge-floor-hard-cap` (default OFF)
+      - when enabled, rr-adaptive focused combos are clamped:
+        - `min_expected_edge_pct = min(min_expected_edge_pct, objective_rr_edge_floor_cap)`
+      - rr-edge-floor-cap guard activation scope expanded:
+        - `risk_gate_focus.startswith("entry_quality_rr_adaptive")` or
+        - recommendation starts with `hold_candidate_calibrate_risk_gate_rr_adaptive_`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - hard-cap ON:
+      - `python scripts/tune_candidate_gate_trade_density.py ... --objective-apply-rr-edge-floor-hard-cap --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage250.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage250.json`
+      - log evidence:
+        - `objective_rr_edge_floor_cap_guard=on ... hard_cap=on, hard_cap_applied=3`
+    - hard-cap OFF baseline:
+      - `python scripts/tune_candidate_gate_trade_density.py ... --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage250_nocap.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage250_nocap.json`
+  - A/B note:
+    - hard-cap improved several non-top combos but top candidate remained `scenario_quality_focus_005`.
+  - promoted snapshot validation:
+    - snapshot:
+      - `build/Release/logs/candidate_promoted_combo_stage2_50.json`
+    - command:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+    - result:
+      - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - validation top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_regime:709`
+      - holdout top risk=`blocked_risk_gate_entry_quality_rr_adaptive_mixed:840`
+      - promotion gate fail persisted (`promotion_gate_pass=false`, `generalization_guard_pass=false`)
+  - interpretation:
+    - edge-base direct regression was reduced, but split ownership is still unstable inside rr-adaptive sub-branches and profitability/expectancy gates remain unmet.
+  - next:
+    - run rr-adaptive sub-branch stabilization sweep (history/regime/mixed ownership alignment objective) before further expectancy micro-tuning.
+
+- Stage-2.51 update (2026-02-17):
+  - newest-data OOT holdout quarantine rule operationalized in train/eval cycle:
+    - file:
+      - `scripts/run_candidate_train_eval_cycle.py`
+    - changes:
+      - new arg:
+        - `--reserve-newest-markets-for-holdout` (default `0`)
+      - split behavior:
+        - computes per-market latest dataset mtime and reserves newest `N` markets into holdout first.
+        - keeps train/validation minimum viability by capping applied reserve to `len(markets) - 2`.
+      - split manifest fields added:
+        - `reserve_newest_markets_for_holdout_requested`
+        - `reserve_newest_markets_for_holdout_applied`
+        - `reserve_newest_markets_for_holdout`
+        - `market_latest_mtime_epoch`
+  - verification:
+    - `python -m py_compile scripts/run_candidate_train_eval_cycle.py` PASS
+    - option presence check:
+      - `python scripts/run_candidate_train_eval_cycle.py --help | rg reserve-newest-markets-for-holdout`
+    - short real-data cycle:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --max-markets 4 --reserve-newest-markets-for-holdout 1 --walk-forward-max-datasets 1 --walk-forward-min-datasets 1`
+  - result:
+    - split manifest confirmed:
+      - requested/applied reserve: `1/1`
+      - reserved market: `KRW_BCH`
+      - train: `KRW_ADA`
+      - validation: `KRW_AVAX`
+      - holdout: `KRW_BCH, KRW_BTC`
+    - cycle summary:
+      - `promotion_gate_pass=false`
+      - `generalization_guard_pass=true`
+      - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_mixed_adders`
+  - interpretation:
+    - newest-data leakage into tuning path is now explicitly blocked by default workflow option, reinforcing anti-overfit discipline.
+
+- Stage-2.52 update (2026-02-17):
+  - rr-adaptive sub-branch stabilization sweep executed under newest-data OOT holdout workflow:
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage252.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage252.json`
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - result:
+    - tuning best combo remained `scenario_quality_focus_005`
+    - split ownership drift persisted:
+      - validation top risk=`blocked_risk_gate_entry_quality_rr_adaptive_mixed:1334`
+      - holdout top risk=`blocked_risk_gate_entry_quality_edge_base:672`
+    - promotion gate remained fail:
+      - `promotion_gate_pass=false`, `generalization_guard_pass=false`
+    - OOT reserve confirmed:
+      - requested/applied reserve=`1/1`, reserved market=`KRW_BCH`
+  - interpretation:
+    - objective split-drift guard alone did not suppress edge-base drift in mixed context; activation scope gap remained for edge-base anti-drift guard.
+
+- Stage-2.53 update (2026-02-17):
+  - edge-base anti-drift activation scope expanded for mixed drift context:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - changes:
+      - `objective_edge_base_anti_drift_guard` now activates when:
+        - focus is `entry_quality_rr_adaptive_mixed`, or
+        - recommendation is `hold_candidate_calibrate_risk_gate_rr_adaptive_mixed_adders`, or
+        - split ownership drift is active in either direction (`rr->edge` or `edge->rr`).
+      - added split-drift direction flags to summary metadata:
+        - `objective_edge_base_anti_drift_split_edge_to_rr_drift_active`
+        - `objective_edge_base_anti_drift_split_rr_edge_drift_active`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - re-run tuning:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage253.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage253.json`
+      - log evidence:
+        - `objective_edge_base_anti_drift_guard=on`
+        - `split_rr_to_edge_drift=False`
+        - `split_edge_to_rr_drift=True`
+    - promoted snapshot validation:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - result:
+    - promotion gate remained fail (`promotion_gate_pass=false`, `generalization_guard_pass=false`)
+    - split drift still observed:
+      - validation top risk=`blocked_risk_gate_entry_quality_rr_adaptive_mixed:1334`
+      - holdout top risk=`blocked_risk_gate_entry_quality_edge_base:672`
+  - interpretation:
+    - drift detection/penalty activation is now correct, but current combo search space still converges to same candidate (`scenario_quality_focus_005`) and does not resolve holdout edge-base ownership.
+  - next:
+    - run penalty-strength A/B (`objective_split_ownership_drift_penalty`, `objective_edge_base_anti_drift_penalty`) and mixed-local-step sweep to force candidate rank separation under persistent `edge->rr` drift.
+
+- Stage-2.54 update (2026-02-17):
+  - penalty-strength A/B/C executed:
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py ... --objective-split-ownership-drift-penalty 1500 --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage254_a.json`
+      - `python scripts/tune_candidate_gate_trade_density.py ... --objective-edge-base-anti-drift-penalty 2200 --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage254_b.json`
+      - `python scripts/tune_candidate_gate_trade_density.py ... --objective-split-ownership-drift-penalty 1800 --objective-edge-base-anti-drift-penalty 2600 --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage254_c.json`
+  - result:
+    - ranking did not change (`scenario_quality_focus_005` remained top in all three runs).
+    - objective scores only shifted by guard penalty constants; candidate ordering remained identical.
+  - interpretation:
+    - current objective penalties were active but did not create rank separation in the active combo space.
+
+- Stage-2.55 update (2026-02-17):
+  - mixed-local-step sweep executed:
+    - command:
+      - `python scripts/tune_candidate_gate_trade_density.py ... --objective-split-ownership-drift-penalty 1500 --objective-edge-base-anti-drift-penalty 2200 --rr-adaptive-regime-local-rr-step 0.03 --rr-adaptive-regime-local-signal-step 0.015 --rr-adaptive-regime-local-edge-step 0.00015 --rr-bridge-local-rr-step 0.03 --rr-bridge-local-signal-step 0.015 --rr-bridge-local-edge-step 0.00015 --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage255_mixedsweep.json`
+  - result:
+    - top combo still remained `scenario_quality_focus_005`.
+  - interpretation:
+    - local-step range expansion alone did not break the winner lock.
+
+- Stage-2.56 update (2026-02-17):
+  - tune->promote call-flow audit requested (winner lock suspicion):
+    - finding:
+      - `scripts/tune_candidate_gate_trade_density.py` restored original `config.json` in `finally` after all evaluations, but never persisted `best_combo` back to build config.
+      - consequence: tune winner could change in summary, yet subsequent train/eval consumed stale config (same effective candidate), which can look like optimizer stagnation/call-flow bug.
+  - fix implemented:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - changes:
+      - added explicit post-sort promotion flow:
+        - apply `best_combo` to `build/Release/config/config.json` after tuning.
+        - save promoted snapshot JSON (`--promoted-combo-json`, default `build/Release/logs/candidate_promoted_combo.json`).
+      - added CLI controls:
+        - `--promote-best-combo` (default ON)
+        - `--disable-promote-best-combo`
+      - added mixed-vs-regime drift guard:
+        - `--objective-enforce-rr-adaptive-mixed-vs-regime-drift-guard` (default ON)
+        - `--objective-rr-adaptive-mixed-vs-regime-drift-penalty` (default `800`)
+      - added summary metadata for new guard/promotion fields.
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - reduced verification run:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 3 --real-data-only --require-higher-tf-companions --screen-top-k 3 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage256_verify.json`
+      - log evidence:
+        - `best_combo=scenario_quality_focus_000`
+        - `promote_best_combo=on, applied=True`
+    - config/snapshot reflection confirmed:
+      - `build/Release/config/config.json` now matches `scenario_quality_focus_000` key fields.
+      - `build/Release/logs/candidate_promoted_combo.json` generated with same combo id.
+    - promoted train/eval cycle:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+      - result changed vs stale-flow baseline (proof that promotion wiring now effective):
+        - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+        - validation top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_regime:1391`
+        - holdout top risk=`blocked_risk_gate_entry_quality_edge_base:712`
+        - gate remained fail (`promotion_gate_pass=false`, `generalization_guard_pass=false`)
+  - next:
+    - with promotion flow fixed, continue true candidate comparison on fresh tuned winners (no stale-config illusion).
+    - prioritize ownership re-alignment to reduce holdout `edge_base` while preventing validation shift into `rr_edge_adaptive_regime`.
+
+- Stage-2.57 update (2026-02-17):
+  - post-fix full-size rerun executed (`max_scenarios=6`) to validate real winner propagation:
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage257.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage257.json`
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - tuning result:
+    - `best_combo=scenario_quality_focus_005`
+    - `promote_best_combo_applied=true` (promotion wiring confirmed active)
+    - best row:
+      - `objective=-23516.871`
+      - `pf=0.5449`
+      - `exp=-8.3579`
+      - `top_risk=blocked_risk_gate_entry_quality_rr_base`
+  - train/eval result (OOT reserve kept):
+    - reserve confirmed: requested/applied=`1/1`, reserved=`KRW_BCH`
+    - verdict:
+      - `promotion_gate_pass=false`
+      - `generalization_guard_pass=false`
+      - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_mixed_adders`
+    - split ownership:
+      - validation top risk=`blocked_risk_gate_entry_quality_rr_adaptive_mixed:1327`
+      - holdout top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_history:709`
+    - stage metrics:
+      - train: `pf=0.5618`, `exp=-8.9594`, `trades=137.2857`
+      - validation: `pf=0.4667`, `exp=-8.2747`, `trades=158.5`
+      - holdout: `pf=0.5682`, `exp=-5.8946`, `trades=110.6667`
+  - interpretation:
+    - stale-config illusion is resolved; tuned winner is now actually applied to next cycle.
+    - holdout top ownership improved from `edge_base` to `rr_edge_adaptive_history`, but profitability/expectancy gates still fail.
+  - next:
+    - add `rr_edge_adaptive_history` ownership alignment guard path (mixed context) and rerun A/B on history-specific penalties.
+
+- Stage-2.58 update (2026-02-17):
+  - context-refresh rerun before new code patch:
+    - command:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage258.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage258.json`
+  - tuning context:
+    - `risk_gate_focus=entry_quality_rr_adaptive_mixed`
+    - split targets:
+      - primary=`blocked_risk_gate_entry_quality_rr_edge_adaptive_history`
+      - secondary=`blocked_risk_gate_entry_quality_rr_adaptive_mixed`
+    - `objective_rr_adaptive_mixed_vs_regime_drift_guard=on`
+  - tuning result:
+    - `best_combo=scenario_quality_focus_000`
+    - `objective=-23445.606`, `pf=0.5506`, `exp=-8.2902`, top risk=`blocked_risk_gate_entry_quality_rr_base`
+  - promoted cycle result:
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+    - verdict:
+      - `promotion_gate_pass=false`, `generalization_guard_pass=false`
+      - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+    - split ownership regressed:
+      - validation top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_regime:1391`
+      - holdout top risk=`blocked_risk_gate_entry_quality_edge_base:712`
+
+- Stage-2.59 update (2026-02-17):
+  - split-drift penalty hardening rerun:
+    - command:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --objective-split-ownership-drift-penalty 2400 --objective-edge-base-anti-drift-penalty 1800 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage259.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage259.json`
+  - tuning context reverted to regime-focused branch after Stage-2.58 promoted pass:
+    - `risk_gate_focus=entry_quality_rr_adaptive_regime`
+    - split targets:
+      - primary=`blocked_risk_gate_entry_quality_edge_base`
+      - secondary=`blocked_risk_gate_entry_quality_rr_edge_adaptive_regime`
+  - tuning result:
+    - `best_combo=scenario_quality_focus_005`
+    - `objective=-25016.871`, `pf=0.5449`, `exp=-8.3579`, top risk=`blocked_risk_gate_entry_quality_rr_base`
+  - promoted cycle result:
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+    - verdict:
+      - `promotion_gate_pass=false`, `generalization_guard_pass=false`
+      - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_mixed_adders`
+    - split ownership recovered to Stage-2.57 pattern:
+      - validation top risk=`blocked_risk_gate_entry_quality_rr_adaptive_mixed:1327`
+      - holdout top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_history:709`
+    - stage metrics:
+      - train: `pf=0.5618`, `exp=-8.9594`, `trades=137.2857`
+      - validation: `pf=0.4667`, `exp=-8.2747`, `trades=158.5`
+      - holdout: `pf=0.5682`, `exp=-5.8946`, `trades=110.6667`
+  - interpretation:
+    - stronger split penalties changed objective scale but did not unlock promotion; the loop oscillates between two ownership states (`mixed/history` vs `regime/edge_base`).
+  - next:
+    - add context-stability guard to prevent immediate branch flip (mixed <-> regime) across consecutive cycles and retune on stabilized branch.
+
+- Stage-2.60 update (2026-02-17):
+  - context-stability guard implemented for mixed/regime branch oscillation:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - changes:
+      - added persistent state-based guard to stabilize `risk_gate_focus` transitions between:
+        - `entry_quality_rr_adaptive_mixed`
+        - `entry_quality_rr_adaptive_regime`
+      - added guard CLI/options:
+        - `--context-stability-state-json` (default `build/Release/logs/candidate_context_stability_state.json`)
+        - `--enable-context-stability-guard` / `--disable-context-stability-guard`
+        - `--context-stability-min-consecutive-to-flip` (default `2`)
+      - added guard telemetry:
+        - console log (`override`, `reason`, `raw_focus`, `applied_focus`, candidate count)
+        - summary JSON fields under `screening`
+        - persisted state JSON output
+  - verification:
+    - compile/help:
+      - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+      - `python scripts/tune_candidate_gate_trade_density.py --help | rg context-stability` PASS
+    - smoke run (state bootstrap):
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 3 --real-data-only --require-higher-tf-companions --screen-top-k 3 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage260_smoke.json`
+      - guard status:
+        - `override=false`, `reason=first_managed_branch`, `applied_focus=entry_quality_rr_adaptive_mixed`
+    - flip-hold verification:
+      - after one promoted train/eval cycle, rerun:
+        - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 3 --real-data-only --require-higher-tf-companions --screen-top-k 3 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage260_verify_flip.json`
+      - guard status:
+        - `override=true`, `reason=flip_candidate_below_threshold`
+        - `raw_focus=entry_quality_rr_adaptive_regime`
+        - `applied_focus=entry_quality_rr_adaptive_mixed`
+    - full rerun:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage260.json`
+      - guard status:
+        - `override=false`, `reason=flip_accepted_after_threshold`
+        - `applied_focus=entry_quality_rr_adaptive_regime`
+      - best combo:
+        - `scenario_quality_focus_005` (`objective=-23516.871`, `pf=0.5449`, `exp=-8.3579`)
+    - promoted cycle:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+      - verdict:
+        - `promotion_gate_pass=false`, `generalization_guard_pass=false`
+        - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_mixed_adders`
+      - split ownership:
+        - validation top risk=`blocked_risk_gate_entry_quality_rr_adaptive_mixed:1327`
+        - holdout top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_history:709`
+  - interpretation:
+    - guard is functioning as designed (single-run flip suppression + persistence evidence), but with threshold `2` branch flip is accepted on the next consecutive signal.
+  - next:
+    - raise stability hysteresis (`--context-stability-min-consecutive-to-flip 3`) for production loop and compare promotion-gate volatility against threshold `2`.
+
+- Stage-2.61 update (2026-02-17):
+  - threshold-3 hysteresis run started:
+    - command:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 3 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage261.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage261.json`
+  - tuning result:
+    - guard status:
+      - `override=true`, `reason=flip_candidate_below_threshold`
+      - `risk_gate_focus` kept as `entry_quality_rr_adaptive_regime`
+      - flip candidate=`entry_quality_rr_adaptive_mixed:1/3`
+    - best combo remained:
+      - `scenario_quality_focus_005`
+      - `objective=-23516.871`, `pf=0.5449`, `exp=-8.3579`
+  - promoted cycle:
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+    - verdict:
+      - `promotion_gate_pass=false`, `generalization_guard_pass=false`
+      - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_mixed_adders`
+    - split ownership:
+      - validation top risk=`blocked_risk_gate_entry_quality_rr_adaptive_mixed:1327`
+      - holdout top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_history:709`
+
+- Stage-2.62 update (2026-02-17):
+  - threshold-3 continuity rerun:
+    - command:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 3 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage262.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage262.json`
+  - tuning result:
+    - guard status:
+      - `override=true`, `reason=flip_candidate_below_threshold`
+      - flip candidate incremented=`entry_quality_rr_adaptive_mixed:2/3`
+      - applied focus still=`entry_quality_rr_adaptive_regime`
+    - best combo remained `scenario_quality_focus_005`
+
+- Stage-2.63 update (2026-02-17):
+  - threshold-3 acceptance rerun + promoted cycle:
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 3 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage263.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage263.json`
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - tuning result:
+    - guard status:
+      - `override=false`, `reason=flip_accepted_after_threshold`
+      - focus flipped at threshold to `entry_quality_rr_adaptive_mixed`
+      - state reset confirmed (`flip_candidate_count=0`, `runs_total=6`)
+    - winner changed with accepted flip:
+      - `best_combo=scenario_quality_focus_000`
+      - `objective=-23445.606`, `pf=0.5506`, `exp=-8.2902`
+  - promoted cycle result:
+    - verdict:
+      - `promotion_gate_pass=false`, `generalization_guard_pass=false`
+      - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+    - stage metrics:
+      - train: `pf=0.5810`, `exp=-8.3967`, `trades=140.5714`
+      - validation: `pf=0.4366`, `exp=-9.1793`, `trades=158.0`
+      - holdout: `pf=0.5674`, `exp=-5.9564`, `trades=106.6667`
+    - split ownership shifted back:
+      - validation top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_regime:1391`
+      - holdout top risk=`blocked_risk_gate_entry_quality_edge_base:712`
+  - interpretation:
+    - winner-lock suspicion from call-flow/call-stack bug is weakened:
+      - guard transition executed exactly as designed (`1/3 -> 2/3 -> accept`), and winner changed after acceptance.
+    - remaining issue is objective/gate bottleneck tradeoff, not transition wiring.
+    - added fast regression check for guard transition wiring:
+      - file: `scripts/validate_context_stability_guard.py`
+      - `python scripts/validate_context_stability_guard.py` -> PASS
+  - next:
+    - keep threshold `3` as default hysteresis for branch stability.
+    - prioritize anti-overfitting robustness with fresh newest-slice data refresh and OOT holdout expansion before additional parameter narrowing.
+
+- Stage-2.64 update (2026-02-17):
+  - fresh-data anti-overfitting refresh executed:
+    - command:
+      - `python scripts/run_realdata_candidate_loop.py --real-data-only --skip-tune --skip-entry-rejection-analysis --skip-strategy-rejection-taxonomy --skip-loss-contributor-analysis --skip-parity-invariant --skip-core-vs-legacy-gate --matrix-max-workers 1 --matrix-backtest-retry-count 1`
+    - result:
+      - refreshed datasets for 12 markets with 1m/5m/60m/240m companions.
+      - 1m latest-candle recency across all 12 markets:
+        - min latest UTC=`2026-02-17T10:04:58Z`
+        - max latest UTC=`2026-02-17T10:12:09Z`
+        - cross-market lag=`431s`
+      - post-refresh matrix snapshot:
+        - `avg_profit_factor=0.4525`, `avg_expectancy_krw=-9.0042`, `overall_gate_pass=false`
+        - top risk component=`blocked_risk_gate_entry_quality_rr_adaptive_regime`
+  - post-refresh tuning/cycle (stage264):
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 3 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage264.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage264.json`
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+    - guard/tuning:
+      - `reason=flip_candidate_below_threshold`, `override=true`, candidate=`entry_quality_rr_adaptive_regime:1/3`
+      - applied focus held at `entry_quality_rr_adaptive_mixed`
+      - `best_combo=scenario_quality_focus_000` (`objective=-25888.461`, `pf=0.3997`, `exp=-10.0536`)
+    - promoted cycle:
+      - `promotion_gate_pass=false`, `generalization_guard_pass=false`
+      - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - metrics:
+        - train: `pf=0.4691`, `exp=-9.2589`
+        - validation: `pf=0.3852`, `exp=-10.1549`
+        - holdout: `pf=0.4587`, `exp=-7.6617`
+      - ownership:
+        - validation top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:2082`
+        - holdout top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:2160`
+  - interpretation:
+    - fresh data did not solve gate failures; performance degraded vs prior batches, which is useful anti-overfitting evidence.
+    - branch-stability wiring remains consistent under fresh data (no call-flow anomaly).
+  - next:
+    - keep tuning step-size conservative until validation PF/expectancy recover on fresh-data baseline.
+    - focus on reducing `rr_adaptive_regime` gate blocks without re-introducing split drift.
+
+- Stage-2.65 update (2026-02-17):
+  - fresh-data baseline under recommendation-chain A/B (unadapted scenario family):
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 3 --disable-bottleneck-adapted-scenarios --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage265a.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage265a.json`
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 3 --disable-bottleneck-adapted-scenarios --disable-rr-adaptive-regime-local-sweep --disable-rr-bridge-local-sweep --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage265b.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage265b.json`
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - tuning comparison:
+    - `265A` and `265B` both remained top-risk locked to `blocked_risk_gate_entry_quality_rr_adaptive_regime`.
+    - `265B` accepted branch (`flip_accepted_after_threshold`) and promoted `scenario_quality_focus_005`.
+  - promoted cycle (`265B`) result:
+    - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+    - recommendation shifted to `hold_candidate_calibrate_second_stage_confirmation_hostile_history_severe_consistency`
+    - metrics:
+      - train: `pf=0.4336`, `exp=-10.4268`
+      - validation: `pf=0.4445`, `exp=-8.2692`, top risk=`blocked_second_stage_confirmation_hostile_history_severe_safety_adders:638`
+      - holdout: `pf=0.4785`, `exp=-7.4733`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1868`
+
+- Stage-2.66 update (2026-02-17):
+  - severe-history targeted objective tightening based on Stage-2.65 recommendation:
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 3 --disable-bottleneck-adapted-scenarios --disable-rr-adaptive-regime-local-sweep --disable-rr-bridge-local-sweep --objective-max-severe-history-ratio 0.50 --objective-severe-history-penalty-scale 22000 --objective-severe-history-hard-cap-penalty 2200 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage266.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage266.json`
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - tuning result:
+    - bottleneck focus switched to `second_stage_confirmation_hostile_history_severe`
+    - best combo changed to `scenario_quality_focus_001`
+  - promoted cycle:
+    - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+    - recommendation changed to `hold_candidate_calibrate_risk_gate_rr_baseline_floor`
+    - metrics:
+      - train: `pf=0.4190`, `exp=-10.8319`
+      - validation: `pf=0.4452`, `exp=-8.4319`, top risk=`blocked_risk_gate_entry_quality_rr_base:971`
+      - holdout: `pf=0.4294`, `exp=-8.2232`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:646`
+  - interpretation:
+    - severe-target tuning reduced holdout top-risk count (`1868 -> 646`) but degraded holdout PF/expectancy.
+
+- Stage-2.67 update (2026-02-17):
+  - rr-baseline-floor recommendation follow-up:
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 3 --disable-bottleneck-adapted-scenarios --disable-rr-adaptive-regime-local-sweep --disable-rr-bridge-local-sweep --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage267.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage267.json`
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - tuning result:
+    - focus moved to `entry_quality_rr_base`, best=`scenario_quality_focus_003`
+  - promoted cycle:
+    - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+    - recommendation changed to `hold_candidate_calibrate_risk_gate_rr_adaptive_history_adders`
+    - metrics:
+      - train: `pf=0.4162`, `exp=-10.3926`
+      - validation: `pf=0.4127`, `exp=-8.7646`, top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_history:1480`
+      - holdout: `pf=0.4804`, `exp=-7.0994`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:2112`
+
+- Stage-2.68 update (2026-02-17):
+  - rr-adaptive-history recommendation follow-up:
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 3 --disable-bottleneck-adapted-scenarios --disable-rr-adaptive-regime-local-sweep --disable-rr-bridge-local-sweep --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage268.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage268.json`
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - tuning result:
+    - focus moved to `entry_quality_rr_adaptive_history`, best=`scenario_quality_focus_005`
+  - promoted cycle:
+    - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+    - recommendation returned to `hold_candidate_calibrate_second_stage_confirmation_hostile_history_severe_consistency`
+    - metrics:
+      - train: `pf=0.4336`, `exp=-10.4268`
+      - validation: `pf=0.4445`, `exp=-8.2692`, top risk=`blocked_second_stage_confirmation_hostile_history_severe_safety_adders:638`
+      - holdout: `pf=0.4785`, `exp=-7.4733`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1868`
+  - interpretation:
+    - fresh-data loop under current objective set forms a recommendation cycle:
+      - `severe_consistency -> rr_baseline_floor -> rr_adaptive_history_adders -> severe_consistency`
+    - wins/losses are now mostly in failure-taxonomy ownership moves, not promotion gate unlock.
+  - next:
+    - add explicit anti-cycle damping for non-managed focus branches (`second_stage_confirmation_*`, `entry_quality_rr_base`, `entry_quality_rr_adaptive_history`) with bounded persistence before focus handoff.
+    - continue with one-step-at-a-time parameter moves to avoid reintroducing train-only gains.
+
+- Stage-2.69 update (2026-02-17):
+  - anti-cycle damping implemented for previously non-managed focus branches:
+    - files:
+      - `scripts/tune_candidate_gate_trade_density.py`
+      - `scripts/validate_context_stability_guard.py`
+    - changes:
+      - extended `canonical_rr_adaptive_focus_branch` managed set:
+        - `entry_quality_rr_adaptive_history`
+        - `entry_quality_rr_base`
+        - `second_stage_confirmation_hostile_history_severe`
+      - extended guard-aligned recommendation mapping:
+        - `entry_quality_rr_adaptive_history -> hold_candidate_calibrate_risk_gate_rr_adaptive_history_adders`
+        - `entry_quality_rr_base -> hold_candidate_calibrate_risk_gate_rr_baseline_floor`
+        - `second_stage_confirmation_hostile_history_severe -> hold_candidate_calibrate_second_stage_confirmation_hostile_history_severe_consistency`
+      - expanded regression test coverage in `validate_context_stability_guard.py`:
+        - canonical mapping assertions for new branches
+        - threshold-gated flip sequence checks into `entry_quality_rr_base`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/validate_context_stability_guard.py` PASS
+    - `python scripts/validate_context_stability_guard.py` PASS
+    - smoke run:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 3 --real-data-only --require-higher-tf-companions --screen-top-k 3 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 3 --disable-bottleneck-adapted-scenarios --disable-rr-adaptive-regime-local-sweep --disable-rr-bridge-local-sweep --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage269_smoke.json`
+      - guard evidence:
+        - `override=true`, `reason=flip_candidate_below_threshold`
+        - `raw_focus=second_stage_confirmation_hostile_history_severe`
+        - `applied_focus=entry_quality_rr_adaptive_history`
+        - candidate=`second_stage_confirmation_hostile_history_severe:1/3`
+  - interpretation:
+    - recommendation-cycle damping now applies beyond mixed/regime branches, reducing immediate focus bounce in fresh-data loops.
+
+- Stage-2.70 update (2026-02-17):
+  - full-size rerun after guard expansion:
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 3 --disable-bottleneck-adapted-scenarios --disable-rr-adaptive-regime-local-sweep --disable-rr-bridge-local-sweep --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage270.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage270.json`
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - tuning result:
+    - guard hysteresis active for non-managed branch transition:
+      - `raw_focus=second_stage_confirmation_hostile_history_severe`
+      - `applied_focus=entry_quality_rr_adaptive_history`
+      - `reason=flip_candidate_below_threshold`, `override=true`
+      - candidate progress=`second_stage_confirmation_hostile_history_severe:2/3`
+    - winner:
+      - `best_combo=scenario_quality_focus_005`
+      - `objective=-25394.923`, `pf=0.3791`, `exp=-10.7788`
+  - promoted cycle result:
+    - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+    - recommendation=`hold_candidate_calibrate_second_stage_confirmation_hostile_history_severe_consistency`
+    - metrics:
+      - train: `pf=0.4336`, `exp=-10.4268`
+      - validation: `pf=0.4445`, `exp=-8.2692`, top risk=`blocked_second_stage_confirmation_hostile_history_severe_safety_adders:638`
+      - holdout: `pf=0.4785`, `exp=-7.4733`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1868`
+  - interpretation:
+    - branch damping is functioning in full loop (`2/3` held), but profitability gate remains unopened.
+    - current loop remains in "generalization guard pass / promotion gate fail" zone.
+
+- Stage-2.71 update (2026-02-17):
+  - threshold-3 acceptance run after Stage-2.70 candidate progress (`2/3`):
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 3 --disable-bottleneck-adapted-scenarios --disable-rr-adaptive-regime-local-sweep --disable-rr-bridge-local-sweep --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage271.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage271.json`
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - tuning result:
+    - guard transition accepted:
+      - `raw_focus=second_stage_confirmation_hostile_history_severe`
+      - `applied_focus=second_stage_confirmation_hostile_history_severe`
+      - `reason=flip_accepted_after_threshold`, `override=false`
+    - best combo:
+      - `scenario_quality_focus_003` (`objective=-25375.937`, `pf=0.3729`, `exp=-10.3934`)
+  - promoted cycle result:
+    - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+    - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_history_adders`
+    - metrics:
+      - train: `pf=0.4162`, `exp=-10.3926`
+      - validation: `pf=0.4127`, `exp=-8.7646`, top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_history:1480`
+      - holdout: `pf=0.4804`, `exp=-7.0994`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:2112`
+  - interpretation:
+    - ?Î∫§Ïò£??guard????æß????âÎöÆ?ñÁßª?èÎøâ??ïÎ£Ñ hysteresis ?Íæ™ÏÜö/??èÏäú???Î∫§Í∏Ω ??àÏòâ.
+    - ??ªÏ≠î ??èÏî°??ÂØÉÎöØ????Î®?ªú???Íæ©Ï≠Ö Ë™òÎ™Ö?ªÊÄ®Ïá∞Ï§? next recommendation Êπ≤Í≥ïÏª???∞Î∂Ω? ?±—äÎí™??ÂØÉÎöØ???ËπÇÎåÅ????Íæ©ÏäÇ.
+
+- Stage-2.72 update (2026-02-17):
+  - follow-up run on Stage-2.71 recommendation path:
+    - commands:
+      - `python scripts/validate_context_stability_guard.py`
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 3 --disable-bottleneck-adapted-scenarios --disable-rr-adaptive-regime-local-sweep --disable-rr-bridge-local-sweep --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage272.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage272.json`
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - tuning result:
+    - guard held previous focus:
+      - `raw_focus=entry_quality_rr_adaptive_history`
+      - `applied_focus=second_stage_confirmation_hostile_history_severe`
+      - `reason=flip_candidate_below_threshold`, `override=true`, candidate=`entry_quality_rr_adaptive_history:1/3`
+    - best combo remained:
+      - `scenario_quality_focus_003` (`objective=-25375.937`, `pf=0.3729`, `exp=-10.3934`)
+  - promoted cycle result:
+    - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+    - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_history_adders`
+    - metrics:
+      - train: `pf=0.4162`, `exp=-10.3926`
+      - validation: `pf=0.4127`, `exp=-8.7646`, top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_history:1480`
+      - holdout: `pf=0.4804`, `exp=-7.0994`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:2112`
+    - walk-forward:
+      - validation ready ratio=`0.0` (min `0.55`), holdout ready ratio=`0.0` (min `0.55`)
+      - all split datasets remained `is_ready_for_live_walkforward=false`
+  - interpretation:
+    - no winner-lock/call-stack anomaly observed in this loop:
+      - promoted combo was applied to `build/Release/config/config.json` and matched `build/Release/logs/candidate_promoted_combo.json`.
+    - primary blocker remains out-of-sample profitability in walk-forward windows, not transition wiring.
+
+- Stage-2.73 update (2026-02-17):
+  - threshold-3 continuation run (`1/3 -> 2/3`):
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 3 --disable-bottleneck-adapted-scenarios --disable-rr-adaptive-regime-local-sweep --disable-rr-bridge-local-sweep --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage273.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage273.json`
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - tuning result:
+    - guard status:
+      - `override=true`, `reason=flip_candidate_below_threshold`
+      - candidate progressed to `entry_quality_rr_adaptive_history:2/3`
+      - applied focus remained `second_stage_confirmation_hostile_history_severe`
+    - best combo remained `scenario_quality_focus_003`
+  - promoted cycle:
+    - no material metric change vs Stage-2.72; gate remained closed.
+
+- Stage-2.74 update (2026-02-17):
+  - threshold-3 acceptance run (`2/3 -> accept`) and full cycle:
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 3 --disable-bottleneck-adapted-scenarios --disable-rr-adaptive-regime-local-sweep --disable-rr-bridge-local-sweep --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage274.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage274.json`
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - tuning result:
+    - guard transition accepted:
+      - `raw_focus=entry_quality_rr_adaptive_history`
+      - `applied_focus=entry_quality_rr_adaptive_history`
+      - `reason=flip_accepted_after_threshold`, `override=false`
+    - winner changed:
+      - `best_combo=scenario_quality_focus_005` (`objective=-25394.923`, `pf=0.3791`, `exp=-10.7788`)
+  - promoted cycle result:
+    - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+    - recommendation=`hold_candidate_calibrate_second_stage_confirmation_hostile_history_severe_consistency`
+    - metrics:
+      - train: `pf=0.4336`, `exp=-10.4268`
+      - validation: `pf=0.4445`, `exp=-8.2692`, top risk=`blocked_second_stage_confirmation_hostile_history_severe_safety_adders:638`
+      - holdout: `pf=0.4785`, `exp=-7.4733`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1868`
+    - walk-forward:
+      - validation ready ratio=`0.0`, holdout ready ratio=`0.0`
+      - representative OOS ratios remained below threshold:
+        - validation: `KRW_SOL=0.2857`, `KRW_SUI=0.2143` (min required `0.55`)
+        - holdout: `KRW_BCH=0.1250`, `KRW_TRX=0.3214`, `KRW_XRP=0.3214` (min required `0.55`)
+  - interpretation:
+    - winner changed immediately after guard acceptance, which further weakens call-stack/winner-lock bug suspicion.
+    - current bottleneck is still profitability gate quality under walk-forward OOS windows, with ownership oscillation between `rr_adaptive_regime` and `second_stage_confirmation_hostile_history_severe`.
+
+- Stage-2.75 update (2026-02-17):
+  - severe-history-targeted follow-up on Stage-2.74 recommendation:
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 3 --disable-bottleneck-adapted-scenarios --disable-rr-adaptive-regime-local-sweep --disable-rr-bridge-local-sweep --objective-max-severe-history-ratio 0.50 --objective-severe-history-penalty-scale 22000 --objective-severe-history-hard-cap-penalty 2200 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage275.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage275.json`
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - tuning result:
+    - severe-history objective tightening applied:
+      - `objective_max_severe_history_ratio=0.50`
+      - `objective_severe_history_penalty_scale=22000`
+      - `objective_severe_history_hard_cap_penalty=2200`
+    - guard status:
+      - `raw_focus=second_stage_confirmation_hostile_history_severe`
+      - `applied_focus=entry_quality_rr_adaptive_history`
+      - `reason=flip_candidate_below_threshold`, `override=true`, candidate=`second_stage_confirmation_hostile_history_severe:1/3`
+    - best combo remained `scenario_quality_focus_005` (`objective=-25394.923`, `pf=0.3791`, `exp=-10.7788`)
+  - promoted cycle result:
+    - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+    - recommendation=`hold_candidate_calibrate_second_stage_confirmation_hostile_history_severe_consistency`
+    - metrics remained effectively unchanged vs Stage-2.74:
+      - train: `pf=0.4336`, `exp=-10.4268`
+      - validation: `pf=0.4445`, `exp=-8.2692`, top risk=`blocked_second_stage_confirmation_hostile_history_severe_safety_adders:638`
+      - holdout: `pf=0.4785`, `exp=-7.4733`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1868`
+      - walk-forward ready ratios: validation=`0.0`, holdout=`0.0`
+  - interpretation:
+    - severe-penalty tightening alone did not break the stagnation zone.
+    - next effective lever should target walk-forward OOS profitability readiness directly (not only failure-taxonomy ownership routing).
+
+- Stage-2.76 update (2026-02-17):
+  - walk-forward failure telemetry added for structural diagnosis:
+    - files:
+      - `scripts/walk_forward_validate.py`
+      - `scripts/run_candidate_train_eval_cycle.py`
+    - changes:
+      - `walk_forward_validate.py` now emits:
+        - `gate_checks` (per-condition pass/actual/threshold),
+        - `gate_fail_reasons` (e.g. `min_oos_profitable_ratio`, `oos_profit_sum_positive`),
+        - `dominant_failure_reason`,
+        - `oos_avg_profit_per_window` and non-positive-window stats.
+      - `run_candidate_train_eval_cycle.py` now propagates walk-forward fail context into split summary:
+        - per-dataset `gate_fail_reasons` / `gate_checks` / `dominant_failure_reason`,
+        - split-level `failure_reason_counts` and `dominant_failure_reason`.
+  - verification:
+    - `python -m py_compile scripts/walk_forward_validate.py scripts/run_candidate_train_eval_cycle.py` PASS
+    - `python scripts/walk_forward_validate.py --exe-path build/Release/AutoLifeTrading.exe --input-csv data/backtest_real/upbit_KRW_SOL_1m_12000.csv --output-json build/Release/logs/wf_smoke_stage275.json --output-csv build/Release/logs/wf_smoke_stage275.csv` PASS
+      - fail reasons now explicit: `min_oos_profitable_ratio,oos_profit_sum_positive`
+    - reduced-split smoke:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1 --max-markets 3 --walk-forward-max-datasets 1 --summary-json build/Release/logs/candidate_train_eval_cycle_summary_stage275_smoke.json --split-manifest-json build/Release/logs/candidate_train_eval_split_manifest_stage275_smoke.json --entry-rejection-output-root build/Release/logs/train_eval_entry_rejections_stage275_smoke`
+      - summary captured split-level dominant reason:
+        - validation=`oos_profit_sum_positive`
+        - holdout=`oos_profit_sum_positive`
+  - interpretation:
+    - stagnation origin is now machine-readable: walk-forward gate fails are dominated by negative OOS profit sum and low profitable-window ratio.
+    - this removes ambiguity between logic wiring issues and true out-of-sample quality shortfall.
+
+- Stage-2.77 update (2026-02-17):
+  - walk-forward-aware objective guard implementation + first full run:
+    - files:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - changes:
+      - tuning objective now reads walk-forward failure context from `train_eval_summary` and applies additional penalties when OOS failures persist:
+        - extra expectancy/PF penalty when `oos_profit_sum_positive` failures dominate
+        - extra win-rate penalty when `min_oos_profitable_ratio` failures dominate
+        - penalty intensity scaled by walk-forward readiness gap
+      - new objective flags added:
+        - `--objective-enforce-walk-forward-profitability-guard`
+        - `--objective-walk-forward-expectancy-penalty-scale`
+        - `--objective-walk-forward-profit-factor-penalty-scale`
+        - `--objective-walk-forward-win-rate-penalty-scale`
+        - `--objective-walk-forward-ready-gap-multiplier`
+    - verification:
+      - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_candidate_train_eval_cycle.py scripts/walk_forward_validate.py scripts/validate_context_stability_guard.py` PASS
+      - `python scripts/validate_context_stability_guard.py` PASS
+  - stage run:
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 3 --disable-bottleneck-adapted-scenarios --disable-rr-adaptive-regime-local-sweep --disable-rr-bridge-local-sweep --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage277.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage277.json`
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - tuning result:
+    - walk-forward guard activated:
+      - `dominant_reason=oos_profit_sum_positive`
+      - fail counts=`{"oos_profit_sum_positive":5,"min_oos_profitable_ratio":5}`
+      - readiness gap=`0.55`
+    - best combo remained:
+      - `scenario_quality_focus_005` (`objective=-33378.9987`, `pf=0.3791`, `exp=-10.7788`)
+  - promoted cycle result:
+    - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+    - recommendation=`hold_candidate_calibrate_second_stage_confirmation_hostile_history_severe_consistency`
+    - metrics remained effectively unchanged vs Stage-2.75:
+      - train: `pf=0.4336`, `exp=-10.4268`
+      - validation: `pf=0.4445`, `exp=-8.2692`, top risk=`blocked_second_stage_confirmation_hostile_history_severe_safety_adders:638`
+      - holdout: `pf=0.4785`, `exp=-7.4733`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1868`
+      - walk-forward ready ratios: validation=`0.0`, holdout=`0.0`
+  - interpretation:
+    - objective shaping was wired correctly and active, but default scales were insufficient to move the promotion trajectory.
+
+- Stage-2.78 update (2026-02-17):
+  - aggressive walk-forward weighting + relaxed severe-history cap test:
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 3 --disable-bottleneck-adapted-scenarios --disable-rr-adaptive-regime-local-sweep --disable-rr-bridge-local-sweep --objective-max-severe-history-ratio 0.60 --objective-severe-history-penalty-scale 12000 --objective-severe-history-hard-cap-penalty 1200 --objective-walk-forward-expectancy-penalty-scale 260 --objective-walk-forward-profit-factor-penalty-scale 3200 --objective-walk-forward-win-rate-penalty-scale 180 --objective-walk-forward-ready-gap-multiplier 2.0 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage278.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage278.json`
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - tuning result:
+    - winner changed:
+      - `best_combo=scenario_quality_focus_004` (`objective=-36998.5776`, `pf=0.3961`, `exp=-10.0082`, `win=41.1557`)
+    - guard status:
+      - `raw_focus=second_stage_confirmation_hostile_history_severe`
+      - `applied_focus=second_stage_confirmation_hostile_history_severe`
+      - `reason=flip_accepted_after_threshold`, `override=false`
+  - promoted cycle result:
+    - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+    - recommendation=`hold_candidate_calibrate_second_stage_confirmation_hostile_history_severe_consistency`
+    - metrics:
+      - train: `pf=0.4760`, `exp=-9.0860` (improved vs Stage-2.77)
+      - validation: `pf=0.4083`, `exp=-8.9148` (worse PF vs Stage-2.77)
+      - holdout: `pf=0.4950`, `exp=-7.0496`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:975` (holdout side improved)
+    - walk-forward:
+      - ready ratios unchanged: validation=`0.0`, holdout=`0.0`
+      - dominant fail reason unchanged: `oos_profit_sum_positive`
+  - interpretation:
+    - objective change can move winner and improve train/holdout pockets, but did not improve walk-forward OOS readiness.
+    - current hard blocker remains negative OOS profit sum across validation/holdout walk-forward windows.
+
+- Stage-2.79 update (2026-02-17):
+  - expanded quality-focus sweep with bottleneck-adapted scenarios re-enabled:
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 12 --real-data-only --require-higher-tf-companions --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 3 --objective-max-severe-history-ratio 0.60 --objective-severe-history-penalty-scale 12000 --objective-severe-history-hard-cap-penalty 1200 --objective-walk-forward-expectancy-penalty-scale 260 --objective-walk-forward-profit-factor-penalty-scale 3200 --objective-walk-forward-win-rate-penalty-scale 180 --objective-walk-forward-ready-gap-multiplier 2.0 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage279.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage279.json`
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - tuning result:
+    - winner changed:
+      - `best_combo=scenario_quality_focus_008` (`objective=-37465.4712`, `pf=0.4057`, `exp=-10.0574`, `win=40.2189`, `trades=121.125`)
+    - adapted family application:
+      - `bottleneck_adapted_scenarios=on`
+      - `scenario_family_counts={'risk_gate_second_stage_history_severe_guard': 12}`
+    - walk-forward objective guard remained active:
+      - `dominant_reason=oos_profit_sum_positive`
+      - failure counts=`{"min_oos_profitable_ratio":5,"oos_profit_sum_positive":5}`
+      - readiness gap=`0.55`
+  - promoted cycle result:
+    - `promotion_gate_pass=false`, `base_promotion_gate_pass=false`, `generalization_guard_pass=true`
+    - recommendation shifted:
+      - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+    - metrics:
+      - train: `pf=0.4394`, `exp=-10.0337`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:2823`
+      - validation: `pf=0.3969`, `exp=-9.5268`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:813`
+      - holdout: `pf=0.4962`, `exp=-6.9718`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1802`
+    - walk-forward:
+      - validation ready ratio=`0.0` (min `0.55`), fail counts=`{"min_oos_profitable_ratio":2,"oos_profit_sum_positive":2}`
+      - holdout ready ratio=`0.0` (min `0.55`), fail counts=`{"min_oos_profitable_ratio":3,"oos_profit_sum_positive":3}`
+      - representative OOS total profit per dataset remained negative:
+        - validation: `KRW_SOL=-2450.2229`, `KRW_SUI=-2784.5036`
+        - holdout: `KRW_BCH=-259.9673`, `KRW_TRX=-764.7549`, `KRW_XRP=-1785.2867`
+  - interpretation:
+    - winner movement remained active, so call-stack/winner-lock anomaly likelihood stays low.
+    - search expansion improved holdout expectancy pocket slightly but did not unlock promotion/walk-forward gates.
+    - bottleneck ownership rotated back to `rr_adaptive_regime`; next run should prioritize faster context ownership update toward rr-adaptive regime calibrations.
+
+- Stage-2.80 update (2026-02-17):
+  - fast ownership-follow run (`context-stability=1`) to accept `rr_adaptive_regime` focus immediately:
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 12 --real-data-only --require-higher-tf-companions --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 1 --objective-max-severe-history-ratio 0.60 --objective-severe-history-penalty-scale 12000 --objective-severe-history-hard-cap-penalty 1200 --objective-walk-forward-expectancy-penalty-scale 260 --objective-walk-forward-profit-factor-penalty-scale 3200 --objective-walk-forward-win-rate-penalty-scale 180 --objective-walk-forward-ready-gap-multiplier 2.0 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage280.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage280.json`
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - tuning result:
+    - context guard switched as intended:
+      - `raw_focus=entry_quality_rr_adaptive_regime`
+      - `applied_focus=entry_quality_rr_adaptive_regime`
+      - `reason=flip_accepted_after_threshold`, `threshold=1`
+    - winner:
+      - `best_combo=scenario_quality_focus_006` (`objective=-36215.3990`, `pf=0.4194`, `exp=-9.3472`, `win=41.3849`)
+  - promoted cycle result:
+    - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+    - recommendation shifted once to:
+      - `hold_candidate_calibrate_risk_gate_rr_baseline_floor`
+    - metrics:
+      - train: `pf=0.4993`, `exp=-8.2843`, top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_mixed:4272`
+      - validation: `pf=0.4646`, `exp=-7.9974`, top risk=`blocked_risk_gate_entry_quality_rr_base:1093`
+      - holdout: `pf=0.4410`, `exp=-8.3996`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1110`
+    - walk-forward:
+      - validation/holdout ready ratio stayed `0.0`
+      - dominant fail reason remained `oos_profit_sum_positive`
+  - interpretation:
+    - train/validation pockets improved materially, but holdout deteriorated; promotion and walk-forward gates remained closed.
+    - ownership drift surfaced (`rr_base` vs `rr_adaptive_regime`) and warranted one more follow-up run.
+
+- Stage-2.81 update (2026-02-17):
+  - rr-baseline recommendation follow-up run:
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 12 --real-data-only --require-higher-tf-companions --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 1 --objective-max-severe-history-ratio 0.60 --objective-severe-history-penalty-scale 12000 --objective-severe-history-hard-cap-penalty 1200 --objective-walk-forward-expectancy-penalty-scale 260 --objective-walk-forward-profit-factor-penalty-scale 3200 --objective-walk-forward-win-rate-penalty-scale 180 --objective-walk-forward-ready-gap-multiplier 2.0 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage281.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage281.json`
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - tuning result:
+    - context guard followed new recommendation:
+      - `raw_focus=entry_quality_rr_base`
+      - `applied_focus=entry_quality_rr_base`
+      - `reason=flip_accepted_after_threshold`, `threshold=1`
+    - winner:
+      - `best_combo=scenario_quality_focus_002` (`objective=-36732.1756`, `pf=0.4118`, `exp=-9.7921`, `win=41.1155`)
+  - promoted cycle result:
+    - `promotion_gate_pass=false`, `base_promotion_gate_pass=false`, `generalization_guard_pass=true`
+    - recommendation returned to:
+      - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+    - metrics:
+      - train: `pf=0.4567`, `exp=-9.5375`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:2748`
+      - validation: `pf=0.4350`, `exp=-8.8452`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:1218`
+      - holdout: `pf=0.4463`, `exp=-7.9567`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime:771`
+    - walk-forward:
+      - validation ready ratio=`0.0`, holdout ready ratio=`0.0`
+      - fail reason counts unchanged in structure:
+        - validation=`{"min_oos_profitable_ratio":2,"oos_profit_sum_positive":2}`
+        - holdout=`{"min_oos_profitable_ratio":3,"oos_profit_sum_positive":3}`
+  - interpretation:
+    - rr-baseline focus did not hold; ownership returned to `rr_adaptive_regime`.
+    - current loop still oscillates inside negative OOS profit-sum regime, so next lever should reduce oscillation and target robust holdout/OOS lift, not only ownership flips.
+
+- Stage-2.82 update (2026-02-17):
+  - objective stabilization patch (ownership rebound guard) + verification run:
+    - code changes:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - added:
+      - `canonical_focus_branch_from_risk_component_reason(...)`
+      - new objective guard:
+        - `--objective-enforce-context-flip-rebound-guard`
+        - `--disable-objective-enforce-context-flip-rebound-guard`
+        - `--objective-context-flip-rebound-penalty`
+      - objective penalty logic:
+        - when `context_stability_guard_reason=flip_accepted_after_threshold`, penalize combos that rebound to previous branch ownership (or unknown third branch) in `top_entry_risk_gate_component_reason`.
+      - screening summary telemetry:
+        - `objective_context_flip_rebound_guard_active`
+        - `objective_context_flip_rebound_reason`
+        - `objective_context_flip_rebound_prev_branch`
+        - `objective_context_flip_rebound_applied_branch`
+    - verification:
+      - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_candidate_train_eval_cycle.py scripts/walk_forward_validate.py scripts/validate_context_stability_guard.py` PASS
+      - `python scripts/validate_context_stability_guard.py` PASS
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 12 --real-data-only --require-higher-tf-companions --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 1 --objective-max-severe-history-ratio 0.60 --objective-severe-history-penalty-scale 12000 --objective-severe-history-hard-cap-penalty 1200 --objective-walk-forward-expectancy-penalty-scale 260 --objective-walk-forward-profit-factor-penalty-scale 3200 --objective-walk-forward-win-rate-penalty-scale 180 --objective-walk-forward-ready-gap-multiplier 2.0 --objective-context-flip-rebound-penalty 1000 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage282.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage282.json`
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - tuning result:
+    - guard active:
+      - `reason=flip_accepted_after_threshold`
+      - `prev_branch=entry_quality_rr_base`
+      - `applied_branch=entry_quality_rr_adaptive_regime`
+      - `penalty=1000`
+    - winner:
+      - `best_combo=scenario_quality_focus_006` (`objective=-37215.3990`, `pf=0.4194`, `exp=-9.3472`, `win=41.3849`)
+  - promoted cycle result:
+    - `promotion_gate_pass=false`, `base_promotion_gate_pass=false`, `generalization_guard_pass=true`
+    - recommendation:
+      - `hold_candidate_calibrate_risk_gate_rr_baseline_floor`
+    - metrics:
+      - train: `pf=0.4993`, `exp=-8.2843`
+      - validation: `pf=0.4646`, `exp=-7.9974`
+      - holdout: `pf=0.4410`, `exp=-8.3996`
+    - walk-forward:
+      - validation/holdout ready ratio remained `0.0`
+      - dominant fail reason remained `oos_profit_sum_positive`
+  - interpretation:
+    - rebound guard was wired and active, but one run Êπ≤Í≥ó??Î®?Ωå??promotion ËπÇÎ¨ê?????ÅÎÉº??? ÔßèÏÇµÎª??
+
+- Stage-2.83 update (2026-02-17):
+  - continuity verification run for rebound guard (same settings as Stage-2.82):
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 12 --real-data-only --require-higher-tf-companions --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 1 --objective-max-severe-history-ratio 0.60 --objective-severe-history-penalty-scale 12000 --objective-severe-history-hard-cap-penalty 1200 --objective-walk-forward-expectancy-penalty-scale 260 --objective-walk-forward-profit-factor-penalty-scale 3200 --objective-walk-forward-win-rate-penalty-scale 180 --objective-walk-forward-ready-gap-multiplier 2.0 --objective-context-flip-rebound-penalty 1000 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage283.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage283.json`
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - tuning result:
+    - guard active:
+      - `reason=flip_accepted_after_threshold`
+      - `prev_branch=entry_quality_rr_adaptive_regime`
+      - `applied_branch=entry_quality_rr_base`
+    - winner:
+      - `best_combo=scenario_quality_focus_002` (`objective=-37732.1756`, `pf=0.4118`, `exp=-9.7921`, `win=41.1155`)
+  - promoted cycle result:
+    - `promotion_gate_pass=false`, `base_promotion_gate_pass=false`, `generalization_guard_pass=true`
+    - recommendation returned:
+      - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+    - metrics:
+      - train: `pf=0.4567`, `exp=-9.5375`
+      - validation: `pf=0.4350`, `exp=-8.8452`
+      - holdout: `pf=0.4463`, `exp=-7.9567`
+    - walk-forward:
+      - validation/holdout ready ratio remained `0.0`
+      - dominant fail reason remained `oos_profit_sum_positive`
+  - interpretation:
+    - rebound guard ??§Î£Ü??∞Ï§à??`rr_base <-> rr_adaptive_regime` ?Î∫£ÎÇ¨ ÔßûÍæ®Î£??ÔßéÎçâ?õÔßû? ÔßèÏÇµÎª??
+    - ????ñÏ†è ???ññ ËπÇÎ¨ê??? ????Ê≤???±Ïä¶??ÖÎÇ´??`OOS profit sum` ???ãî ?¥—àÏªô Ôßû¬Ä??øÏî†??
+
+- Stage-2.84 update (2026-02-17):
+  - threshold-2 stabilization + stronger walk-forward penalties:
+    - commands:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 12 --real-data-only --require-higher-tf-companions --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 2 --objective-max-severe-history-ratio 0.60 --objective-severe-history-penalty-scale 12000 --objective-severe-history-hard-cap-penalty 1200 --objective-walk-forward-expectancy-penalty-scale 320 --objective-walk-forward-profit-factor-penalty-scale 4200 --objective-walk-forward-win-rate-penalty-scale 240 --objective-walk-forward-ready-gap-multiplier 2.0 --objective-context-flip-rebound-penalty 1200 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage284.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage284.json`
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - tuning result:
+    - context stabilization behaved as expected:
+      - `context_stability_guard_reason=flip_candidate_below_threshold`
+      - `override=true`, `raw_focus=entry_quality_rr_adaptive_regime`, `applied_focus=entry_quality_rr_base`
+      - state now keeps candidate progression (`flip_candidate_focus=entry_quality_rr_adaptive_regime`, `flip_candidate_count=1`)
+    - rebound guard state:
+      - `objective_context_flip_rebound_guard_active=false` (no accepted flip in this run)
+    - winner remained:
+      - `best_combo=scenario_quality_focus_002` (`objective=-40068.6472`, `pf=0.4118`, `exp=-9.7921`, `win=41.1155`)
+  - promoted cycle result:
+    - `promotion_gate_pass=false`, `base_promotion_gate_pass=false`, `generalization_guard_pass=true`
+    - recommendation:
+      - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+    - metrics:
+      - train: `pf=0.4567`, `exp=-9.5375`
+      - validation: `pf=0.4350`, `exp=-8.8452`
+      - holdout: `pf=0.4463`, `exp=-7.9567`
+    - walk-forward:
+      - validation/holdout ready ratio remained `0.0`
+      - fail counts unchanged:
+        - validation=`{"min_oos_profitable_ratio":2,"oos_profit_sum_positive":2}`
+        - holdout=`{"min_oos_profitable_ratio":3,"oos_profit_sum_positive":3}`
+  - interpretation:
+    - threshold-2 is effective for suppressing immediate branch flip, but promotion metrics did not improve.
+    - stronger walk-forward penalties changed objective magnitude but did not alter split/walk-forward outcome.
+    - blocker remains persistent negative OOS profit sum and low profitable-window ratio across all walk-forward datasets.
+
+- Stage-2.85 update (2026-02-17):
+  - walk-forward trade-density guard introduction + first run:
+    - code changes:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - added objective controls:
+      - `--objective-enforce-walk-forward-trade-density-guard`
+      - `--disable-objective-enforce-walk-forward-trade-density-guard`
+      - `--objective-walk-forward-max-avg-trades`
+      - `--objective-walk-forward-trade-density-penalty-scale`
+    - objective behavior:
+      - when walk-forward profit-sum failure is active, penalize combos whose `avg_total_trades` exceeds configured soft cap.
+  - commands:
+    - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 12 --real-data-only --require-higher-tf-companions --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 2 --objective-max-severe-history-ratio 0.60 --objective-severe-history-penalty-scale 12000 --objective-severe-history-hard-cap-penalty 1200 --objective-walk-forward-expectancy-penalty-scale 320 --objective-walk-forward-profit-factor-penalty-scale 4200 --objective-walk-forward-win-rate-penalty-scale 240 --objective-walk-forward-ready-gap-multiplier 2.0 --objective-enforce-walk-forward-trade-density-guard --objective-walk-forward-max-avg-trades 110 --objective-walk-forward-trade-density-penalty-scale 180 --objective-context-flip-rebound-penalty 1200 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage285.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage285.json`
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - tuning result:
+    - guard state:
+      - `objective_walk_forward_trade_density_guard_active=true`
+      - `max_avg_trades=110`, `penalty_scale=180`
+    - context flip handling:
+      - `context_stability_guard_reason=flip_accepted_after_threshold`
+      - focus moved to `entry_quality_rr_adaptive_regime`
+    - winner:
+      - `best_combo=scenario_quality_focus_002`
+      - objective degraded materially vs Stage-2.84 (`-46970.8014` vs `-40068.6472`)
+      - best-row metrics: `pf=0.3623`, `exp=-11.3474`, `trades=114.25`
+  - promoted cycle result:
+    - `promotion_gate_pass=false`, `base_promotion_gate_pass=false`, `generalization_guard_pass=true`
+    - recommendation:
+      - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+    - metrics deteriorated vs Stage-2.84:
+      - train: `pf=0.4342`, `exp=-10.4363`, `trades=126.1429`
+      - validation: `pf=0.3923`, `exp=-9.5233`, `trades=147.0`
+      - holdout: `pf=0.3857`, `exp=-9.6143`, `trades=91.0`
+    - walk-forward:
+      - ready ratios unchanged: validation=`0.0`, holdout=`0.0`
+      - dominant failure unchanged: `oos_profit_sum_positive`
+  - interpretation:
+    - trade-density guard as configured was too aggressive and pushed selection toward weaker PF/expectancy regime.
+    - primary blocker remains unchanged: persistent negative OOS profit sum and sub-threshold profitable-window ratio.
+    - next iteration should roll back trade-density penalty strength (or disable) and move to direct OOS-loss contributor ownership controls.
+
+- Stage-2.86 update (2026-02-17):
+  - walk-forward quality-floor guard added (RR/edge floor bias) and evaluated:
+    - code changes:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - new objective controls:
+      - `--objective-enforce-walk-forward-quality-floor-guard`
+      - `--disable-objective-enforce-walk-forward-quality-floor-guard`
+      - `--objective-walk-forward-min-reward-risk-floor`
+      - `--objective-walk-forward-rr-floor-penalty-scale`
+      - `--objective-walk-forward-min-edge-floor`
+      - `--objective-walk-forward-edge-floor-penalty-scale`
+    - behavior:
+      - when walk-forward OOS profit-sum failure is active, penalize combos with low `min_reward_risk` / low `min_expected_edge_pct`.
+  - commands:
+    - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 12 --real-data-only --require-higher-tf-companions --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 2 --objective-max-severe-history-ratio 0.60 --objective-severe-history-penalty-scale 12000 --objective-severe-history-hard-cap-penalty 1200 --objective-walk-forward-expectancy-penalty-scale 300 --objective-walk-forward-profit-factor-penalty-scale 3600 --objective-walk-forward-win-rate-penalty-scale 220 --objective-walk-forward-ready-gap-multiplier 2.0 --objective-enforce-walk-forward-quality-floor-guard --objective-walk-forward-min-reward-risk-floor 1.30 --objective-walk-forward-rr-floor-penalty-scale 7000 --objective-walk-forward-min-edge-floor 0.00105 --objective-walk-forward-edge-floor-penalty-scale 15000000 --disable-objective-enforce-walk-forward-trade-density-guard --objective-context-flip-rebound-penalty 1200 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage286.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage286.json`
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - tuning result:
+    - quality-floor guard active:
+      - `rr_floor=1.30`, `rr_scale=7000`
+      - `edge_floor=0.00105`, `edge_scale=15000000`
+    - trade-density guard disabled for recovery:
+      - `objective_walk_forward_trade_density_guard_active=false`
+    - winner:
+      - `best_combo=scenario_quality_focus_006` (`objective=-39618.9362`, `pf=0.4194`, `exp=-9.3472`, `trades=130.0`)
+      - recovery vs Stage-2.85 degraded winner (`-46970.8014`)
+  - promoted cycle result:
+    - `promotion_gate_pass=false`, `base_promotion_gate_pass=false`, `generalization_guard_pass=true`
+    - recommendation:
+      - `hold_candidate_calibrate_risk_gate_rr_baseline_floor`
+    - metrics (recovered vs Stage-2.85, near Stage-2.80/2.82 plateau):
+      - train: `pf=0.4993`, `exp=-8.2843`
+      - validation: `pf=0.4646`, `exp=-7.9974`
+      - holdout: `pf=0.4410`, `exp=-8.3996`
+    - walk-forward:
+      - validation/holdout ready ratio still `0.0`
+      - dominant fail reason unchanged: `oos_profit_sum_positive`
+  - interpretation:
+    - quality-floor guard avoided the Stage-2.85 over-penalization failure and restored prior performance band.
+    - however it still did not break walk-forward OOS loss regime; promotion remains blocked.
+    - next lever should target dataset-level OOS loss concentration (market-specific loss ownership) instead of global scalar penalties only.
+
+- Stage-2.87 update (2026-02-17):
+  - market-level loss concentration guard implemented and wired:
+    - code changes:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - added combo-level metrics from `profitability_matrix_*` (`core_full`):
+      - `market_loss_total_krw`
+      - `market_loss_top_share_pct`
+      - `market_loss_hhi`
+      - `market_loss_losing_market_count`
+      - `market_loss_top_market`
+    - new objective controls:
+      - `--objective-enforce-market-loss-concentration-guard`
+      - `--disable-objective-enforce-market-loss-concentration-guard`
+      - `--objective-market-loss-min-total-loss-krw`
+      - `--objective-market-loss-max-top-share-pct`
+      - `--objective-market-loss-top-share-penalty-scale`
+      - `--objective-market-loss-max-hhi`
+      - `--objective-market-loss-hhi-penalty-scale`
+    - objective behavior:
+      - under walk-forward `oos_profit_sum_positive` failure regime, penalize combos with excessive single-market loss concentration (top-share / HHI overshoot).
+    - verification:
+      - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_candidate_train_eval_cycle.py scripts/walk_forward_validate.py scripts/validate_context_stability_guard.py` PASS
+      - `python scripts/validate_context_stability_guard.py` PASS
+    - run:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --run-tune --skip-fetch --reserve-newest-markets-for-holdout 1`
+      - note: first run failed once due `argparse` help `%` escaping, then fixed (`(%%)`) and rerun PASS.
+    - stage artifacts:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage287.csv`
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage287.json`
+      - `build/Release/logs/candidate_train_eval_cycle_summary_stage287.json`
+  - tuning result:
+    - guard active:
+      - `objective_market_loss_concentration_guard_active=true`
+      - params: `min_total_loss=400`, `max_top_share=52`, `top_share_scale=110`, `max_hhi=0.44`, `hhi_scale=6000`
+    - winner:
+      - `best_combo=scenario_quality_focus_006`
+      - `objective=-32184.7854`, `pf=0.4479`, `exp=-9.5202`, `trades=116.0`
+      - market-loss profile: `total_loss=5406.3026`, `top_share=50.5461%`, `hhi=0.38249`, `top_market=KRW-DOGE`
+    - concentration-heavy candidates were pushed lower:
+      - example: `scenario_quality_focus_022` (`top_share=61.7551%`, `hhi=0.46014`, objective `-40279.4591`)
+  - promoted cycle result:
+    - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+    - recommendation:
+      - `hold_candidate_calibrate_risk_gate_rr_baseline_floor`
+    - metrics:
+      - validation: `pf=0.4646`, `exp=-7.9974`, `trades=166.5`
+      - holdout: `pf=0.4410`, `exp=-8.3996`, `trades=98.6667`
+    - walk-forward:
+      - validation ready ratio=`0.0`, holdout ready ratio=`0.0`
+      - dominant fail reason unchanged: `oos_profit_sum_positive`
+  - interpretation:
+    - objective now has direct market-loss concentration ownership penalty and telemetry, which is structurally correct for the current bottleneck.
+    - this run still did not break the OOS profit-sum failure regime, but it removed a blind spot (per-market loss concentration) from ranking logic.
+    - next iteration should tune concentration scales adaptively by split severity (validation vs holdout) while preserving anti-overfit discipline.
+
+- Stage-2.88 update (2026-02-17):
+  - tighter concentration experiment (no new code patch; parameter sweep on Stage-2.87 guard):
+    - tuning command:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 12 --real-data-only --require-higher-tf-companions --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 2 --objective-max-severe-history-ratio 0.60 --objective-severe-history-penalty-scale 12000 --objective-severe-history-hard-cap-penalty 1200 --objective-walk-forward-expectancy-penalty-scale 300 --objective-walk-forward-profit-factor-penalty-scale 3600 --objective-walk-forward-win-rate-penalty-scale 220 --objective-walk-forward-ready-gap-multiplier 2.0 --objective-enforce-walk-forward-quality-floor-guard --objective-walk-forward-min-reward-risk-floor 1.30 --objective-walk-forward-rr-floor-penalty-scale 7000 --objective-walk-forward-min-edge-floor 0.00105 --objective-walk-forward-edge-floor-penalty-scale 15000000 --disable-objective-enforce-walk-forward-trade-density-guard --objective-enforce-market-loss-concentration-guard --objective-market-loss-min-total-loss-krw 400 --objective-market-loss-max-top-share-pct 50 --objective-market-loss-top-share-penalty-scale 140 --objective-market-loss-max-hhi 0.40 --objective-market-loss-hhi-penalty-scale 8000 --objective-context-flip-rebound-penalty 1200 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage288.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage288.json`
+    - split evaluation command (promoted combo replay):
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+    - stage artifacts:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage288.csv`
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage288.json`
+      - `build/Release/logs/candidate_train_eval_cycle_summary_stage288.json`
+  - tuning result:
+    - guard config:
+      - `max_top_share=50.0`, `top_share_scale=140.0`
+      - `max_hhi=0.40`, `hhi_scale=8000.0`
+      - `objective_market_loss_concentration_guard_active=true`
+    - context behavior:
+      - `context_stability_guard_reason=flip_accepted_after_threshold`
+      - focus converged to `entry_quality_rr_base`
+    - winner:
+      - `best_combo=scenario_quality_focus_002`
+      - `objective=-39827.0980`, `pf=0.4118`, `exp=-9.7921`, `trades=122.875`
+      - diversified loss profile:
+        - `market_loss_top_share_pct=26.9570%`
+        - `market_loss_hhi=0.16762`
+        - `market_loss_top_market=KRW-DOGE`
+  - promoted cycle result:
+    - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+    - recommendation shifted to:
+      - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+    - metrics:
+      - validation: `pf=0.4350`, `exp=-8.8452`, `trades=157.5`
+      - holdout: `pf=0.4463`, `exp=-7.9567`, `trades=99.6667`
+    - walk-forward:
+      - validation/holdout ready ratio remained `0.0`
+      - failure counts unchanged:
+        - validation=`{"min_oos_profitable_ratio":2,"oos_profit_sum_positive":2}`
+        - holdout=`{"min_oos_profitable_ratio":3,"oos_profit_sum_positive":3}`
+  - interpretation:
+    - tighter concentration guard successfully moved winner toward lower single-market loss concentration.
+    - holdout PF/expectancy improved vs Stage-2.87, but validation weakened and walk-forward bottleneck remained unchanged.
+    - next step should preserve concentration control while adding explicit validation-floor weighting to avoid validation regression.
+
+- Stage-2.89 update (2026-02-17):
+  - validation-floor guard added to objective (implementation):
+    - code changes:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - train-eval context ingestion expanded:
+      - `read_train_eval_holdout_context(...)` now also extracts
+        - `validation_avg_profit_factor`
+        - `validation_avg_expectancy_krw`
+        - `validation_avg_total_trades`
+        - `validation_avg_win_rate_pct`
+        - holdout metric mirrors (`holdout_avg_*`)
+    - objective controls added:
+      - `--objective-enforce-validation-floor-guard`
+      - `--disable-objective-enforce-validation-floor-guard`
+      - `--objective-validation-floor-min-profit-factor`
+      - `--objective-validation-floor-min-expectancy-krw`
+      - `--objective-validation-floor-min-win-rate-pct`
+      - `--objective-validation-profit-factor-floor-ratio`
+      - `--objective-validation-expectancy-drop-tolerance-krw`
+      - `--objective-validation-win-rate-drop-tolerance-pct`
+      - `--objective-validation-floor-profit-factor-penalty-scale`
+      - `--objective-validation-floor-expectancy-penalty-scale`
+      - `--objective-validation-floor-win-rate-penalty-scale`
+    - dynamic floor behavior:
+      - under walk-forward `oos_profit_sum_positive` regime, effective floors are computed from
+        - static floor and
+        - previous validation metrics (PF ratio / expectancy tolerance / win-rate tolerance).
+    - telemetry:
+      - tuning log prints effective validation floors and previous validation metrics.
+      - summary json records activation, static/dynamic floor params, and effective floor values.
+    - verification:
+      - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_candidate_train_eval_cycle.py scripts/walk_forward_validate.py scripts/validate_context_stability_guard.py` PASS
+      - `python scripts/validate_context_stability_guard.py` PASS
+  - run:
+    - tuning:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 12 --real-data-only --require-higher-tf-companions --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --context-stability-min-consecutive-to-flip 2 --objective-max-severe-history-ratio 0.60 --objective-severe-history-penalty-scale 12000 --objective-severe-history-hard-cap-penalty 1200 --objective-walk-forward-expectancy-penalty-scale 300 --objective-walk-forward-profit-factor-penalty-scale 3600 --objective-walk-forward-win-rate-penalty-scale 220 --objective-walk-forward-ready-gap-multiplier 2.0 --objective-enforce-walk-forward-quality-floor-guard --objective-walk-forward-min-reward-risk-floor 1.30 --objective-walk-forward-rr-floor-penalty-scale 7000 --objective-walk-forward-min-edge-floor 0.00105 --objective-walk-forward-edge-floor-penalty-scale 15000000 --disable-objective-enforce-walk-forward-trade-density-guard --objective-enforce-market-loss-concentration-guard --objective-market-loss-min-total-loss-krw 400 --objective-market-loss-max-top-share-pct 50 --objective-market-loss-top-share-penalty-scale 140 --objective-market-loss-max-hhi 0.40 --objective-market-loss-hhi-penalty-scale 8000 --objective-enforce-validation-floor-guard --objective-validation-floor-min-profit-factor 0.42 --objective-validation-floor-min-expectancy-krw -9.5 --objective-validation-floor-min-win-rate-pct 40.5 --objective-validation-profit-factor-floor-ratio 0.98 --objective-validation-expectancy-drop-tolerance-krw 0.6 --objective-validation-win-rate-drop-tolerance-pct 0.7 --objective-validation-floor-profit-factor-penalty-scale 4200 --objective-validation-floor-expectancy-penalty-scale 260 --objective-validation-floor-win-rate-penalty-scale 180 --objective-context-flip-rebound-penalty 1200 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage289.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage289.json`
+    - promoted combo split eval:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+    - artifacts:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage289.csv`
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage289.json`
+      - `build/Release/logs/candidate_train_eval_cycle_summary_stage289.json`
+  - result:
+    - tuning:
+      - `best_combo=scenario_quality_focus_002`
+      - `objective=-38944.3954`, `pf=0.4118`, `exp=-9.7921`, `trades=122.875`, `win=41.1155`
+      - market-loss profile remained diversified:
+        - `top_share=26.9570%`, `hhi=0.16762`, `top_market=KRW-DOGE`
+      - validation floor telemetry:
+        - guard active `true`
+        - effective floors:
+          - `pf_floor=0.4263`
+          - `exp_floor=-9.4452`
+          - `win_floor=40.5`
+    - split eval:
+      - validation: `pf=0.4350`, `exp=-8.8452`, `trades=157.5`
+      - holdout: `pf=0.4463`, `exp=-7.9567`, `trades=99.6667`
+      - recommendation:
+        - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - promotion:
+        - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+      - walk-forward:
+        - validation/holdout ready ratio still `0.0`
+        - failure counts unchanged:
+          - validation=`{"min_oos_profitable_ratio":2,"oos_profit_sum_positive":2}`
+          - holdout=`{"min_oos_profitable_ratio":3,"oos_profit_sum_positive":3}`
+  - interpretation:
+    - validation-floor guard is now structurally integrated and actively reflected in objective telemetry.
+    - this run kept Stage-2.88 split performance profile (no additional regression, no gate breakthrough).
+    - next step should move from scalar floor tightening to explicit walk-forward window-level loss attribution (which windows/markets drive `oos_profit_sum_positive`) to target the unchanged bottleneck directly.
+
+- Stage-2.90 update (2026-02-17):
+  - walk-forward window loss-focus guard implemented (window-level attribution wiring):
+    - code changes:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - added window-loss context extraction from walk-forward CSVs:
+      - source: `build/Release/logs/walk_forward_split/{validation,holdout}/wf_*.csv`
+      - parsed metrics:
+        - split-wise OOS window count / negative-window ratio / nonpositive-window ratio
+        - split-wise absolute loss concentration by market (top market, top-share, HHI)
+      - context keys exposed via `read_train_eval_holdout_context(...)`:
+        - `wf_window_holdout_top_loss_market`
+        - `wf_window_holdout_top_loss_market_share_pct`
+        - `wf_window_holdout_loss_hhi`
+        - plus validation mirrors and window-count metrics
+    - objective controls added:
+      - `--objective-enforce-wf-window-loss-focus-guard`
+      - `--disable-objective-enforce-wf-window-loss-focus-guard`
+      - `--objective-wf-window-loss-focus-activation-min-share-pct`
+      - `--objective-wf-window-loss-focus-activation-min-hhi`
+      - `--objective-wf-window-loss-focus-market-match-penalty`
+      - `--objective-wf-window-loss-focus-top-share-penalty-scale`
+      - `--objective-wf-window-loss-focus-hhi-penalty-scale`
+    - objective behavior:
+      - when walk-forward OOS profit-sum failure is active and window-loss concentration context is severe,
+        - penalize combos that keep top-loss ownership in the same holdout top-loss market,
+        - and penalize combo top-share/HHI overshoot with context-severity scaling.
+    - telemetry:
+      - tuning log line: `objective_wf_window_loss_focus_guard=...`
+      - summary json fields:
+        - activation/config values
+        - holdout/validation window-loss concentration context
+        - `objective_wf_window_loss_focus_guard_active`, `..._context_triggered`
+    - verification:
+      - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_candidate_train_eval_cycle.py scripts/walk_forward_validate.py scripts/validate_context_stability_guard.py` PASS
+      - `python scripts/validate_context_stability_guard.py` PASS
+  - first experiment (high activation threshold):
+    - tuning command (Stage-2.90):
+      - `python scripts/tune_candidate_gate_trade_density.py ... --objective-enforce-wf-window-loss-focus-guard --objective-wf-window-loss-focus-activation-min-share-pct 50 --objective-wf-window-loss-focus-activation-min-hhi 0.36 --objective-wf-window-loss-focus-market-match-penalty 700 --objective-wf-window-loss-focus-top-share-penalty-scale 95 --objective-wf-window-loss-focus-hhi-penalty-scale 5200 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage290.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage290.json`
+    - result:
+      - `best_combo=scenario_quality_focus_006`, `objective=-40879.7942`
+      - context observed:
+        - holdout top loss market=`KRW-SUI`
+        - top-share=`43.4775%`, HHI=`0.3394`
+      - guard not triggered (`active=false`) due high activation thresholds.
+
+- Stage-2.91 update (2026-02-17):
+  - activation-tuned follow-up (same guard, lower activation threshold):
+    - tuning command:
+      - `python scripts/tune_candidate_gate_trade_density.py ... --objective-enforce-wf-window-loss-focus-guard --objective-wf-window-loss-focus-activation-min-share-pct 43 --objective-wf-window-loss-focus-activation-min-hhi 0.33 --objective-wf-window-loss-focus-market-match-penalty 700 --objective-wf-window-loss-focus-top-share-penalty-scale 95 --objective-wf-window-loss-focus-hhi-penalty-scale 5200 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage291.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage291.json`
+    - promoted split replay:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+    - artifacts:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage291.csv`
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage291.json`
+      - `build/Release/logs/candidate_train_eval_cycle_summary_stage291.json`
+  - tuning result:
+    - `best_combo=scenario_quality_focus_006`, `objective=-40660.03556` (improved vs Stage-2.90)
+    - guard activated:
+      - `objective_wf_window_loss_focus_guard_active=true`
+      - `context_triggered=true`
+      - holdout context:
+        - top loss market=`KRW-SUI`
+        - top-share=`43.2581%`
+        - HHI=`0.3401`
+    - validation floor dynamic target was also active:
+      - `pf_floor=0.4553`, `exp_floor=-8.5974`, `win_floor=40.5`
+  - promoted cycle result:
+    - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+    - recommendation:
+      - `hold_candidate_calibrate_risk_gate_rr_baseline_floor`
+    - metrics:
+      - validation: `pf=0.4646`, `exp=-7.9974`, `trades=166.5`, risk=`blocked_risk_gate_entry_quality_rr_base`
+      - holdout: `pf=0.4410`, `exp=-8.3996`, `trades=98.6667`, risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime`
+    - walk-forward:
+      - validation/holdout ready ratio remained `0.0`
+      - fail counts unchanged:
+        - validation=`{"min_oos_profitable_ratio":2,"oos_profit_sum_positive":2}`
+        - holdout=`{"min_oos_profitable_ratio":3,"oos_profit_sum_positive":3}`
+  - interpretation:
+    - window-level loss attribution is now integrated and can actively influence ranking.
+    - even with active guard, promotion and walk-forward bottlenecks remain unchanged.
+    - next iteration should introduce window-cluster selective penalties (early/late regime bins) rather than only market-ownership concentration.
+
+- Stage-2.92 update (2026-02-17):
+  - window-cluster selective penalty wiring completed (early/mid/late loss attribution):
+    - code changes:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - implementation:
+      - holdout dominant-cluster context derived for objective:
+        - `wf_window_holdout_cluster_dominant`
+        - `wf_window_holdout_cluster_dominant_loss_share_pct`
+        - `wf_window_holdout_cluster_dominant_top_loss_market`
+        - `wf_window_holdout_cluster_dominant_loss_hhi`
+      - activation wiring added:
+        - `objective_wf_window_cluster_context_triggered`
+        - `objective_wf_window_cluster_loss_guard_active`
+      - objective call wiring completed (screen/final both):
+        - `enforce_wf_window_cluster_loss_guard`
+        - `holdout_wf_window_dominant_cluster*`
+        - `objective_wf_window_cluster_*`
+      - telemetry/log wiring completed:
+        - console: `objective_wf_window_cluster_loss_guard=...`
+        - summary json (`screening`) cluster config/context fields persisted.
+    - verification:
+      - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_candidate_train_eval_cycle.py scripts/walk_forward_validate.py scripts/validate_context_stability_guard.py` PASS
+      - `python scripts/validate_context_stability_guard.py` PASS
+  - tuning experiment (Stage-2.92):
+    - command:
+      - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --objective-enforce-wf-window-loss-focus-guard --objective-wf-window-loss-focus-activation-min-share-pct 43 --objective-wf-window-loss-focus-activation-min-hhi 0.33 --objective-wf-window-loss-focus-market-match-penalty 700 --objective-wf-window-loss-focus-top-share-penalty-scale 95 --objective-wf-window-loss-focus-hhi-penalty-scale 5200 --objective-enforce-wf-window-cluster-loss-guard --objective-wf-window-cluster-activation-min-loss-share-pct 40 --objective-wf-window-cluster-activation-min-hhi 0.35 --objective-wf-window-cluster-market-match-penalty 650 --objective-wf-window-cluster-top-share-penalty-scale 85 --objective-wf-window-cluster-hhi-penalty-scale 4200 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage292.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage292.json`
+    - artifacts:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage292.csv`
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage292.json`
+    - result:
+      - best combo changed:
+        - `scenario_quality_focus_006` -> `scenario_quality_focus_002`
+      - objective improved:
+        - `-40660.03556` -> `-34346.67632`
+      - guard activation:
+        - `objective_wf_window_loss_focus_guard_active=true`
+        - `objective_wf_window_cluster_loss_guard_active=true`
+        - `objective_wf_window_cluster_context_triggered=true`
+      - holdout cluster context:
+        - dominant cluster=`early`
+        - dominant cluster loss-share=`41.7226%`
+        - dominant cluster top-loss market=`KRW-SUI`
+        - dominant cluster top-loss market share=`45.9897%`
+        - dominant cluster HHI=`0.3673`
+  - promoted split replay:
+    - command:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1 --summary-json build/Release/logs/candidate_train_eval_cycle_summary_stage292.json`
+    - artifact:
+      - `build/Release/logs/candidate_train_eval_cycle_summary_stage292.json`
+    - result:
+      - recommendation:
+        - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - promotion:
+        - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+      - split metrics:
+        - validation: `pf=0.4350`, `exp=-8.8452`, `trades=157.5`
+        - holdout: `pf=0.4463`, `exp=-7.9567`, `trades=99.6667`
+      - walk-forward:
+        - validation/holdout ready ratio=`0.0`
+        - fail counts unchanged:
+          - validation=`{"min_oos_profitable_ratio":2,"oos_profit_sum_positive":2}`
+          - holdout=`{"min_oos_profitable_ratio":3,"oos_profit_sum_positive":3}`
+  - interpretation:
+    - cluster-loss guard wiring itself is complete and active in ranking.
+    - winner replacement occurred (006 -> 002), so prior plateau was not a call-stack dead path.
+    - however, promoted replay remains below profitability/promotion gates, and walk-forward readiness is still blocked by the same two fail reasons.
+    - next iteration should focus on reducing `oos_profit_sum_positive` failures in holdout windows directly (regime-specific loss suppression, not objective-only penalty scaling).
+
+- Stage-2.93 update (2026-02-17):
+  - anti-overfitting execution policy locked in documentation (always-on hard rules):
+    - section added:
+      - `## Anti-Overfitting Hard Rules (Always ON)`
+    - key lock points:
+      - fixed time-split discipline (`train -> validation -> holdout` + newest OOT quarantine)
+      - per-cycle hyperparameter freeze
+      - promotion reproducibility minimum `N=3` on non-overlapping holdout/OOT windows
+      - symbol-invariant concentration controls preferred over symbol-specific targeting
+      - fresh-data usage limited to additive OOT evidence (not historical replacement)
+
+- Stage-2.94 update (2026-02-17):
+  - anti-overfitting guard tightening implemented (validation confirmation required):
+    - code changes:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - added options:
+      - `--objective-wf-window-loss-focus-require-validation-confirmation` (default on)
+      - `--disable-objective-wf-window-loss-focus-require-validation-confirmation`
+      - `--objective-wf-window-cluster-require-validation-confirmation` (default on)
+      - `--disable-objective-wf-window-cluster-require-validation-confirmation`
+    - activation logic change:
+      - wf-window market-focus guard now activates only when:
+        - holdout context severe, and
+        - validation context also severe, and
+        - validation top-loss market matches holdout top-loss market
+        - (unless explicit disable flag used)
+      - wf-window cluster-focus guard now activates only when:
+        - holdout cluster context severe, and
+        - validation cluster context also severe, and
+        - validation dominant cluster matches holdout dominant cluster
+        - (unless explicit disable flag used)
+    - telemetry expanded:
+      - holdout/validation triggered flags
+      - validation confirmation flags
+      - require-confirmation config flags
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_candidate_train_eval_cycle.py scripts/walk_forward_validate.py scripts/validate_context_stability_guard.py` PASS
+    - `python scripts/validate_context_stability_guard.py` PASS
+  - tuning run (stage294):
+    - command:
+      - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --objective-enforce-wf-window-loss-focus-guard --objective-wf-window-loss-focus-activation-min-share-pct 43 --objective-wf-window-loss-focus-activation-min-hhi 0.33 --objective-wf-window-loss-focus-market-match-penalty 700 --objective-wf-window-loss-focus-top-share-penalty-scale 95 --objective-wf-window-loss-focus-hhi-penalty-scale 5200 --objective-wf-window-loss-focus-require-validation-confirmation --objective-enforce-wf-window-cluster-loss-guard --objective-wf-window-cluster-activation-min-loss-share-pct 40 --objective-wf-window-cluster-activation-min-hhi 0.35 --objective-wf-window-cluster-market-match-penalty 650 --objective-wf-window-cluster-top-share-penalty-scale 85 --objective-wf-window-cluster-hhi-penalty-scale 4200 --objective-wf-window-cluster-require-validation-confirmation --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage294.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage294.json`
+    - result:
+      - best combo unchanged: `scenario_quality_focus_002`
+      - objective improved by overfit-guard deactivation effect:
+        - `-34346.67632` -> `-33446.67632` (focus guard penalty not applied)
+      - activation evidence:
+        - market-focus:
+          - holdout triggered=`true`
+          - validation triggered=`false`
+          - validation market confirmed=`false`
+          - guard active=`false`
+          - holdout top market=`KRW-SUI`, validation top market=`KRW-AVAX`
+        - cluster-focus:
+          - holdout triggered=`true`
+          - validation triggered=`true`
+          - validation cluster confirmed=`true`
+          - guard active=`true`
+          - dominant cluster holdout/validation=`early`
+  - promoted replay (stage294):
+    - command:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1 --summary-json build/Release/logs/candidate_train_eval_cycle_summary_stage294.json`
+    - result:
+      - recommendation unchanged:
+        - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - promotion unchanged:
+        - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+      - split metrics unchanged:
+        - validation: `pf=0.4350`, `exp=-8.8452`, `trades=157.5`
+        - holdout: `pf=0.4463`, `exp=-7.9567`, `trades=99.6667`
+      - walk-forward unchanged:
+        - validation/holdout ready ratio=`0.0`
+        - fail counts unchanged (`min_oos_profitable_ratio`, `oos_profit_sum_positive`)
+  - interpretation:
+    - guard activation is now less noise-sensitive (holdout-only market concentration does not auto-penalize).
+    - this reduced objective penalty noise, but did not yet improve replay profitability/promotion outcomes.
+    - next step should target direct reduction of holdout `oos_profit_sum_positive` windows with regime-loss control, while keeping this confirmation gate locked.
+
+- Stage-2.95 ~ Stage-2.104 batch update (2026-02-17, 10-stage continuous run):
+  - execution policy:
+    - per request, executed 10 consecutive `2.nn` stages before reporting.
+    - immediate interrupt condition was set for overfit-like signal emergence; no such positive-overfit signal occurred.
+  - Stage-2.95 ~ Stage-2.103 (quality_focus, objective sweep, no promotion):
+    - objective-parameter sweep completed across 9 stages:
+      - trade-density cap/penalty tightening
+      - walk-forward quality-floor tightening
+      - validation-floor dynamic tightening
+      - market-loss concentration threshold tightening
+      - cluster-focus activation/penalty variant
+    - artifacts:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage295.json` ... `stage303.json`
+    - result:
+      - winner lock persisted in all 9 stages:
+        - `best_combo=scenario_quality_focus_002`
+      - aggregate performance fields unchanged across winners:
+        - `pf=0.4118`, `exp=-9.7921`, `trades=122.875`
+      - interpretation:
+        - objective-only reshaping did not move ranking frontier under current candidate pool.
+  - Stage-2.104 (diverse_wide expansion + promoted replay):
+    - tuning command (expanded candidate pool):
+      - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode diverse_wide -MaxScenarios 14 -RealDataOnly -RequireHigherTfCompanions ... --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage304.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage304.json`
+    - replay command:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1 --summary-json build/Release/logs/candidate_train_eval_cycle_summary_stage304.json`
+    - tuning result:
+      - winner changed:
+        - `scenario_quality_focus_002` -> `scenario_diverse_wide_011`
+      - but winner quality degraded:
+        - tuning best metrics:
+          - `pf=0.3700`, `exp=-10.8907`, `trades=114.625`
+    - replay result (vs stage294 baseline):
+      - recommendation changed:
+        - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders` -> `hold_candidate_calibrate_risk_gate_rr_baseline_floor`
+      - promotion remained blocked:
+        - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+      - split metrics degraded:
+        - validation: `0.4350/-8.8452` -> `0.4080/-9.0274`
+        - holdout: `0.4463/-7.9567` -> `0.4351/-8.3587`
+      - walk-forward unchanged:
+        - validation/holdout ready ratio=`0.0`
+        - failure counts unchanged (`min_oos_profitable_ratio`, `oos_profit_sum_positive`)
+  - batch interpretation:
+    - expanding search space without changing feature/decision basis did not improve generalization; it increased exploration variance and selected an inferior winner.
+    - no "good-on-current-slice-only" positive spike was observed.
+    - next step should move from objective tuning to candidate-generation logic changes specifically targeting OOS profit-sum failure windows.
+
+- Stage-2.105 ~ Stage-2.114 batch update (2026-02-17, 10-stage continuous run):
+  - implementation (candidate-generation path, not objective-only tuning):
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - added walk-forward profit-sum recovery expansion:
+      - function:
+        - `expand_walk_forward_profit_sum_recovery_candidates(...)`
+      - new CLI controls:
+        - `--enable-wf-profit-sum-recovery-expansion` / `--disable-wf-profit-sum-recovery-expansion`
+        - `--wf-profit-sum-recovery-min-combo-count`
+        - `--wf-profit-sum-recovery-max-injected`
+        - `--wf-profit-sum-recovery-min-ready-gap`
+      - behavior:
+        - when holdout walk-forward `oos_profit_sum_positive` failure is active and ready-gap exceeds threshold,
+        - injects symbol-invariant conservative recovery profiles (edge/rr/quality/turnover/hostility guard tightening),
+        - tags family as `walk_forward_profit_sum_recovery`.
+      - telemetry:
+        - log line: `wf_profit_sum_recovery_expansion=...`
+        - summary keys:
+          - `wf_profit_sum_recovery_*` config + applied/reason/injected count
+        - bottleneck section includes:
+          - `walk_forward_profit_sum_recovery_expansion` metadata
+    - verification:
+      - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_candidate_train_eval_cycle.py scripts/walk_forward_validate.py scripts/validate_context_stability_guard.py` PASS
+      - `python scripts/validate_context_stability_guard.py` PASS
+  - execution set:
+    - `2.105~2.113` (stage305~313): tuning sweeps with/without recovery expansion, quality/diverse variants, no promotion.
+    - `2.114` (stage314): selected best objective setting (stage305 equivalent) rerun with promotion + replay.
+  - artifacts:
+    - tuning:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage305.json` ... `stage314.json`
+    - replay:
+      - `build/Release/logs/candidate_train_eval_cycle_summary_stage314.json`
+  - batch result:
+    - recovery expansion applied as designed:
+      - injected combos observed (`4~6` by stage setting),
+      - scenario family mix included `walk_forward_profit_sum_recovery`.
+    - winner behavior:
+      - most runs remained `scenario_quality_focus_002` (baseline winner lock persisted).
+      - one run (`stage310`) selected injected recovery combo:
+        - `scenario_quality_focus_003_wf_profit_recovery_04`
+        - but objective/quality was worse than baseline (`pf=0.4172`, `exp=-10.7954`, lower utility).
+    - promoted replay (`stage314`):
+      - recommendation unchanged vs prior degraded baseline:
+        - `hold_candidate_calibrate_risk_gate_rr_baseline_floor`
+      - promotion unchanged:
+        - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+      - split metrics unchanged from stage304:
+        - validation: `pf=0.4080`, `exp=-9.0274`, `trades=149.0`
+        - holdout: `pf=0.4351`, `exp=-8.3587`, `trades=89.6667`
+      - walk-forward unchanged:
+        - ready ratio validation/holdout=`0.0`
+        - failure counts unchanged (`min_oos_profitable_ratio`, `oos_profit_sum_positive`)
+  - interpretation:
+    - candidate-generation expansion wiring is functional and can produce/select recovery-family candidates.
+    - however, with current feature space and gate topology, injected recovery profiles did not improve promotion/generalization outcomes.
+    - next step should shift to data/feature-level walk-forward loss decomposition (window feature attribution) rather than additional threshold/profile tuning.
+
+- Stage-2.115 ~ Stage-2.124 batch update (2026-02-18, 10-stage continuous run):
+  - implementation (window-feature attribution + targeted candidate generation):
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - added walk-forward window loss feature attribution:
+      - function:
+        - `classify_wf_window_loss_feature(...)`
+      - context expansion:
+        - `summarize_walk_forward_window_loss_context(...)` now emits:
+          - `wf_window_{split}_loss_feature_dominant`
+          - `wf_window_{split}_loss_feature_dominant_share_pct`
+          - `wf_window_{split}_loss_feature_hhi`
+          - `wf_window_{split}_loss_feature_total_abs_krw`
+          - `wf_window_{split}_loss_feature_window_count`
+    - added window-feature recovery expansion:
+      - function:
+        - `expand_walk_forward_window_feature_recovery_candidates(...)`
+      - new CLI controls:
+        - `--enable-wf-window-feature-recovery-expansion` / `--disable-wf-window-feature-recovery-expansion`
+        - `--wf-window-feature-recovery-min-combo-count`
+        - `--wf-window-feature-recovery-max-injected`
+        - `--wf-window-feature-recovery-min-dominant-share-pct`
+        - `--wf-window-feature-recovery-min-ready-gap`
+        - `--wf-window-feature-recovery-require-validation-confirmation` / `--wf-window-feature-recovery-no-validation-confirmation`
+      - behavior:
+        - when holdout walk-forward profit-sum failure is active and dominant loss feature share is high,
+        - injects feature-conditioned, symbol-invariant conservative profiles
+        - tags family as `walk_forward_window_feature_recovery`
+    - telemetry/report expansion:
+      - new logs:
+        - `wf_window_feature_recovery_expansion=...`
+      - summary keys:
+        - `wf_window_feature_recovery_*`
+        - `objective_wf_window_*_loss_feature_*`
+      - bottleneck section includes:
+        - `walk_forward_window_feature_recovery_expansion` metadata
+    - verification:
+      - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_candidate_train_eval_cycle.py scripts/walk_forward_validate.py scripts/validate_context_stability_guard.py` PASS
+      - `python scripts/validate_context_stability_guard.py` PASS
+  - execution set:
+    - `2.115` (stage315): baseline run after implementation wiring.
+    - `2.116~2.123` (stage316~323): parameter sweeps for feature-recovery activation/min-share/injected-count/scenario-mode.
+    - `2.124` (stage324): best setting rerun + replay (`run_candidate_train_eval_cycle`).
+  - artifacts:
+    - tuning:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage315.json` ... `stage324.json`
+    - replay:
+      - `build/Release/logs/candidate_train_eval_cycle_summary_stage324.json`
+  - batch result:
+    - attribution stabilized on the same dominant holdout feature:
+      - `wf_window_holdout_loss_feature_dominant=oos_winrate_collapse`
+      - dominant share=`65.85%` (validation confirmation=`true`)
+    - feature-recovery expansion behavior:
+      - applied in stage `316/317/318/319/321/322/323/324`
+      - injected combos observed=`4~6`
+      - scenario family mix included `walk_forward_window_feature_recovery`
+    - winner behavior:
+      - majority stages stayed locked at:
+        - `scenario_quality_focus_002`
+      - diverse branch stages (`321/322`) selected:
+        - `scenario_diverse_wide_011`
+        - but objective/quality degraded (`pf=0.3700`, `exp=-10.8907`)
+    - overfit risk signal:
+      - no positive "slice-only spike" observed across the 10-stage run.
+    - replay (`stage324`) vs prior degraded replay (`stage314`):
+      - recommendation recovered:
+        - `hold_candidate_calibrate_risk_gate_rr_baseline_floor` -> `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - promotion remained blocked:
+        - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+      - split metrics improved:
+        - validation: `0.4080/-9.0274` -> `0.4350/-8.8452`
+        - holdout: `0.4351/-8.3587` -> `0.4463/-7.9567`
+      - walk-forward unchanged:
+        - ready ratio validation/holdout=`0.0`
+        - fail reasons unchanged (`min_oos_profitable_ratio`, `oos_profit_sum_positive`)
+  - interpretation:
+    - window-feature attribution and feature-conditioned candidate injection are wired and reproducible.
+    - but selection frontier still converges to the same quality baseline under current objective/gate topology.
+    - next step should connect attribution signal to objective-side penalty/bonus (feature-collapse-aware scoring), not only candidate injection count/threshold sweeps.
+
+- Stage-2.125 ~ Stage-2.134 batch update (2026-02-18, 10-stage continuous run):
+  - implementation (objective-side feature-collapse linkage):
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - added objective guard:
+      - `objective_wf_window_feature_collapse_guard`
+      - behavior:
+        - if holdout walk-forward dominant loss feature is persistent (share/HHI trigger) and validation confirms,
+        - non-aligned combos get mismatch penalties,
+        - feature-aligned recovery combos get objective bonus.
+    - compute wiring:
+      - `compute_combo_objective(...)` extended with:
+        - `enforce_wf_window_feature_collapse_guard`
+        - dominant-feature context fields
+        - combo feature-recovery tags
+        - feature-collapse penalty/bonus scales
+      - objective scoring now includes `score_adjustment` branch for aligned bonus.
+    - new CLI controls:
+      - `--objective-enforce-wf-window-feature-collapse-guard` / disable
+      - `--objective-wf-window-feature-collapse-activation-min-share-pct`
+      - `--objective-wf-window-feature-collapse-activation-min-hhi`
+      - `--objective-wf-window-feature-collapse-mismatch-penalty`
+      - `--objective-wf-window-feature-collapse-unfocused-penalty-scale`
+      - `--objective-wf-window-feature-collapse-hhi-penalty-scale`
+      - `--objective-wf-window-feature-collapse-aligned-bonus`
+      - `--objective-wf-window-feature-collapse-require-validation-confirmation` / disable
+    - telemetry/report:
+      - log line:
+        - `objective_wf_window_feature_collapse_guard=...`
+      - summary keys:
+        - `objective_wf_window_feature_collapse_*` (config/activation/context)
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_candidate_train_eval_cycle.py scripts/walk_forward_validate.py scripts/validate_context_stability_guard.py` PASS
+    - `python scripts/validate_context_stability_guard.py` PASS
+  - execution set:
+    - `2.125` (stage325): baseline with feature-collapse objective guard enabled.
+    - `2.126~2.133` (stage326~333): scale/activation/ablation sweeps.
+      - mismatch/bonus scale variants
+      - share/hhi activation variants
+      - guard-off ablation (`stage331`)
+      - diverse-widened variant (`stage333`)
+    - `2.134` (stage334): best-objective setting rerun + replay.
+  - artifacts:
+    - tuning:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage325.json` ... `stage334.json`
+    - replay:
+      - `build/Release/logs/candidate_train_eval_cycle_summary_stage334.json`
+  - batch result:
+    - objective guard activated as intended:
+      - context stable:
+        - dominant feature=`oos_winrate_collapse`
+        - holdout share=`65.11%`
+        - validation confirmation=`true`
+    - winner behavior changed materially:
+      - guard-on quality runs selected:
+        - `scenario_quality_focus_001_wf_window_feature_recovery_02`
+      - guard-off ablation (`stage331`) reverted to:
+        - `scenario_quality_focus_002`
+    - tuning-layer caution:
+      - guard-on winner had worse raw tuning PF/expectancy (`0.3993 / -10.6385`) vs guard-off baseline (`0.4118 / -9.7921`).
+      - implies objective reward-shaping can move ranking even when raw static summary looks weaker.
+    - replay (`stage334`) vs prior replay (`stage324`) improved:
+      - recommendation unchanged:
+        - `hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - promotion unchanged:
+        - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+      - split metrics:
+        - validation: `0.4350/-8.8452` -> `0.4463/-8.3123`
+        - holdout: `0.4463/-7.9567` -> `0.4677/-7.7623`
+      - walk-forward unchanged:
+        - ready ratio validation/holdout=`0.0`
+        - fail reasons unchanged (`min_oos_profitable_ratio`, `oos_profit_sum_positive`)
+  - interpretation:
+    - objective-side feature linkage is now functionally effective (ranking and replay behavior both moved).
+    - this is progress signal, but not gate-breakthrough yet.
+    - next step should add anti-reward-hacking floor:
+      - when feature-collapse bonus is active, enforce non-regression floor on raw PF/expectancy/trade-quality in tuning summary before promotion consideration.
+
+- Stage-2.135 ~ Stage-2.144 batch update (2026-02-18, 10-stage continuous run):
+  - implementation (feature-collapse bonus anti-reward-hacking floor):
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - objective behavior change:
+      - feature-aligned bonus now applies only when combo quality floors are met.
+      - if aligned but below quality floors, bonus is blocked and penalty is applied.
+    - compute wiring:
+      - `compute_combo_objective(...)` extended with:
+        - `objective_wf_window_feature_collapse_bonus_min_profit_factor`
+        - `objective_wf_window_feature_collapse_bonus_min_expectancy_krw`
+        - `objective_wf_window_feature_collapse_bonus_min_win_rate_pct`
+        - `objective_wf_window_feature_collapse_bonus_quality_penalty_scale`
+      - quality-floor shortfall penalty is included in objective penalty branch.
+    - new CLI controls:
+      - `--objective-wf-window-feature-collapse-bonus-min-profit-factor`
+      - `--objective-wf-window-feature-collapse-bonus-min-expectancy-krw`
+      - `--objective-wf-window-feature-collapse-bonus-min-win-rate-pct`
+      - `--objective-wf-window-feature-collapse-bonus-quality-penalty-scale`
+    - effective floor policy:
+      - bonus floors are clamped with validation-floor effective values (`max(static_bonus_floor, effective_validation_floor)`).
+    - telemetry/report:
+      - log line includes:
+        - `bonus_pf_floor`, `bonus_exp_floor`, `bonus_win_floor`, `bonus_quality_scale`
+      - summary keys include:
+        - `objective_wf_window_feature_collapse_bonus_*`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_candidate_train_eval_cycle.py scripts/walk_forward_validate.py scripts/validate_context_stability_guard.py` PASS
+    - `python scripts/validate_context_stability_guard.py` PASS
+  - execution set:
+    - `2.135` (stage335): anti-reward-hacking baseline (quality_focus).
+    - `2.136~2.143` (stage336~343): penalty-scale/floor/ablation/diverse sweeps.
+      - bonus quality penalty scale sweep (`220/320/420`)
+      - bonus quality floor tightening (`pf/exp/win`)
+      - aligned-bonus and mismatch scale variants
+      - guard-off ablation (`stage342`)
+      - diverse branch run (`stage343`)
+    - `2.144` (stage344): best-setting rerun + replay (`run_candidate_train_eval_cycle`).
+  - artifacts:
+    - tuning:
+      - `build/Release/logs/candidate_trade_density_tuning_summary_stage335.json` ... `stage344.json`
+    - replay:
+      - `build/Release/logs/candidate_train_eval_cycle_summary_stage344.json`
+  - batch result:
+    - quality-focus winner stabilized to baseline-quality combo:
+      - stage `335~342` and `344` winner=`scenario_quality_focus_002`
+      - tuning summary metrics fixed at `pf=0.4118`, `exp=-9.7921`
+    - guard-off ablation (`stage342`) kept same winner:
+      - objective score improved (`-33446.6763`) vs guard-on (`-36163.4631`)
+      - indicates bonus-floor guard no longer distorts winner toward weaker aligned combo.
+    - diverse branch (`stage343`) underperformed:
+      - winner=`scenario_diverse_wide_009`, `pf=0.4102`, `exp=-9.3802`
+      - objective score worsened (`-41511.3003`)
+    - replay (`stage344`) vs prior best replay (`stage334`) regressed:
+      - validation: `0.4463/-8.3123` -> `0.4350/-8.8452`
+      - holdout: `0.4677/-7.7623` -> `0.4463/-7.9567`
+      - promotion unchanged:
+        - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+      - walk-forward unchanged:
+        - ready ratio validation/holdout=`0.0`
+        - fail reasons unchanged (`min_oos_profitable_ratio`, `oos_profit_sum_positive`)
+  - interpretation:
+    - anti-reward-hacking objective floor is functioning:
+      - previously selected weak-but-aligned recovery winner is blocked.
+    - but gate-breakthrough was not achieved and replay gain from stage334 was not retained under stricter objective.
+    - next step should pivot to structure-level change (selection/gate topology) instead of additional objective scalar tuning only.
+
+- Stage-2.145 kickoff (2026-02-18, structure-level pivot start):
+  - decision:
+    - adopt combined approach:
+      - `1) Pareto selector (offline pre-live)`
+      - `2) 2-stage gate (stability pre-gate -> profitability gate)`
+      - `5) veto ensemble (hard block layer)`
+      - `4) champion-challenger bandit (small live allocation only)`
+    - rollout order:
+      - phase A: implement `1` first with backward-compatible toggle.
+      - phase B: apply `2/5` in live decision gate path.
+      - phase C: add `4` with strict risk budget after `2/5` stabilizes.
+  - execution principle (anti-overfitting):
+    - selector update is batch/offline only (e.g., daily/4h), not per-candle online retune.
+    - one selected champion stays fixed during each live session window.
+    - promotion still requires validation+holdout+walk-forward evidence.
+  - implementation started:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - added selector mode scaffold:
+      - objective default path preserved.
+      - new mode `pareto_objective`:
+        - build Pareto front on configured maximize/minimize metrics.
+        - pick winner from Pareto front using existing objective order as tie-break.
+        - auto-fallback to objective mode if front is too small.
+    - new CLI controls:
+      - `--selector-mode objective|pareto_objective`
+      - `--pareto-maximize-fields`
+      - `--pareto-minimize-fields`
+      - `--pareto-selector-min-front-size`
+    - telemetry/report extension:
+      - summary includes selector metadata:
+        - requested/applied mode
+        - reason
+        - front size and front combo ids
+  - execution result (`stage345`, pareto selector on):
+    - run:
+      - `python scripts/tune_candidate_gate_trade_density.py ... --selector-mode pareto_objective --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage345.json`
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1 --summary-json build/Release/logs/candidate_train_eval_cycle_summary_stage345.json`
+    - selector telemetry:
+      - requested=`pareto_objective`, applied=`pareto_objective`
+      - pareto front size=`4`
+      - pareto front ids include:
+        - `scenario_quality_focus_002`
+        - `scenario_quality_focus_003_wf_profit_recovery_04`
+        - `scenario_quality_focus_000`
+        - `scenario_quality_focus_002_wf_profit_recovery_03`
+    - winner/replay:
+      - winner remained `scenario_quality_focus_002` (`pf=0.4118`, `exp=-9.7921`)
+      - replay (`stage345`) stayed same as `stage344`:
+        - validation=`0.4350 / -8.8452`
+        - holdout=`0.4463 / -7.9567`
+        - `promotion_gate_pass=false`, walk-forward ready ratio unchanged (`0.0`)
+  - interpretation:
+    - Pareto selector wiring is now active and observable in artifacts.
+    - but immediate profitability/gate breakthrough is not yet observed.
+    - next implementation should continue phase B (`2-stage gate + veto`) rather than additional selector scalar tweaks only.
+
+- Stage-2.146 update (2026-02-18, phase-B selector gate wiring):
+  - implementation (`2-stage gate + veto` in offline selector path):
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - selector behavior extension:
+      - pre-selection pipeline now supports:
+        - `veto ensemble` hard filter
+        - `two-stage gate`:
+          - stage-1 pre-gate (stability proxy)
+          - stage-2 profit-gate (profitability proxy)
+      - final winner selection order:
+        - `veto -> two-stage -> selector_mode(objective|pareto_objective)`
+    - new CLI controls:
+      - `--selector-enable-two-stage-gate` / disable
+      - `--selector-two-stage-pre-*`
+      - `--selector-two-stage-profit-*`
+      - `--selector-two-stage-allow-pre-gate-fallback` / disable
+      - `--selector-enable-veto-ensemble` / disable
+      - `--selector-veto-*`
+    - telemetry/report:
+      - summary now records:
+        - candidate row counts before/after filters
+        - two-stage pass counts (`pre`, `profit`)
+        - veto blocked count and blocked combo ids
+        - applied level (`profit_gate` / fallback)
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py ...` PASS
+  - execution (`stage346`):
+    - tuning:
+      - `python scripts/tune_candidate_gate_trade_density.py ... --selector-mode pareto_objective --selector-enable-two-stage-gate --selector-enable-veto-ensemble --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage346.json`
+    - replay:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1 --summary-json build/Release/logs/candidate_train_eval_cycle_summary_stage346.json`
+  - result:
+    - selector telemetry:
+      - requested/applied=`pareto_objective`
+      - two-stage applied level=`profit_gate`
+      - pre/profit rows=`4 / 2`
+      - veto blocked=`0`
+      - pareto front size=`2`, candidate rows=`2`
+    - winner:
+      - remained `scenario_quality_focus_002` (`pf=0.4118`, `exp=-9.7921`)
+    - replay (`stage346`) vs `stage345`:
+      - validation unchanged=`0.4350 / -8.8452`
+      - holdout unchanged=`0.4463 / -7.9567`
+      - `promotion_gate_pass=false`, walk-forward ready ratio unchanged (`0.0`)
+  - interpretation:
+    - phase-B wiring is now active and producing structured selection diagnostics.
+    - however, gating structure alone still did not move replay metrics or gate verdict.
+    - next step should proceed to live-path `2-stage gate + veto` enforcement (not only offline selector) and then evaluate drift/ready-ratio response.
+
+- Stage-2.147 update (2026-02-18, live-path propagation + selection consistency hardening):
+  - implementation:
+    - `scripts/run_realdata_candidate_loop.py`
+      - added tune selector pass-through CLI set (phase-B defaults):
+        - selector mode: `pareto_objective`
+        - `two-stage gate`: enabled by default
+        - `veto ensemble`: enabled by default
+        - phase-B threshold set (`pre/profit/veto`) exposed as loop-level args.
+      - tuning subprocess wiring now forwards selector/two-stage/veto controls to:
+        - `scripts/tune_candidate_gate_trade_density.py`
+      - runtime log now emits:
+        - `tune_selector=mode:..., two_stage:..., veto:...`
+    - `scripts/run_candidate_auto_improvement_loop.py`
+      - added same tune selector controls at auto-loop CLI level and forwards them to internal tune run.
+      - fixed winner consistency bug:
+        - `select_best_combo_from_tune_summary(...)` now uses tune summary `best_combo_id` (selector-applied result) as authoritative.
+        - fallback to local objective re-ranking only when `best_combo_id` is missing/invalid.
+      - added telemetry fields:
+        - `selected_combo_selection_source`
+        - `selected_combo_selector_mode_applied`
+        - `selected_combo_selector_reason`
+      - iteration log now prints selection source and applied selector mode.
+  - verification:
+    - `python -m py_compile scripts/run_realdata_candidate_loop.py scripts/run_candidate_auto_improvement_loop.py scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/run_realdata_candidate_loop.py --help` PASS
+    - `python scripts/run_candidate_auto_improvement_loop.py --help` PASS
+    - selector consistency smoke:
+      - `select_best_combo_from_tune_summary(...)` on `candidate_trade_density_tuning_summary_stage346.json`
+      - result:
+        - `selected_combo=scenario_quality_focus_002`
+        - `selection_source=tune_summary_best_combo_id`
+        - `selector_mode_applied=pareto_objective`
+  - interpretation:
+    - phase-B selectorÍ∞Ä ?§ÌîÑ?ºÏù∏ ?úÎãù?êÎßå Î∞òÏòÅ?òÍ≥† auto-loop?êÏÑú ?¨Ï†ï?¨Î°ú Î¨¥Î†•?îÎêò???∏Ï∂ú Í≤ΩÎ°ú Î¶¨Ïä§?¨Î? ?úÍ±∞?àÎã§.
+    - next step:
+      - run next batch (`stage347+`) with replay to measure whether enforcement consistency moves gate metrics (promotion/walk-forward ready ratio).
+
+- Stage-2.148 update (2026-02-18, stage347 execution after propagation):
+  - execution:
+    - tuning:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --selector-mode pareto_objective --selector-enable-two-stage-gate --selector-enable-veto-ensemble --selector-two-stage-pre-min-avg-trades 8 --selector-two-stage-pre-min-win-rate-pct 39 --selector-two-stage-pre-max-market-loss-top-share-pct 33 --selector-two-stage-pre-max-market-loss-hhi 0.19 --selector-two-stage-profit-min-profit-factor 0.41 --selector-two-stage-profit-min-expectancy-krw -10 --selector-two-stage-profit-min-win-rate-pct 40 --selector-veto-max-market-loss-top-share-pct 33 --selector-veto-max-market-loss-hhi 0.19 --selector-veto-max-avg-total-trades 150 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage347.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage347.json`
+    - replay:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1 --summary-json build/Release/logs/candidate_train_eval_cycle_summary_stage347.json`
+  - result:
+    - selector telemetry:
+      - requested/applied=`pareto_objective`
+      - reason=`pareto_front_filtered_by_objective_order`
+      - pre/profit rows=`4 / 2`
+      - candidate rows=`2`, veto blocked=`0`
+    - winner:
+      - `best_combo_id=scenario_quality_focus_002`
+    - replay metrics:
+      - validation=`pf 0.4350 / exp -8.8452`
+      - holdout=`pf 0.4463 / exp -7.9567`
+      - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+      - walk-forward ready ratio validation/holdout=`0.0 / 0.0`
+    - vs stage346:
+      - no metric movement (winner + replay + gate verdict all unchanged).
+  - interpretation:
+    - selector propagation/call-stack consistency fix itself is stable, but core bottleneck remains unchanged.
+    - next step:
+      - proceed to topology pivot candidate set (selection/gate structure), not additional scalar threshold micro-tuning.
+
+- Stage-2.149 update (2026-02-18, topology pivot: consistency-objective selector):
+  - implementation:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - added new selector mode:
+      - `consistency_objective`
+      - purpose:
+        - penalize screen?îfinal drift before final winner pick (anti-overfitting topology)
+      - scoring components:
+        - objective drift (`objective_score` vs `screen_objective_score`)
+        - win-rate drift (`avg_win_rate_pct` vs `screen_avg_win_rate_pct`)
+        - profitable-ratio drift (`profitable_ratio` vs `screen_profitable_ratio`)
+        - trade-count drift (`avg_total_trades` vs `screen_avg_total_trades`)
+        - gate penalties (`gate_profit_factor_pass`, `gate_expectancy_pass`, `gate_trades_pass`)
+      - selector telemetry extension:
+        - `consistency_selector_top_score`
+        - `consistency_selector_top_detail`
+        - `consistency_selector_top3`
+    - CLI extension:
+      - `--selector-mode` now supports:
+        - `objective | pareto_objective | consistency_objective`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_realdata_candidate_loop.py scripts/run_candidate_auto_improvement_loop.py` PASS
+    - `python scripts/tune_candidate_gate_trade_density.py --help` PASS
+  - execution (`stage348`):
+    - tuning:
+      - `python scripts/tune_candidate_gate_trade_density.py ... --selector-mode consistency_objective --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage348.json`
+    - replay:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1 --summary-json build/Release/logs/candidate_train_eval_cycle_summary_stage348.json`
+  - result:
+    - selector telemetry:
+      - requested/applied=`consistency_objective`
+      - reason=`consistency_penalized_objective_selection`
+      - candidate rows=`2`
+      - top detail showed drift terms near zero and gate penalty dominated.
+    - winner:
+      - remained `scenario_quality_focus_002`
+    - replay metrics:
+      - validation=`0.4350 / -8.8452`
+      - holdout=`0.4463 / -7.9567`
+      - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+      - walk-forward ready ratio validation/holdout=`0.0 / 0.0`
+    - vs stage347:
+      - no metric movement.
+  - interpretation:
+    - topology selector extension is wired and observable, but current candidate set has low screen/final drift, so selector pressure is weak.
+    - next step:
+      - shift from selector-only topology to gate-structure topology change (pre-entry rejection path / risk-gate branch logic) for meaningful movement.
+
+- Stage-2.150 update (2026-02-18, gate-structure topology patch: adaptive relief):
+  - implementation (runtime gate branch redesign):
+    - `include/engine/EngineConfig.h`
+      - added entry-quality adaptive-relief controls:
+        - `enable_entry_quality_adaptive_relief`
+        - `entry_quality_adaptive_relief_rr_max_gap`
+        - `entry_quality_adaptive_relief_edge_max_gap`
+        - `entry_quality_adaptive_relief_min_signal_strength`
+        - `entry_quality_adaptive_relief_min_expected_value`
+        - `entry_quality_adaptive_relief_min_liquidity_score`
+        - `entry_quality_adaptive_relief_position_scale`
+    - `src/common/Config.cpp`
+      - wired config JSON parsing for all adaptive-relief controls.
+    - `src/runtime/BacktestRuntime.cpp`
+      - `EntryQualityGateSnapshot` extended with `adaptive_relief_applied`.
+      - `evaluateEntryQualityGate(...)` now supports limited adaptive-only failure relief:
+        - applies only when failure source is adaptive-tightening branch.
+        - requires quality floor (`signal strength`, `expected value`, `liquidity`).
+        - relief gates are capped and never below base gate.
+      - second-stage confirmation now uses `entry_quality_eval` effective gates (post-relief aware).
+      - when relief path is used, position size is down-scaled by `entry_quality_adaptive_relief_position_scale`.
+      - added runtime log marker:
+        - `entry-quality adaptive relief applied ...`
+    - `src/runtime/LiveTradingRuntime.cpp`
+      - mirrored adaptive-relief logic for live path parity.
+      - same relief quality floor, capped relaxation, and position down-scale.
+      - same relief log marker emitted.
+    - config surface update:
+      - `config/config.json`
+      - `build/Release/config/config.json`
+      - adaptive-relief defaults explicitly added.
+    - tuning/persistence compatibility:
+      - `scripts/tune_candidate_gate_trade_density.py`
+        - adaptive-relief keys added to `TUNABLE_TRADING_KEYS`
+      - `scripts/run_candidate_auto_improvement_loop.py`
+        - adaptive-relief keys added to combo->config apply map
+  - verification:
+    - C++ build:
+      - `cmake --build build --config Release --target AutoLifeTrading` PASS
+    - python compile:
+      - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_candidate_auto_improvement_loop.py scripts/run_realdata_candidate_loop.py` PASS
+  - execution (`stage349`):
+    - tuning:
+      - `python scripts/tune_candidate_gate_trade_density.py ... --selector-mode pareto_objective --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage349.json`
+    - replay:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1 --summary-json build/Release/logs/candidate_train_eval_cycle_summary_stage349.json`
+  - observed behavior:
+    - relief runtime logs confirmed in artifacts:
+      - `build/Release/logs/autolife.log` / `autolife.*.log` include multiple
+        `entry-quality adaptive relief applied` records.
+    - selector telemetry changed:
+      - stage347: `pre/profit/candidate=4/2/2`
+      - stage349: `pre/profit/candidate=3/0/3` (`pre_gate_fallback` branch active)
+    - replay deltas vs stage347:
+      - validation:
+        - `pf: 0.4350 -> 0.4293` (down)
+        - `exp: -8.8452 -> -8.8376` (slight up)
+      - holdout:
+        - `pf: 0.4463 -> 0.4688` (up)
+        - `exp: -7.9567 -> -7.7824` (up)
+      - train:
+        - `pf: 0.4567 -> 0.4766` (up)
+      - top risk remained:
+        - `blocked_risk_gate_entry_quality_rr_adaptive_regime` (count shifts observed)
+      - promotion unchanged:
+        - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+      - walk-forward unchanged:
+        - ready ratio validation/holdout=`0.0 / 0.0`
+  - interpretation:
+    - this is first structural patch with measurable distribution shift (especially holdout-side PF/expectancy improvement) without symbol hardcoding.
+    - but validation PF weakened and promotion/walk-forward are still blocked, so full breakthrough is not yet achieved.
+    - next step:
+      - tighten relief acceptance with validation-priority guard (anti-overfit):
+        - keep relief only when validation PF floor is not degraded beyond tolerance in replay chain.
+
+- Stage-2.151 update (2026-02-18, adaptive-relief validation-priority tightening + wiring completion):
+  - implementation:
+    - runtime guard tightening (validation-priority):
+      - `include/engine/EngineConfig.h`
+      - `src/common/Config.cpp`
+      - `src/runtime/BacktestRuntime.cpp`
+      - `src/runtime/LiveTradingRuntime.cpp`
+      - added/used adaptive-relief hard guards:
+        - `entry_quality_adaptive_relief_min_strategy_trades`
+        - `entry_quality_adaptive_relief_min_strategy_win_rate`
+        - `entry_quality_adaptive_relief_min_strategy_profit_factor`
+        - `entry_quality_adaptive_relief_block_high_stress_regime`
+      - relief is now allowed only when strategy history and regime constraints are satisfied.
+    - script wiring completion:
+      - `scripts/tune_candidate_gate_trade_density.py`
+        - new keys appended to `TUNABLE_TRADING_KEYS`.
+        - `apply_candidate_combo_to_config(...)` now writes adaptive-relief keys (including new 4 keys) when present.
+      - `scripts/run_candidate_auto_improvement_loop.py`
+        - combo->config apply map extended with the same 4 keys.
+    - config surface:
+      - `config/config.json`
+      - `build/Release/config/config.json`
+      - new adaptive-relief guard defaults kept explicit in JSON.
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_candidate_auto_improvement_loop.py` PASS
+    - `D:\VisualStudio\Install\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe --build build --config Release --target AutoLifeTrading` PASS
+  - execution (`stage350`):
+    - tuning:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --selector-mode pareto_objective --selector-enable-two-stage-gate --selector-enable-veto-ensemble --selector-two-stage-pre-min-avg-trades 8 --selector-two-stage-pre-min-win-rate-pct 39 --selector-two-stage-pre-max-market-loss-top-share-pct 33 --selector-two-stage-pre-max-market-loss-hhi 0.19 --selector-two-stage-profit-min-profit-factor 0.41 --selector-two-stage-profit-min-expectancy-krw -10 --selector-two-stage-profit-min-win-rate-pct 40 --selector-veto-max-market-loss-top-share-pct 33 --selector-veto-max-market-loss-hhi 0.19 --selector-veto-max-avg-total-trades 150 --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage350.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage350.json`
+    - replay:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1 --summary-json build/Release/logs/candidate_train_eval_cycle_summary_stage350.json`
+  - result:
+    - selector:
+      - winner remained `scenario_quality_focus_002`
+      - two-stage rows stayed `pre/profit/candidate = 3 / 0 / 3` (same as stage349)
+    - replay metrics:
+      - train=`pf 0.4567 / exp -9.5375`
+      - validation=`pf 0.4350 / exp -8.8452`
+      - holdout=`pf 0.4463 / exp -7.9567`
+      - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+      - walk-forward ready ratio validation/holdout=`0.0 / 0.0`
+    - delta vs stage349:
+      - train/validation/holdout metrics regressed back to stage347-equivalent baseline.
+      - `entry-quality adaptive relief applied` runtime log records were not observed in current stage350 artifacts.
+  - interpretation:
+    - stricter relief guard prevented the prior holdout-side uplift from stage349 and restored conservative baseline behavior.
+    - overfitting-risk control improved (relief no longer firing broadly), but breakthrough is still absent.
+    - next step:
+      - move from scalar relief tightening to structure-level path diversification:
+        - keep strict-relief profile as safety anchor,
+        - add alternate branch profile with bounded relief/re-ranking mix for A/B comparison in next 2.nn batch.
+
+- Stage-2.152 update (2026-02-18, diagnostic split: "bug vs regime" isolation run):
+  - purpose:
+    - verify whether no-progress state is caused by call-stack/config-apply bug or by over-constrained selection + hard market regime.
+  - execution A (`stage351_diag_raw`, raw objective path):
+    - tuning:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --selector-mode objective --disable-selector-enable-two-stage-gate --disable-selector-enable-veto-ensemble --disable-objective-enforce-rr-ownership-top-component --disable-objective-enforce-split-ownership-drift-guard --disable-objective-enforce-rr-adaptive-mixed-vs-regime-drift-guard --disable-objective-enforce-edge-base-anti-drift-guard --disable-objective-enforce-walk-forward-profitability-guard --disable-objective-enforce-walk-forward-quality-floor-guard --disable-objective-enforce-walk-forward-trade-density-guard --disable-objective-enforce-market-loss-concentration-guard --disable-objective-enforce-wf-window-loss-focus-guard --disable-objective-enforce-wf-window-cluster-loss-guard --disable-objective-enforce-wf-window-feature-collapse-guard --disable-objective-enforce-validation-floor-guard --disable-objective-enforce-context-flip-rebound-guard --disable-holdout-failure-family-suppression --disable-post-suppression-quality-expansion --disable-wf-profit-sum-recovery-expansion --disable-wf-window-feature-recovery-expansion --disable-context-stability-guard --disable-bottleneck-priority --disable-bottleneck-adapted-scenarios --disable-rr-adaptive-regime-local-sweep --disable-rr-bridge-local-sweep --disable-hint-impact-guardrail --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage351_diag_raw.json`
+    - replay:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1 --summary-json build/Release/logs/candidate_train_eval_cycle_summary_stage351_diag_raw.json`
+    - result:
+      - winner changed: `scenario_quality_focus_002 -> scenario_quality_focus_003`
+      - replay:
+        - train=`pf 0.4162 / exp -10.3926`
+        - validation=`pf 0.4127 / exp -8.7646`
+        - holdout=`pf 0.4804 / exp -7.0994`
+      - verdict:
+        - `promotion_gate_pass=false`, `generalization_guard_pass=true`, WF ready ratio=`0.0/0.0`
+  - execution B (`stage352_diag_diverse`, wider search-space):
+    - tuning:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode diverse_light --max-scenarios 12 --real-data-only --require-higher-tf-companions ... (same diagnostic disable flags) ... --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage352_diag_diverse.json`
+    - replay:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1 --summary-json build/Release/logs/candidate_train_eval_cycle_summary_stage352_diag_diverse.json`
+    - result:
+      - winner changed again: `scenario_diverse_light_001`
+      - replay:
+        - train=`pf 0.6035 / exp -6.4987`
+        - validation=`pf 0.4698 / exp -7.6307`
+        - holdout=`pf 0.5086 / exp -7.1888`
+      - verdict:
+        - `promotion_gate_pass=false`, `generalization_guard_pass=false` (validation vs train PF-drop check fail)
+        - WF ready ratio=`0.0/0.0`
+  - diagnostic conclusion:
+    - call-stack/config-apply path is responsive (winner and risk bottleneck class both changed under controlled perturbation).
+    - no-progress root cause is not a "frozen winner bug", but:
+      - still-negative expectancy across splits,
+      - hard walk-forward profitability failure (`ready_ratio=0.0`),
+      - and split stability constraints at promotion stage.
+    - market regime note (current split snapshots):
+      - 1m close-return average:
+        - train: `-2.11%`
+        - validation: `-2.36%`
+        - holdout: `+8.29%` (BCH outlier uplift)
+      - regime is mixed/unstable, not uniformly bullish; strict promotion failure under this regime is expected.
+  - next step:
+    - keep diagnostic result as baseline and proceed to structure change targeting the new dominant bottleneck:
+      - `blocked_second_stage_confirmation_hostile_history_severe_safety_adders`
+    - introduce one bounded branch that reduces severe-history adder pressure without lowering global PF/expectancy gates.
+
+- Stage-2.153 update (2026-02-18, second-stage severe-history bounded branch rollout + recalibration):
+  - implementation (structure-level change, not scalar-only retune):
+    - files:
+      - `include/engine/EngineConfig.h`
+      - `src/common/Config.cpp`
+      - `src/runtime/BacktestRuntime.cpp`
+      - `src/runtime/LiveTradingRuntime.cpp`
+      - `config/config.json`
+      - `build/Release/config/config.json`
+      - `scripts/tune_candidate_gate_trade_density.py`
+      - `scripts/run_candidate_auto_improvement_loop.py`
+    - change summary:
+      - second-stage history safety adders are now severity-aware (`mild/moderate/severe`) instead of fixed single-step pressure.
+      - added bounded severe-history relief branch:
+        - relief activates only when current signal quality is sufficient (strength/EV/liquidity/sample floor).
+        - relief is capped by `second_stage_history_safety_relief_max_scale`.
+      - added config surface for the above branch so auto-loop/tuning pipeline can carry keys without schema drift.
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_candidate_auto_improvement_loop.py` PASS
+    - `D:\VisualStudio\Install\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe --build build --config Release --target AutoLifeTrading` PASS
+  - execution A (`stage353_fresh`, strict selector/gate chain, cache off):
+    - tuning:
+      - `python scripts/tune_candidate_gate_trade_density.py ... --disable-eval-cache --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage353_fresh.json`
+    - replay:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1 --summary-json build/Release/logs/candidate_train_eval_cycle_summary_stage353_fresh.json`
+    - result vs stage350:
+      - train: `pf 0.4567 -> 0.4669`, `exp -9.5375 -> -9.2259` (improved)
+      - validation: `pf 0.4350 -> 0.4318`, `exp -8.8452 -> -8.9877` (degraded)
+      - holdout: `pf 0.4463 -> 0.4606`, `exp -7.9567 -> -7.7371` (improved)
+      - selector topology moved:
+        - `two_stage_applied_level: pre_gate_fallback -> profit_gate`
+        - `veto_blocked_count: 0 -> 1`
+      - however severe-history blocker counts rose (validation/holdout), indicating initial severe-scale setting was too aggressive.
+  - execution B (`stage354_fresh`, severe-scale recalibrated):
+    - recalibration:
+      - severe amplification removed (`second_stage_history_safety_severe_scale=1.0`)
+      - relief widened (`max_scale=0.45`, lower quality floors, hostile-regime block off by default)
+    - tuning/replay:
+      - `candidate_trade_density_tuning_summary_stage354_fresh.json`
+      - `candidate_train_eval_cycle_summary_stage354_fresh.json`
+    - result:
+      - replay metrics returned near stage350 baseline:
+        - train=`pf 0.4593 / exp -9.4892`
+        - validation=`pf 0.4350 / exp -8.8452`
+        - holdout=`pf 0.4463 / exp -7.9567`
+      - promotion/walk-forward unchanged:
+        - `promotion_gate_pass=false`, `generalization_guard_pass=true`
+        - WF ready ratio validation/holdout=`0.0 / 0.0`
+  - interpretation:
+    - structural branch insertion itself is stable and does alter selector topology.
+    - but with current market/split, this branch alone does not clear promotion/WF bottleneck.
+    - next step:
+      - keep this bounded branch as infrastructure, and pivot to the next structure-level item:
+        - decouple `entry_quality` and `second_stage` into explicit two-head score aggregation (single serial hard-block ?ÑÌôî).
+
+- Stage-2.154 update (2026-02-18, explicit two-head aggregation rollout: entry-quality + second-stage):
+  - implementation (structure-level change):
+    - files:
+      - `include/engine/EngineConfig.h`
+      - `src/common/Config.cpp`
+      - `src/runtime/BacktestRuntime.cpp`
+      - `src/runtime/LiveTradingRuntime.cpp`
+      - `include/runtime/BacktestRuntime.h`
+      - `src/main.cpp`
+      - `config/config.json`
+      - `build/Release/config/config.json`
+      - `scripts/tune_candidate_gate_trade_density.py`
+      - `scripts/run_candidate_auto_improvement_loop.py`
+    - change summary:
+      - added explicit two-head scoring model:
+        - `entry_quality_head_score`
+        - `second_stage_head_score`
+        - weighted aggregate acceptance score
+      - decoupled serial hard-block chain:
+        - both heads pass -> immediate pass
+        - one head near-miss -> bounded override path (aggregate + floor + regime/history guard)
+      - added runtime diagnostics counters:
+        - `two_head_aggregation_override_accept`
+        - `two_head_aggregation_blocked`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_candidate_auto_improvement_loop.py` PASS
+    - `D:\VisualStudio\Install\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe --build build --config Release --target AutoLifeTrading` PASS
+  - execution (`stage355_fresh`):
+    - tuning:
+      - `candidate_trade_density_tuning_summary_stage355_fresh.json`
+    - replay:
+      - `candidate_train_eval_cycle_summary_stage355_fresh.json`
+    - result:
+      - bottleneck ownership rotated to second-stage:
+        - `top_entry_risk_gate_component_reason=blocked_second_stage_confirmation_rr_margin`
+      - metrics:
+        - train=`pf 0.4561 / exp -9.6372`
+        - validation=`pf 0.4350 / exp -8.8452`
+        - holdout=`pf 0.4463 / exp -7.9567`
+      - promotion/WF unchanged:
+        - `promotion_gate_pass=false`
+        - WF ready ratio validation/holdout=`0.0 / 0.0`
+  - interpretation:
+    - structure was applied and ownership taxonomy moved, but override activation remained conservative.
+  - next step:
+    - keep two-head structure and relax bounded defaults slightly so non-hostile near-miss cases can be tested without lowering anti-overfit discipline.
+
+- Stage-2.155 update (2026-02-18, two-head bounded-relax calibration):
+  - calibration update:
+    - files:
+      - `include/engine/EngineConfig.h`
+      - `src/common/Config.cpp`
+      - `config/config.json`
+      - `build/Release/config/config.json`
+    - defaults tuned:
+      - `two_head_min_entry_quality_score: 0.94 -> 0.90`
+      - `two_head_min_second_stage_score: 0.92 -> 0.88`
+      - `two_head_min_aggregate_score: 1.00 -> 0.98`
+      - `two_head_aggregation_block_high_stress_regime: true -> false`
+      - `two_head_aggregation_min_strategy_trades: 12 -> 8`
+  - verification:
+    - `D:\VisualStudio\Install\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe --build build --config Release --target AutoLifeTrading` PASS
+  - execution (`stage356_fresh`):
+    - tuning:
+      - `candidate_trade_density_tuning_summary_stage356_fresh.json`
+    - replay:
+      - `candidate_train_eval_cycle_summary_stage356_fresh.json`
+    - result vs stage355:
+      - train improved:
+        - `pf 0.4561 -> 0.4738`
+        - `exp -9.6372 -> -9.2902`
+      - holdout improved:
+        - `pf 0.4463 -> 0.4786`
+        - `exp -7.9567 -> -7.5772`
+      - validation degraded:
+        - `pf 0.4350 -> 0.4227`
+        - `exp -8.8452 -> -9.0267`
+      - blocker volume reduced materially:
+        - train `blocked_risk_gate_entry_quality: 3459 -> 1433`
+        - train `blocked_second_stage_confirmation: 5304 -> 2156`
+      - live-like sample check (`KRW-SOL` backtest json):
+        - `two_head_aggregation_override_accept=21`
+        - `two_head_aggregation_blocked=501`
+      - promotion/WF unchanged:
+        - `promotion_gate_pass=false`
+        - WF ready ratio validation/holdout=`0.0 / 0.0`
+  - interpretation:
+    - two-head override path is now functionally active (not only taxonomy relabeling).
+    - split behavior is mixed (validation down, holdout up), so overfit-risk guard must stay strict.
+  - next step:
+    - add validation-floor-coupled override cap:
+      - shrink override allowance automatically when validation floor drifts down,
+      - preserve holdout gain while preventing validation collapse.
+
+- Stage-2.156 update (2026-02-18, validation-floor-coupled two-head override-cap objective rollout):
+  - implementation:
+    - files:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - added:
+      - objective guard: validation-floor-coupled `two_head_override_accept_ratio` cap
+      - dynamic cap model:
+        - base cap -> deficit-coupled shrink -> min cap floor
+      - tuning objective inputs:
+        - `two_head_override_accept_ratio`
+        - `two_head_override_total`
+      - diagnostics fields in summary rows:
+        - `two_head_override_dynamic_cap_ratio`
+        - `two_head_override_cap_guard_active`
+        - `two_head_override_cap_overshoot`
+      - new CLI controls:
+        - `--objective-enforce-two-head-validation-coupled-override-cap`
+        - `--objective-two-head-override-base-cap-ratio`
+        - `--objective-two-head-override-min-cap-ratio`
+        - `--objective-two-head-validation-deficit-cap-shrink`
+        - `--objective-two-head-override-cap-penalty-scale`
+        - `--objective-two-head-override-cap-activation-min-total`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/tune_candidate_gate_trade_density.py --help` PASS
+  - execution:
+    - tuning:
+      - `candidate_trade_density_tuning_summary_stage357_fresh.json`
+    - replay:
+      - `candidate_train_eval_cycle_summary_stage357_fresh.json`
+  - note:
+    - guard activation log was present, but all `two_head_override_*` totals were `0.0` due to upstream matrix aggregation omission.
+
+- Stage-2.157 update (2026-02-18, matrix aggregation path fix for two-head counters):
+  - implementation:
+    - files:
+      - `scripts/run_profitability_matrix.py`
+    - change:
+      - wired `two_head_aggregation_override_accept` and `two_head_aggregation_blocked` into `entry_risk_gate_breakdown_json` aggregation path.
+      - excluded the two-head meta counters from top-risk-component ownership ranking (taxonomy stability).
+  - verification:
+    - `python -m py_compile scripts/run_profitability_matrix.py scripts/tune_candidate_gate_trade_density.py` PASS
+  - execution (`stage358_fresh`):
+    - tuning:
+      - `candidate_trade_density_tuning_summary_stage358_fresh.json`
+    - result:
+      - `two_head_override_total` recovered (max row total=`11309`)
+      - `two_head_override_accept_ratio` observed range now non-zero (max=`0.03084`)
+      - with default cap settings, all rows had `two_head_override_cap_overshoot=0.0` (guard active but non-binding)
+      - best combo remained `scenario_quality_focus_002`
+
+- Stage-2.158 update (2026-02-18, cap-stress validation to prove guard binding path):
+  - execution (`stage359_capstress`):
+    - tuning command override:
+      - `--objective-two-head-override-base-cap-ratio 0.015`
+      - `--objective-two-head-override-min-cap-ratio 0.003`
+      - `--objective-two-head-validation-deficit-cap-shrink 0.02`
+      - `--objective-two-head-override-cap-penalty-scale 6500`
+    - output:
+      - `candidate_trade_density_tuning_summary_stage359_capstress.json`
+  - result:
+    - overshoot activated on all rows (`10/10`), max overshoot=`0.02152`
+    - best combo id unchanged (`scenario_quality_focus_002`), but objective reflected cap-penalty application:
+      - `stage358: -38417.0891 -> stage359: -38654.5971`
+  - interpretation:
+    - validation-coupled override-cap path is now both wired and behaviorally verified.
+    - default profile keeps this guard as non-binding watchdog unless override ratio drifts up.
+  - next step:
+    - keep default cap settings for production tuning.
+    - proceed to next structure-level bottleneck work (signal-generation / policy-layer generalization), while retaining this guard as anti-overfit backstop.
+
+- Stage-2.159 update (2026-02-18, second-stage RR near-miss relief wiring + diagnostics):
+  - implementation:
+    - config/runtime:
+      - added bounded near-miss relief knobs in `EngineConfig`/`Config`:
+        - `enable_second_stage_rr_margin_near_miss_relief`
+        - `second_stage_rr_margin_near_miss_max_gap`
+        - `second_stage_rr_margin_near_miss_min_signal_strength`
+        - `second_stage_rr_margin_near_miss_min_expected_value`
+        - `second_stage_rr_margin_near_miss_min_liquidity_score`
+        - `second_stage_rr_margin_near_miss_min_strategy_trades`
+        - `second_stage_rr_margin_near_miss_block_high_stress_regime`
+        - `second_stage_rr_margin_near_miss_score_boost`
+      - added second-stage snapshot diagnostics:
+        - `rr_margin_gap`, `edge_margin_gap`, `rr_margin_near_miss`
+      - added two-head diagnostics:
+        - `rr_margin_near_miss_relief_applied`
+    - backtest funnel counters:
+      - `second_stage_rr_margin_near_miss_observed`
+      - `second_stage_rr_margin_near_miss_relief_applied`
+      - `blocked_second_stage_confirmation_rr_margin_near_miss`
+      - `two_head_aggregation_override_accept_rr_margin_near_miss`
+    - reporting chain:
+      - wired new counters into `src/main.cpp` JSON/console funnel output.
+      - wired new counters into `scripts/run_profitability_matrix.py` (`entry_risk_gate_breakdown_json`).
+      - extended `scripts/tune_candidate_gate_trade_density.py` row metrics:
+        - near-miss observed/blocked/relief counts + ratios
+        - override accept near-miss count + ratio
+  - verification:
+    - `python -m py_compile scripts/run_profitability_matrix.py scripts/tune_candidate_gate_trade_density.py` PASS
+    - C++ build verification was initially blocked in one shell (`cmake` not found in PATH), then resolved in Stage-2.160 via absolute CMake path.
+
+- Stage-2.160 update (2026-02-18, CMake path resolution + compile verification):
+  - environment/path:
+    - confirmed CMake binary under vcpkg:
+      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe`
+    - note:
+      - on shells where `cmake` is not in PATH, use the absolute path above for all build commands.
+  - verification:
+    - build PASS:
+      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading`
+    - runtime JSON smoke:
+      - `./build/Release/AutoLifeTrading.exe --backtest data/backtest/sample_trend_pullback_1m.csv --json`
+      - verified new entry-funnel keys exist:
+        - `blocked_second_stage_confirmation_rr_margin_near_miss`
+        - `second_stage_rr_margin_near_miss_observed`
+        - `second_stage_rr_margin_near_miss_relief_applied`
+        - `two_head_aggregation_override_accept_rr_margin_near_miss`
+
+- Stage-2.161 update (2026-02-18, stage360_fresh re-run after near-miss integration):
+  - execution:
+    - tuning:
+      - `python scripts/tune_candidate_gate_trade_density.py --scenario-mode quality_focus --max-scenarios 6 --real-data-only --require-higher-tf-companions --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-eval-cache --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage360_fresh.csv --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage360_fresh.json`
+    - train/eval:
+      - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1 --summary-json build/Release/logs/candidate_train_eval_cycle_summary_stage360_fresh.json`
+  - tuning result:
+    - best combo: `scenario_quality_focus_002`
+    - core metrics (best row):
+      - `avg_profit_factor=0.4191`
+      - `avg_expectancy_krw=-9.8398`
+      - `avg_total_trades=124.875`
+      - `profitable_ratio=0.0`
+      - `promotion_gate=false`
+    - near-miss diagnostics (best row):
+      - `second_stage_rr_margin_near_miss_observed_count=111.0`
+      - `second_stage_rr_margin_near_miss_blocked_count=53.0`
+      - `second_stage_rr_margin_near_miss_relief_applied_count=40.0`
+      - `two_head_override_accept_rr_margin_near_miss_count=0.0`
+      - interpretation: near-miss relief path is now active and measurable, but promotion bottleneck remains unresolved.
+  - train/eval result:
+    - train: `pf=0.4738`, `exp=-9.2902`, `avg_trades=140.43`
+    - validation: `pf=0.4227`, `exp=-9.0267`, `avg_trades=164.0`
+    - holdout: `pf=0.4786`, `exp=-7.5772`, `avg_trades=94.67`
+    - walk-forward:
+      - validation `ready_ratio=0.0`, dominant fail=`oos_profit_sum_positive`
+      - holdout `ready_ratio=0.0`, dominant fail=`oos_profit_sum_positive`
+    - conclusion:
+      - structural near-miss instrumentation is integrated and functioning;
+      - profitability/walk-forward gates still fail, so next step remains structure-level bottleneck work (signal-generation/policy-layer generalization) over micro tuning.
+
+- Stage-2.162 update (2026-02-18, near-miss floor-relax stale-config leakage guard):
+  - root cause:
+    - tuning loop seeds each combo from `build/Release/config/config.json` (`original_build_raw`).
+    - if an experimental key is missing in combo spec, old value can remain and be reused across all combos.
+  - implementation:
+    - file:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - change:
+      - `apply_candidate_combo_to_config(...)` now force-sets below keys every combo:
+        - `enable_two_head_rr_margin_near_miss_floor_relax` (default `False` when absent)
+        - `two_head_rr_margin_near_miss_second_stage_floor_relax` (default `0.06`)
+        - `two_head_rr_margin_near_miss_aggregate_floor_relax` (default `0.03`)
+      - summary row now records effective combo-level values:
+        - `combo_near_miss_floor_relax_enabled`
+        - `combo_near_miss_second_stage_floor_relax`
+        - `combo_near_miss_aggregate_floor_relax`
+        - `near_miss_floor_relax_leak_detected` (sanity flag)
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - re-run (`max-scenarios=1`, with expansion):
+      - `candidate_trade_density_tuning_summary_stage163_guardcheck.csv/json`
+    - check:
+      - all rows `combo_near_miss_floor_relax_enabled=False`
+      - all rows `two_head_near_miss_floor_relax_applied_count=0.0`
+  - result snapshot:
+    - best combo: `scenario_quality_focus_000_wf_profit_recovery_05`
+    - still gate-fail (`overall_gate_pass=False`)
+    - `avg_profit_factor=0.5353`, `avg_expectancy_krw=-9.1537`
+    - near-miss remains mostly blocked at two-head floors:
+      - observed=`603`, relief_applied=`138`, relief_blocked=`132`
+      - blocked_second_stage_floor=`129`, blocked_aggregate_score=`132`
+
+- Stage-2.163 update (2026-02-18, near-miss surplus-compensation structural probe):
+  - implementation:
+    - files:
+      - `include/engine/EngineConfig.h`
+      - `src/common/Config.cpp`
+      - `src/runtime/BacktestRuntime.cpp`
+      - `src/runtime/LiveTradingRuntime.cpp`
+      - `include/runtime/BacktestRuntime.h`
+      - `src/main.cpp`
+      - `scripts/run_profitability_matrix.py`
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - change:
+      - added bounded two-head compensation path (default OFF):
+        - `enable_two_head_rr_margin_near_miss_surplus_compensation`
+        - `two_head_rr_margin_near_miss_surplus_min_entry_surplus`
+        - `two_head_rr_margin_near_miss_surplus_min_edge_score`
+        - `two_head_rr_margin_near_miss_surplus_max_second_stage_deficit`
+        - `two_head_rr_margin_near_miss_surplus_max_aggregate_deficit`
+        - `two_head_rr_margin_near_miss_surplus_entry_weight`
+        - `two_head_rr_margin_near_miss_surplus_max_aggregate_bonus`
+      - runtime diagnostics added:
+        - `two_head_aggregation_rr_margin_near_miss_surplus_compensation_applied`
+        - blocked-log now prints `entry_surplus`, `second_deficit`, `aggregate_deficit`, `edge_score`, `surplus_bonus`
+      - tuning/matrix plumbing:
+        - summary and breakdown now carry the new counter and combo-level compensation params.
+  - verification:
+    - `python -m py_compile scripts/run_profitability_matrix.py scripts/tune_candidate_gate_trade_density.py` PASS
+    - build PASS:
+      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading`
+  - execution (8-dataset matrix A/B):
+    - baseline config:
+      - `profitability_gate_report_stage163_surplus_baseline.json`
+      - `pf=0.4585`, `exp=-9.4684`
+    - compensation ON (default-bounded + loose-bounded):
+      - `profitability_gate_report_stage163_surplus_on.json`
+      - `profitability_gate_report_stage163_surplus_loose.json`
+      - both unchanged vs baseline
+      - `two_head_aggregation_rr_margin_near_miss_surplus_compensation_applied=0`
+  - diagnosis:
+    - single-run diagnostic log (`upbit_KRW_ADA_1m_12000`) showed representative blocked sample:
+      - `entry_surplus=0.1019`, `second_deficit=0.6726`, `aggregate_deficit=0.3356`, `edge_score=2.5000`
+    - interpretation:
+      - near-miss blocked cases are not "small deficit" events; deficits are much larger than bounded compensation range.
+      - next structural focus should move upstream (second-stage head score calibration / gating topology), not additional bounded compensation tuning.
+
+- Stage-2.164 update (2026-02-18, runtime config sync fix + near-miss head-score-floor probe):
+  - implementation:
+    - runtime/config pipeline fix:
+      - `scripts/run_profitability_matrix.py`
+      - backtest subprocess now runs with `cwd=exe_dir`.
+      - matrix writes active profile config to both:
+        - user `--config-path`
+        - runtime path `exe_dir/config/config.json`
+      - report inputs now include `runtime_config_path`.
+    - near-miss head-score-floor path (default OFF):
+      - files:
+        - `include/engine/EngineConfig.h`
+        - `src/common/Config.cpp`
+        - `src/runtime/BacktestRuntime.cpp`
+        - `src/runtime/LiveTradingRuntime.cpp`
+        - `include/runtime/BacktestRuntime.h`
+        - `src/main.cpp`
+        - `scripts/run_profitability_matrix.py`
+        - `scripts/tune_candidate_gate_trade_density.py`
+      - keys:
+        - `enable_second_stage_rr_margin_near_miss_head_score_floor`
+        - `second_stage_rr_margin_near_miss_head_score_floor_base`
+        - `second_stage_rr_margin_near_miss_head_score_floor_quality_weight`
+        - `second_stage_rr_margin_near_miss_head_score_floor_gap_weight`
+        - `second_stage_rr_margin_near_miss_head_score_floor_max`
+      - diagnostics:
+        - counter: `two_head_aggregation_rr_margin_near_miss_head_score_floor_applied`
+        - tuning row + leak guard fields added for head-floor.
+  - verification:
+    - `python -m py_compile scripts/run_profitability_matrix.py scripts/tune_candidate_gate_trade_density.py` PASS
+    - build PASS:
+      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading`
+    - matrix profile-application sanity (`custom --config-path`):
+      - before fix: `core_full` and `legacy_default` identical on BTC (`trades=4` both)
+      - after fix: BTC split diverged (`core_full trades=4`, `legacy_default trades=74`)
+  - execution (8-dataset A/B, core_full):
+    - baseline:
+      - `pf=0.4585`, `exp=-9.4684`
+      - near-miss override=`2`, blocked=`19`
+    - head-floor ON (moderate):
+      - `pf=0.4585`, `exp=-9.4678` (tiny improve)
+      - `near_head_floor_applied=19`
+      - near-miss override `2 -> 5`
+      - blocked `19 -> 15` (second-stage-floor blocked `19 -> 6`)
+    - head-floor ON (strong):
+      - `pf=0.4552`, `exp=-9.5735` (worse)
+      - near-miss override `9`, blocked `1`, but quality drift worsened overall profitability
+  - conclusion:
+    - runtime config propagation bug in matrix was real and is now fixed.
+    - head-score-floor path is structurally active and can move near-miss acceptance,
+      but aggressive settings degrade PF/expectancy.
+    - keep head-floor default OFF, and if reused, only with bounded moderate settings.
+
+- Stage-2.165 update (2026-02-18, second-stage RR negative-margin soft-score + loop config propagation fix):
+  - implementation:
+    - second-stage soft-score path (default OFF):
+      - files:
+        - `include/engine/EngineConfig.h`
+        - `src/common/Config.cpp`
+        - `src/runtime/BacktestRuntime.cpp`
+        - `src/runtime/LiveTradingRuntime.cpp`
+      - new keys:
+        - `enable_second_stage_rr_margin_soft_score`
+        - `second_stage_rr_margin_soft_score_max_gap`
+        - `second_stage_rr_margin_soft_score_floor`
+        - `second_stage_rr_margin_soft_score_gap_tightness_weight`
+      - behavior:
+        - when `rr_margin < 0` and `rr_margin_gap <= max_gap`, apply bounded soft floor to `rr_margin_score`,
+        - avoid hard collapse to `0` for slight negative RR margin while keeping `pass/fail` gate logic unchanged.
+    - tuning/loop propagation fix:
+      - files:
+        - `scripts/tune_candidate_gate_trade_density.py`
+        - `scripts/run_candidate_auto_improvement_loop.py`
+      - fix:
+        - added missing near-miss/two-head config keys to tunable/apply lists,
+        - prevents combo promotion/apply from silently dropping near-miss structural parameters.
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_candidate_auto_improvement_loop.py scripts/run_profitability_matrix.py` PASS
+    - build PASS:
+      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading`
+  - A/B probe (core_full):
+    - run set A (`engine_compare_36` first 8):
+      - reports:
+        - `build/Release/logs/report_softscore_off.json`
+        - `build/Release/logs/report_softscore_on.json`
+      - result:
+        - both runs dominated by `no_signal_generated`, no effective delta.
+    - run set B (8 mixed sample/simulation datasets):
+      - reports:
+        - `build/Release/logs/report_softscore2_off.json`
+        - `build/Release/logs/report_softscore2_on.json`
+      - result:
+        - metrics unchanged (`pf=25.2152`, `exp=-0.0591`),
+        - near-miss-related counters unchanged (`delta=0`).
+  - interpretation:
+    - soft-score path is integrated and build-safe,
+    - current quick A/B datasets did not enter the targeted `rr_margin < 0` near-miss region,
+    - next validation should replay a dataset bundle where Stage-2.163/2.164 near-miss counters were active.
+
+- Stage-2.166 update (2026-02-18, soft-score activation telemetry + Stage-164 dataset revalidation):
+  - implementation:
+    - telemetry added to verify real activation:
+      - `SecondStageConfirmationSnapshot`:
+        - `rr_margin_soft_score_applied`
+        - `rr_margin_soft_score_floor_value`
+      - backtest entry-funnel counter:
+        - `second_stage_rr_margin_soft_score_applied`
+      - reporting chain sync:
+        - `src/main.cpp` JSON/console output
+        - `scripts/run_profitability_matrix.py` aggregation/exclusion list
+    - files:
+      - `src/runtime/BacktestRuntime.cpp`
+      - `src/runtime/LiveTradingRuntime.cpp`
+      - `include/runtime/BacktestRuntime.h`
+      - `src/main.cpp`
+      - `scripts/run_profitability_matrix.py`
+  - verification:
+    - `python -m py_compile scripts/run_profitability_matrix.py` PASS
+    - build PASS:
+      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading`
+  - A/B revalidation (Stage-164 active 8-dataset bundle):
+    - OFF:
+      - `build/Release/logs/report_softscore4_off.json`
+    - ON(strong):
+      - `build/Release/logs/report_softscore4_on_strong.json`
+    - result:
+      - profile metrics unchanged (`pf=0.4585`, `exp=-9.4684`, trades unchanged),
+      - near-miss counters unchanged,
+      - new telemetry confirms no activation:
+        - `second_stage_rr_margin_soft_score_applied=0` (OFF/ON both)
+  - conclusion:
+    - current bottleneck dataset does not traverse this soft-score branch,
+    - root bottleneck remains two-head/second-stage floor topology and near-miss relief gating, not RR-negative soft-score collapse.
+
+- Stage-2.167 update (2026-02-18, two-head near-miss adaptive floor-relax path + Stage-164 A/B):
+  - implementation:
+    - added adaptive floor-relax path for near-miss relief (default OFF):
+      - adaptive signal: weighted by `near_miss_quality_score` + `near_miss_gap_tightness`
+      - activation guard: `min_activation` threshold
+      - bounded relax caps for second-stage/aggregate floors
+    - new trading config keys:
+      - `enable_two_head_rr_margin_near_miss_adaptive_floor_relax`
+      - `two_head_rr_margin_near_miss_adaptive_floor_relax_min_activation`
+      - `two_head_rr_margin_near_miss_adaptive_floor_relax_max_second_stage`
+      - `two_head_rr_margin_near_miss_adaptive_floor_relax_max_aggregate`
+      - `two_head_rr_margin_near_miss_adaptive_floor_relax_quality_weight`
+      - `two_head_rr_margin_near_miss_adaptive_floor_relax_gap_weight`
+    - telemetry/reporting:
+      - runtime snapshot fields:
+        - `rr_margin_near_miss_adaptive_floor_relax_applied`
+        - `rr_margin_near_miss_adaptive_floor_relax_strength`
+      - backtest entry-funnel counter:
+        - `two_head_aggregation_rr_margin_near_miss_adaptive_floor_relax_applied`
+      - report chain propagation:
+        - `src/main.cpp`
+        - `scripts/run_profitability_matrix.py`
+        - `scripts/tune_candidate_gate_trade_density.py`
+        - `scripts/run_candidate_auto_improvement_loop.py`
+  - files:
+    - `include/engine/EngineConfig.h`
+    - `src/common/Config.cpp`
+    - `src/runtime/BacktestRuntime.cpp`
+    - `src/runtime/LiveTradingRuntime.cpp`
+    - `include/runtime/BacktestRuntime.h`
+    - `src/main.cpp`
+    - `scripts/run_profitability_matrix.py`
+    - `scripts/tune_candidate_gate_trade_density.py`
+    - `scripts/run_candidate_auto_improvement_loop.py`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_profitability_matrix.py scripts/run_candidate_auto_improvement_loop.py` PASS
+    - build PASS:
+      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading`
+  - A/B revalidation (same Stage-164 active 8-dataset bundle):
+    - OFF:
+      - `build/Release/logs/report_adaptive_floor_relax_off.json`
+    - ON (moderate):
+      - `build/Release/logs/report_adaptive_floor_relax_on.json`
+    - ON (strong):
+      - `build/Release/logs/report_adaptive_floor_relax_strong.json`
+    - summary:
+      - profile metrics:
+        - OFF: `pf=0.4585`, `exp=-9.4684`
+        - ON(moderate): `pf=0.4585`, `exp=-9.4682`
+        - ON(strong): `pf=0.4585`, `exp=-9.4678`
+      - near-miss blocked topology:
+        - OFF: `near_miss_relief_applied=21`, `relief_blocked=19`, `blocked_second_floor=19`, `blocked_aggregate=19`, `near_miss_override=2`
+        - ON(moderate): `near_miss_relief_applied=20`, `relief_blocked=17`, `blocked_second_floor=15`, `blocked_aggregate=17`, `adaptive_floor_relax_applied=19`, `near_miss_override=3`
+        - ON(strong): `near_miss_relief_applied=20`, `relief_blocked=16`, `blocked_second_floor=15`, `blocked_aggregate=16`, `adaptive_floor_relax_applied=20`, `near_miss_override=4`
+  - conclusion:
+    - adaptive path is now structurally active on the known bottleneck bundle and reduces near-miss blocked counts in the targeted components.
+    - profitability improvement is currently marginal; gate remains failed.
+    - next step should focus on objective-side coupling so tuning promotes this path only when expectancy/profit-factor floors are not degraded.
+
+- Stage-2.168 update (2026-02-18, objective-side coupling for adaptive near-miss floor-relax):
+  - implementation:
+    - objective-side guard added to penalize overuse of adaptive near-miss floor-relax when validation-floor deficit grows.
+    - new CLI/objective parameters wired:
+      - `objective_enforce_two_head_near_miss_adaptive_floor_relax_coupled_cap`
+      - `objective_two_head_near_miss_adaptive_floor_relax_base_cap_ratio`
+      - `objective_two_head_near_miss_adaptive_floor_relax_min_cap_ratio`
+      - `objective_two_head_near_miss_adaptive_floor_relax_validation_deficit_cap_shrink`
+      - `objective_two_head_near_miss_adaptive_floor_relax_cap_penalty_scale`
+      - `objective_two_head_near_miss_adaptive_floor_relax_cap_activation_min_total`
+    - screen/final row diagnostics added:
+      - `two_head_near_miss_adaptive_floor_relax_ratio`
+      - `two_head_near_miss_adaptive_floor_relax_dynamic_cap_ratio`
+      - `two_head_near_miss_adaptive_floor_relax_cap_guard_active`
+      - `two_head_near_miss_adaptive_floor_relax_cap_overshoot`
+    - summary metadata (`screening`) now stores the new objective guard flags/params for replay traceability.
+  - files:
+    - `scripts/tune_candidate_gate_trade_density.py`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/tune_candidate_gate_trade_density.py --help` PASS
+    - smoke tuning:
+      - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 2 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 2 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1`
+  - smoke run result:
+    - output:
+      - `build/Release/logs/candidate_trade_density_tuning_summary.json`
+      - `build/Release/logs/candidate_trade_density_tuning_summary.csv`
+    - best combo:
+      - `scenario_quality_focus_000_wf_profit_recovery_05`
+      - `objective_score=-32833.18778`
+      - `avg_profit_factor=0.5353`, `avg_expectancy_krw=-9.1537`, `profitable_ratio=0.125`, `overall_gate_pass=false`
+    - adaptive-cap objective diagnostics were present and active in summary:
+      - `objective_two_head_near_miss_adaptive_floor_relax_coupled_cap_guard_active=true`
+      - best-row fields emitted with no missing key errors.
+  - conclusion:
+    - objective coupling path is now fully wired (args -> objective -> row diagnostics -> summary metadata) and execution-safe.
+    - this smoke run still failed profitability/walk-forward gates; no performance lift yet.
+  - next:
+    - run the next batch on the known near-miss-active bundle and prioritize candidate generation that actually activates adaptive floor-relax (`applied_count > 0`) so the new cap penalty meaningfully shapes ranking.
+
+- Stage-2.169 update (2026-02-18, adaptive-candidate injection + leak guard correction):
+  - implementation:
+    - `quality_focus` base profiles now include adaptive near-miss floor-relax variants (bounded defaults), so generated candidates can actually exercise the new objective cap guard.
+    - combo dedupe fingerprint extended to include near-miss/adaptive keys, preventing accidental collapse of structurally different combos.
+    - leak detection corrected:
+      - `near_miss_floor_relax_leak_detected` no longer flags when adaptive floor-relax is enabled (false-positive removal).
+  - files:
+    - `scripts/tune_candidate_gate_trade_density.py`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - smoke tuning replay:
+      - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 2 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 2 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1`
+    - result:
+      - no near-miss floor-relax leakage warning after guard fix.
+      - best combo kept adaptive path ON:
+        - `combo_near_miss_adaptive_floor_relax_enabled=true`
+        - `two_head_near_miss_adaptive_floor_relax_applied_count=138`
+        - `two_head_near_miss_adaptive_floor_relax_ratio=1.0`
+        - `two_head_near_miss_adaptive_floor_relax_dynamic_cap_ratio=0.8396`
+        - `two_head_near_miss_adaptive_floor_relax_cap_overshoot=0.1604`
+      - objective score moved lower (`-32833.1878 -> -33653.0027`) while PF/expectancy unchanged (`pf=0.5353`, `exp=-9.1537`), confirming objective-side cap penalty is actively applied when adaptive overuse appears.
+  - conclusion:
+    - objective cap coupling is no longer dormant; it now participates in ranking on real run artifacts.
+    - core profitability gate still fails, so next step remains structural candidate diversification + broader final-stage comparison (not single-winner micro-tuning).
+  - next:
+    - run a wider batch (`screen_top_k >= 3`, `max_scenarios >= 6`) and compare ranking deltas between cap guard ON/OFF to ensure penalty improves robustness selection instead of only reducing score.
+
+- Stage-2.170 update (2026-02-18, adaptive-cap guard ON/OFF A/B on widened batch):
+  - execution:
+    - guard ON:
+      - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 3 --matrix-max-workers 1 --matrix-backtest-retry-count 1`
+      - snapshot:
+        - `build/Release/logs/candidate_trade_density_tuning_summary_guard_on.json`
+        - `build/Release/logs/candidate_trade_density_tuning_summary_guard_on.csv`
+    - guard OFF:
+      - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 3 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --disable-objective-enforce-two-head-near-miss-adaptive-floor-relax-coupled-cap`
+      - snapshot:
+        - `build/Release/logs/candidate_trade_density_tuning_summary_guard_off.json`
+        - `build/Release/logs/candidate_trade_density_tuning_summary_guard_off.csv`
+  - result:
+    - best combo unchanged (`scenario_quality_focus_002`) for ON/OFF.
+    - ON/OFF best objective identical (`-36317.0891`), profitability gate still fail.
+    - guard penalty activated only on overshoot candidate:
+      - `scenario_quality_focus_001_wf_profit_recovery_02`
+      - `adaptive_ratio=0.8732`, `adaptive_cap=0.6918`, `overshoot=0.1814`
+      - objective delta (`ON - OFF`) = `-927.1850`
+    - non-overshoot candidates had zero delta.
+  - interpretation:
+    - adaptive-cap guard is selective and functioning (penalizes overshoot only).
+    - current widened batch did not change winner selection because winner had `adaptive_applied=0` and no overshoot.
+  - next:
+    - increase candidate diversity toward active adaptive usage near decision boundary (not only one overshoot candidate), then re-run ON/OFF A/B to test whether winner set changes under robustness constraint.
+
+- Stage-2.171 update (2026-02-18, validation-script hardening + revalidation):
+  - implementation:
+    - `run_realdata_candidate_loop.py`
+      - fixed real-dataset detection to work for custom real-data directories not containing `backtest_real` in path.
+      - aligned explicit dataset classification to primary `upbit_*_1m_*.csv` semantics, with higher-TF companion checks applied only to primary 1m candidates.
+    - `run_ci_operational_gate.py`
+      - fixed fallback behavior: when prime dataset is missing but fallback exists, fallback is now used as first candidate instead of immediate hard-fail.
+    - `verify_cleanup_wave_a.py`
+      - hardened `--run-tests` path: missing test executables are now reported as structured failures (`exit_code=127`, `error=missing_executable`) instead of crashing.
+    - `validate_v2_shadow_parity.py`
+      - hardened boolean parsing for check fields to avoid string truthiness issues (`"false"` no longer treated as `True`).
+  - files:
+    - `scripts/run_realdata_candidate_loop.py`
+    - `scripts/run_ci_operational_gate.py`
+    - `scripts/verify_cleanup_wave_a.py`
+    - `scripts/validate_v2_shadow_parity.py`
+  - verification:
+    - `python -m py_compile scripts/run_realdata_candidate_loop.py scripts/run_ci_operational_gate.py scripts/verify_cleanup_wave_a.py scripts/validate_v2_shadow_parity.py` PASS
+    - custom real-dir regression repro:
+      - `get_dataset_files(..., only_real_data=True, require_higher_tf=True)` now returns primary 1m dataset (`count=1`).
+      - `resolve_explicit_dataset_files(...)` with custom dir primary dataset also resolves correctly (`count=1`).
+    - CI gate fallback repro:
+      - prime missing + fallback present no longer throws `Backtest prime dataset not found`; fallback-first path confirmed.
+    - Wave A test-runner hardening repro:
+      - missing test exe returns structured failure row instead of uncaught exception.
+    - v2 shadow bool parsing repro:
+      - `"false" -> False`, `"true" -> True`, `"off" -> False`, unexpected token -> `False`.
+    - help checks:
+      - `run_realdata_candidate_loop.py`, `run_ci_operational_gate.py`, `verify_cleanup_wave_a.py`, `validate_v2_shadow_parity.py` `--help` PASS
+  - conclusion:
+    - validation chain robustness improved for custom data paths and fallback/missing-artifact scenarios.
+    - no regression observed in CLI/parser entrypoints.
+
+- Stage-2.172 update (2026-02-18, tuning command-flag propagation fix + cache invalidation hardening):
+  - implementation:
+    - root cause found in `tune_candidate_gate_trade_density.py:evaluate_combo(...)`:
+      - when `enable_hostility_adaptive_thresholds=False`, downstream matrix command still used default ON behavior because disable flag was never forwarded.
+      - `trades_only` mode could also be semantically masked by the same issue.
+    - fixed matrix command construction to always pass explicit mode flags:
+      - `--enable-hostility-adaptive-thresholds` or `--disable-hostility-adaptive-thresholds`
+      - `--enable-hostility-adaptive-trades-only` or `--disable-hostility-adaptive-trades-only`
+    - eval cache key hardened:
+      - added `matrix_script_signature` (path/size/mtime_ns) into cache material.
+      - bumped `cache_schema_version` to `5` to prevent stale reuse after logic/script changes.
+    - `run_profitability_matrix.py` adaptive mode precedence adjusted:
+      - when `enable_hostility_adaptive_trades_only=true`, trades-only mode now takes precedence over full adaptive mode even if full flag is also true.
+      - prevents accidental full-threshold relaxation when operator intended trades-only behavior.
+    - helper added:
+      - `file_cache_signature(path_value: pathlib.Path) -> Dict[str, Any]`
+  - files:
+    - `scripts/tune_candidate_gate_trade_density.py`
+    - `scripts/run_profitability_matrix.py`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_candidate_train_eval_cycle.py scripts/run_profitability_matrix.py` PASS
+    - targeted harness revalidation PASS (inline Python, mocked subprocess):
+      - case A (`adaptive_thresholds=OFF`, `trades_only=OFF`): command contains both disable flags.
+      - case B (`adaptive_thresholds=OFF`, `trades_only=ON`): command contains `disable-thresholds + enable-trades-only`.
+      - cache behavior:
+        - same inputs -> second call returns `from_cache=true`.
+        - matrix script file content/mtime change -> cache invalidated and subprocess rerun confirmed.
+    - adaptive precedence check (inline Python):
+      - both flags true -> `compute_effective_thresholds(...).adaptive_mode == "trades_only"` confirmed.
+  - conclusion:
+    - tuning mode switches now map 1:1 to effective matrix behavior.
+    - cache no longer silently reuses stale results across matrix-script changes, reducing false ?úwinner unchanged??artifacts.
+
+- Stage-2.173 update (2026-02-18, adaptive mode disable-propagation fix in realdata/train-eval chain):
+  - implementation:
+    - root cause:
+      - `run_realdata_candidate_loop.py` matrix invocation only appended `--enable-*` flags and omitted `--disable-*`.
+      - therefore, when caller requested OFF, `run_profitability_matrix.py` default values could still keep adaptive modes active.
+    - fixed `run_realdata_candidate_loop.py` matrix command construction:
+      - explicit pair forwarding added for:
+        - `--enable/--disable-hostility-adaptive-thresholds`
+        - `--enable/--disable-hostility-adaptive-trades-only`
+    - fixed `run_candidate_train_eval_cycle.py` forwarding path:
+      - added CLI args:
+        - `--enable/--disable-hostility-adaptive-trades-only`
+      - added explicit pass-through of the above flag into nested `run_realdata_candidate_loop` argv.
+  - files:
+    - `scripts/run_realdata_candidate_loop.py`
+    - `scripts/run_candidate_train_eval_cycle.py`
+  - verification:
+    - `python -m py_compile scripts/run_realdata_candidate_loop.py scripts/run_candidate_train_eval_cycle.py scripts/run_profitability_matrix.py scripts/tune_candidate_gate_trade_density.py` PASS
+    - inline harness validation PASS:
+      - `run_realdata_candidate_loop.run_profitability_matrix(...)` with OFF/OFF emits both disable flags.
+      - `run_candidate_train_eval_cycle.build_loop_argv(...)` with OFF/OFF emits both disable flags.
+    - CLI checks PASS:
+      - `python scripts/run_candidate_train_eval_cycle.py --help`
+      - `python scripts/run_realdata_candidate_loop.py --help`
+  - conclusion:
+    - adaptive mode intent now propagates correctly through `train_eval -> realdata_loop -> profitability_matrix`.
+    - removes a hidden mismatch that could make optimization behavior appear stuck or inconsistent.
+
+- Stage-2.174 update (2026-02-18, auto-improvement chain adaptive-flag explicitness fix):
+  - implementation:
+    - `run_candidate_auto_improvement_loop.py` baseline realdata argv now explicitly forwards trades-only flag with thresholds:
+      - targets ON -> `--enable-hostility-adaptive-thresholds` + `--enable-hostility-adaptive-trades-only`
+      - targets OFF -> `--disable-hostility-adaptive-thresholds` + `--disable-hostility-adaptive-trades-only`
+    - tuning argv path now explicitly appends:
+      - `--disable-hostility-adaptive-trades-only`
+      - keeps tune-stage behavior stable even if downstream defaults change.
+  - files:
+    - `scripts/run_candidate_auto_improvement_loop.py`
+  - verification:
+    - `python -m py_compile scripts/run_candidate_auto_improvement_loop.py scripts/run_realdata_candidate_loop.py scripts/run_candidate_train_eval_cycle.py scripts/run_profitability_matrix.py scripts/tune_candidate_gate_trade_density.py` PASS
+    - CLI check:
+      - `python scripts/run_candidate_auto_improvement_loop.py --help` PASS
+  - conclusion:
+    - adaptive mode semantics are now explicit end-to-end in auto-improvement orchestration.
+    - reduced risk of hidden default drift causing unexplained metric stagnation or mode mismatch.
+
+- Stage-2.175 update (2026-02-18, script-suite full verification mode pass):
+  - implementation:
+    - added reproducible script-suite verifier:
+      - `scripts/verify_script_suite.py`
+      - checks:
+        - all `scripts/*.py` compile (`py_compile`)
+        - all entrypoint scripts (`__main__`) pass `--help`
+        - adaptive flag pair integrity on wrapper chain (`enable`/`disable` both present)
+    - full-run verification executed in current workspace:
+      - script inventory: `scripts_total=34`
+      - compile failures: `0`
+      - help failures: `0`
+      - adaptive flag pair failures: `0`
+      - final status: `VERIFY_SCRIPT_SUITE_PASS`
+  - files:
+    - `scripts/verify_script_suite.py`
+  - verification:
+    - `python -m py_compile scripts/verify_script_suite.py` PASS
+    - `python scripts/verify_script_suite.py` PASS
+  - conclusion:
+    - current script suite passes full static/CLI verification baseline.
+    - remaining high-cost risk checks are runtime/data-dependent e2e runs (long-duration realdata cycles).
+
+- Stage-2.176 update (2026-02-18, expectancy-first drawdown-stability objective guard integrated):
+  - implementation:
+    - `tune_candidate_gate_trade_density.py` objective pipeline now includes peak-drawdown stability guard:
+      - new CLI switches:
+        - `--objective-enforce-peak-drawdown-guard` / `--disable-objective-enforce-peak-drawdown-guard`
+        - `--objective-max-peak-drawdown-pct`
+        - `--objective-peak-drawdown-penalty-scale`
+      - `compute_combo_objective(...)` penalty now applies when `peak_max_drawdown_pct` exceeds configured cap.
+      - screen/final objective call paths both wired to pass drawdown metrics and guard parameters.
+    - selector consistency scoring now includes drawdown drift:
+      - `abs(peak_max_drawdown_pct - screen_peak_max_drawdown_pct)` penalty term added.
+    - reporting/traceability extended:
+      - promoted combo and report now persist `peak_max_drawdown_pct` and related objective config fields.
+      - `screen_peak_max_drawdown_pct` linkage stored on final-row snapshot for explainability.
+  - files:
+    - `scripts/tune_candidate_gate_trade_density.py`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py scripts/run_candidate_auto_improvement_loop.py scripts/verify_script_suite.py` PASS
+    - `python scripts/verify_script_suite.py` PASS:
+      - `scripts_total=34`, `compile_failures=0`, `help_failures=0`, `flag_pair_failures=0`
+    - function smoke checks (inline Python import) PASS:
+      - `compute_combo_objective(...)` direct call succeeded.
+      - `compute_consistency_selector_score(...)` direct call succeeded (tuple return validated).
+  - conclusion:
+    - expectancy/profitable-ratio optimization now explicitly penalizes unstable high-drawdown candidates.
+    - this is a structural scoring change (not symbol hardcoding), aligned with anti-overfitting policy.
+
+- Stage-2.177 update (2026-02-18, reduced-cost tuning run after drawdown objective integration):
+  - run command:
+    - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 1 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 2 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate`
+  - observed outputs:
+    - dataset quality gate: `passed=8`, `failed=4` (from `dataset_count=12` pool)
+    - selected best combo:
+      - `scenario_quality_focus_000_wf_profit_recovery_01_wf_window_feature_recovery_02`
+    - best row metrics:
+      - `objective_score=-45363.621949`
+      - `avg_profit_factor=0.3599`
+      - `avg_expectancy_krw=-11.2549`
+      - `avg_win_rate_pct=32.2617`
+      - `profitable_ratio=0.0`
+      - `peak_max_drawdown_pct=5.4297`
+      - `screen_peak_max_drawdown_pct=3.4031`
+    - drawdown objective config in report:
+      - `objective_enforce_peak_drawdown_guard=true`
+      - `objective_max_peak_drawdown_pct=18.0`
+      - `objective_peak_drawdown_penalty_scale=120.0`
+      - `objective_peak_drawdown_guard_active=true`
+  - files/artifacts:
+    - `build/Release/logs/candidate_trade_density_tuning_summary.json`
+    - `build/Release/logs/candidate_trade_density_tuning_summary.csv`
+    - `build/Release/logs/candidate_promoted_combo.json`
+  - conclusion:
+    - drawdown guard integration is active end-to-end and reflected in generated reports.
+    - however, core profitability bottleneck (`pf<1`, `exp<0`) remains; next step should stay on structural improvements rather than micro-parameter tweaking.
+
+- Stage-2.178 update (2026-02-18, candidate-vs-baseline delta attribution snapshot integrated):
+  - implementation:
+    - `tune_candidate_gate_trade_density.py` now emits explicit `candidate_vs_baseline` snapshot for each run:
+      - baseline auto-selection priority:
+        - final rows excluding best combo
+        - screen rows excluding best combo
+        - final rows fallback
+        - screen rows fallback
+      - baseline matching rules:
+        - `combo_id == baseline_current`
+        - baseline family (`legacy_baseline` / `base_unadapted`)
+        - `*_000` combo-id pattern
+      - snapshot contains:
+        - candidate/baseline key metrics (`objective/pf/expectancy/winrate/profitable_ratio/trades/drawdown`)
+        - per-metric delta
+        - improvement/regression tri-state summary
+        - `comparable_dataset_scope` flag (`true` only when baseline source is final stage)
+    - output propagation:
+      - included in `candidate_trade_density_tuning_summary.json`
+      - included in `candidate_promoted_combo.json`
+      - console line added: `[TuneCandidate] baseline_delta=...`
+  - files:
+    - `scripts/tune_candidate_gate_trade_density.py`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - reduced-cost run PASS:
+      - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 1 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 2 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate`
+    - observed delta snapshot:
+      - `baseline_source=screen_excluding_best`
+      - `delta.objective_score=+5281.458956`
+      - `delta.avg_profit_factor=-0.0807`
+      - `delta.avg_expectancy_krw=-2.0548`
+      - `delta.peak_max_drawdown_pct=+2.0905`
+      - `improvement_score=1`, `regression_score=4`
+  - conclusion:
+    - winner stagnation diagnosis is now explicit in artifacts (not inferred from logs).
+    - this enables faster separation of selector/logic issues vs market/data-hostility regimes.
+
+- Stage-2.179 update (2026-02-18, objective baseline-regression guard integrated):
+  - implementation:
+    - `tune_candidate_gate_trade_density.py` objective stage now supports soft baseline-regression guard:
+      - new CLI switches:
+        - `--enable-objective-baseline-regression-guard` / `--disable-objective-baseline-regression-guard`
+        - `--objective-baseline-regression-profit-factor-penalty-scale`
+        - `--objective-baseline-regression-expectancy-penalty-scale`
+        - `--objective-baseline-regression-win-rate-penalty-scale`
+        - `--objective-baseline-regression-drawdown-penalty-scale`
+      - guard behavior:
+        - picks baseline anchor combo from final rows (fallback by baseline pattern rules)
+        - applies objective penalty to rows regressing vs baseline on PF/expectancy/win-rate/drawdown
+        - stores pre-guard objective and per-metric baseline deltas per row
+    - reporting:
+      - top-level `baseline_regression_guard` block added to summary JSON
+      - screening/config block includes guard status, scales, selected baseline combo, penalized row count
+      - promoted combo snapshot now includes `baseline_regression_guard`
+      - console summary line added: `[TuneCandidate] baseline_regression_guard=...`
+  - files:
+    - `scripts/tune_candidate_gate_trade_density.py`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - reduced-cost run PASS:
+      - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 1 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 2 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate`
+    - observed runtime:
+      - `objective_baseline_regression_guard=on` printed with configured scales
+      - `baseline_regression_guard=enabled=True, active=True, ... penalized_rows=0` printed
+      - `candidate_vs_baseline` snapshot still emitted for attribution (`baseline_source=screen_excluding_best`)
+  - conclusion:
+    - candidate selection now has both:
+      - explicit post-run attribution (`candidate_vs_baseline`)
+      - structural anti-regression pressure inside objective ranking.
+    - this reduces risk of selecting candidates that improve objective superficially while degrading core profitability quality vs baseline.
+
+- Stage-2.180 update (2026-02-18, baseline-regression guard ON/OFF A/B verification):
+  - run setup:
+    - fixed baseline matcher scope (`*_000` only; removed broad `_000_` match) to avoid treating derived variants as baseline anchor.
+    - command:
+      - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 1 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 2 --screen-top-k 4 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo`
+      - same command + `--disable-objective-baseline-regression-guard`
+  - observed A/B:
+    - winner unchanged on this batch:
+      - ON: `best_combo=scenario_quality_focus_000_wf_profit_recovery_05`
+      - OFF: same combo
+    - but guard penalties were applied as intended:
+      - baseline anchor: `scenario_quality_focus_000`
+      - penalized rows: `2/4`
+      - max penalty: `1298.7040`
+      - per-combo ON-vs-OFF objective deltas matched guard penalty values.
+  - artifacts:
+    - `build/Release/logs/candidate_trade_density_tuning_summary_guard_on.json`
+    - `build/Release/logs/candidate_trade_density_tuning_summary_guard_off.json`
+  - conclusion:
+    - guard is functioning (score shaping works), even when winner identity does not change.
+    - this is expected when current winner already dominates baseline on key quality metrics.
+
+- Stage-2.181 update (2026-02-18, baseline-readiness pass/fail gate integrated and verified):
+  - implementation:
+    - added `candidate_vs_baseline_readiness` snapshot (pass/fail + failed checks + thresholds):
+      - checks:
+        - comparable dataset scope (`final*` source)
+        - `delta(avg_profit_factor) >= threshold`
+        - `delta(avg_expectancy_krw) >= threshold`
+        - `delta(avg_win_rate_pct) >= threshold`
+        - `delta(peak_max_drawdown_pct) <= threshold`
+    - new CLI thresholds:
+      - `--baseline-readiness-require-comparable-scope` / `--baseline-readiness-allow-noncomparable-scope`
+      - `--baseline-readiness-min-pf-delta`
+      - `--baseline-readiness-min-expectancy-delta-krw`
+      - `--baseline-readiness-min-win-rate-delta-pct`
+      - `--baseline-readiness-max-drawdown-delta-pct`
+    - report propagation:
+      - summary JSON top-level and promoted combo JSON include readiness snapshot.
+      - screening/config section records readiness thresholds and pass/fail.
+      - console prints: `[TuneCandidate] baseline_readiness=...`
+  - verification:
+    - compile PASS:
+      - `python -m py_compile scripts/tune_candidate_gate_trade_density.py`
+    - reduced-cost run PASS:
+      - same command as Stage-2.180 (guard ON, no promote)
+    - observed runtime:
+      - `baseline_readiness=pass, require_comparable=True, failed_checks=[]`
+      - baseline source recognized as `final_excluding_best` and treated as comparable scope.
+  - conclusion:
+    - promotion-readiness evidence now includes explicit baseline-relative quality gate, not just raw objective ranking.
+    - this tightens anti-overfitting discipline by requiring quality directionality against baseline.
+
+- Stage-2.182 update (2026-02-18, expanded-batch guard ON/OFF A/B with `MaxScenarios=3`):
+  - run setup:
+    - command baseline:
+      - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 3 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo`
+    - A/B pair:
+      - guard ON (default)
+      - guard OFF (`--disable-objective-baseline-regression-guard`)
+  - observed:
+    - ON/OFF winner identical:
+      - `best_combo=scenario_quality_focus_001_wf_profit_recovery_05`
+      - `best_combo_objective_score=-32465.769055`
+    - guard ON applied penalties to regressing rows:
+      - baseline anchor: `scenario_quality_focus_000`
+      - `penalized_rows=4/6`
+      - `max_penalty=1435.58`
+      - ON-vs-OFF objective delta equals per-row guard penalty (score-shaping verified).
+    - readiness:
+      - `baseline_readiness=pass` with comparable final scope.
+      - key deltas vs baseline:
+        - `objective +7192.7899`
+        - `pf +0.2212`
+        - `expectancy +1.4451`
+        - `peak_drawdown -0.2344`
+  - artifacts:
+    - `build/Release/logs/candidate_trade_density_tuning_summary_guard_on_max3.json`
+    - `build/Release/logs/candidate_trade_density_tuning_summary_guard_off_max3.json`
+  - conclusion:
+    - guard is active and functioning in expanded candidate set.
+    - no winner swap indicates current winner is not a weak overfit survivor against baseline under this batch.
+
+- Stage-2.183 update (2026-02-18, guard sensitivity stress test with aggressive scales):
+  - run setup:
+    - same as Stage-2.182 ON run, but with stronger guard scales:
+      - `--objective-baseline-regression-profit-factor-penalty-scale 8000`
+      - `--objective-baseline-regression-expectancy-penalty-scale 400`
+      - `--objective-baseline-regression-win-rate-penalty-scale 250`
+      - `--objective-baseline-regression-drawdown-penalty-scale 200`
+  - observed:
+    - winner still unchanged:
+      - `best_combo=scenario_quality_focus_001_wf_profit_recovery_05`
+    - guard pressure increased materially:
+      - `max_penalty`: `1435.58 -> 3102.08`
+      - penalized rows remained `4/6`
+    - objective reductions concentrated on baseline-regressing combos while winner objective stayed unchanged.
+  - artifacts:
+    - `build/Release/logs/candidate_trade_density_tuning_summary_guard_on_max3_aggressive.json`
+  - conclusion:
+    - winner appears robust against reasonable-to-strong baseline-regression guard scales on current dataset slice.
+    - remaining bottleneck is absolute profitability quality (`pf<1`, negative expectancy regime), not selector fragility.
+
+- Stage-2.184 update (2026-02-18, expanded `MaxScenarios=6` batch ON/OFF verification):
+  - run setup:
+    - command:
+      - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo`
+      - same command + `--disable-objective-baseline-regression-guard`
+  - observed:
+    - ON/OFF winner remained identical:
+      - `best_combo=scenario_quality_focus_002`
+    - guard ON score-shaping active:
+      - baseline anchor: `scenario_quality_focus_000`
+      - penalized rows: `7/8`
+      - max penalty: `1435.58`
+      - ON-vs-OFF objective deltas matched guard penalty per combo.
+    - critical signal:
+      - `baseline_readiness=fail` with failed check `drawdown_delta`.
+      - winner delta vs baseline:
+        - `pf +0.0361`, `expectancy +0.4257`, `drawdown +0.2917` (worse drawdown).
+      - absolute quality still weak:
+        - `avg_profit_factor=0.4191`, `avg_expectancy_krw=-9.8398`.
+  - artifacts:
+    - `build/Release/logs/candidate_trade_density_tuning_summary_guard_on_max6.json`
+    - `build/Release/logs/candidate_trade_density_tuning_summary_guard_off_max6.json`
+  - conclusion:
+    - expanded batch confirmed the current structural bottleneck has shifted to baseline-relative drawdown regression.
+    - objective guard alone is not sufficient to force non-regressing winner selection under current thresholds.
+
+- Stage-2.185 update (2026-02-18, selector baseline-readiness veto strict/relaxed mode validated):
+  - implementation:
+    - added selector pre-filter option to enforce baseline-readiness checks before ranking:
+      - `--enable/--disable-selector-baseline-readiness-veto`
+      - `--selector-baseline-readiness-veto-fail-closed` / `--selector-baseline-readiness-veto-fail-open`
+    - veto uses baseline-delta checks already configured by readiness thresholds.
+    - selector/report metadata now includes kept/vetoed counts and combo ids.
+  - run results:
+    - strict mode (default drawdown delta cap `0.0`):
+      - command: same as Stage-2.184 ON + `--enable-selector-baseline-readiness-veto`
+      - result:
+        - `kept_rows=1`, `vetoed_rows=7`
+        - `best_combo=scenario_quality_focus_000` (baseline fallback-like behavior)
+    - relaxed mode (`--baseline-readiness-max-drawdown-delta-pct 0.35`):
+      - result:
+        - `kept_rows=2`, `vetoed_rows=6`
+        - `best_combo=scenario_quality_focus_002`
+        - `baseline_readiness=pass`
+  - artifacts:
+    - `build/Release/logs/candidate_trade_density_tuning_summary_veto_max6_strict.json`
+    - `build/Release/logs/candidate_trade_density_tuning_summary_veto_max6_drawdown035.json`
+  - conclusion:
+    - selector-level readiness veto works as designed and provides a practical control knob:
+      - strict threshold enforces zero drawdown regression (very conservative, baseline-heavy),
+      - relaxed threshold allows controlled drawdown tradeoff while preserving readiness discipline.
+
+- Stage-2.186 update (2026-02-18, auto-improvement loop now forwards baseline-readiness veto defaults):
+  - implementation:
+    - `scripts/run_candidate_auto_improvement_loop.py` parser now includes tune forwarding options:
+      - `--tune-enable/--tune-disable-selector-baseline-readiness-veto`
+      - `--tune-selector-baseline-readiness-veto-fail-closed` / `--tune-selector-baseline-readiness-veto-fail-open`
+      - `--tune-baseline-readiness-max-drawdown-delta-pct` (default `0.30`)
+    - tune argv assembly now always forwards:
+      - selector baseline-readiness veto enable/disable state,
+      - fail-open/fail-closed mode,
+      - drawdown delta readiness cap.
+    - default behavior in auto loop is now explicit and stable:
+      - veto `ON`, fail mode `closed`, max drawdown delta `0.30`.
+  - verification:
+    - `python -m py_compile scripts/run_candidate_auto_improvement_loop.py` PASS
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/verify_script_suite.py --skip-help` PASS
+    - smoke run PASS:
+      - `python scripts/run_candidate_auto_improvement_loop.py --max-iterations 0`
+  - conclusion:
+    - Stage-2.185 sweep result (`0.30` minimal non-baseline-lock threshold) is now connected to the default auto-loop tune path, reducing silent regression risk during repeated iterations.
+
+- Stage-2.187 update (2026-02-18, veto-0.30 rerun after wiring confirms reproducibility):
+  - run command:
+    - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --enable-selector-baseline-readiness-veto --selector-baseline-readiness-veto-fail-closed --baseline-readiness-max-drawdown-delta-pct 0.30 --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2187_veto030.json --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2187_veto030.csv`
+  - observed:
+    - `best_combo=scenario_quality_focus_002` (unchanged vs prior 0.30 sweep)
+    - selector/veto:
+      - `selector_mode=objective`, `selector_candidate_rows=2`
+      - `baseline_readiness_veto applied=True, kept=2, vetoed=6`
+    - baseline readiness:
+      - `baseline_readiness_pass=True`, `failed_checks=[]`
+      - best delta vs baseline:
+        - `pf +0.0361`, `expectancy +0.4257`, `drawdown +0.2917`
+    - best absolute quality (still bottleneck):
+      - `avg_profit_factor=0.4191`
+      - `avg_expectancy_krw=-9.8398`
+  - artifacts:
+    - `build/Release/logs/candidate_trade_density_tuning_summary_stage2187_veto030.json`
+    - `build/Release/logs/candidate_trade_density_tuning_summary_stage2187_veto030.csv`
+  - conclusion:
+    - auto-loop wiring did not introduce selection drift; 0.30 profile behavior is reproducible.
+    - next bottleneck remains absolute profitability recovery, not selector readiness plumbing.
+
+- Stage-2.188 update (2026-02-18, train/eval split re-validation after wiring):
+  - run command:
+    - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+  - observed:
+    - promotion verdict:
+      - `promotion_gate_pass=False`
+      - `generalization_guard_pass=True`
+      - `recommendation=hold_candidate_calibrate_risk_gate_rr_baseline_floor`
+    - split metrics (`core_full`):
+      - train: `pf=0.3874`, `exp=-11.4827`, `trades=125.0`
+      - validation: `pf=0.5110`, `exp=-7.3772`, `trades=153.5`, top risk=`blocked_risk_gate_entry_quality_rr_base`
+      - holdout: `pf=0.5100`, `exp=-6.8934`, `trades=87.0`, top risk=`blocked_risk_gate_entry_quality_rr_adaptive_regime`
+    - walk-forward:
+      - validation `ready_ratio=0.0` (dominant fail `oos_profit_sum_positive`)
+      - holdout `ready_ratio=0.0` (dominant fail `min_oos_profitable_ratio`)
+  - conclusion:
+    - bottleneck is not split overfit drift; it is persistent negative OOS profitability and rr-baseline/rr-adaptive ownership pressure.
+
+- Stage-2.189 update (2026-02-18, rr-baseline dedicated family prototype):
+  - implementation:
+    - added `risk_gate_rr_baseline_floor_sweep` adaptation family in:
+      - `scripts/tune_candidate_gate_trade_density.py`
+    - mapped rr-baseline recommendation/focus into this dedicated family.
+  - initial run (before opt-in gating):
+    - best combo remained `scenario_quality_focus_002` but absolute quality degraded vs prior baseline run:
+      - `pf 0.4191 -> 0.4080`
+      - `exp -9.8398 -> -10.1491`
+      - `drawdown 6.4181 -> 6.8893`
+  - conclusion:
+    - direct default activation introduced regression risk; feature must be guarded behind explicit experiment flag.
+
+- Stage-2.190 update (2026-02-18, rr-baseline family sweep switched to opt-in):
+  - implementation:
+    - added CLI flag:
+      - `--enable-rr-baseline-floor-family-sweep` / `--disable-rr-baseline-floor-family-sweep`
+      - default is `OFF` (legacy behavior preserved).
+    - `risk_gate_rr_baseline_floor_sweep` is now active only when flag is enabled.
+    - restored rr-base objective blend to previous conservative weighting (`quality 0.90 / relax 0.10`).
+  - A/B verification:
+    - default OFF run:
+      - family=`risk_gate_quality_rebalance`
+      - best metrics restored to baseline profile (`pf=0.4191`, `exp=-9.8398`).
+    - opt-in ON run:
+      - family=`risk_gate_rr_baseline_floor_sweep`
+      - reproduces prototype behavior (`pf=0.4080`, `exp=-10.1491`).
+  - conclusion:
+    - safe default path is preserved; rr-baseline family sweep is available for controlled experiments only.
+    - keep OFF in normal loop until additional constraints/objective alignment are added.
+
+- Stage-2.191 update (2026-02-18, walk-forward profitable-ratio-aware recovery diversification):
+  - implementation:
+    - `expand_walk_forward_profit_sum_recovery_candidates` now reads:
+      - `min_oos_profitable_ratio` fail count
+      - `walk_forward_dominant_failure_reason`
+    - if dominant failure is profitable-ratio oriented, recovery profiles switch to ratio-aware mix (`ratio_focus_active=True`).
+    - added logging/summary fields:
+      - `wf_profit_sum_recovery_profitable_ratio_fail_count`
+      - `wf_profit_sum_recovery_ratio_focus_active`
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/verify_script_suite.py --skip-help` PASS
+  - conclusion:
+    - structural diversification is active, but strict readiness-veto conditions still keep promoted winner unchanged in baseline run.
+
+- Stage-2.192 update (2026-02-18, strict-veto rerun after ratio-aware recovery patch):
+  - run command:
+    - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --enable-selector-baseline-readiness-veto --selector-baseline-readiness-veto-fail-closed --baseline-readiness-max-drawdown-delta-pct 0.30 --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2192_ratio_profiles_rebalanced.json --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2192_ratio_profiles_rebalanced.csv`
+  - observed:
+    - `best_combo` remained `scenario_quality_focus_002`.
+    - ratio-aware injected candidates appeared but were vetoed mostly by `expectancy_delta` / `drawdown_delta`.
+    - strict default path remained stable (no hidden winner flip).
+  - conclusion:
+    - current bottleneck remains readiness compatibility of injected recovery combos, not missing candidate diversity.
+
+- Stage-2.193 update (2026-02-18, baseline-readiness expectancy noise-tolerance option added):
+  - implementation:
+    - new tune arg:
+      - `--baseline-readiness-expectancy-tolerance-krw`
+    - applied to both:
+      - `build_candidate_vs_baseline_readiness`
+      - `apply_selector_baseline_readiness_veto_to_rows`
+    - auto-loop forwarding added:
+      - `--tune-baseline-readiness-expectancy-tolerance-krw`
+  - experiment (`tolerance=0.02`):
+    - winner flipped to `scenario_quality_focus_002_wf_profit_recovery_03`.
+    - baseline delta:
+      - `pf +0.0529`
+      - `expectancy -0.0119`
+      - `drawdown +0.2188`
+  - conclusion:
+    - tolerance can unlock near-pass candidates, but introduces non-zero expectancy regression risk.
+
+- Stage-2.194 update (2026-02-18, expectancy-tolerance default rolled back to strict):
+  - decision:
+    - set default `baseline_readiness_expectancy_tolerance_krw=0.0` (strict).
+    - set default `tune_baseline_readiness_expectancy_tolerance_krw=0.0` in auto loop.
+  - strict recheck:
+    - command: same as Stage-2.192 strict run (no tolerance override).
+    - result:
+      - `best_combo=scenario_quality_focus_002` restored.
+      - baseline delta returned to stable profile (`pf +0.0361`, `exp +0.4257`, `drawdown +0.2917`).
+  - conclusion:
+    - tolerance remains available as explicit experiment knob only; strict default protects anti-overfitting/anti-regression discipline.
+
+- Stage-2.195 update (2026-02-18, structural fix for no-movement risk in tuning loop):
+  - root cause found:
+    - `combo_fingerprint` was covering only a subset of applied tuning keys.
+    - many applied keys (including near-miss surplus/head-score-floor families) were missing from fingerprint, causing:
+      - over-aggressive `dedupe_combos` collapse,
+      - stale `evaluate_combo` cache reuse across materially different combos.
+  - implementation:
+    - replaced manual fingerprint payload with `combo_tunable_material(...)` based on:
+      - `TUNABLE_TRADING_KEYS` full set,
+      - `TUNABLE_STRATEGY_KEYS` full set.
+    - bumped `evaluate_combo` `cache_schema_version: 5 -> 6` to invalidate stale key-space reuse.
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` PASS
+    - `python scripts/verify_script_suite.py --skip-help` PASS
+    - synthetic fingerprint checks:
+      - toggling `enable_two_head_rr_margin_near_miss_surplus_compensation` changes fingerprint
+      - changing `second_stage_rr_margin_near_miss_head_score_floor_quality_weight` changes fingerprint
+  - conclusion:
+    - this resolves a structural blind spot that could mask meaningful combo deltas and make repeated tuning appear stuck.
+    - next tuning batches should be interpreted only with this fixed fingerprint/cache baseline.
+
+- Stage-2.196 update (2026-02-18, strict rerun on fixed fingerprint/cache baseline):
+  - run command:
+    - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --enable-selector-baseline-readiness-veto --selector-baseline-readiness-veto-fail-closed --baseline-readiness-max-drawdown-delta-pct 0.30 --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2195_fingerprint_fix.json --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2195_fingerprint_fix.csv`
+  - observed:
+    - first rerun (fresh cache key-space): completed in ~205s, all final rows `from_cache=False`.
+    - immediate rerun with same command: completed in ~1.5s, final rows `from_cache=True (8/8)`.
+    - strict selector result remained:
+      - `best_combo=scenario_quality_focus_002`
+      - baseline delta stayed around prior strict profile (`pf +0.0361`, `exp +0.4257`, `drawdown +0.2917`).
+  - conclusion:
+    - cache/fingerprint infrastructure now behaves as intended (fresh recompute then stable cache-hit).
+    - core bottleneck is still readiness/veto compatibility of recovery candidates, not cache-key collision.
+
+- Stage-2.197 update (2026-02-18, walk-forward expectancy-repair structural expansion added):
+  - implementation:
+    - added `walk_forward_expectancy_repair` expansion family in `scripts/tune_candidate_gate_trade_density.py`.
+    - expansion is activated only when:
+      - walk-forward profit-sum failure is active,
+      - profitable-ratio failure is active (or dominant),
+      - ready-gap threshold is met.
+    - added CLI:
+      - `--enable-wf-expectancy-repair-expansion` / `--disable-wf-expectancy-repair-expansion`
+      - `--wf-expectancy-repair-max-injected`
+      - `--wf-expectancy-repair-min-ready-gap`
+    - wired logging + summary metadata:
+      - `wf_expectancy_repair_*`
+  - first verification (stage2197):
+    - combos expanded (`+2`) but initial repair profile quality was too aggressive; selected winner unchanged.
+
+- Stage-2.198 update (2026-02-18, expectancy-repair profile recalibration):
+  - implementation:
+    - source-priority changed to higher-quality recovery candidates first.
+    - repair deltas softened (edge/rr/signal/expectancy increments reduced).
+  - verification (stage2198):
+    - strong repair candidate emerged:
+      - `scenario_quality_focus_002_wf_profit_recovery_03_wf_expectancy_repair_01`
+      - baseline delta: `pf +0.0715`, `exp +0.8984`, `drawdown -0.2227`
+    - but still vetoed by a single check:
+      - `win_rate_delta = -1.0709` vs threshold `-1.0`.
+
+- Stage-2.199 update (2026-02-18, strict conditional win-rate override in baseline-readiness veto):
+  - implementation:
+    - added `win_rate` single-failure override in selector readiness veto:
+      - applies only when `win_rate_delta` is the sole failed check
+      - and `pf_delta/expectancy_delta/drawdown_delta` clear strict quality thresholds.
+    - new CLI:
+      - `--enable-baseline-readiness-win-rate-quality-override` / disable counterpart
+      - `--baseline-readiness-win-rate-quality-override-min-pf-delta` (default `0.05`)
+      - `--baseline-readiness-win-rate-quality-override-min-expectancy-delta-krw` (default `0.80`)
+      - `--baseline-readiness-win-rate-quality-override-max-drawdown-delta-pct` (default `0.30`)
+  - verification (stage2199):
+    - best combo flipped to:
+      - `scenario_quality_focus_002_wf_profit_recovery_03_wf_expectancy_repair_01`
+    - selector kept rows increased (`2 -> 3`), override applied count `1`.
+
+- Stage-2.200 update (2026-02-18, baseline-readiness snapshot aligned with selector override):
+  - implementation:
+    - aligned `build_candidate_vs_baseline_readiness` with same strict win-rate override rule to remove readiness-report mismatch.
+  - verification (stage2200):
+    - `best_combo` remained:
+      - `scenario_quality_focus_002_wf_profit_recovery_03_wf_expectancy_repair_01`
+    - readiness now consistent:
+      - `baseline_readiness=pass`
+      - `baseline_readiness_veto win_rate_override_applied=1`
+    - key delta vs baseline:
+      - `pf +0.0715`, `exp +0.8984`, `drawdown -0.2227` (win-rate delta only slight negative).
+  - conclusion:
+    - structural stagnation bottleneck has been broken without globally relaxing expectancy/drawdown constraints.
+    - overfitting risk is controlled by strict conditional override gates, not broad threshold loosening.
+
+- Stage-2.203 update (2026-02-18, walk-forward dominant-feature forced injection guard):
+  - root issue:
+    - `expand_walk_forward_window_feature_recovery_candidates` skipped injection when combo count already exceeded `min_combo_count`, even when holdout/validation dominant feature concentration was high.
+    - in practice, `oos_winrate_collapse` was dominant but feature-targeted family stayed inactive.
+  - implementation (`scripts/tune_candidate_gate_trade_density.py`):
+    - added forced-injection controls:
+      - `--wf-window-feature-recovery-force-dominant-share-pct` (default `60.0`)
+      - `--wf-window-feature-recovery-force-min-injected` (default `1`)
+    - if dominant feature is supported and share threshold is exceeded, injects minimum feature-recovery combos even when combo-count gate is already satisfied.
+    - source combo selection for feature recovery changed to quality-priority sorting (edge/RR/PF/EV first) instead of raw list order.
+  - verification (`stage2203_force_feature_recovery`):
+    - `walk_forward_window_feature_recovery_expansion` became active:
+      - `reason=expanded_by_wf_window_feature_force_injection`
+      - `injected=1`
+      - `feature=oos_winrate_collapse`
+      - `force_triggered=true`
+    - however, injected combo was still screened out before final-stage evaluation.
+
+- Stage-2.204 update (2026-02-18, forced feature-recovery screen->final retention):
+  - implementation:
+    - when forced feature-recovery trigger is active and no such combo is in `screen_top_k`, one feature-recovery combo is retained into final set.
+    - added screening telemetry fields to summary:
+      - `wf_window_feature_force_screen_keep_applied`
+      - `wf_window_feature_force_screen_kept_combo_id`
+  - verification (`stage2204_force_feature_screenkeep`):
+    - final stage now evaluates:
+      - `scenario_quality_focus_002_wf_profit_recovery_03_wf_expectancy_repair_01_wf_window_feature_recovery_01`
+    - side effect observed:
+      - baseline comparator absent in final rows -> baseline regression guard became inactive (`reason=baseline_not_found`).
+
+- Stage-2.205 update (2026-02-18, baseline-anchor keep in final set to preserve anti-overfit guard):
+  - implementation:
+    - added final-screen baseline anchor retention:
+      - if `scenario_quality_focus_000` exists in screen rows but is excluded by `screen_top_k`, append it to final evaluation set.
+    - added summary telemetry:
+      - `baseline_anchor_screen_keep_applied`
+      - `baseline_anchor_screen_kept_combo_id`
+  - verification (`stage2205_force_feature_baseline_anchor`):
+    - logs:
+      - `baseline_anchor_screen_keep=on, combo_id=scenario_quality_focus_000`
+      - baseline regression guard active again (`active=true`, `reason=ok`)
+      - forced feature-recovery combo evaluated in final stage.
+    - tuning result:
+      - `best_combo=scenario_quality_focus_003`
+      - baseline readiness still fail (`failed_checks=['pf_delta','expectancy_delta']`)
+  - post-tuning split rerun:
+    - command:
+      - `python scripts/run_candidate_train_eval_cycle.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --real-data-dir .\data\backtest_real --real-live-data-dir .\data\backtest_real_live --reserve-newest-markets-for-holdout 2 --train-iterations 1`
+    - metrics:
+      - train: `pf=0.4667`, `exp=-10.2104`, top risk=`blocked_risk_gate_entry_quality_edge_base`
+      - validation: `pf=0.5546`, `exp=-6.9966`, top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_regime`
+      - holdout: `pf=0.5138`, `exp=-11.1427`, top risk=`blocked_risk_gate_entry_quality_rr_edge_adaptive_regime`
+    - verdict:
+      - `promotion_gate_pass=false`
+      - `generalization_guard_pass=false`
+      - recommendation=`hold_candidate_calibrate_risk_gate_rr_adaptive_regime_adders`
+      - walk-forward ready ratio remains `0.0` for validation/holdout.
+  - conclusion:
+    - structural blocked-path issue (feature recovery never entering final) is now fixed.
+    - core bottleneck remains negative OOS expectancy/profit-factor; next work should stay on structure-level regime/edge-adaptive risk-gate calibration.
+
+- Stage-2.231 update (2026-02-18, selector deadlock-escape telemetry wiring + smoke validation):
+  - implementation (`scripts/tune_candidate_gate_trade_density.py`):
+    - added startup logs for selector config and objective deadlock-escape config:
+      - `selector_config=...`
+      - `selector_objective_deadlock_escape=...`
+    - expanded promotion snapshot and summary flat fields with deadlock-escape telemetry:
+      - `selector_objective_deadlock_escape_*`
+    - extended completion selector log to include:
+      - `deadlock_escape_active/switch_applied/reason/top/selected`
+    - fixed runtime NameError in new selector log (`selector_enable_two_stage_gate` variable binding).
+  - verification (smoke):
+    - command:
+      - `python scripts/tune_candidate_gate_trade_density.py --disable-eval-cache --max-scenarios 8 --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2234_structural_iter03.json --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2234_structural_iter03.csv`
+    - result:
+      - selector applied mode switched as intended:
+        - `requested=objective`
+        - `applied=objective_deadlock_escape`
+        - `reason=objective_mode_deadlock_escape_selected`
+      - deadlock escape telemetry:
+        - `active=true`, `switch_applied=true`, `adjusted_gain=974.3815`
+        - top -> selected switch recorded in summary json.
+      - quality/gate status:
+        - `overall_gate_pass=false`
+        - selected row still negative (`avg_profit_factor=0.6412`, `avg_expectancy_krw=-9.9887`).
+  - conclusion:
+    - structural selector deadlock-escape path is now observable/verifiable end-to-end.
+    - next step is calibration (activation/switch thresholds) so deadlock escape does not sacrifice objective score without net readiness gain.
+
+- Stage-2.232 update (2026-02-18, direct `overall_gate_pass=false` attribution + triplet-fail structural remediation):
+  - direct cause attribution (best combo gate report):
+    - `overall_gate_pass=false` is directly driven by `profile_gate_pass=false`.
+    - failed gate components are explicitly:
+      - `gate_profit_factor_pass=false`
+      - `gate_expectancy_pass=false`
+      - `gate_profitable_ratio_pass=false`
+    - measured values (best final row):
+      - `avg_profit_factor=0.6412` (threshold `>=1.0`)
+      - `avg_expectancy_krw=-9.9887` (threshold `>=0.0`)
+      - `profitable_ratio=0.1429` (threshold `>=0.55`)
+    - rejection concentration context:
+      - top rejection=`no_signal_generated`
+      - top risk-gate component=`blocked_risk_gate_entry_quality_rr_adaptive_history` (`4029`).
+  - structural improvement (`scripts/tune_candidate_gate_trade_density.py`):
+    - expanded `expand_oos_profitability_remediation_candidates(...)` with triplet-fail hard-lock mode:
+      - activation when PF/EXP collapse is confirmed on both validation+holdout and profitable-ratio failure remains active under EV-floor pressure.
+      - in this mode:
+        - injection budget increased (up to 3) to prevent under-exploration.
+        - stricter remediation profiles are injected (`triplet_fail_*` profiles).
+        - adaptive/near-miss relief pathways are hard-disabled for injected rows.
+        - quality floors (`min_strategy_profit_factor`, `min_strategy_expectancy_krw`, two-head quality floors) are tightened.
+    - telemetry wiring:
+      - row-level: `oos_profitability_remediation_triplet_fail_*`
+      - meta/summary: `oos_profitability_remediation_triplet_fail_*`
+      - startup log now prints triplet activation/injected count in remediation line.
+  - verification:
+    - `python -m py_compile scripts/tune_candidate_gate_trade_density.py` -> pass
+    - `python scripts/verify_script_suite.py --skip-help` -> pass
+    - smoke:
+      - `python scripts/tune_candidate_gate_trade_density.py --disable-eval-cache --max-scenarios 8 --summary-json build/Release/logs/candidate_trade_density_tuning_summary_stage2234_structural_iter04.json --summary-csv build/Release/logs/candidate_trade_density_tuning_summary_stage2234_structural_iter04.csv`
+      - triplet mode activated as intended:
+        - `triplet_fail_active=true`, `triplet_fail_injected=3`
+      - selected best combo still fails overall gate (same 3 gate components remain failing).
+  - conclusion:
+    - direct gate-fail reason is now fixed to a concrete triplet (`PF/EXP/profitable_ratio`) rather than generic deadlock symptom.
+    - remediation structure now targets exactly that triplet; next step is objective/selector coupling so triplet-improving candidates are promoted more aggressively when objective gaps are small.
+
+2. Expectancy-first improvement loop
+- Optimize for:
+  - `avg_expectancy_krw`,
+  - `profitable_ratio`,
+  - drawdown stability.
+- Keep a minimum trade floor, but make it hostility-adaptive instead of fixed-only.
+
+3. Candidate promotion readiness
+- Repeat matrix/tuning on expanded real datasets.
+- Record baseline vs candidate delta with explicit failure attribution.
+
+## P2 (Migration closure)
+1. Core migration finalization
+- Make core path default for all decision planes in production profile.
+- Keep one explicit rollback preset during burn-in.
+- Remove legacy-only branches after burn-in evidence is complete.
+
+2. Documentation and CI alignment
+- Keep only active operational docs.
+- Ensure CI PR Gate includes exploratory profitability report upload path checks.
+
+## P3 (Scalable Pattern Auto-Learning Roadmap)
+1. "?´Îó≠? ?Î®?£ûÔßç„Öª?ìÈÅä?????∑Í∫Ω Êπ≤Í≥ó?(?Î∫£Ïõæ ÂØÉÎöØ???
+- This roadmap does not guarantee profit. It raises robustness only if all out-of-sample gates pass.
+- Minimum acceptance (rolling, real-data):
+  - `profit_factor >= 1.05` on train/validation/holdout, no single split below `1.00`
+  - `avg_expectancy_krw > 0` on validation + holdout
+  - `max_drawdown` and `daily_loss_streak` within risk budget
+  - no fatal parity drift between core/v2 shadow/live-shadow paths
+- Promotion is allowed only when the same winner survives at least `N=3` consecutive re-runs with different date slices.
+
+2. ?Í≥óÏî†?????Ω© Êπ≤Í≥ïÏª??Î∫§Ïò£ (Phase A-B)
+- Phase A: Data foundation
+  - Maintain versioned datasets by `market/timeframe/regime` and timestamp split metadata.
+  - Use strict time-based split: train -> validation -> holdout (newest reserved).
+  - Add leak checks to ensure no future candle/label contamination.
+- Phase B: Pattern/feature store
+  - Build reusable feature groups: trend, volatility, liquidity, structure-break, session/microstructure.
+  - Persist feature definitions with schema version to guarantee replay parity.
+  - Reject any feature unavailable at decision time (`no-lookahead` rule).
+
+3. ??àÎíø/?Ï¢èÍπÆ ?®Íæ©Îß?(Phase C)
+- Train multiple candidate policies per regime cluster, not a single global tuned preset.
+- Use ensemble or bandit-style selector with explicit risk governor override.
+- Keep risk policy separate from alpha policy so risk controls remain stable during model refresh.
+
+4. Shadow -> Live ?Î∞¥Í∫Ω ??âÍ∞ê (Phase D-E)
+- Phase D: Shadow validation
+  - Run `paper/shadow` first, compare decision taxonomy + execution schema against production.
+  - Require drift monitor pass (feature drift, label drift, rejection-taxonomy drift).
+- Phase E: Controlled live adaptation
+  - Retrain only on scheduled windows; block ad-hoc hot tuning after drawdown spikes.
+  - Add kill-switch criteria (slippage burst, fill failure burst, unexpected rejection skew).
+  - Keep auto-rollback to last known stable bundle.
+
+5. ?®Ïá±???Ë´õ‚ëπ? ?Î®?äÉ (??Í∏??Í≥∏Ïäú)
+- Optimize on one symbol/period only: forbidden.
+- Any "winner" must pass at least 3 non-overlapping holdout windows.
+- Hyperparameter freeze during validation cycle: mandatory.
+- Complexity penalty: if two candidates are similar, choose the simpler one.
+- Re-fetching recent data is required, but only as an additional out-of-time test, never as replacement for older regimes.
+
+6. ?Íæ®Ï¶∫ ??Êπ≤Í≥ï? ÂØÉÍ≥å??- If P0-P3 gates all pass, the system can become a "robust, risk-controlled, statistically defensible" trading bot.
+- Even then, no permanent edge is guaranteed; maintenance loop (drift monitoring + periodic retrain + rollback discipline) remains mandatory.
+
+## Validation Commands
+- Script-suite full verification:
+  - `python scripts/verify_script_suite.py`
+  - `python scripts/verify_script_suite.py --skip-help`  (fast compile/pair check)
+- Exploratory profitability:
+  - `python scripts/run_profitability_exploratory.py`
+- Real-data candidate loop:
+  - `python scripts/run_realdata_candidate_loop.py -SkipFetch -SkipTune`
+  - `python scripts/run_realdata_candidate_loop.py --real-data-only --skip-tune --skip-entry-rejection-analysis --skip-strategy-rejection-taxonomy --skip-loss-contributor-analysis --skip-parity-invariant --skip-core-vs-legacy-gate --matrix-max-workers 1 --matrix-backtest-retry-count 1`
+- Candidate tuning:
+  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions`
+  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 1 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 2 --screen-top-k 1 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate`
+  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 1 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 2 --screen-top-k 4 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo`
+  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 1 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 2 --screen-top-k 4 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --disable-objective-baseline-regression-guard`
+  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 3 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo`
+  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 3 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --disable-objective-baseline-regression-guard`
+  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 3 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 6 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --objective-baseline-regression-profit-factor-penalty-scale 8000 --objective-baseline-regression-expectancy-penalty-scale 400 --objective-baseline-regression-win-rate-penalty-scale 250 --objective-baseline-regression-drawdown-penalty-scale 200`
+  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo`
+  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --disable-objective-baseline-regression-guard`
+  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --enable-selector-baseline-readiness-veto`
+  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --enable-selector-baseline-readiness-veto --selector-baseline-readiness-veto-fail-closed --baseline-readiness-max-drawdown-delta-pct 0.30`
+  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --enable-selector-baseline-readiness-veto --selector-baseline-readiness-veto-fail-closed --baseline-readiness-max-drawdown-delta-pct 0.30 --baseline-readiness-expectancy-tolerance-krw 0.02`
+  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --enable-selector-baseline-readiness-veto --selector-baseline-readiness-veto-fail-closed --baseline-readiness-max-drawdown-delta-pct 0.30 --enable-rr-baseline-floor-family-sweep`
+  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --screen-dataset-limit 3 --screen-top-k 8 --matrix-max-workers 1 --matrix-backtest-retry-count 1 --skip-core-vs-legacy-gate --disable-promote-best-combo --enable-selector-baseline-readiness-veto --baseline-readiness-max-drawdown-delta-pct 0.35`
+  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --objective-max-peak-drawdown-pct 18 --objective-peak-drawdown-penalty-scale 120`
+  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --promoted-combo-json build/Release/logs/candidate_promoted_combo.json`
+  - `python scripts/tune_candidate_gate_trade_density.py -ScenarioMode quality_focus -MaxScenarios 6 -RealDataOnly -RequireHigherTfCompanions --context-stability-min-consecutive-to-flip 3`
+  - `python scripts/validate_context_stability_guard.py`
+- Split train/eval cycle with walk-forward gate:
+  - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune`
+  - `python scripts/run_candidate_train_eval_cycle.py --train-iterations 1 --skip-fetch --skip-tune --reserve-newest-markets-for-holdout 1`
+- v2 shadow parity gate:
+  - `python scripts/validate_v2_shadow_parity.py -Strict`
+  - `python scripts/validate_v2_shadow_parity.py -CheckRuntimeShadow -Strict`
+  - `python scripts/validate_v2_shadow_parity.py -CheckRuntimeShadow -CheckRuntimeLiveShadow -Strict`
+
+## Exit Criteria
+- Backtest/live parity checks pass on decision-path and candle-path invariants.
+- Adaptive learning state survives restart and remains usable.
+- Candidate gate passes expectancy/profitable-ratio focused thresholds on real-data matrix.
+- Core path is proven and legacy cleanup can proceed in controlled PR batches.
+

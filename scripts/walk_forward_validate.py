@@ -148,8 +148,41 @@ def main(argv=None) -> int:
     profit_ratio = round(profitable_count / float(ran_count), 4) if ran_count > 0 else 0.0
     oos_profit_sum = round(sum(float(w["test_profit"]) for w in ran), 4) if ran_count > 0 else 0.0
     oos_max_mdd = round(max(float(w["test_mdd_pct"]) for w in ran), 4) if ran_count > 0 else 0.0
+    oos_avg_profit = round((oos_profit_sum / float(ran_count)), 4) if ran_count > 0 else 0.0
+    oos_negative_profit_windows = len([w for w in ran if float(w["test_profit"]) <= 0.0])
+    oos_negative_profit_ratio = round((oos_negative_profit_windows / float(ran_count)), 4) if ran_count > 0 else 0.0
 
-    is_ready = ran_count >= 3 and profit_ratio >= 0.55 and oos_profit_sum > 0.0 and oos_max_mdd <= 12.0
+    min_oos_windows = 3
+    min_oos_profitable_ratio = 0.55
+    require_positive_profit_sum = True
+    max_oos_mdd_pct = 12.0
+
+    gate_checks = {
+        "min_oos_windows": {
+            "pass": bool(ran_count >= min_oos_windows),
+            "actual": int(ran_count),
+            "threshold_min": int(min_oos_windows),
+        },
+        "min_oos_profitable_ratio": {
+            "pass": bool(profit_ratio >= min_oos_profitable_ratio),
+            "actual": float(profit_ratio),
+            "threshold_min": float(min_oos_profitable_ratio),
+        },
+        "oos_profit_sum_positive": {
+            "pass": bool(oos_profit_sum > 0.0),
+            "actual": float(oos_profit_sum),
+            "threshold_min": 0.0,
+        },
+        "max_oos_mdd_pct": {
+            "pass": bool(oos_max_mdd <= max_oos_mdd_pct),
+            "actual": float(oos_max_mdd),
+            "threshold_max": float(max_oos_mdd_pct),
+        },
+    }
+    gate_fail_reasons = [name for name, item in gate_checks.items() if not bool(item.get("pass", False))]
+    dominant_failure_reason = gate_fail_reasons[0] if gate_fail_reasons else ""
+
+    is_ready = len(gate_fail_reasons) == 0
     report = {
         "generated_at_utc": datetime.now(tz=timezone.utc).isoformat(),
         "input_csv": str(input_csv),
@@ -158,11 +191,17 @@ def main(argv=None) -> int:
         "oos_profitable_windows": profitable_count,
         "oos_profitable_ratio": profit_ratio,
         "oos_total_profit": oos_profit_sum,
+        "oos_avg_profit_per_window": oos_avg_profit,
+        "oos_nonpositive_profit_windows": oos_negative_profit_windows,
+        "oos_nonpositive_profit_ratio": oos_negative_profit_ratio,
         "oos_max_mdd_pct": oos_max_mdd,
-        "gate_oos_windows_min": 3,
-        "gate_oos_profitable_ratio_min": 0.55,
-        "gate_oos_profit_sum_positive": True,
-        "gate_oos_max_mdd_pct_max": 12.0,
+        "gate_oos_windows_min": int(min_oos_windows),
+        "gate_oos_profitable_ratio_min": float(min_oos_profitable_ratio),
+        "gate_oos_profit_sum_positive": bool(require_positive_profit_sum),
+        "gate_oos_max_mdd_pct_max": float(max_oos_mdd_pct),
+        "gate_checks": gate_checks,
+        "gate_fail_reasons": gate_fail_reasons,
+        "dominant_failure_reason": dominant_failure_reason,
         "is_ready_for_live_walkforward": is_ready,
     }
     dump_json(output_json, report)
@@ -171,6 +210,8 @@ def main(argv=None) -> int:
     print(f"windows_total={len(windows)}, windows_oos_ran={ran_count}")
     print("=== Walk-Forward Verdict ===")
     print(f"is_ready_for_live_walkforward={is_ready}")
+    if gate_fail_reasons:
+        print(f"gate_fail_reasons={','.join(gate_fail_reasons)}")
     print(f"saved_csv={output_csv}")
     print(f"saved_json={output_json}")
     return 0

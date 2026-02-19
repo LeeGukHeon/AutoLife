@@ -29,6 +29,12 @@ std::string normalizeStrategyName(std::string name) {
     if (name == "grid") {
         return "grid_trading";
     }
+    if (name == "foundation") {
+        return "foundation_adaptive";
+    }
+    if (name == "foundation_adaptive_strategy") {
+        return "foundation_adaptive";
+    }
     return name;
 }
 
@@ -214,6 +220,34 @@ void Config::load(const std::string& path) {
             engine_config_.mode = (mode_str == "LIVE") ? engine::TradingMode::LIVE : engine::TradingMode::PAPER;
             engine_config_.dry_run = t.value("dry_run", false);
             engine_config_.allow_live_orders = t.value("allow_live_orders", false);
+            engine_config_.enable_live_mtf_dataset_capture =
+                t.value("enable_live_mtf_dataset_capture", true);
+            engine_config_.live_mtf_dataset_capture_interval_seconds =
+                std::max(30, t.value("live_mtf_dataset_capture_interval_seconds", 300));
+            engine_config_.live_mtf_dataset_capture_output_dir = trimCopy(
+                t.value("live_mtf_dataset_capture_output_dir", "data/backtest_real_live")
+            );
+            if (engine_config_.live_mtf_dataset_capture_output_dir.empty()) {
+                engine_config_.live_mtf_dataset_capture_output_dir = "data/backtest_real_live";
+            }
+            if (t.contains("live_mtf_dataset_capture_timeframes") &&
+                t["live_mtf_dataset_capture_timeframes"].is_array()) {
+                std::vector<std::string> tf_list;
+                for (const auto& tf : t["live_mtf_dataset_capture_timeframes"]) {
+                    if (!tf.is_string()) {
+                        continue;
+                    }
+                    auto normalized = trimCopy(tf.get<std::string>());
+                    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                    if (!normalized.empty()) {
+                        tf_list.push_back(std::move(normalized));
+                    }
+                }
+                if (!tf_list.empty()) {
+                    engine_config_.live_mtf_dataset_capture_timeframes = std::move(tf_list);
+                }
+            }
             engine_config_.initial_capital = initial_capital_;
 
             engine_config_.scan_interval_seconds = t.value("scan_interval_seconds", 60);
@@ -243,13 +277,152 @@ void Config::load(const std::string& path) {
             engine_config_.min_strategy_trades_for_ev = t.value("min_strategy_trades_for_ev", 30);
             engine_config_.min_strategy_expectancy_krw = t.value("min_strategy_expectancy_krw", 0.0);
             engine_config_.min_strategy_profit_factor = t.value("min_strategy_profit_factor", 1.00);
+            engine_config_.enable_strategy_ev_pre_cat_soften_non_severe =
+                t.value("enable_strategy_ev_pre_cat_soften_non_severe", false);
+            engine_config_.enable_strategy_ev_pre_cat_relaxed_recovery_evidence =
+                t.value("enable_strategy_ev_pre_cat_relaxed_recovery_evidence", false);
+            engine_config_.enable_strategy_ev_pre_cat_relaxed_recovery_full_history_anchor =
+                t.value("enable_strategy_ev_pre_cat_relaxed_recovery_full_history_anchor", false);
+            engine_config_.enable_strategy_ev_pre_cat_recovery_evidence_hysteresis =
+                t.value("enable_strategy_ev_pre_cat_recovery_evidence_hysteresis", false);
+            engine_config_.strategy_ev_pre_cat_recovery_evidence_hysteresis_hold_steps =
+                t.value("strategy_ev_pre_cat_recovery_evidence_hysteresis_hold_steps", 12);
+            engine_config_.strategy_ev_pre_cat_recovery_evidence_hysteresis_min_trades =
+                t.value("strategy_ev_pre_cat_recovery_evidence_hysteresis_min_trades", 8);
+            engine_config_.enable_strategy_ev_pre_cat_recovery_quality_hysteresis_relief =
+                t.value("enable_strategy_ev_pre_cat_recovery_quality_hysteresis_relief", false);
+            engine_config_.strategy_ev_pre_cat_recovery_quality_hysteresis_min_strength =
+                t.value("strategy_ev_pre_cat_recovery_quality_hysteresis_min_strength", 0.67);
+            engine_config_.strategy_ev_pre_cat_recovery_quality_hysteresis_min_expected_value =
+                t.value("strategy_ev_pre_cat_recovery_quality_hysteresis_min_expected_value", 0.00060);
+            engine_config_.strategy_ev_pre_cat_recovery_quality_hysteresis_min_liquidity =
+                t.value("strategy_ev_pre_cat_recovery_quality_hysteresis_min_liquidity", 56.0);
+            engine_config_.strategy_ev_pre_cat_relaxed_recovery_min_trades =
+                t.value("strategy_ev_pre_cat_relaxed_recovery_min_trades", 8);
+            engine_config_.strategy_ev_pre_cat_relaxed_recovery_expectancy_gap_krw =
+                t.value("strategy_ev_pre_cat_relaxed_recovery_expectancy_gap_krw", 2.0);
+            engine_config_.strategy_ev_pre_cat_relaxed_recovery_profit_factor_gap =
+                t.value("strategy_ev_pre_cat_relaxed_recovery_profit_factor_gap", 0.12);
+            engine_config_.strategy_ev_pre_cat_relaxed_recovery_min_win_rate =
+                t.value("strategy_ev_pre_cat_relaxed_recovery_min_win_rate", 0.48);
+            engine_config_.enable_strategy_ev_pre_cat_recovery_evidence_bridge =
+                t.value("enable_strategy_ev_pre_cat_recovery_evidence_bridge", false);
+            engine_config_.enable_strategy_ev_pre_cat_recovery_evidence_bridge_surrogate =
+                t.value("enable_strategy_ev_pre_cat_recovery_evidence_bridge_surrogate", false);
+            engine_config_.strategy_ev_pre_cat_recovery_evidence_bridge_max_strategy_trades =
+                t.value("strategy_ev_pre_cat_recovery_evidence_bridge_max_strategy_trades", 24);
+            engine_config_.strategy_ev_pre_cat_recovery_evidence_bridge_max_full_history_pressure =
+                t.value("strategy_ev_pre_cat_recovery_evidence_bridge_max_full_history_pressure", 0.96);
+            engine_config_.strategy_ev_pre_cat_recovery_evidence_bridge_max_severe_axis_count =
+                t.value("strategy_ev_pre_cat_recovery_evidence_bridge_max_severe_axis_count", 2);
+            engine_config_.strategy_ev_pre_cat_recovery_evidence_bridge_max_activations_per_key =
+                t.value("strategy_ev_pre_cat_recovery_evidence_bridge_max_activations_per_key", 1);
+            engine_config_.enable_strategy_ev_pre_cat_pressure_rebound_relief =
+                t.value("enable_strategy_ev_pre_cat_pressure_rebound_relief", false);
+            engine_config_.strategy_ev_pre_cat_pressure_rebound_relief_max_strategy_trades =
+                t.value("strategy_ev_pre_cat_pressure_rebound_relief_max_strategy_trades", 28);
+            engine_config_.strategy_ev_pre_cat_pressure_rebound_relief_min_strength =
+                t.value("strategy_ev_pre_cat_pressure_rebound_relief_min_strength", 0.74);
+            engine_config_.strategy_ev_pre_cat_pressure_rebound_relief_min_expected_value =
+                t.value("strategy_ev_pre_cat_pressure_rebound_relief_min_expected_value", 0.00110);
+            engine_config_.strategy_ev_pre_cat_pressure_rebound_relief_min_liquidity =
+                t.value("strategy_ev_pre_cat_pressure_rebound_relief_min_liquidity", 60.0);
+            engine_config_.strategy_ev_pre_cat_pressure_rebound_relief_min_reward_risk =
+                t.value("strategy_ev_pre_cat_pressure_rebound_relief_min_reward_risk", 1.25);
+            engine_config_.strategy_ev_pre_cat_pressure_rebound_relief_min_full_history_pressure =
+                t.value("strategy_ev_pre_cat_pressure_rebound_relief_min_full_history_pressure", 0.95);
+            engine_config_.strategy_ev_pre_cat_pressure_rebound_relief_max_recent_history_pressure =
+                t.value("strategy_ev_pre_cat_pressure_rebound_relief_max_recent_history_pressure", 0.78);
+            engine_config_.strategy_ev_pre_cat_pressure_rebound_relief_max_regime_history_pressure =
+                t.value("strategy_ev_pre_cat_pressure_rebound_relief_max_regime_history_pressure", 0.80);
+            engine_config_.strategy_ev_pre_cat_pressure_rebound_relief_max_severe_axis_count =
+                t.value("strategy_ev_pre_cat_pressure_rebound_relief_max_severe_axis_count", 2);
+            engine_config_.strategy_ev_pre_cat_pressure_rebound_relief_max_activations_per_key =
+                t.value("strategy_ev_pre_cat_pressure_rebound_relief_max_activations_per_key", 1);
+            engine_config_.enable_strategy_ev_pre_cat_negative_history_quarantine =
+                t.value("enable_strategy_ev_pre_cat_negative_history_quarantine", false);
+            engine_config_.strategy_ev_pre_cat_negative_history_quarantine_hold_steps =
+                t.value("strategy_ev_pre_cat_negative_history_quarantine_hold_steps", 6);
+            engine_config_.strategy_ev_pre_cat_negative_history_quarantine_min_full_history_pressure =
+                t.value("strategy_ev_pre_cat_negative_history_quarantine_min_full_history_pressure", 0.95);
+            engine_config_.strategy_ev_pre_cat_negative_history_quarantine_max_history_pf =
+                t.value("strategy_ev_pre_cat_negative_history_quarantine_max_history_pf", 0.45);
+            engine_config_.strategy_ev_pre_cat_negative_history_quarantine_max_history_expectancy_krw =
+                t.value("strategy_ev_pre_cat_negative_history_quarantine_max_history_expectancy_krw", -10.0);
+            engine_config_.enable_strategy_ev_pre_cat_relaxed_severe_gate =
+                t.value("enable_strategy_ev_pre_cat_relaxed_severe_gate", false);
+            engine_config_.strategy_ev_pre_cat_relaxed_severe_min_trades =
+                t.value("strategy_ev_pre_cat_relaxed_severe_min_trades", 18);
+            engine_config_.strategy_ev_pre_cat_relaxed_severe_pressure_threshold =
+                t.value("strategy_ev_pre_cat_relaxed_severe_pressure_threshold", 0.78);
+            engine_config_.enable_strategy_ev_pre_cat_composite_severe_model =
+                t.value("enable_strategy_ev_pre_cat_composite_severe_model", false);
+            engine_config_.strategy_ev_pre_cat_composite_pressure_threshold =
+                t.value("strategy_ev_pre_cat_composite_pressure_threshold", 0.84);
+            engine_config_.strategy_ev_pre_cat_composite_min_critical_signals =
+                t.value("strategy_ev_pre_cat_composite_min_critical_signals", 2);
+            engine_config_.enable_strategy_ev_pre_cat_sync_guard =
+                t.value("enable_strategy_ev_pre_cat_sync_guard", false);
+            engine_config_.enable_strategy_ev_pre_cat_contextual_severe_downgrade =
+                t.value("enable_strategy_ev_pre_cat_contextual_severe_downgrade", false);
+            engine_config_.strategy_ev_pre_cat_contextual_severe_max_pressure =
+                t.value("strategy_ev_pre_cat_contextual_severe_max_pressure", 0.90);
+            engine_config_.strategy_ev_pre_cat_contextual_severe_max_axis_count =
+                t.value("strategy_ev_pre_cat_contextual_severe_max_axis_count", 2);
+            engine_config_.enable_strategy_ev_pre_cat_no_soft_quality_relief =
+                t.value("enable_strategy_ev_pre_cat_no_soft_quality_relief", false);
+            engine_config_.strategy_ev_pre_cat_no_soft_quality_relief_max_strategy_trades =
+                t.value("strategy_ev_pre_cat_no_soft_quality_relief_max_strategy_trades", 20);
+            engine_config_.strategy_ev_pre_cat_no_soft_quality_relief_min_strength =
+                t.value("strategy_ev_pre_cat_no_soft_quality_relief_min_strength", 0.72);
+            engine_config_.strategy_ev_pre_cat_no_soft_quality_relief_min_expected_value =
+                t.value("strategy_ev_pre_cat_no_soft_quality_relief_min_expected_value", 0.00100);
+            engine_config_.strategy_ev_pre_cat_no_soft_quality_relief_min_liquidity =
+                t.value("strategy_ev_pre_cat_no_soft_quality_relief_min_liquidity", 58.0);
+            engine_config_.strategy_ev_pre_cat_no_soft_quality_relief_min_reward_risk =
+                t.value("strategy_ev_pre_cat_no_soft_quality_relief_min_reward_risk", 1.30);
+            engine_config_.strategy_ev_pre_cat_no_soft_quality_relief_max_full_history_pressure =
+                t.value("strategy_ev_pre_cat_no_soft_quality_relief_max_full_history_pressure", 1.00);
+            engine_config_.strategy_ev_pre_cat_no_soft_quality_relief_max_severe_axis_count =
+                t.value("strategy_ev_pre_cat_no_soft_quality_relief_max_severe_axis_count", 2);
+            engine_config_.strategy_ev_pre_cat_no_soft_quality_relief_max_activations_per_key =
+                t.value("strategy_ev_pre_cat_no_soft_quality_relief_max_activations_per_key", 1);
+            engine_config_.enable_strategy_ev_pre_cat_candidate_rr_failsafe =
+                t.value("enable_strategy_ev_pre_cat_candidate_rr_failsafe", false);
+            engine_config_.strategy_ev_pre_cat_candidate_rr_failsafe_max_strategy_trades =
+                t.value("strategy_ev_pre_cat_candidate_rr_failsafe_max_strategy_trades", 18);
+            engine_config_.strategy_ev_pre_cat_candidate_rr_failsafe_min_strength =
+                t.value("strategy_ev_pre_cat_candidate_rr_failsafe_min_strength", 0.73);
+            engine_config_.strategy_ev_pre_cat_candidate_rr_failsafe_min_expected_value =
+                t.value("strategy_ev_pre_cat_candidate_rr_failsafe_min_expected_value", 0.00095);
+            engine_config_.strategy_ev_pre_cat_candidate_rr_failsafe_min_liquidity =
+                t.value("strategy_ev_pre_cat_candidate_rr_failsafe_min_liquidity", 59.0);
+            engine_config_.strategy_ev_pre_cat_candidate_rr_failsafe_min_reward_risk =
+                t.value("strategy_ev_pre_cat_candidate_rr_failsafe_min_reward_risk", 1.30);
+            engine_config_.strategy_ev_pre_cat_candidate_rr_failsafe_max_full_history_pressure =
+                t.value("strategy_ev_pre_cat_candidate_rr_failsafe_max_full_history_pressure", 0.96);
+            engine_config_.strategy_ev_pre_cat_candidate_rr_failsafe_max_severe_axis_count =
+                t.value("strategy_ev_pre_cat_candidate_rr_failsafe_max_severe_axis_count", 2);
+            engine_config_.strategy_ev_pre_cat_candidate_rr_failsafe_max_activations_per_key =
+                t.value("strategy_ev_pre_cat_candidate_rr_failsafe_max_activations_per_key", 1);
+            engine_config_.strategy_ev_pre_cat_unsynced_override_min_strength =
+                t.value("strategy_ev_pre_cat_unsynced_override_min_strength", 0.74);
+            engine_config_.strategy_ev_pre_cat_unsynced_override_min_expected_value =
+                t.value("strategy_ev_pre_cat_unsynced_override_min_expected_value", 0.00085);
+            engine_config_.strategy_ev_pre_cat_unsynced_override_min_liquidity =
+                t.value("strategy_ev_pre_cat_unsynced_override_min_liquidity", 60.0);
+            engine_config_.strategy_ev_pre_cat_unsynced_override_min_reward_risk =
+                t.value("strategy_ev_pre_cat_unsynced_override_min_reward_risk", 1.28);
+            engine_config_.strategy_ev_pre_cat_unsynced_override_max_full_history_pressure =
+                t.value("strategy_ev_pre_cat_unsynced_override_max_full_history_pressure", 1.00);
+            engine_config_.strategy_ev_pre_cat_unsynced_override_max_severe_axis_count =
+                t.value("strategy_ev_pre_cat_unsynced_override_max_severe_axis_count", 4);
             engine_config_.avoid_high_volatility = t.value("avoid_high_volatility", true);
             engine_config_.avoid_trending_down = t.value("avoid_trending_down", true);
             engine_config_.enable_core_plane_bridge = t.value("enable_core_plane_bridge", true);
             engine_config_.enable_core_policy_plane = t.value("enable_core_policy_plane", true);
             engine_config_.enable_core_risk_plane = t.value("enable_core_risk_plane", true);
             engine_config_.enable_core_execution_plane = t.value("enable_core_execution_plane", true);
-            engine_config_.enable_v2_shadow_policy_probe = t.value("enable_v2_shadow_policy_probe", true);
             engine_config_.use_strategy_alpha_head_mode = t.value("use_strategy_alpha_head_mode", false);
             engine_config_.hostility_ewma_alpha = t.value("hostility_ewma_alpha", 0.14);
             engine_config_.hostility_hostile_threshold = t.value("hostility_hostile_threshold", 0.62);
@@ -262,6 +435,126 @@ void Config::load(const std::string& path) {
             engine_config_.hostility_pause_recent_win_rate = t.value("hostility_pause_recent_win_rate", 0.40);
             engine_config_.backtest_hostility_pause_candles = t.value("backtest_hostility_pause_candles", 36);
             engine_config_.backtest_hostility_pause_candles_extreme = t.value("backtest_hostility_pause_candles_extreme", 60);
+            engine_config_.enable_entry_quality_adaptive_relief =
+                t.value("enable_entry_quality_adaptive_relief", true);
+            engine_config_.entry_quality_adaptive_relief_rr_max_gap =
+                t.value("entry_quality_adaptive_relief_rr_max_gap", 0.08);
+            engine_config_.entry_quality_adaptive_relief_edge_max_gap =
+                t.value("entry_quality_adaptive_relief_edge_max_gap", 0.00012);
+            engine_config_.entry_quality_adaptive_relief_min_signal_strength =
+                t.value("entry_quality_adaptive_relief_min_signal_strength", 0.68);
+            engine_config_.entry_quality_adaptive_relief_min_expected_value =
+                t.value("entry_quality_adaptive_relief_min_expected_value", 0.00035);
+            engine_config_.entry_quality_adaptive_relief_min_liquidity_score =
+                t.value("entry_quality_adaptive_relief_min_liquidity_score", 58.0);
+            engine_config_.entry_quality_adaptive_relief_min_strategy_trades =
+                t.value("entry_quality_adaptive_relief_min_strategy_trades", 16);
+            engine_config_.entry_quality_adaptive_relief_min_strategy_win_rate =
+                t.value("entry_quality_adaptive_relief_min_strategy_win_rate", 0.47);
+            engine_config_.entry_quality_adaptive_relief_min_strategy_profit_factor =
+                t.value("entry_quality_adaptive_relief_min_strategy_profit_factor", 0.98);
+            engine_config_.entry_quality_adaptive_relief_block_high_stress_regime =
+                t.value("entry_quality_adaptive_relief_block_high_stress_regime", true);
+            engine_config_.entry_quality_adaptive_relief_position_scale =
+                t.value("entry_quality_adaptive_relief_position_scale", 0.80);
+            engine_config_.second_stage_history_safety_severe_scale =
+                t.value("second_stage_history_safety_severe_scale", 1.00);
+            engine_config_.enable_second_stage_history_safety_severe_relief =
+                t.value("enable_second_stage_history_safety_severe_relief", true);
+            engine_config_.second_stage_history_safety_relief_max_scale =
+                t.value("second_stage_history_safety_relief_max_scale", 0.45);
+            engine_config_.second_stage_history_safety_relief_min_strategy_trades =
+                t.value("second_stage_history_safety_relief_min_strategy_trades", 12);
+            engine_config_.second_stage_history_safety_relief_min_signal_strength =
+                t.value("second_stage_history_safety_relief_min_signal_strength", 0.68);
+            engine_config_.second_stage_history_safety_relief_min_expected_value =
+                t.value("second_stage_history_safety_relief_min_expected_value", 0.00045);
+            engine_config_.second_stage_history_safety_relief_min_liquidity_score =
+                t.value("second_stage_history_safety_relief_min_liquidity_score", 58.0);
+            engine_config_.second_stage_history_safety_relief_block_hostile_regime =
+                t.value("second_stage_history_safety_relief_block_hostile_regime", false);
+            engine_config_.enable_two_head_entry_second_stage_aggregation =
+                t.value("enable_two_head_entry_second_stage_aggregation", true);
+            engine_config_.two_head_entry_quality_weight =
+                t.value("two_head_entry_quality_weight", 0.55);
+            engine_config_.two_head_second_stage_weight =
+                t.value("two_head_second_stage_weight", 0.45);
+            engine_config_.two_head_min_entry_quality_score =
+                t.value("two_head_min_entry_quality_score", 0.90);
+            engine_config_.two_head_min_second_stage_score =
+                t.value("two_head_min_second_stage_score", 0.88);
+            engine_config_.two_head_min_aggregate_score =
+                t.value("two_head_min_aggregate_score", 0.98);
+            engine_config_.two_head_aggregation_block_high_stress_regime =
+                t.value("two_head_aggregation_block_high_stress_regime", false);
+            engine_config_.two_head_aggregation_min_strategy_trades =
+                t.value("two_head_aggregation_min_strategy_trades", 8);
+            engine_config_.enable_two_head_rr_margin_near_miss_floor_relax =
+                t.value("enable_two_head_rr_margin_near_miss_floor_relax", false);
+            engine_config_.two_head_rr_margin_near_miss_second_stage_floor_relax =
+                t.value("two_head_rr_margin_near_miss_second_stage_floor_relax", 0.06);
+            engine_config_.two_head_rr_margin_near_miss_aggregate_floor_relax =
+                t.value("two_head_rr_margin_near_miss_aggregate_floor_relax", 0.03);
+            engine_config_.enable_two_head_rr_margin_near_miss_adaptive_floor_relax =
+                t.value("enable_two_head_rr_margin_near_miss_adaptive_floor_relax", false);
+            engine_config_.two_head_rr_margin_near_miss_adaptive_floor_relax_min_activation =
+                t.value("two_head_rr_margin_near_miss_adaptive_floor_relax_min_activation", 0.45);
+            engine_config_.two_head_rr_margin_near_miss_adaptive_floor_relax_max_second_stage =
+                t.value("two_head_rr_margin_near_miss_adaptive_floor_relax_max_second_stage", 0.08);
+            engine_config_.two_head_rr_margin_near_miss_adaptive_floor_relax_max_aggregate =
+                t.value("two_head_rr_margin_near_miss_adaptive_floor_relax_max_aggregate", 0.04);
+            engine_config_.two_head_rr_margin_near_miss_adaptive_floor_relax_quality_weight =
+                t.value("two_head_rr_margin_near_miss_adaptive_floor_relax_quality_weight", 0.55);
+            engine_config_.two_head_rr_margin_near_miss_adaptive_floor_relax_gap_weight =
+                t.value("two_head_rr_margin_near_miss_adaptive_floor_relax_gap_weight", 0.45);
+            engine_config_.enable_two_head_rr_margin_near_miss_surplus_compensation =
+                t.value("enable_two_head_rr_margin_near_miss_surplus_compensation", false);
+            engine_config_.two_head_rr_margin_near_miss_surplus_min_entry_surplus =
+                t.value("two_head_rr_margin_near_miss_surplus_min_entry_surplus", 0.05);
+            engine_config_.two_head_rr_margin_near_miss_surplus_min_edge_score =
+                t.value("two_head_rr_margin_near_miss_surplus_min_edge_score", 1.03);
+            engine_config_.two_head_rr_margin_near_miss_surplus_max_second_stage_deficit =
+                t.value("two_head_rr_margin_near_miss_surplus_max_second_stage_deficit", 0.05);
+            engine_config_.two_head_rr_margin_near_miss_surplus_max_aggregate_deficit =
+                t.value("two_head_rr_margin_near_miss_surplus_max_aggregate_deficit", 0.04);
+            engine_config_.two_head_rr_margin_near_miss_surplus_entry_weight =
+                t.value("two_head_rr_margin_near_miss_surplus_entry_weight", 0.35);
+            engine_config_.two_head_rr_margin_near_miss_surplus_max_aggregate_bonus =
+                t.value("two_head_rr_margin_near_miss_surplus_max_aggregate_bonus", 0.05);
+            engine_config_.enable_second_stage_rr_margin_near_miss_relief =
+                t.value("enable_second_stage_rr_margin_near_miss_relief", true);
+            engine_config_.second_stage_rr_margin_near_miss_max_gap =
+                t.value("second_stage_rr_margin_near_miss_max_gap", 0.02);
+            engine_config_.second_stage_rr_margin_near_miss_min_signal_strength =
+                t.value("second_stage_rr_margin_near_miss_min_signal_strength", 0.70);
+            engine_config_.second_stage_rr_margin_near_miss_min_expected_value =
+                t.value("second_stage_rr_margin_near_miss_min_expected_value", 0.00055);
+            engine_config_.second_stage_rr_margin_near_miss_min_liquidity_score =
+                t.value("second_stage_rr_margin_near_miss_min_liquidity_score", 60.0);
+            engine_config_.second_stage_rr_margin_near_miss_min_strategy_trades =
+                t.value("second_stage_rr_margin_near_miss_min_strategy_trades", 12);
+            engine_config_.second_stage_rr_margin_near_miss_block_high_stress_regime =
+                t.value("second_stage_rr_margin_near_miss_block_high_stress_regime", true);
+            engine_config_.second_stage_rr_margin_near_miss_score_boost =
+                t.value("second_stage_rr_margin_near_miss_score_boost", 0.08);
+            engine_config_.enable_second_stage_rr_margin_soft_score =
+                t.value("enable_second_stage_rr_margin_soft_score", false);
+            engine_config_.second_stage_rr_margin_soft_score_max_gap =
+                t.value("second_stage_rr_margin_soft_score_max_gap", 0.02);
+            engine_config_.second_stage_rr_margin_soft_score_floor =
+                t.value("second_stage_rr_margin_soft_score_floor", 0.70);
+            engine_config_.second_stage_rr_margin_soft_score_gap_tightness_weight =
+                t.value("second_stage_rr_margin_soft_score_gap_tightness_weight", 0.20);
+            engine_config_.enable_second_stage_rr_margin_near_miss_head_score_floor =
+                t.value("enable_second_stage_rr_margin_near_miss_head_score_floor", false);
+            engine_config_.second_stage_rr_margin_near_miss_head_score_floor_base =
+                t.value("second_stage_rr_margin_near_miss_head_score_floor_base", 0.0);
+            engine_config_.second_stage_rr_margin_near_miss_head_score_floor_quality_weight =
+                t.value("second_stage_rr_margin_near_miss_head_score_floor_quality_weight", 0.0);
+            engine_config_.second_stage_rr_margin_near_miss_head_score_floor_gap_weight =
+                t.value("second_stage_rr_margin_near_miss_head_score_floor_gap_weight", 0.0);
+            engine_config_.second_stage_rr_margin_near_miss_head_score_floor_max =
+                t.value("second_stage_rr_margin_near_miss_head_score_floor_max", 1.0);
 
             if (t.contains("enabled_strategies")) {
                 engine_config_.enabled_strategies = t["enabled_strategies"].get<std::vector<std::string>>();
