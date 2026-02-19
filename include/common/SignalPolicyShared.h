@@ -32,6 +32,11 @@ double computeCostAwareRewardRiskFloor(
 bool rebalanceSignalRiskReward(strategy::Signal& signal, const engine::EngineConfig& cfg);
 double computeStrategyHistoryWinProbPrior(const strategy::Signal& signal, const engine::EngineConfig& cfg);
 double computeCalibratedExpectedEdgePct(const strategy::Signal& signal, const engine::EngineConfig& cfg);
+double computeContextualEdgeGateFloor(
+    const strategy::Signal& signal,
+    const engine::EngineConfig& cfg,
+    double nominal_edge_gate
+);
 bool isAlphaHeadFallbackCandidate(const strategy::Signal& signal, bool alpha_head_mode);
 void normalizeSignalStopLossByRegime(strategy::Signal& signal, analytics::MarketRegime regime);
 

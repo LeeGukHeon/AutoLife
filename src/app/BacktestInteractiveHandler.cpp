@@ -131,7 +131,7 @@ static CompanionCheckResult checkHigherTfCompanions(const std::string& csv_path)
         return false;
     };
 
-    for (const auto& token : {"5m", "60m", "240m"}) {
+    for (const auto& token : {"5m", "15m", "60m", "240m"}) {
         if (hasCompanion(token)) {
             out.found_tokens.push_back(token);
         } else {
@@ -146,7 +146,7 @@ static void printCompanionRequirementError(const std::string& csv_path, const Co
     std::cout << "실거래 동등 MTF 모드 검증 실패: " << csv_path << "\n";
     if (!check.applicable) {
         std::cout << "  파일명 규칙이 맞지 않습니다. 예: upbit_KRW_BTC_1m_12000.csv\n";
-        std::cout << "  companion(5m/60m/240m) 자동 매칭이 가능한 1m 파일을 지정하세요.\n";
+        std::cout << "  companion(5m/15m/60m/240m) 자동 매칭이 가능한 1m 파일을 지정하세요.\n";
         return;
     }
 
@@ -159,7 +159,7 @@ static void printCompanionRequirementError(const std::string& csv_path, const Co
             std::cout << check.missing_tokens[i];
         }
         std::cout << "\n";
-        std::cout << "  같은 폴더에 upbit_<market>_5m_*.csv / 60m / 240m 파일이 필요합니다.\n";
+        std::cout << "  같은 폴더에 upbit_<market>_5m_*.csv / 15m / 60m / 240m 파일이 필요합니다.\n";
     }
 }
 
@@ -277,14 +277,14 @@ int runInteractiveBacktest(Config& config) {
     std::string csv_path;
     if (source_choice == 3) {
         require_higher_tf_companions = readYesNo(
-            "실거래 동등 MTF 모드로 실행할까요? (1m + 5m/60m/240m companion 강제)",
+            "실거래 동등 MTF 모드로 실행할까요? (1m + 5m/15m/60m/240m companion 강제)",
             true
         );
         auto candidates = listRealDataPrimaryCsvs(require_higher_tf_companions);
         if (candidates.empty()) {
             std::cout << "선택 가능한 실데이터 1m CSV가 없습니다.\n";
             std::cout << "경로: data/backtest_real\n";
-            std::cout << "필요 파일 예: upbit_KRW_BTC_1m_12000.csv (+ 5m/60m/240m companion)\n";
+            std::cout << "필요 파일 예: upbit_KRW_BTC_1m_12000.csv (+ 5m/15m/60m/240m companion)\n";
             return 1;
         }
 
@@ -307,7 +307,7 @@ int runInteractiveBacktest(Config& config) {
             return 1;
         }
         require_higher_tf_companions = readYesNo(
-            "실거래 동등 MTF 모드로 실행할까요? (1m + 5m/60m/240m companion 강제)",
+            "실거래 동등 MTF 모드로 실행할까요? (1m + 5m/15m/60m/240m companion 강제)",
             true
         );
         std::cout << "실데이터 CSV 사용: " << csv_path << "\n\n";
@@ -330,7 +330,7 @@ int runInteractiveBacktest(Config& config) {
             printCompanionRequirementError(csv_path, check);
             return 1;
         }
-        std::cout << "MTF companion 검증 통과: 5m/60m/240m\n\n";
+        std::cout << "MTF companion 검증 통과: 5m/15m/60m/240m\n\n";
     }
 
     config.setInitialCapital(bt_capital);

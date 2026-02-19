@@ -1,4 +1,4 @@
-﻿# Foundation Review: Engine/Strategy/Main (2026-02-19)
+# Foundation Review: Engine/Strategy/Main (2026-02-19)
 
 ## Why this review
 - Verification accuracy cannot improve if core execution logic is structurally hard to reason about.

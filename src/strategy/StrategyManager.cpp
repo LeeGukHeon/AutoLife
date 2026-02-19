@@ -534,15 +534,17 @@ Signal StrategyManager::processStrategySignal(
     double available_capital,
     const analytics::RegimeAnalysis& regime
 ) {
+    Signal signal;
     try {
         if (!strategy->isEnabled()) {
-            return Signal();
+            return signal;
         }
 
         const bool core_signal_ownership = coreSignalOwnershipEnabledForManager();
-        auto signal = strategy->generateSignal(market, metrics, candles, current_price, available_capital, regime);
+        signal = strategy->generateSignal(market, metrics, candles, current_price, available_capital, regime);
+        std::string no_signal_reason = signal.reason;
         if (signal.type == SignalType::NONE && core_signal_ownership) {
-            signal = buildCoreRescueCandidate(
+            Signal rescue_signal = buildCoreRescueCandidate(
                 strategy,
                 market,
                 metrics,
@@ -551,9 +553,14 @@ Signal StrategyManager::processStrategySignal(
                 available_capital,
                 regime
             );
+            if (rescue_signal.type != SignalType::NONE) {
+                signal = std::move(rescue_signal);
+            } else if (no_signal_reason.empty() && !rescue_signal.reason.empty()) {
+                no_signal_reason = rescue_signal.reason;
+            }
         }
         if (signal.type == SignalType::NONE && alphaHeadModeEnabledForManager()) {
-            signal = buildAlphaHeadFallbackSignal(
+            Signal fallback_signal = buildAlphaHeadFallbackSignal(
                 strategy->getInfo().name,
                 market,
                 metrics,
@@ -561,6 +568,14 @@ Signal StrategyManager::processStrategySignal(
                 current_price,
                 regime
             );
+            if (fallback_signal.type != SignalType::NONE) {
+                signal = std::move(fallback_signal);
+            } else if (no_signal_reason.empty() && !fallback_signal.reason.empty()) {
+                no_signal_reason = fallback_signal.reason;
+            }
+        }
+        if (signal.type == SignalType::NONE && !no_signal_reason.empty()) {
+            signal.reason = no_signal_reason;
         }
 
         if (signal.type != SignalType::NONE) {
@@ -600,14 +615,13 @@ Signal StrategyManager::processStrategySignal(
                 LOG_INFO("{} - {} core rescue candidate generated (strength {:.2f}, archetype {})",
                          market, signal.strategy_name, signal.strength, signal.entry_archetype);
             }
-
-            return signal;
         }
     } catch (const std::exception& e) {
         LOG_ERROR("{} - {} analysis failed: {}", market, strategy->getInfo().name, e.what());
+        signal.reason = "strategy_execution_exception";
     }
 
-    return Signal();
+    return signal;
 }
 
 std::vector<Signal> StrategyManager::collectSignals(
@@ -630,6 +644,7 @@ std::vector<Signal> StrategyManager::collectSignals(
         diagnostics->generated_by_strategy.clear();
         diagnostics->skipped_disabled_by_strategy.clear();
         diagnostics->no_signal_by_strategy.clear();
+        diagnostics->no_signal_reason_counts.clear();
         diagnostics->exception_by_strategy.clear();
     }
 
@@ -672,6 +687,10 @@ std::vector<Signal> StrategyManager::collectSignals(
                 if (diagnostics != nullptr) {
                     diagnostics->no_signal_count++;
                     diagnostics->no_signal_by_strategy[strategy_name]++;
+                    const std::string no_signal_reason = signal.reason.empty()
+                        ? "no_signal_reason_unspecified"
+                        : signal.reason;
+                    diagnostics->no_signal_reason_counts[no_signal_reason]++;
                 }
             }
         } catch (const std::exception& e) {

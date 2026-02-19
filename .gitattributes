@@ -1,2 +1,43 @@
-# Auto detect text files and perform LF normalization
+# Auto detect text files and normalize line endings by Git defaults.
 * text=auto
+
+# Encoding policy:
+# - source/script/docs/config: UTF-8 (no BOM)
+# - csv BOM policy is enforced via .editorconfig / tooling
+
+*.c text working-tree-encoding=UTF-8
+*.cc text working-tree-encoding=UTF-8
+*.cpp text working-tree-encoding=UTF-8
+*.cxx text working-tree-encoding=UTF-8
+*.h text working-tree-encoding=UTF-8
+*.hh text working-tree-encoding=UTF-8
+*.hpp text working-tree-encoding=UTF-8
+*.hxx text working-tree-encoding=UTF-8
+*.py text working-tree-encoding=UTF-8
+*.ps1 text working-tree-encoding=UTF-8
+*.sh text working-tree-encoding=UTF-8
+*.bat text working-tree-encoding=UTF-8
+*.cmd text working-tree-encoding=UTF-8
+*.cmake text working-tree-encoding=UTF-8
+*.md text working-tree-encoding=UTF-8
+*.txt text working-tree-encoding=UTF-8
+*.json text working-tree-encoding=UTF-8
+*.yaml text working-tree-encoding=UTF-8
+*.yml text working-tree-encoding=UTF-8
+*.toml text working-tree-encoding=UTF-8
+*.ini text working-tree-encoding=UTF-8
+*.cfg text working-tree-encoding=UTF-8
+*.conf text working-tree-encoding=UTF-8
+*.env text working-tree-encoding=UTF-8
+*.sql text working-tree-encoding=UTF-8
+*.xml text working-tree-encoding=UTF-8
+*.html text working-tree-encoding=UTF-8
+*.css text working-tree-encoding=UTF-8
+*.js text working-tree-encoding=UTF-8
+*.ts text working-tree-encoding=UTF-8
+
+CMakeLists.txt text working-tree-encoding=UTF-8
+Makefile text working-tree-encoding=UTF-8
+README text working-tree-encoding=UTF-8
+README.md text working-tree-encoding=UTF-8
+AGENTS.md text working-tree-encoding=UTF-8

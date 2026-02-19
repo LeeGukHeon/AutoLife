@@ -3,6 +3,7 @@
 #include <vector>
 #include <string>
 #include <map>
+#include <array>
 #include "common/Types.h"
 #include "common/Config.h"
 #include "backtest/DataHistory.h"
@@ -47,6 +48,8 @@ public:
             std::string strategy_name;
             std::string entry_archetype;
             std::string regime;
+            std::string volatility_bucket;
+            std::string liquidity_bucket;
             std::string strength_bucket;
             std::string expected_value_bucket;
             std::string reward_risk_bucket;
@@ -211,6 +214,13 @@ public:
             int no_signal = 0;
             int generated = 0;
         };
+        struct PostEntryRiskTelemetry {
+            int adaptive_stop_updates = 0;
+            int adaptive_tp_recalibration_updates = 0;
+            int adaptive_partial_ratio_samples = 0;
+            double adaptive_partial_ratio_sum = 0.0;
+            std::array<int, 5> adaptive_partial_ratio_histogram{{0, 0, 0, 0, 0}};
+        };
 
         double final_balance;
         double total_profit;
@@ -228,6 +238,8 @@ public:
         int intrabar_stop_tp_collision_count = 0;
         std::map<std::string, int> exit_reason_counts;
         std::map<std::string, int> entry_rejection_reason_counts;
+        std::map<std::string, int> no_signal_pattern_counts;
+        std::map<std::string, int> entry_quality_edge_gap_buckets;
         std::map<std::string, int> intrabar_collision_by_strategy;
         std::vector<StrategySummary> strategy_summaries;
         std::vector<PatternSummary> pattern_summaries;
@@ -236,6 +248,7 @@ public:
         int strategy_collect_exception_count = 0;
         EntryFunnelSummary entry_funnel;
         PreCatFeatureSnapshot pre_cat_feature_snapshot;
+        PostEntryRiskTelemetry post_entry_risk_telemetry;
     };
     Result getResult() const;
 
@@ -291,6 +304,8 @@ private:
     std::map<std::string, int> strategy_no_signal_counts_;
     int strategy_collect_exception_count_ = 0;
     std::map<std::string, int> entry_rejection_reason_counts_;
+    std::map<std::string, int> no_signal_pattern_counts_;
+    std::map<std::string, int> entry_quality_edge_gap_buckets_;
     int intrabar_stop_tp_collision_count_ = 0;
     std::map<std::string, int> intrabar_collision_by_strategy_;
     std::map<std::string, int> pre_cat_recovery_hysteresis_hold_by_key_;
@@ -299,6 +314,11 @@ private:
     std::map<std::string, int> pre_cat_candidate_rr_failsafe_activation_by_key_;
     std::map<std::string, int> pre_cat_pressure_rebound_relief_activation_by_key_;
     std::map<std::string, int> pre_cat_negative_history_quarantine_hold_by_key_;
+    int adaptive_stop_update_count_ = 0;
+    int adaptive_tp_recalibration_count_ = 0;
+    int adaptive_partial_ratio_samples_ = 0;
+    double adaptive_partial_ratio_sum_ = 0.0;
+    std::array<int, 5> adaptive_partial_ratio_histogram_{{0, 0, 0, 0, 0}};
 
     // Simulation Methods
     void processCandle(const Candle& candle);
@@ -326,4 +346,3 @@ private:
 
 } // namespace backtest
 } // namespace autolife
-

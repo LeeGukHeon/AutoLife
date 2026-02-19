@@ -27,6 +27,7 @@ public:
         std::map<std::string, int> generated_by_strategy;
         std::map<std::string, int> skipped_disabled_by_strategy;
         std::map<std::string, int> no_signal_by_strategy;
+        std::map<std::string, int> no_signal_reason_counts;
         std::map<std::string, int> exception_by_strategy;
     };
 

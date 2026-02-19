@@ -324,6 +324,7 @@ private:
     std::atomic<bool> prometheus_server_running_ = false;  // HTTP ?쒕쾭 ?ㅽ뻾 ?곹깭
 
     std::map<std::string, std::string> recovered_strategy_map_;
+    std::map<std::string, double> pending_buy_reservation_by_order_id_;
 
     struct PersistedPosition {
         std::string market;

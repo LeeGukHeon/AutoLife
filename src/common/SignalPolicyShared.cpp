@@ -353,6 +353,24 @@ double computeCalibratedExpectedEdgePct(const strategy::Signal& signal, const en
         default:
             break;
     }
+    const bool low_liq_uptrend_signal =
+        signal.reason == "foundation_adaptive_regime_entry_low_liq_uptrend";
+    if (low_liq_uptrend_signal) {
+        if (signal.market_regime == analytics::MarketRegime::TRENDING_UP) {
+            win_prob += 0.04;
+        } else {
+            win_prob -= 0.02;
+        }
+        if (signal.strength >= 0.68) {
+            win_prob += 0.01;
+        }
+        if (signal.volatility > 0.0 && signal.volatility <= 2.0) {
+            win_prob += 0.01;
+        }
+        if (signal.liquidity_score > 0.0 && signal.liquidity_score < 42.0) {
+            win_prob -= 0.01;
+        }
+    }
     if (signal.reason == "alpha_head_fallback_candidate") {
         if (signal.market_regime == analytics::MarketRegime::TRENDING_UP) {
             win_prob += 0.08;
@@ -402,11 +420,83 @@ double computeCalibratedExpectedEdgePct(const strategy::Signal& signal, const en
     win_prob = std::clamp(win_prob, 0.12, 0.88);
 
     double round_trip_cost_pct = computeEffectiveRoundTripCostPct(signal, cfg);
+    if (low_liq_uptrend_signal &&
+        signal.market_regime == analytics::MarketRegime::TRENDING_UP &&
+        signal.liquidity_score >= 42.0) {
+        round_trip_cost_pct *= 0.95;
+    }
     if (signal.reason == "alpha_head_fallback_candidate" && signal.liquidity_score >= 58.0) {
         round_trip_cost_pct *= 0.88;
     }
     const double expected_gross_pct = (win_prob * gross_reward_pct) - ((1.0 - win_prob) * gross_risk_pct);
     return expected_gross_pct - round_trip_cost_pct;
+}
+
+double computeContextualEdgeGateFloor(
+    const strategy::Signal& signal,
+    const engine::EngineConfig& cfg,
+    double nominal_edge_gate
+) {
+    const double nominal_floor = std::max(0.00025, nominal_edge_gate);
+    const bool hostile_regime =
+        signal.market_regime == analytics::MarketRegime::HIGH_VOLATILITY ||
+        signal.market_regime == analytics::MarketRegime::TRENDING_DOWN;
+    const bool favorable_regime =
+        signal.market_regime == analytics::MarketRegime::TRENDING_UP ||
+        signal.market_regime == analytics::MarketRegime::RANGING;
+
+    const double round_trip_cost_pct = computeEffectiveRoundTripCostPct(signal, cfg);
+    double cost_anchor = round_trip_cost_pct * (hostile_regime ? 0.14 : 0.11);
+    cost_anchor += hostile_regime ? 0.00016 : 0.00010;
+
+    if (signal.market_regime == analytics::MarketRegime::RANGING) {
+        cost_anchor += 0.00002;
+    }
+    if (signal.liquidity_score > 0.0 && signal.liquidity_score < 52.0) {
+        cost_anchor += 0.00006;
+    }
+    if (signal.volatility > 3.8) {
+        cost_anchor += 0.00003;
+    }
+    if (favorable_regime &&
+        signal.strength >= 0.70 &&
+        signal.liquidity_score >= 58.0) {
+        cost_anchor -= 0.00004;
+    }
+    if (signal.expected_value >= 0.00085) {
+        cost_anchor -= 0.00003;
+    }
+    if (signal.reason == "foundation_adaptive_regime_entry_ranging_low_flow") {
+        cost_anchor -= 0.00002;
+    }
+    cost_anchor = std::clamp(cost_anchor, 0.00025, 0.00090);
+
+    double quality_conf = 0.0;
+    quality_conf += std::clamp((signal.strength - 0.58) / 0.26, 0.0, 1.0) * 0.40;
+    quality_conf += std::clamp((signal.liquidity_score - 52.0) / 18.0, 0.0, 1.0) * 0.30;
+    quality_conf += std::clamp((signal.expected_value - 0.00045) / 0.00110, 0.0, 1.0) * 0.30;
+    quality_conf = std::clamp(quality_conf, 0.0, 1.0);
+
+    double relax_blend = std::clamp(0.32 + (0.58 * quality_conf), 0.18, 0.92);
+    if (hostile_regime) {
+        relax_blend *= 0.55;
+    }
+    if (signal.liquidity_score > 0.0 && signal.liquidity_score < 50.0) {
+        relax_blend *= 0.72;
+    }
+    if (signal.expected_value < 0.00045) {
+        relax_blend *= 0.75;
+    }
+    relax_blend = std::clamp(relax_blend, 0.10, 0.92);
+
+    const double downward_room = std::max(0.0, nominal_floor - cost_anchor);
+    double adjusted_floor = nominal_floor - (downward_room * relax_blend);
+
+    const double min_nominal_ratio = hostile_regime ? 0.70 : 0.48;
+    adjusted_floor = std::max(adjusted_floor, nominal_floor * min_nominal_ratio);
+    adjusted_floor = std::max(adjusted_floor, cost_anchor);
+
+    return std::clamp(adjusted_floor, 0.00025, nominal_floor + 0.00030);
 }
 
 void applyArchetypeRiskAdjustments(

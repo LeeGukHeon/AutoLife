@@ -1,4 +1,4 @@
-﻿name: CI Strict Live Gate
+name: CI Strict Live Gate
 
 on:
   schedule:

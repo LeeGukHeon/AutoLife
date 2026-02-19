@@ -13,6 +13,7 @@
 namespace {
 constexpr int kScanMarketLimit = 25;
 constexpr int kTf5mMarketLimit = kScanMarketLimit;
+constexpr int kTf15mMarketLimit = kScanMarketLimit;
 constexpr int kTf1hMarketLimit = kScanMarketLimit;
 constexpr int kTf4hMarketLimit = kScanMarketLimit;
 constexpr int kTf1dMarketLimit = kScanMarketLimit;
@@ -20,40 +21,6 @@ constexpr int kIncrementalFetchCount = 3;
 constexpr auto kMinCandleApiInterval = std::chrono::milliseconds(120);
 constexpr auto kMinFullSyncInterval = std::chrono::milliseconds(30LL * 60LL * 1000LL);
 constexpr auto kMaxFullSyncInterval = std::chrono::milliseconds(72LL * 60LL * 60LL * 1000LL);
-
-std::vector<autolife::Candle> aggregateCandlesByStep(
-    const std::vector<autolife::Candle>& source,
-    size_t step,
-    size_t max_bars = 0
-) {
-    std::vector<autolife::Candle> out;
-    if (step == 0 || source.size() < step) {
-        return out;
-    }
-
-    out.reserve(source.size() / step + 1);
-    for (size_t i = 0; i + step <= source.size(); i += step) {
-        autolife::Candle aggregated;
-        aggregated.open = source[i].open;
-        aggregated.close = source[i + step - 1].close;
-        aggregated.high = source[i].high;
-        aggregated.low = source[i].low;
-        aggregated.volume = 0.0;
-        aggregated.timestamp = source[i].timestamp;
-
-        for (size_t j = i; j < i + step; ++j) {
-            aggregated.high = std::max(aggregated.high, source[j].high);
-            aggregated.low = std::min(aggregated.low, source[j].low);
-            aggregated.volume += source[j].volume;
-        }
-        out.push_back(std::move(aggregated));
-    }
-
-    if (max_bars > 0 && out.size() > max_bars) {
-        out.erase(out.begin(), out.end() - static_cast<std::ptrdiff_t>(max_bars));
-    }
-    return out;
-}
 }
 
 namespace autolife {
@@ -158,12 +125,14 @@ std::vector<CoinMetrics> MarketScanner::scanAllMarkets() {
     // Candles 조회 (시계열 캐시 사용)
     std::map<std::string, std::vector<Candle>> candles_map_1m;
     std::map<std::string, std::vector<Candle>> candles_map_5m;
+    std::map<std::string, std::vector<Candle>> candles_map_15m;
     std::map<std::string, std::vector<Candle>> candles_map_1h;
     std::map<std::string, std::vector<Candle>> candles_map_4h;
     std::map<std::string, std::vector<Candle>> candles_map_1d;
 
     const int CANDLES_1M = static_cast<int>(common::targetBarsForTimeframe("1m", 200));
     const int CANDLES_5M = static_cast<int>(common::targetBarsForTimeframe("5m", 120));
+    const int CANDLES_15M = static_cast<int>(common::targetBarsForTimeframe("15m", 120));
     const int CANDLES_1H = static_cast<int>(common::targetBarsForTimeframe("1h", 120));
     const int CANDLES_4H = static_cast<int>(common::targetBarsForTimeframe("4h", 90));
     const int CANDLES_1D = static_cast<int>(common::targetBarsForTimeframe("1d", 60));
@@ -178,6 +147,7 @@ std::vector<CoinMetrics> MarketScanner::scanAllMarkets() {
 
     // 추가 타임프레임은 상위 일부 종목만 수집 (API 제한 고려)
     int tf5m_limit = std::min(kTf5mMarketLimit, (int)top_markets.size());
+    int tf15m_limit = std::min(kTf15mMarketLimit, (int)top_markets.size());
     int tf1h_limit = std::min(kTf1hMarketLimit, (int)top_markets.size());
     int tf4h_limit = std::min(kTf4hMarketLimit, (int)top_markets.size());
     int tf1d_limit = std::min(kTf1dMarketLimit, (int)top_markets.size());
@@ -187,6 +157,14 @@ std::vector<CoinMetrics> MarketScanner::scanAllMarkets() {
         auto candles = getCandlesWithRollingCache(market, "5", CANDLES_5M, false);
         if (!candles.empty()) {
             candles_map_5m[market] = std::move(candles);
+        }
+    }
+
+    for (int i = 0; i < tf15m_limit; ++i) {
+        const auto& market = top_markets[i];
+        auto candles = getCandlesWithRollingCache(market, "15", CANDLES_15M, false);
+        if (!candles.empty()) {
+            candles_map_15m[market] = std::move(candles);
         }
     }
 
@@ -264,15 +242,6 @@ if (ticker_map.find(market) != ticker_map.end()) {
             metrics.candles = candles_map_1m[market];
             metrics.candles_by_tf["1m"] = metrics.candles;
 
-            auto candles_15m = aggregateCandlesByStep(
-                metrics.candles,
-                15,
-                common::targetBarsForTimeframe("15m", 120)
-            );
-            if (!candles_15m.empty()) {
-                metrics.candles_by_tf["15m"] = std::move(candles_15m);
-            }
-            
             if (!metrics.candles.empty()) {
                 metrics.volume_surge_ratio = analyzeVolumeSurge(metrics.candles); 
                 metrics.volatility = analyzeVolatility(metrics.candles);
@@ -282,16 +251,10 @@ if (ticker_map.find(market) != ticker_map.end()) {
 
         if (candles_map_5m.find(market) != candles_map_5m.end()) {
             metrics.candles_by_tf["5m"] = candles_map_5m[market];
-            if (metrics.candles_by_tf.find("15m") == metrics.candles_by_tf.end()) {
-                auto candles_15m = aggregateCandlesByStep(
-                    candles_map_5m[market],
-                    3,
-                    common::targetBarsForTimeframe("15m", 120)
-                );
-                if (!candles_15m.empty()) {
-                    metrics.candles_by_tf["15m"] = std::move(candles_15m);
-                }
-            }
+        }
+
+        if (candles_map_15m.find(market) != candles_map_15m.end()) {
+            metrics.candles_by_tf["15m"] = candles_map_15m[market];
         }
 
         if (candles_map_1h.find(market) != candles_map_1h.end()) {
@@ -404,21 +367,16 @@ CoinMetrics MarketScanner::analyzeMarket(const std::string& market) {
         metrics.candles = getRecentCandles(market, "1", 120);
         if (!metrics.candles.empty()) {
             metrics.candles_by_tf["1m"] = metrics.candles;
-            auto candles_15m = aggregateCandlesByStep(metrics.candles, 15, 120);
-            if (!candles_15m.empty()) {
-                metrics.candles_by_tf["15m"] = std::move(candles_15m);
-            }
         }
 
         auto candles_5m = getRecentCandles(market, "5", 120);
         if (!candles_5m.empty()) {
             metrics.candles_by_tf["5m"] = candles_5m;
-            if (metrics.candles_by_tf.find("15m") == metrics.candles_by_tf.end()) {
-                auto candles_15m = aggregateCandlesByStep(candles_5m, 3, 120);
-                if (!candles_15m.empty()) {
-                    metrics.candles_by_tf["15m"] = std::move(candles_15m);
-                }
-            }
+        }
+
+        auto candles_15m = getRecentCandles(market, "15", 120);
+        if (!candles_15m.empty()) {
+            metrics.candles_by_tf["15m"] = candles_15m;
         }
 
         auto candles_1h = getRecentCandles(market, "60", 120);

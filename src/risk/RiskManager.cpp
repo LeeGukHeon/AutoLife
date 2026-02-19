@@ -1,4 +1,4 @@
-﻿#include "risk/RiskManager.h"
+#include "risk/RiskManager.h"
 #include "common/Logger.h"
 #include "common/Config.h"
 #include <algorithm>
@@ -7,6 +7,20 @@
 
 namespace autolife {
 namespace risk {
+
+namespace {
+
+double fallbackRiskPct(double stop_loss, double entry_price) {
+    if (entry_price <= 0.0) {
+        return 0.0045;
+    }
+    if (stop_loss > 0.0 && stop_loss < entry_price) {
+        return std::clamp((entry_price - stop_loss) / entry_price, 0.0025, 0.0250);
+    }
+    return 0.0045;
+}
+
+} // namespace
 
 RiskManager::RiskManager(double initial_capital)
     : initial_capital_(initial_capital)
@@ -126,11 +140,13 @@ bool RiskManager::canEnterPosition(
         return false;
     }
 
-    // Soft warning: after stop-loss and fee, exit amount may be near minimum
+    // Enforce entry notional high enough so a normal stop-loss exit
+    // still remains above exchange minimum order amount.
     double min_required_for_exit = MIN_ORDER_KRW / ((1.0 - BASE_STOP_LOSS_PCT) * (1.0 - FEE_RATE));
     if (required_amount < min_required_for_exit) {
-        LOG_WARN("{} warning: stop-loss exit may violate minimum order (need {:.0f}, got {:.0f})",
+        LOG_WARN("{} buy blocked: stop-loss exit may violate min order (need {:.0f}, got {:.0f})",
                  market, min_required_for_exit, required_amount);
+        return false;
     }
     
     // Recommended minimum check
@@ -221,7 +237,20 @@ bool RiskManager::isDailyLossLimitExceeded() const {
     double loss_krw = daily_start_capital_ - equity;
     double loss_pct = loss_krw / daily_start_capital_;
 
-    if (daily_loss_limit_krw_ > 0.0 && loss_krw >= daily_loss_limit_krw_) {
+    // Keep KRW limit meaningful across account sizes:
+    // effective KRW guard is the tighter of (configured KRW, daily pct * daily start capital).
+    // This prevents "dead" KRW thresholds on small accounts while preserving stricter custom KRW caps.
+    double effective_krw_limit = daily_loss_limit_krw_;
+    const double pct_limit_krw = daily_start_capital_ * std::max(0.0, daily_loss_limit_pct_);
+    if (pct_limit_krw > 0.0) {
+        if (effective_krw_limit <= 0.0) {
+            effective_krw_limit = pct_limit_krw;
+        } else {
+            effective_krw_limit = std::min(effective_krw_limit, pct_limit_krw);
+        }
+    }
+
+    if (effective_krw_limit > 0.0 && loss_krw >= effective_krw_limit) {
         return true;
     }
 
@@ -585,6 +614,258 @@ void RiskManager::setPositionTrailingParams(
 
     it->second.breakeven_trigger = breakeven_trigger;
     it->second.trailing_start = trailing_start;
+}
+
+void RiskManager::applyAdaptiveRiskControls(const std::string& market) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+    auto it = positions_.find(market);
+    if (it == positions_.end()) return;
+
+    auto& pos = it->second;
+    if (pos.entry_price <= 0.0 || pos.current_price <= 0.0) return;
+    if (pos.stop_loss <= 0.0) return;
+
+    if (pos.highest_price <= 0.0) {
+        pos.highest_price = pos.current_price;
+    }
+    if (pos.highest_price < pos.entry_price) {
+        pos.highest_price = pos.entry_price;
+    }
+
+    const double entry = pos.entry_price;
+    const double current = pos.current_price;
+    const double base_risk_pct = fallbackRiskPct(pos.stop_loss, entry);
+
+    const double breakeven_trigger = (pos.breakeven_trigger > 0.0)
+        ? pos.breakeven_trigger
+        : (entry * (1.0 + base_risk_pct * 0.80));
+    const double trailing_start = (pos.trailing_start > 0.0)
+        ? pos.trailing_start
+        : (entry * (1.0 + base_risk_pct * 1.20));
+
+    double candidate_stop = pos.stop_loss;
+    std::string reason = "hold";
+
+    // Step 1: once price proves initial direction, reduce tail-risk to near break-even.
+    if (pos.highest_price >= breakeven_trigger) {
+        double fee_guard_pct = 0.00045;
+        if (pos.liquidity_score > 0.0 && pos.liquidity_score < 50.0) {
+            fee_guard_pct += 0.00025;
+        }
+        if (pos.volatility > 3.5) {
+            fee_guard_pct += 0.00020;
+        }
+        const double be_stop = entry * (1.0 + fee_guard_pct);
+        if (be_stop > candidate_stop) {
+            candidate_stop = be_stop;
+            reason = "breakeven_guard";
+        }
+    }
+
+    // Step 2: trend-following trail based on highest reached price.
+    if (pos.highest_price >= trailing_start) {
+        double trailing_gap_pct = base_risk_pct * (pos.half_closed ? 0.40 : 0.55);
+        switch (pos.market_regime) {
+            case analytics::MarketRegime::TRENDING_UP:
+                trailing_gap_pct *= 0.90;
+                break;
+            case analytics::MarketRegime::TRENDING_DOWN:
+            case analytics::MarketRegime::HIGH_VOLATILITY:
+                trailing_gap_pct *= 1.18;
+                break;
+            case analytics::MarketRegime::RANGING:
+                trailing_gap_pct *= 1.05;
+                break;
+            case analytics::MarketRegime::UNKNOWN:
+            default:
+                break;
+        }
+        if (pos.liquidity_score > 0.0 && pos.liquidity_score < 50.0) {
+            trailing_gap_pct *= 1.08;
+        } else if (pos.liquidity_score >= 72.0) {
+            trailing_gap_pct *= 0.93;
+        }
+        if (pos.volatility > 0.0 && pos.volatility <= 1.8) {
+            trailing_gap_pct *= 0.88;
+        } else if (pos.volatility >= 4.5) {
+            trailing_gap_pct *= 1.12;
+        }
+        trailing_gap_pct = std::clamp(trailing_gap_pct, 0.0018, 0.0105);
+
+        const double trail_stop = pos.highest_price * (1.0 - trailing_gap_pct);
+        if (trail_stop > candidate_stop) {
+            candidate_stop = trail_stop;
+            reason = "adaptive_trailing";
+        }
+    }
+
+    // Step 3: if position is stagnant for long time, cut downside and recycle capital.
+    const long long now_ms = getCurrentTimestamp();
+    const double holding_seconds = std::max(0.0, static_cast<double>(now_ms - pos.entry_time) / 1000.0);
+    if (holding_seconds >= 4.0 * 3600.0 && pos.highest_price <= entry * 1.0030) {
+        const double time_guard_stop = entry * 0.9990;
+        if (time_guard_stop > candidate_stop) {
+            candidate_stop = time_guard_stop;
+            reason = "time_stagnation_guard";
+        }
+    }
+    if (holding_seconds >= 8.0 * 3600.0 && pos.highest_price <= entry * 1.0010) {
+        const double recycle_stop = entry * 1.0002;
+        if (recycle_stop > candidate_stop) {
+            candidate_stop = recycle_stop;
+            reason = "capital_recycle_guard";
+        }
+    }
+
+    // Step 4: dynamic TP recalibration for post-entry regime adaptation.
+    // This avoids entry-only gating and manages loss concentration context
+    // (especially low-liquidity uptrend continuation).
+    const bool low_liquidity =
+        (pos.liquidity_score > 0.0 && pos.liquidity_score < 48.0);
+    const bool low_volatility =
+        (pos.volatility > 0.0 && pos.volatility <= 1.9);
+    const bool hostile_uptrend_context =
+        (pos.market_regime == analytics::MarketRegime::TRENDING_UP &&
+         low_liquidity &&
+         low_volatility);
+
+    bool tp_updated = false;
+    const double tp_min_step = std::max(entry * 0.00005, 1e-8);
+    const double tp_headroom_floor = current * 1.0010;
+
+    if (!pos.half_closed && hostile_uptrend_context) {
+        const double tightened_tp1 = std::max(
+            tp_headroom_floor,
+            entry * (1.0 + std::clamp(base_risk_pct * 0.65, 0.0035, 0.0100))
+        );
+        if (pos.take_profit_1 > 0.0 && tightened_tp1 + tp_min_step < pos.take_profit_1) {
+            pos.take_profit_1 = tightened_tp1;
+            tp_updated = true;
+        }
+    }
+
+    if (hostile_uptrend_context &&
+        holding_seconds >= 90.0 * 60.0 &&
+        pos.highest_price <= entry * (1.0 + base_risk_pct * 0.75)) {
+        double tightened_tp2 = entry * (1.0 + std::clamp(base_risk_pct * 1.05, 0.0055, 0.0160));
+        tightened_tp2 = std::max(tightened_tp2, pos.take_profit_1 * 1.0018);
+        tightened_tp2 = std::max(tightened_tp2, tp_headroom_floor);
+        if (pos.take_profit_2 > 0.0 && tightened_tp2 + tp_min_step < pos.take_profit_2) {
+            pos.take_profit_2 = tightened_tp2;
+            tp_updated = true;
+        }
+    }
+
+    if (pos.half_closed &&
+        pos.market_regime == analytics::MarketRegime::TRENDING_UP &&
+        pos.liquidity_score >= 70.0 &&
+        pos.volatility >= 2.2 &&
+        pos.highest_price >= entry * 1.0080) {
+        double runner_tp2 = std::max(pos.take_profit_2, pos.highest_price * 1.0020);
+        const double runner_cap = entry * (1.0 + std::clamp(base_risk_pct * 3.0, 0.0300, 0.0800));
+        runner_tp2 = std::min(runner_tp2, runner_cap);
+        runner_tp2 = std::max(runner_tp2, pos.take_profit_1 * 1.0018);
+        if (runner_tp2 > pos.take_profit_2 + tp_min_step) {
+            pos.take_profit_2 = runner_tp2;
+            tp_updated = true;
+        }
+    }
+
+    if (pos.take_profit_2 > 0.0 && pos.take_profit_1 > 0.0 &&
+        pos.take_profit_2 < pos.take_profit_1 * 1.0015) {
+        pos.take_profit_2 = pos.take_profit_1 * 1.0015;
+        tp_updated = true;
+    }
+
+    // Keep stop strictly below current price to avoid immediate self-trigger.
+    const double max_allowed_stop = current * 0.9985;
+    if (max_allowed_stop <= 0.0) return;
+    candidate_stop = std::min(candidate_stop, max_allowed_stop);
+    if (!std::isfinite(candidate_stop)) return;
+
+    // Stop can only move upward; ignore micro-noise updates.
+    const double min_step = std::max(entry * 0.00005, 1e-8);
+    if (candidate_stop <= pos.stop_loss + min_step) {
+        return;
+    }
+
+    pos.stop_loss = candidate_stop;
+    LOG_INFO(
+        "{} adaptive stop update [{}]: {:.0f} (entry {:.0f}, px {:.0f}, high {:.0f}, hold {:.1f}h)",
+        market,
+        reason,
+        pos.stop_loss,
+        pos.entry_price,
+        pos.current_price,
+        pos.highest_price,
+        holding_seconds / 3600.0
+    );
+
+    if (tp_updated) {
+        LOG_INFO(
+            "{} adaptive TP recalibration: tp1 {:.0f}, tp2 {:.0f} (entry {:.0f}, px {:.0f}, hold {:.1f}h, regime {}, liq {:.1f}, vol {:.2f})",
+            market,
+            pos.take_profit_1,
+            pos.take_profit_2,
+            pos.entry_price,
+            pos.current_price,
+            holding_seconds / 3600.0,
+            static_cast<int>(pos.market_regime),
+            pos.liquidity_score,
+            pos.volatility
+        );
+    }
+}
+
+double RiskManager::getAdaptivePartialExitRatio(const std::string& market) const {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+    auto it = positions_.find(market);
+    if (it == positions_.end()) {
+        return 0.50;
+    }
+
+    const auto& pos = it->second;
+    if (pos.quantity <= 0.0 || pos.half_closed) {
+        return 0.50;
+    }
+
+    double ratio = 0.50;
+    const bool low_liquidity =
+        (pos.liquidity_score > 0.0 && pos.liquidity_score < 50.0);
+    const bool low_volatility =
+        (pos.volatility > 0.0 && pos.volatility <= 1.8);
+    const bool hostile_uptrend_context =
+        (pos.market_regime == analytics::MarketRegime::TRENDING_UP &&
+         low_liquidity &&
+         low_volatility);
+
+    if (hostile_uptrend_context) {
+        ratio = 0.65;
+    } else if (pos.market_regime == analytics::MarketRegime::TRENDING_DOWN ||
+               pos.market_regime == analytics::MarketRegime::HIGH_VOLATILITY) {
+        ratio = 0.70;
+    } else if (pos.market_regime == analytics::MarketRegime::TRENDING_UP &&
+               pos.liquidity_score >= 70.0 &&
+               pos.volatility >= 2.2) {
+        ratio = 0.45;
+    }
+
+    const long long now_ms = getCurrentTimestamp();
+    const double holding_seconds = std::max(
+        0.0,
+        static_cast<double>(now_ms - pos.entry_time) / 1000.0
+    );
+    const double progress_pct = (pos.entry_price > 0.0)
+        ? ((std::max(pos.highest_price, pos.current_price) - pos.entry_price) / pos.entry_price)
+        : 0.0;
+
+    if (holding_seconds >= 2.0 * 3600.0 && progress_pct < 0.0045) {
+        ratio = std::max(ratio, 0.72);
+    }
+
+    return std::clamp(ratio, 0.35, 0.80);
 }
 
 Position* RiskManager::getPosition(const std::string& market) {

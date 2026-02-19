@@ -1,4 +1,4 @@
-﻿#include "common/Config.h"
+#include "common/Config.h"
 #include "common/Logger.h"
 #include "common/PathUtils.h"
 #include "common/TickSizeHelper.h"

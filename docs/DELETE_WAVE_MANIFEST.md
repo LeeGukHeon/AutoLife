@@ -217,7 +217,7 @@ python scripts/assess_wave_b_readiness.py --run-refresh-checks
   - build: `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeV2ShadowParityTest`
   - run: `python scripts/validate_v2_shadow_parity.py -Strict`
   - runtime strict: `python scripts/validate_v2_shadow_parity.py -CheckRuntimeShadow -Strict`
-  - runtime strict (live ?�함): `python scripts/validate_v2_shadow_parity.py -CheckRuntimeShadow -CheckRuntimeLiveShadow -Strict`
+  - runtime strict (live ?ы븿): `python scripts/validate_v2_shadow_parity.py -CheckRuntimeShadow -CheckRuntimeLiveShadow -Strict`
   - note: live strict requires at least one `LiveTradingRuntime::executeSignals` cycle to populate `v2_shadow_policy_parity_live.jsonl`.
   - artifact: `build/Release/logs/v2_shadow_parity_report.json`
   - result: PASS

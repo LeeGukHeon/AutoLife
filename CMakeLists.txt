@@ -43,6 +43,7 @@ set(LIB_SOURCES
     src/common/Config.cpp
     src/common/PathUtils.cpp
     src/common/SignalPolicyShared.cpp
+    src/common/RuntimeDiagnosticsShared.cpp
     src/common/StrategyEdgeStatsShared.cpp
     src/network/JwtGenerator.cpp
     src/network/UpbitHttpClient.cpp

@@ -1,6 +1,6 @@
-﻿# Stage 15 Execution TODO (Reset Baseline)
+# Stage 15 Execution TODO (Reset Baseline)
 
-Last updated: 2026-02-19
+Last updated: 2026-02-20
 Status: `RESET_BASELINE_ACTIVE`
 
 ## Reset Intent
@@ -104,6 +104,11 @@ D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_
 - [x] R0.4 `include/v2`, `src/v2` folder flatten 완료 (경로 재배치 + CMake/tests/scripts 반영 + smoke 검증) (2026-02-19)
 - [x] R0.5 Remaining legacy shadow/v2 stack fully removed from runtime + CMake + tests/scripts (2026-02-19)
 - [x] R0.6 V2 naming cleanup + residual legacy preset removal (`run_verification.py`, `legacy_fallback` 삭제, runtime `getPrimaryTakeProfit` 명명 정리) (2026-02-19)
+- [x] R0.7 Candidate-generation attribution fix + backtest synthetic liquidity rebuild (`StrategyManager` no-signal reason propagation, `BacktestRuntime` notional-based liquidity model) (2026-02-20)
+- [x] R0.8 Hostile uptrend RR/EV recalibration (`FoundationAdaptiveStrategy`) + multi adaptive reproducibility pass (2026-02-20)
+- [x] R0.9 Real-data period-shift verification (6-market MTF windows) + strict-parity 15m companion dependency identified (2026-02-20)
+- [x] R0.10 Native 15m companion enforcement + MTF entry integration (scanner/live/strategy/validation-scripts unified) (2026-02-20)
+- [x] R0.11 Entry-quality contextual edge-floor commonization (backtest/live shared) + real-data 6set revalidation (`v5_contextual_edge_floor_only`) (2026-02-20)
 - [x] P0.1 Fix tune-before-final-report mismatch (2026-02-19)
 - [x] P0.2 Fix source config path wiring (2026-02-19)
 - [ ] P0.3 Split promotion gate logic

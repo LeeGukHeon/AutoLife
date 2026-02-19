@@ -2,6 +2,7 @@
 #include "common/Logger.h"
 #include "common/MarketDataWindowPolicy.h"
 #include "common/PathUtils.h"
+#include "common/RuntimeDiagnosticsShared.h"
 #include "common/SignalPolicyShared.h"
 #include "common/StrategyEdgeStatsShared.h"
 #include "execution/OrderLifecycleStateMachine.h"
@@ -68,6 +69,44 @@ bool containsToken(const std::string& value, const std::string& token) {
     return value.find(token) != std::string::npos;
 }
 
+std::string edgeGapBucket(double edge_gap) {
+    if (!std::isfinite(edge_gap)) {
+        return "edge_gap_invalid";
+    }
+    if (edge_gap <= 0.0) {
+        return "edge_gap_le_0";
+    }
+    if (edge_gap <= 0.00002) {
+        return "edge_gap_0_0p2bp";
+    }
+    if (edge_gap <= 0.00005) {
+        return "edge_gap_0p2_0p5bp";
+    }
+    if (edge_gap <= 0.00010) {
+        return "edge_gap_0p5_1p0bp";
+    }
+    if (edge_gap <= 0.00020) {
+        return "edge_gap_1p0_2p0bp";
+    }
+    return "edge_gap_gt_2p0bp";
+}
+
+int adaptivePartialRatioHistogramIndex(double ratio) {
+    if (ratio < 0.45) {
+        return 0; // 0.35~0.44
+    }
+    if (ratio < 0.55) {
+        return 1; // 0.45~0.54
+    }
+    if (ratio < 0.65) {
+        return 2; // 0.55~0.64
+    }
+    if (ratio < 0.75) {
+        return 3; // 0.65~0.74
+    }
+    return 4; // 0.75~0.80
+}
+
 double entrySlippagePct(const engine::EngineConfig& cfg) {
     const bool execution_plane_enabled = cfg.enable_core_plane_bridge && cfg.enable_core_execution_plane;
     return execution_plane_enabled ? CORE_ENTRY_SLIPPAGE_PCT : LEGACY_ENTRY_SLIPPAGE_PCT;
@@ -130,44 +169,19 @@ using autolife::common::signal_policy::computeCostAwareRewardRiskFloor;
 using autolife::common::signal_policy::rebalanceSignalRiskReward;
 using autolife::common::signal_policy::computeStrategyHistoryWinProbPrior;
 using autolife::common::signal_policy::computeCalibratedExpectedEdgePct;
+using autolife::common::signal_policy::computeContextualEdgeGateFloor;
 using autolife::common::strategy_edge::StrategyEdgeStats;
 using autolife::common::strategy_edge::buildStrategyEdgeStats;
 using autolife::common::strategy_edge::makeStrategyRegimeKey;
 using autolife::common::strategy_edge::makeMarketStrategyRegimeKey;
 using autolife::common::strategy_edge::buildStrategyRegimeEdgeStats;
 using autolife::common::strategy_edge::buildMarketStrategyRegimeEdgeStats;
-
-const char* regimeToLabel(analytics::MarketRegime regime) {
-    switch (regime) {
-        case analytics::MarketRegime::TRENDING_UP: return "TRENDING_UP";
-        case analytics::MarketRegime::TRENDING_DOWN: return "TRENDING_DOWN";
-        case analytics::MarketRegime::RANGING: return "RANGING";
-        case analytics::MarketRegime::HIGH_VOLATILITY: return "HIGH_VOLATILITY";
-        default: return "UNKNOWN";
-    }
-}
-
-std::string strengthBucket(double strength) {
-    if (strength < 0.55) return "strength_low";
-    if (strength < 0.70) return "strength_mid";
-    return "strength_high";
-}
-
-std::string expectedValueBucket(double expected_value) {
-    // expected_value is tracked as calibrated net edge after fee/slippage.
-    // Use stricter cutoffs so ev_high reflects meaningful post-cost expectancy.
-    if (!std::isfinite(expected_value)) return "ev_negative";
-    if (expected_value < 0.0) return "ev_negative";
-    if (expected_value < 0.0015) return "ev_neutral";
-    if (expected_value < 0.0035) return "ev_positive";
-    return "ev_high";
-}
-
-std::string rewardRiskBucket(double rr) {
-    if (rr < 1.20) return "rr_low";
-    if (rr < 1.60) return "rr_mid";
-    return "rr_high";
-}
+using autolife::common::runtime_diag::marketRegimeLabel;
+using autolife::common::runtime_diag::strengthBucket;
+using autolife::common::runtime_diag::expectedValueBucket;
+using autolife::common::runtime_diag::rewardRiskBucket;
+using autolife::common::runtime_diag::volatilityBucket;
+using autolife::common::runtime_diag::liquidityBucket;
 
 bool requiresTypedArchetype(const std::string& strategy_name) {
     return autolife::common::signal_policy::requiresTypedArchetype(strategy_name);
@@ -334,6 +348,30 @@ EntryQualityGateSnapshot evaluateEntryQualityGate(
                 snapshot.failure = EntryQualityGateSnapshot::FailureKind::None;
                 snapshot.reward_risk_gate_effective = relieved_rr_gate;
                 snapshot.expected_edge_gate_effective = relieved_edge_gate;
+                snapshot.adaptive_relief_applied = true;
+            }
+        }
+    }
+
+    // Bounded near-miss relief for thin-liquidity uptrend signals:
+    // allow only tiny base-edge shortfalls when RR surplus and signal quality are strong.
+    if (!snapshot.pass &&
+        snapshot.failure == EntryQualityGateSnapshot::FailureKind::ExpectedEdgeBase) {
+        const bool thin_uptrend =
+            signal.market_regime == analytics::MarketRegime::TRENDING_UP &&
+            signal.liquidity_score >= 40.0 &&
+            signal.liquidity_score <= 52.0;
+        if (thin_uptrend) {
+            const double edge_gap = edge_gate_base - snapshot.calibrated_expected_edge_pct;
+            const bool tiny_edge_gap = edge_gap > 0.0 && edge_gap <= 0.00008;
+            const bool strong_quality =
+                signal.strength >= 0.66 &&
+                signal.expected_value >= std::max(0.00030, cfg.entry_quality_adaptive_relief_min_expected_value * 0.85);
+            const bool rr_surplus = snapshot.reward_risk_ratio >= (rr_gate_base + 0.10);
+            if (tiny_edge_gap && strong_quality && rr_surplus) {
+                snapshot.pass = true;
+                snapshot.failure = EntryQualityGateSnapshot::FailureKind::None;
+                snapshot.expected_edge_gate_effective = snapshot.calibrated_expected_edge_pct;
                 snapshot.adaptive_relief_applied = true;
             }
         }
@@ -1344,6 +1382,8 @@ void BacktestEngine::init(const Config& config) {
     strategy_no_signal_counts_.clear();
     strategy_collect_exception_count_ = 0;
     entry_rejection_reason_counts_.clear();
+    no_signal_pattern_counts_.clear();
+    entry_quality_edge_gap_buckets_.clear();
     intrabar_stop_tp_collision_count_ = 0;
     intrabar_collision_by_strategy_.clear();
     pre_cat_recovery_hysteresis_hold_by_key_.clear();
@@ -1352,10 +1392,15 @@ void BacktestEngine::init(const Config& config) {
     pre_cat_candidate_rr_failsafe_activation_by_key_.clear();
     pre_cat_pressure_rebound_relief_activation_by_key_.clear();
     pre_cat_negative_history_quarantine_hold_by_key_.clear();
+    adaptive_stop_update_count_ = 0;
+    adaptive_tp_recalibration_count_ = 0;
+    adaptive_partial_ratio_samples_ = 0;
+    adaptive_partial_ratio_sum_ = 0.0;
+    adaptive_partial_ratio_histogram_ = {0, 0, 0, 0, 0};
     
     // Reset Risk Manager with initial capital
     risk_manager_ = std::make_unique<risk::RiskManager>(balance_krw_);
-    // 諛깊뀒?ㅽ듃?먯꽌???ㅼ떆媛?荑⑤떎??鍮꾪솢?깊솕 (?ㅼ떆媛꾩씠 ?꾨땶 ?쒕??덉씠???쒓컙 ?ъ슜)
+    // Backtest uses deterministic replay; disable re-entry cooldown.
     risk_manager_->setMinReentryInterval(0);
     risk_manager_->setMaxDailyTrades(1000);
     
@@ -1679,14 +1724,23 @@ void BacktestEngine::processCandle(const Candle& candle) {
         }
     }
     
-    // Estimate volume surge and rolling average volume
+    // Estimate volume surge from rolling notional (price * volume) to reduce
+    // asset-price-scale bias in backtest synthetic market metrics.
     double avg_vol = 0.0;
+    double avg_notional = 0.0;
     if (current_candles_.size() >= 20) {
         for (size_t vi = current_candles_.size() - 20; vi < current_candles_.size() - 1; ++vi) {
             avg_vol += current_candles_[vi].volume;
+            avg_notional += (current_candles_[vi].close * current_candles_[vi].volume);
         }
         avg_vol /= 19.0;
-        metrics.volume_surge_ratio = (avg_vol > 0) ? (candle.volume / avg_vol) : 1.0;
+        avg_notional /= 19.0;
+        const double current_notional = candle.close * candle.volume;
+        if (avg_notional > 0.0) {
+            metrics.volume_surge_ratio = current_notional / avg_notional;
+        } else {
+            metrics.volume_surge_ratio = (avg_vol > 0.0) ? (candle.volume / avg_vol) : 1.0;
+        }
     } else {
         metrics.volume_surge_ratio = 1.0;
     }
@@ -1704,12 +1758,23 @@ void BacktestEngine::processCandle(const Candle& candle) {
         }
     }
 
-    // Liquidity drops when range is wide and volume baseline is weak
-    const double vol_baseline_t = std::clamp((avg_vol - 10.0) / 120.0, 0.0, 1.0);
-    const double spread_stress_t = std::clamp((candle_range_pct - 0.15) / 1.5, 0.0, 1.0);
-    const double surge_bonus = std::clamp((metrics.volume_surge_ratio - 1.0) * 8.0, -10.0, 15.0);
+    const double vol_baseline_t = std::clamp((avg_vol - 8.0) / 90.0, 0.0, 1.0);
+    const double notional_log = std::log10(std::max(avg_notional, 1.0));
+    const double notional_t = std::clamp((notional_log - 7.5) / 2.6, 0.0, 1.0);
+    const double spread_stress_t = std::clamp((candle_range_pct - 0.25) / 2.2, 0.0, 1.0);
+    const double surge_bonus = std::clamp((metrics.volume_surge_ratio - 1.0) * 6.0, -7.0, 12.0);
+    double regime_adjust = 0.0;
+    if (regime.regime == analytics::MarketRegime::TRENDING_UP) {
+        regime_adjust += 2.0;
+    } else if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
+        regime_adjust -= 4.0;
+    } else if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
+        regime_adjust -= 8.0;
+    } else if (regime.regime == analytics::MarketRegime::RANGING) {
+        regime_adjust -= 1.5;
+    }
     metrics.liquidity_score = std::clamp(
-        30.0 + (vol_baseline_t * 55.0) - (spread_stress_t * 25.0) + surge_bonus,
+        38.0 + (vol_baseline_t * 22.0) + (notional_t * 32.0) - (spread_stress_t * 18.0) + surge_bonus + regime_adjust,
         10.0, 95.0
     );
 
@@ -1817,17 +1882,58 @@ void BacktestEngine::processCandle(const Candle& candle) {
             } else {
                 if (!position->half_closed && tp1_touched) {
                     const double tp1_fill = position->take_profit_1 * (1.0 - exitSlippagePct(engine_config_));
-                    const double partial_qty = position->quantity * 0.5;
+                    const double partial_ratio = std::clamp(
+                        risk_manager_->getAdaptivePartialExitRatio(market_name_),
+                        0.35,
+                        0.80
+                    );
+                    adaptive_partial_ratio_samples_++;
+                    adaptive_partial_ratio_sum_ += partial_ratio;
+                    const int partial_ratio_hist_idx = adaptivePartialRatioHistogramIndex(partial_ratio);
+                    if (partial_ratio_hist_idx >= 0 &&
+                        partial_ratio_hist_idx < static_cast<int>(adaptive_partial_ratio_histogram_.size())) {
+                        adaptive_partial_ratio_histogram_[static_cast<size_t>(partial_ratio_hist_idx)]++;
+                    }
+                    const double partial_qty = position->quantity * partial_ratio;
+                    const double partial_notional = partial_qty * tp1_fill;
 
-                    Order tp1_order;
-                    tp1_order.market = market_name_;
-                    tp1_order.side = OrderSide::SELL;
-                    tp1_order.volume = partial_qty;
-                    tp1_order.price = tp1_fill;
-                    tp1_order.strategy_name = position->strategy_name;
-                    executeOrder(tp1_order, tp1_fill);
-                    risk_manager_->partialExit(market_name_, tp1_fill);
-                    position = risk_manager_->getPosition(market_name_);
+                    if (partial_qty <= 0.0 || partial_notional < engine_config_.min_order_krw) {
+                        const double full_notional = position->quantity * tp1_fill;
+                        if (full_notional >= engine_config_.min_order_krw) {
+                            const risk::Position closed_position = *position;
+                            Order tp_full_order;
+                            tp_full_order.market = market_name_;
+                            tp_full_order.side = OrderSide::SELL;
+                            tp_full_order.volume = position->quantity;
+                            tp_full_order.price = tp1_fill;
+                            tp_full_order.strategy_name = position->strategy_name;
+                            executeOrder(tp_full_order, tp1_fill);
+                            risk_manager_->exitPosition(market_name_, tp1_fill, "TakeProfitFullDueToMinOrder");
+                            notifyStrategyClosed(closed_position, tp1_fill);
+                            position = nullptr;
+                        } else {
+                            risk_manager_->setHalfClosed(market_name_, true);
+                            risk_manager_->moveStopToBreakeven(market_name_);
+                            position = risk_manager_->getPosition(market_name_);
+                        }
+                    } else {
+                        Order tp1_order;
+                        tp1_order.market = market_name_;
+                        tp1_order.side = OrderSide::SELL;
+                        tp1_order.volume = partial_qty;
+                        tp1_order.price = tp1_fill;
+                        tp1_order.strategy_name = position->strategy_name;
+                        executeOrder(tp1_order, tp1_fill);
+
+                        if (risk_manager_->applyPartialSellFill(market_name_, tp1_fill, partial_qty, "TakeProfit1")) {
+                            risk_manager_->setHalfClosed(market_name_, true);
+                            risk_manager_->moveStopToBreakeven(market_name_);
+                        } else {
+                            LOG_WARN("Backtest TP1 accounting failed: {} qty {:.8f} @ {:.0f}",
+                                     market_name_, partial_qty, tp1_fill);
+                        }
+                        position = risk_manager_->getPosition(market_name_);
+                    }
                 }
 
                 if (position) {
@@ -1860,6 +1966,26 @@ void BacktestEngine::processCandle(const Candle& candle) {
                         position = nullptr;
                     }
                 }
+            }
+        }
+    }
+
+    // Apply post-entry adaptive stop logic after current-candle exit checks.
+    // This avoids same-candle stop tightening lookahead in backtest.
+    if (position) {
+        const double stop_before = position->stop_loss;
+        const double tp1_before = position->take_profit_1;
+        const double tp2_before = position->take_profit_2;
+        risk_manager_->applyAdaptiveRiskControls(market_name_);
+        position = risk_manager_->getPosition(market_name_);
+        if (position) {
+            if (position->stop_loss > stop_before + 1e-9) {
+                adaptive_stop_update_count_++;
+            }
+            const bool tp1_changed = std::fabs(position->take_profit_1 - tp1_before) > 1e-9;
+            const bool tp2_changed = std::fabs(position->take_profit_2 - tp2_before) > 1e-9;
+            if (tp1_changed || tp2_changed) {
+                adaptive_tp_recalibration_count_++;
             }
         }
     }
@@ -1905,6 +2031,17 @@ void BacktestEngine::processCandle(const Candle& candle) {
         if (signals.empty()) {
             entry_funnel_.no_signal_generated++;
             markEntryReject("no_signal_generated");
+            const std::string no_signal_pattern_key =
+                std::string("regime=") + marketRegimeLabel(regime.regime) +
+                "|vol=" + volatilityBucket(metrics.volatility) +
+                "|liq=" + liquidityBucket(metrics.liquidity_score);
+            no_signal_pattern_counts_[no_signal_pattern_key]++;
+            for (const auto& kv : collect_diag.no_signal_reason_counts) {
+                if (kv.first.empty() || kv.second <= 0) {
+                    continue;
+                }
+                entry_rejection_reason_counts_[kv.first] += kv.second;
+            }
         }
         for (const auto& signal : signals) {
             if (!signal.strategy_name.empty()) {
@@ -3735,7 +3872,11 @@ void BacktestEngine::processCandle(const Candle& candle) {
             if (core_risk_enabled) {
                 // Conservative baseline edge-floor calibration:
                 // adjust only in small bounded ranges using broad quality/context signals.
-                const double edge_floor_nominal = tuned_cfg.min_expected_edge_pct;
+                const double edge_floor_nominal = computeContextualEdgeGateFloor(
+                    best_signal,
+                    tuned_cfg,
+                    tuned_cfg.min_expected_edge_pct
+                );
                 double edge_base_shift = 0.0;
 
                 if (best_signal.market_regime == analytics::MarketRegime::HIGH_VOLATILITY ||
@@ -4124,6 +4265,12 @@ void BacktestEngine::processCandle(const Candle& candle) {
                         : (entry_quality_gate_ok && !second_stage_ok);
                     if (!attribute_second_stage && !entry_quality_gate_ok) {
                         entry_funnel_.blocked_risk_gate_entry_quality++;
+                        const double edge_gap_effective =
+                            entry_quality_eval.expected_edge_gate_effective -
+                            entry_quality_eval.calibrated_expected_edge_pct;
+                        auto markEdgeGapBucket = [&]() {
+                            entry_quality_edge_gap_buckets_[edgeGapBucket(edge_gap_effective)]++;
+                        };
                         switch (entry_quality_eval.failure) {
                             case EntryQualityGateSnapshot::FailureKind::InvalidPriceLevels:
                                 entry_funnel_.blocked_risk_gate_entry_quality_invalid_levels++;
@@ -4153,10 +4300,12 @@ void BacktestEngine::processCandle(const Candle& candle) {
                             case EntryQualityGateSnapshot::FailureKind::ExpectedEdgeBase:
                                 entry_funnel_.blocked_risk_gate_entry_quality_edge++;
                                 entry_funnel_.blocked_risk_gate_entry_quality_edge_base++;
+                                markEdgeGapBucket();
                                 break;
                             case EntryQualityGateSnapshot::FailureKind::ExpectedEdgeAdaptive:
                                 entry_funnel_.blocked_risk_gate_entry_quality_edge++;
                                 entry_funnel_.blocked_risk_gate_entry_quality_edge_adaptive++;
+                                markEdgeGapBucket();
                                 switch (entry_quality_eval.adaptive_edge_source) {
                                     case EntryQualityGateSnapshot::AdaptiveSource::History:
                                         entry_funnel_.blocked_risk_gate_entry_quality_edge_adaptive_history++;
@@ -4175,10 +4324,12 @@ void BacktestEngine::processCandle(const Candle& candle) {
                             case EntryQualityGateSnapshot::FailureKind::RewardRiskAndExpectedEdgeBase:
                                 entry_funnel_.blocked_risk_gate_entry_quality_rr_edge++;
                                 entry_funnel_.blocked_risk_gate_entry_quality_rr_edge_base++;
+                                markEdgeGapBucket();
                                 break;
                             case EntryQualityGateSnapshot::FailureKind::RewardRiskAndExpectedEdgeAdaptive:
                                 entry_funnel_.blocked_risk_gate_entry_quality_rr_edge++;
                                 entry_funnel_.blocked_risk_gate_entry_quality_rr_edge_adaptive++;
+                                markEdgeGapBucket();
                                 switch (entry_quality_eval.adaptive_rr_source) {
                                     case EntryQualityGateSnapshot::AdaptiveSource::History:
                                         entry_funnel_.blocked_risk_gate_entry_quality_rr_edge_adaptive_history++;
@@ -4312,13 +4463,28 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     best_signal.position_size *= relief_scale;
                 }
                 const double min_order_krw = std::max(5000.0, engine_config_.min_order_krw);
+                const double fee_rate = Config::getInstance().getFeeRate();
+                const double stop_guard_pct = [&]() {
+                    if (best_signal.entry_price > 0.0 &&
+                        best_signal.stop_loss > 0.0 &&
+                        best_signal.stop_loss < best_signal.entry_price) {
+                        const double rp = (best_signal.entry_price - best_signal.stop_loss) / best_signal.entry_price;
+                        return std::clamp(rp, 0.01, 0.20);
+                    }
+                    return 0.03;
+                }();
+                const double slip_guard_pct = std::clamp(stopSlippagePct(engine_config_) * 1.25, 0.0005, 0.02);
+                const double exit_retention = std::max(0.50, 1.0 - stop_guard_pct - slip_guard_pct - fee_rate);
+                const double min_safe_order_krw = std::max(min_order_krw, min_order_krw / exit_retention);
+                const double min_executable_order_krw =
+                    std::ceil(min_safe_order_krw / min_order_krw) * min_order_krw;
                 const double available_cash_for_gate = risk_manager_->getRiskMetrics().available_capital;
-                const bool has_min_order_capital = available_cash_for_gate >= min_order_krw;
+                const bool has_min_order_capital = available_cash_for_gate >= min_executable_order_krw;
                 if (!has_min_order_capital) {
                     entry_funnel_.blocked_min_order_or_capital++;
                     markEntryReject("blocked_min_order_or_capital");
                 } else {
-                    const double min_position_size_for_order = min_order_krw / available_cash_for_gate;
+                    const double min_position_size_for_order = min_executable_order_krw / available_cash_for_gate;
                     const double effective_position_size = std::clamp(
                         std::max(best_signal.position_size, min_position_size_for_order),
                         0.0,
@@ -4344,23 +4510,20 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     const double fee_rate = Config::getInstance().getFeeRate();
                     const double fee_reserve = std::clamp(engine_config_.order_fee_reserve_pct, 0.0, 0.02);
                     const double spendable_capital = available_cash / (1.0 + fee_reserve);
-                    const bool capital_gate_ok = spendable_capital >= min_order_krw;
+                    const bool capital_gate_ok = spendable_capital >= min_executable_order_krw;
 
                     if (capital_gate_ok) {
                         double desired_order_krw = available_cash * effective_position_size;
                         double max_order_krw = std::min(engine_config_.max_order_krw, spendable_capital);
                         if (available_cash <= engine_config_.small_account_tier1_capital_krw) {
                             const double tier_cap = std::clamp(engine_config_.small_account_tier1_max_order_pct, 0.01, 1.0);
-                            max_order_krw = std::min(max_order_krw, std::max(min_order_krw, available_cash * tier_cap));
+                            max_order_krw = std::min(max_order_krw, std::max(min_executable_order_krw, available_cash * tier_cap));
                         } else if (available_cash <= engine_config_.small_account_tier2_capital_krw) {
                             const double tier_cap = std::clamp(engine_config_.small_account_tier2_max_order_pct, 0.01, 1.0);
-                            max_order_krw = std::min(max_order_krw, std::max(min_order_krw, available_cash * tier_cap));
+                            max_order_krw = std::min(max_order_krw, std::max(min_executable_order_krw, available_cash * tier_cap));
                         }
 
-                        const int max_lots = std::max(1, static_cast<int>(std::floor(max_order_krw / min_order_krw)));
-                        int desired_lots = static_cast<int>(std::floor(desired_order_krw / min_order_krw));
-                        desired_lots = std::clamp(desired_lots, 1, max_lots);
-                        const double order_amount = static_cast<double>(desired_lots) * min_order_krw;
+                        const double order_amount = std::clamp(desired_order_krw, min_executable_order_krw, max_order_krw);
                         const double quantity = order_amount / (fill_price * (1.0 + fee_rate));
                         const double fee = quantity * fill_price * fee_rate;
                         const bool order_sizing_ok =
@@ -4630,9 +4793,11 @@ BacktestEngine::Result BacktestEngine::getResult() const {
                 ss.avg_loss_krw += std::abs(trade.profit_loss); // temp as gross loss accumulator
             }
 
-            const std::string regime_label = regimeToLabel(trade.market_regime);
+            const std::string regime_label = marketRegimeLabel(trade.market_regime);
             const std::string archetype_label =
                 trade.entry_archetype.empty() ? "UNSPECIFIED" : trade.entry_archetype;
+            const std::string vol_bucket = volatilityBucket(trade.volatility);
+            const std::string liq_bucket = liquidityBucket(trade.liquidity_score);
             const std::string strength_bucket = strengthBucket(trade.signal_strength);
             const double entry_notional = trade.entry_price * trade.quantity;
             const double realized_net_edge = (entry_notional > 1e-9)
@@ -4652,6 +4817,7 @@ BacktestEngine::Result BacktestEngine::getResult() const {
             const std::string rr_bucket = rewardRiskBucket(trade.reward_risk_ratio);
             const std::string pattern_key =
                 strategy_name + "|" + archetype_label + "|" + regime_label + "|" +
+                vol_bucket + "|" + liq_bucket + "|" +
                 strength_bucket + "|" + ev_bucket + "|" + rr_bucket;
             auto& pa = pattern_map[pattern_key];
             pa.total_trades++;
@@ -4691,17 +4857,22 @@ BacktestEngine::Result BacktestEngine::getResult() const {
             const size_t p3 = (p2 == std::string::npos) ? std::string::npos : key.find('|', p2 + 1);
             const size_t p4 = (p3 == std::string::npos) ? std::string::npos : key.find('|', p3 + 1);
             const size_t p5 = (p4 == std::string::npos) ? std::string::npos : key.find('|', p4 + 1);
+            const size_t p6 = (p5 == std::string::npos) ? std::string::npos : key.find('|', p5 + 1);
+            const size_t p7 = (p6 == std::string::npos) ? std::string::npos : key.find('|', p6 + 1);
             if (p1 == std::string::npos || p2 == std::string::npos || p3 == std::string::npos ||
-                p4 == std::string::npos || p5 == std::string::npos) {
+                p4 == std::string::npos || p5 == std::string::npos ||
+                p6 == std::string::npos || p7 == std::string::npos) {
                 continue;
             }
             Result::PatternSummary ps;
             ps.strategy_name = key.substr(0, p1);
             ps.entry_archetype = key.substr(p1 + 1, p2 - p1 - 1);
             ps.regime = key.substr(p2 + 1, p3 - p2 - 1);
-            ps.strength_bucket = key.substr(p3 + 1, p4 - p3 - 1);
-            ps.expected_value_bucket = key.substr(p4 + 1, p5 - p4 - 1);
-            ps.reward_risk_bucket = key.substr(p5 + 1);
+            ps.volatility_bucket = key.substr(p3 + 1, p4 - p3 - 1);
+            ps.liquidity_bucket = key.substr(p4 + 1, p5 - p4 - 1);
+            ps.strength_bucket = key.substr(p5 + 1, p6 - p5 - 1);
+            ps.expected_value_bucket = key.substr(p6 + 1, p7 - p6 - 1);
+            ps.reward_risk_bucket = key.substr(p7 + 1);
             ps.total_trades = pa.total_trades;
             ps.winning_trades = pa.winning_trades;
             ps.losing_trades = pa.losing_trades;
@@ -4724,6 +4895,8 @@ BacktestEngine::Result BacktestEngine::getResult() const {
                 if (a.strategy_name != b.strategy_name) return a.strategy_name < b.strategy_name;
                 if (a.entry_archetype != b.entry_archetype) return a.entry_archetype < b.entry_archetype;
                 if (a.regime != b.regime) return a.regime < b.regime;
+                if (a.volatility_bucket != b.volatility_bucket) return a.volatility_bucket < b.volatility_bucket;
+                if (a.liquidity_bucket != b.liquidity_bucket) return a.liquidity_bucket < b.liquidity_bucket;
                 return a.total_trades > b.total_trades;
             });
     } else {
@@ -4758,6 +4931,8 @@ BacktestEngine::Result BacktestEngine::getResult() const {
     result.avg_fee_krw = (closed_trades > 0) ? (total_fees / static_cast<double>(closed_trades)) : 0.0;
     result.exit_reason_counts = std::move(exit_reason_counts);
     result.entry_rejection_reason_counts = entry_rejection_reason_counts_;
+    result.no_signal_pattern_counts = no_signal_pattern_counts_;
+    result.entry_quality_edge_gap_buckets = entry_quality_edge_gap_buckets_;
     result.intrabar_stop_tp_collision_count = intrabar_stop_tp_collision_count_;
     result.intrabar_collision_by_strategy = intrabar_collision_by_strategy_;
     std::set<std::string> strategy_names;
@@ -4822,6 +4997,11 @@ BacktestEngine::Result BacktestEngine::getResult() const {
     result.strategy_collect_exception_count = strategy_collect_exception_count_;
     result.entry_funnel = entry_funnel_;
     result.pre_cat_feature_snapshot = pre_cat_feature_snapshot_;
+    result.post_entry_risk_telemetry.adaptive_stop_updates = adaptive_stop_update_count_;
+    result.post_entry_risk_telemetry.adaptive_tp_recalibration_updates = adaptive_tp_recalibration_count_;
+    result.post_entry_risk_telemetry.adaptive_partial_ratio_samples = adaptive_partial_ratio_samples_;
+    result.post_entry_risk_telemetry.adaptive_partial_ratio_sum = adaptive_partial_ratio_sum_;
+    result.post_entry_risk_telemetry.adaptive_partial_ratio_histogram = adaptive_partial_ratio_histogram_;
     return result;
 }
 
@@ -4871,4 +5051,13 @@ void BacktestEngine::updateDynamicFilter() {
 
 } // namespace backtest
 } // namespace autolife
+
+
+
+
+
+
+
+
+
 

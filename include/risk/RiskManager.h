@@ -201,6 +201,14 @@ public:
         double breakeven_trigger,
         double trailing_start
     );
+
+    // Adaptive post-entry risk control shared by backtest/live runtime.
+    // Tightens stop only in one direction (never widens risk).
+    void applyAdaptiveRiskControls(const std::string& market);
+
+    // Returns runtime-adaptive partial exit ratio for the current position.
+    // Used by both live and backtest to keep post-entry de-risk cadence aligned.
+    double getAdaptivePartialExitRatio(const std::string& market) const;
     
     // ===== 二쇰Ц ?湲??먮낯 愿由?=====
     // ?쒖텧?먯?留??꾩쭅 泥닿껐 ????二쇰Ц 湲덉븸??異붿쟻?섏뿬 以묐났 二쇰Ц 諛⑹?

@@ -1,4 +1,4 @@
-﻿# Chapter History (Brief)
+# Chapter History (Brief)
 
 This file is intentionally concise.
 Keep each completed chapter to 2-4 lines.
@@ -42,4 +42,35 @@ Keep each completed chapter to 2-4 lines.
   - Reduced default CMake build to `AutoLifeTrading` only (`AUTOLIFE_BUILD_GATE_TESTS=OFF`) and revalidated with fresh `build_fresh` configure/build.
   - Completed runtime commonization phase-2A by extracting duplicated edge stats/key-builder helpers into `common/StrategyEdgeStatsShared` and wiring both runtimes to shared helpers.
   - Normalized core runtime/risk/config files to UTF-8 to unblock safe large-file patching and reduce `C4828` warning noise.
-
+  - Completed runtime commonization phase-2B by centralizing regime/rejection/bucket diagnostics into `common/RuntimeDiagnosticsShared`.
+  - Added fixed-mode reproducibility recheck (same command x2) and confirmed gate-critical fields match.
+  - Added no-signal pattern-signature extraction (`regime|vol|liq`) from backtest runtime and surfaced it into verification diagnostics/failure attribution.
+  - Root-cause evidence now points to low-liquidity dominant no-signal patterns across regimes (not coin-specific hardcoding).
+  - Added shared contextual edge-floor gate (`computeContextualEdgeGateFloor`) and wired both backtest/live.
+  - Real-data 6-set recheck: expectancy/trade-count improved, but adaptive verdict still fail (`primary_non_execution_group=candidate_generation`).
+  - Added entry-quality edge-gap bucket diagnostics (`entry_quality_edge_gap_buckets`) and aggregate attribution in verification reports.
+  - Confirmed current edge-gate misses are mostly `>2bp` (not near-miss), and `simulation_large.csv` losses are uptrend/stop-loss concentrated.
+  - Expanded pattern diagnostics to include `volatility_bucket`/`liquidity_bucket` and added `top_loss_pattern_cells` attribution to verification.
+  - Confirmed dominant loss cell is `TRENDING_UP + vol_low + liq_low + FOUNDATION_UPTREND_CONTINUATION`; quarantine-gating experiments were rolled back due over-suppression.
+  - Added quality-guarded strategy experiment path and measured synthetic uplift under low-liquidity uptrend context.
+  - Hardened adaptive validation with `sample_size_guard_pass` so low-trade-count “pass” is blocked (`overall_gate_pass=false` when sample is insufficient).
+  - Added shared post-entry adaptive risk controls in `RiskManager` (breakeven/trailing/time-guard stop tightening) and connected both `BacktestRuntime`/`LiveTradingRuntime` to the same path.
+  - Backtest applies adaptive tightening after candle exit checks to avoid same-candle lookahead bias; build + CLI backtest smoke re-validated.
+  - Hardened account-size neutrality: entry now enforces min-order survivability at stop-loss, and live/backtest sizing both use safe minimum executable order (risk/slippage/fee aware).
+  - Fixed partial-sell dust edge case: removed fake half-close path; now fallback is full take-profit if possible, otherwise protective-state arm only.
+  - Fixed "dead KRW loss limit" behavior: daily KRW loss guard now auto-binds to daily-start-capital * daily-loss-pct (tighter-of logic), so small accounts are covered without separate mode.
+  - Added dynamic position-cap adaptation: effective max positions now follows deployable capital, and entry position_size auto-scales by occupancy pressure + capital buffer ratio.
+  - Added post-entry adaptive TP/cadence alignment: shared adaptive partial-exit ratio API wired to both live/backtest; `RiskManager` now recalibrates TP1/TP2 for hostile uptrend/stagnation/runner contexts.
+  - Validation judgement policy refined: adaptive verdict semantics now documented as `pass|fail|inconclusive` with regime-aware sample logic + opportunity-conversion check.
+  - `scripts/run_verification.py` semantics aligned: removed `monitor`, added dynamic `effective_min_avg_trades` + opportunity-conversion guard; adaptive gate pass now requires verdict `pass`.
+  - Added post-entry telemetry export pipeline: backtest JSON now emits `post_entry_risk_telemetry` (adaptive stop/TP trigger counts + partial-ratio histogram), and verification report aggregates the same metrics.
+  - Fixed strategy no-signal reason propagation bug (`processStrategySignal` default-return loss) so rejection attribution is now explicit (`foundation_no_signal_*`).
+  - Rebuilt backtest synthetic liquidity metric to notional-based scaling; validated gain on `simulation_2000.csv` while multi-dataset gate still fails on `simulation_large.csv` quality.
+  - Added hostile uptrend RR/EV recalibration in `FoundationAdaptiveStrategy` (pattern-level: `TRENDING_UP + low_liq + low_vol`), replacing aggressive RR expansion with bounded calibration.
+  - Multi verification now reproducibly passes (`avg_pf=1.2337`, `avg_expectancy_krw=4.4895`, `overall_gate_pass=true`) with `repro1/repro2` parity.
+  - Real-data period-shift comparison completed (current vs 2024-03 vs 2024-11, 6 markets, MTF companions).
+  - Found strict-parity dependency on 15m companion (`entry_rounds=0` when missing); after adding 15m, all windows still failed with candidate-generation bottleneck dominance.
+- 2026-02-20 | CH-01 (in progress) | MTF entry + native 15m companion policy tightened.
+  - Scanner now loads native 15m with rolling-cache incremental updates; live runtime no longer resamples 15m from 1m/5m.
+  - Foundation strategy entry uses 5m/15m/1h confirmation head and emits explicit foundation_no_signal_mtf_* reasons.
+  - strict companion requirement unified to 5m/15m/60m/240m across CLI/interactive + major real-data tuning scripts.

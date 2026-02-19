@@ -1,4 +1,4 @@
-﻿#include "app/BacktestCliHandler.h"
+#include "app/BacktestCliHandler.h"
 
 #include "app/BacktestReportFormatter.h"
 #include "common/Logger.h"
@@ -76,7 +76,7 @@ static CompanionCheckResult checkHigherTfCompanions(const std::string& csv_path)
         return false;
     };
 
-    for (const auto& token : {"5m", "60m", "240m"}) {
+    for (const auto& token : {"5m", "15m", "60m", "240m"}) {
         if (hasCompanion(token)) {
             out.found_tokens.push_back(token);
         } else {
@@ -91,7 +91,7 @@ static void printCompanionRequirementError(const std::string& csv_path, const Co
     std::cout << "실거래 동등 MTF 모드 검증 실패: " << csv_path << "\n";
     if (!check.applicable) {
         std::cout << "  파일명 규칙이 맞지 않습니다. 예: upbit_KRW_BTC_1m_12000.csv\n";
-        std::cout << "  companion(5m/60m/240m) 자동 매칭이 가능한 1m 파일을 지정하세요.\n";
+        std::cout << "  companion(5m/15m/60m/240m) 자동 매칭이 가능한 1m 파일을 지정하세요.\n";
         return;
     }
 
@@ -104,7 +104,7 @@ static void printCompanionRequirementError(const std::string& csv_path, const Co
             std::cout << check.missing_tokens[i];
         }
         std::cout << "\n";
-        std::cout << "  같은 폴더에 upbit_<market>_5m_*.csv / 60m / 240m 파일이 필요합니다.\n";
+        std::cout << "  같은 폴더에 upbit_<market>_5m_*.csv / 15m / 60m / 240m 파일이 필요합니다.\n";
     }
 }
 
@@ -155,8 +155,27 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
     j["intrabar_stop_tp_collision_count"] = result.intrabar_stop_tp_collision_count;
     j["exit_reason_counts"] = result.exit_reason_counts;
     j["entry_rejection_reason_counts"] = result.entry_rejection_reason_counts;
+    j["no_signal_pattern_counts"] = result.no_signal_pattern_counts;
+    j["entry_quality_edge_gap_buckets"] = result.entry_quality_edge_gap_buckets;
     j["intrabar_collision_by_strategy"] = result.intrabar_collision_by_strategy;
     j["strategy_collect_exception_count"] = result.strategy_collect_exception_count;
+    const int partial_ratio_samples = std::max(0, result.post_entry_risk_telemetry.adaptive_partial_ratio_samples);
+    const double partial_ratio_avg = (partial_ratio_samples > 0)
+        ? (result.post_entry_risk_telemetry.adaptive_partial_ratio_sum / static_cast<double>(partial_ratio_samples))
+        : 0.0;
+    j["post_entry_risk_telemetry"] = {
+        {"adaptive_stop_updates", result.post_entry_risk_telemetry.adaptive_stop_updates},
+        {"adaptive_tp_recalibration_updates", result.post_entry_risk_telemetry.adaptive_tp_recalibration_updates},
+        {"adaptive_partial_ratio_samples", partial_ratio_samples},
+        {"adaptive_partial_ratio_avg", partial_ratio_avg},
+        {"adaptive_partial_ratio_histogram", {
+            {"0.35_0.44", result.post_entry_risk_telemetry.adaptive_partial_ratio_histogram[0]},
+            {"0.45_0.54", result.post_entry_risk_telemetry.adaptive_partial_ratio_histogram[1]},
+            {"0.55_0.64", result.post_entry_risk_telemetry.adaptive_partial_ratio_histogram[2]},
+            {"0.65_0.74", result.post_entry_risk_telemetry.adaptive_partial_ratio_histogram[3]},
+            {"0.75_0.80", result.post_entry_risk_telemetry.adaptive_partial_ratio_histogram[4]}
+        }}
+    };
 
     j["entry_funnel"] = {
         {"entry_rounds", result.entry_funnel.entry_rounds},
@@ -315,6 +334,8 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
             {"strategy_name", p.strategy_name},
             {"entry_archetype", p.entry_archetype},
             {"regime", p.regime},
+            {"volatility_bucket", p.volatility_bucket},
+            {"liquidity_bucket", p.liquidity_bucket},
             {"strength_bucket", p.strength_bucket},
             {"expected_value_bucket", p.expected_value_bucket},
             {"reward_risk_bucket", p.reward_risk_bucket},

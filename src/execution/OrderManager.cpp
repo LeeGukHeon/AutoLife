@@ -370,9 +370,9 @@ std::vector<ActiveOrder> OrderManager::getFilledOrders() {
             filled.push_back(it->second);
             it = active_orders_.erase(it);
         } else if (terminal_cancel_or_reject) {
-            // Partial fill can exist when an order is canceled/rejected after some execution.
-            // Emit that fill once before dropping terminal order from active set.
-            if (has_fill) {
+            // Emit terminal order once (including zero-fill) so caller can release
+            // reserved capital and handle partial-fill accounting consistently.
+            if (has_fill || it->second.side == OrderSide::BUY) {
                 filled.push_back(it->second);
             }
             it = active_orders_.erase(it);

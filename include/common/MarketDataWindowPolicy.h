@@ -95,7 +95,7 @@ inline DataWindowCheckResult checkLiveEquivalentWindow(
 inline bool hasLiveEquivalentCompanionSet(
     const std::map<std::string, std::vector<Candle>>& candles_by_tf
 ) {
-    for (const auto tf : {"5m", "1h", "4h"}) {
+    for (const auto tf : {"5m", "15m", "1h", "4h"}) {
         const auto it = candles_by_tf.find(tf);
         if (it == candles_by_tf.end() || it->second.empty()) {
             return false;

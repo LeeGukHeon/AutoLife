@@ -1,4 +1,4 @@
-﻿name: CI PR Gate
+name: CI PR Gate
 
 on:
   workflow_dispatch:

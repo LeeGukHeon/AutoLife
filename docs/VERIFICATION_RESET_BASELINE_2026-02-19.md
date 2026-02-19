@@ -1,4 +1,4 @@
-﻿# Verification Reset Baseline (2026-02-19)
+# Verification Reset Baseline (2026-02-19)
 
 ## Decision
 - We restart verification from a minimal baseline.
@@ -25,6 +25,10 @@
   - `diagnostics.per_dataset`
   - `diagnostics.failure_attribution`
   - `diagnostics.per_dataset[*].strategy_collection`
+- Report diagnostics (post-entry lifecycle):
+  - `adaptive_validation.per_dataset[*].post_entry_risk_telemetry`
+  - `adaptive_validation.aggregates.avg_adaptive_*`
+  - `adaptive_validation.aggregates.adaptive_partial_ratio_histogram`
 
 ## User Command (minimal)
 - `python scripts/verify_baseline.py`
@@ -64,5 +68,8 @@ These remain for backward compatibility while baseline proves stability.
 - Same datasets + same config => same gate outcome.
 - Investigations can be done from one report without extra side artifacts.
 - Root-cause direction must be visible from report diagnostics before parameter tuning.
-- Adaptive validation verdict (`pass|monitor|fail`) should be explainable from regime/risk metrics.
+- Adaptive validation verdict (`pass|fail|inconclusive`) should be explainable from regime/risk metrics.
+- Low sample size should default to `inconclusive` unless hard-risk guards fail.
+- Sample-size thresholds should be regime-aware (hostile market allows lower trade count).
+- Opportunity conversion (`entries_executed / generated_signals`) must be tracked with trade count.
 

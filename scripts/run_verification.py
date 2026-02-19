@@ -116,6 +116,59 @@ def top_reason_rows(reason_counts: Dict[str, int], limit: int = 5) -> List[Dict[
     return [{"reason": key, "count": int(count)} for key, count in ordered[: max(1, int(limit))]]
 
 
+def top_pattern_rows(pattern_counts: Dict[str, int], limit: int = 5) -> List[Dict[str, Any]]:
+    ordered = sorted(pattern_counts.items(), key=lambda item: (-int(item[1]), item[0]))
+    return [{"pattern": key, "count": int(count)} for key, count in ordered[: max(1, int(limit))]]
+
+
+def build_pattern_cell_profit_map(pattern_rows: Any) -> Dict[str, Dict[str, float]]:
+    out: Dict[str, Dict[str, float]] = {}
+    if not isinstance(pattern_rows, list):
+        return out
+    for row in pattern_rows:
+        if not isinstance(row, dict):
+            continue
+        regime = str(row.get("regime", "")).strip() or "UNKNOWN"
+        vol_bucket = str(row.get("volatility_bucket", "")).strip() or "vol_unknown"
+        liq_bucket = str(row.get("liquidity_bucket", "")).strip() or "liq_unknown"
+        strength_bucket = str(row.get("strength_bucket", "")).strip() or "strength_unknown"
+        archetype = str(row.get("entry_archetype", "")).strip() or "UNSPECIFIED"
+        pattern_key = (
+            f"regime={regime}|vol={vol_bucket}|liq={liq_bucket}|"
+            f"strength={strength_bucket}|arch={archetype}"
+        )
+        trades = max(0, to_int(row.get("total_trades", 0)))
+        total_profit = to_float(row.get("total_profit", row.get("total_profit_krw", 0.0)))
+        slot = out.setdefault(pattern_key, {"trades": 0.0, "total_profit_krw": 0.0})
+        slot["trades"] += float(trades)
+        slot["total_profit_krw"] += float(total_profit)
+    return out
+
+
+def top_loss_pattern_cells(
+    pattern_profit_map: Dict[str, Dict[str, float]],
+    limit: int = 6,
+) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for key, item in pattern_profit_map.items():
+        if not isinstance(item, dict):
+            continue
+        trades = max(0, to_int(item.get("trades", 0)))
+        total_profit = to_float(item.get("total_profit_krw", 0.0))
+        if trades <= 0:
+            continue
+        rows.append(
+            {
+                "pattern": str(key),
+                "trades": int(trades),
+                "total_profit_krw": round(total_profit, 4),
+                "avg_profit_krw": round(total_profit / float(trades), 4),
+            }
+        )
+    rows.sort(key=lambda x: (float(x["total_profit_krw"]), -int(x["trades"]), str(x["pattern"])))
+    return rows[: max(1, int(limit))]
+
+
 def build_strategy_funnel_diagnostics(strategy_signal_funnel: Any) -> Dict[str, Any]:
     rows: List[Dict[str, Any]] = []
     if isinstance(strategy_signal_funnel, list):
@@ -263,10 +316,16 @@ def build_dataset_diagnostics(dataset_name: str, backtest_result: Dict[str, Any]
     }
 
     reason_counts = normalized_reason_counts(backtest_result.get("entry_rejection_reason_counts", {}))
+    no_signal_pattern_counts = normalized_reason_counts(backtest_result.get("no_signal_pattern_counts", {}))
+    edge_gap_bucket_counts = normalized_reason_counts(
+        backtest_result.get("entry_quality_edge_gap_buckets", {})
+    )
+    pattern_profit_map = build_pattern_cell_profit_map(backtest_result.get("pattern_summaries", []))
     strategy_diag = build_strategy_funnel_diagnostics(backtest_result.get("strategy_signal_funnel", []))
     strategy_collection_diag = build_strategy_collection_diagnostics(
         backtest_result.get("strategy_collection_summaries", [])
     )
+    post_entry_telemetry = parse_post_entry_risk_telemetry(backtest_result)
 
     return {
         "dataset": dataset_name,
@@ -281,8 +340,15 @@ def build_dataset_diagnostics(dataset_name: str, backtest_result: Dict[str, Any]
         },
         "top_rejection_reasons": top_reason_rows(reason_counts, limit=5),
         "rejection_reason_counts": reason_counts,
+        "no_signal_pattern_counts": no_signal_pattern_counts,
+        "top_no_signal_patterns": top_pattern_rows(no_signal_pattern_counts, limit=5),
+        "entry_quality_edge_gap_buckets": edge_gap_bucket_counts,
+        "top_entry_quality_edge_gap_buckets": top_pattern_rows(edge_gap_bucket_counts, limit=5),
+        "pattern_cell_profit_map": pattern_profit_map,
+        "top_loss_pattern_cells": top_loss_pattern_cells(pattern_profit_map, limit=6),
         "strategy_funnel": strategy_diag,
         "strategy_collection": strategy_collection_diag,
+        "post_entry_risk_telemetry": post_entry_telemetry,
         "strategy_collect_exception_count": max(
             0, to_int(backtest_result.get("strategy_collect_exception_count", 0))
         ),
@@ -297,7 +363,22 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         "entries_executed": 0,
     }
     aggregate_reasons: Dict[str, int] = {}
+    aggregate_no_signal_patterns: Dict[str, int] = {}
+    aggregate_edge_gap_buckets: Dict[str, int] = {}
+    aggregate_pattern_profit_map: Dict[str, Dict[str, float]] = {}
     top_group_votes: Dict[str, int] = {}
+    aggregate_post_entry_telemetry: Dict[str, Any] = {
+        "adaptive_stop_updates": 0,
+        "adaptive_tp_recalibration_updates": 0,
+        "adaptive_partial_ratio_samples": 0,
+        "adaptive_partial_ratio_histogram": {
+            "0.35_0.44": 0,
+            "0.45_0.54": 0,
+            "0.55_0.64": 0,
+            "0.65_0.74": 0,
+            "0.75_0.80": 0,
+        },
+    }
 
     for item in dataset_diagnostics:
         groups = item.get("bottleneck_groups", {})
@@ -313,11 +394,65 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
                     continue
                 aggregate_reasons[reason_key] = aggregate_reasons.get(reason_key, 0) + max(0, to_int(v))
 
+        no_signal_patterns = item.get("no_signal_pattern_counts", {})
+        if isinstance(no_signal_patterns, dict):
+            for k, v in no_signal_patterns.items():
+                pattern_key = str(k).strip()
+                if not pattern_key:
+                    continue
+                aggregate_no_signal_patterns[pattern_key] = (
+                    aggregate_no_signal_patterns.get(pattern_key, 0) + max(0, to_int(v))
+                )
+
+        edge_gap_buckets = item.get("entry_quality_edge_gap_buckets", {})
+        if isinstance(edge_gap_buckets, dict):
+            for k, v in edge_gap_buckets.items():
+                bucket_key = str(k).strip()
+                if not bucket_key:
+                    continue
+                aggregate_edge_gap_buckets[bucket_key] = (
+                    aggregate_edge_gap_buckets.get(bucket_key, 0) + max(0, to_int(v))
+                )
+
+        pattern_profit_map = item.get("pattern_cell_profit_map", {})
+        if isinstance(pattern_profit_map, dict):
+            for k, v in pattern_profit_map.items():
+                pattern_key = str(k).strip()
+                if not pattern_key or not isinstance(v, dict):
+                    continue
+                slot = aggregate_pattern_profit_map.setdefault(
+                    pattern_key,
+                    {"trades": 0.0, "total_profit_krw": 0.0},
+                )
+                slot["trades"] += float(max(0, to_int(v.get("trades", 0))))
+                slot["total_profit_krw"] += float(to_float(v.get("total_profit_krw", 0.0)))
+
         top_group = item.get("top_non_execution_group", {})
         if isinstance(top_group, dict):
             name = str(top_group.get("name", "")).strip()
             if name:
                 top_group_votes[name] = top_group_votes.get(name, 0) + 1
+
+        post_entry_telemetry = item.get("post_entry_risk_telemetry", {})
+        if isinstance(post_entry_telemetry, dict):
+            aggregate_post_entry_telemetry["adaptive_stop_updates"] += max(
+                0, to_int(post_entry_telemetry.get("adaptive_stop_updates", 0))
+            )
+            aggregate_post_entry_telemetry["adaptive_tp_recalibration_updates"] += max(
+                0,
+                to_int(post_entry_telemetry.get("adaptive_tp_recalibration_updates", 0)),
+            )
+            aggregate_post_entry_telemetry["adaptive_partial_ratio_samples"] += max(
+                0,
+                to_int(post_entry_telemetry.get("adaptive_partial_ratio_samples", 0)),
+            )
+            histogram = post_entry_telemetry.get("adaptive_partial_ratio_histogram", {})
+            if isinstance(histogram, dict):
+                for key in aggregate_post_entry_telemetry["adaptive_partial_ratio_histogram"]:
+                    aggregate_post_entry_telemetry["adaptive_partial_ratio_histogram"][key] += max(
+                        0,
+                        to_int(histogram.get(key, 0)),
+                    )
 
     non_execution_total = (
         aggregate_groups["candidate_generation"]
@@ -346,7 +481,11 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
             "share_of_non_execution": round(primary_group_share, 4),
         },
         "top_rejection_reasons": top_reason_rows(aggregate_reasons, limit=8),
+        "top_no_signal_patterns": top_pattern_rows(aggregate_no_signal_patterns, limit=8),
+        "top_entry_quality_edge_gap_buckets": top_pattern_rows(aggregate_edge_gap_buckets, limit=8),
+        "top_loss_pattern_cells": top_loss_pattern_cells(aggregate_pattern_profit_map, limit=10),
         "top_non_execution_group_vote_counts": top_group_votes,
+        "post_entry_risk_telemetry": aggregate_post_entry_telemetry,
     }
 
 
@@ -363,6 +502,24 @@ def build_failure_attribution(
         name = str(primary_group.get("name", "")).strip()
         if name:
             primary_group_name = name
+    primary_no_signal_pattern = ""
+    top_no_signal_patterns = aggregate_diagnostics.get("top_no_signal_patterns", [])
+    if isinstance(top_no_signal_patterns, list) and top_no_signal_patterns:
+        first = top_no_signal_patterns[0]
+        if isinstance(first, dict):
+            primary_no_signal_pattern = str(first.get("pattern", "")).strip()
+    primary_edge_gap_bucket = ""
+    top_edge_gap_buckets = aggregate_diagnostics.get("top_entry_quality_edge_gap_buckets", [])
+    if isinstance(top_edge_gap_buckets, list) and top_edge_gap_buckets:
+        first_gap = top_edge_gap_buckets[0]
+        if isinstance(first_gap, dict):
+            primary_edge_gap_bucket = str(first_gap.get("pattern", "")).strip()
+    primary_loss_pattern_cell = ""
+    top_loss_pattern_cells_rows = aggregate_diagnostics.get("top_loss_pattern_cells", [])
+    if isinstance(top_loss_pattern_cells_rows, list) and top_loss_pattern_cells_rows:
+        first_loss = top_loss_pattern_cells_rows[0]
+        if isinstance(first_loss, dict):
+            primary_loss_pattern_cell = str(first_loss.get("pattern", "")).strip()
 
     hypothesis = "balanced_or_data_limited"
     next_focus: List[str] = []
@@ -392,6 +549,9 @@ def build_failure_attribution(
     return {
         "failed_gates": failed_gates,
         "primary_non_execution_group": primary_group_name,
+        "primary_no_signal_pattern": primary_no_signal_pattern,
+        "primary_entry_quality_edge_gap_bucket": primary_edge_gap_bucket,
+        "primary_loss_pattern_cell": primary_loss_pattern_cell,
         "low_trade_condition": low_trade_condition,
         "hypothesis": hypothesis,
         "next_focus": next_focus,
@@ -430,8 +590,38 @@ def build_regime_metrics_from_patterns(backtest_result: Dict[str, Any]) -> Dict[
     return output
 
 
+def parse_post_entry_risk_telemetry(backtest_result: Dict[str, Any]) -> Dict[str, Any]:
+    telemetry = backtest_result.get("post_entry_risk_telemetry", {})
+    if not isinstance(telemetry, dict):
+        telemetry = {}
+
+    histogram_raw = telemetry.get("adaptive_partial_ratio_histogram", {})
+    histogram: Dict[str, int] = {}
+    if isinstance(histogram_raw, dict):
+        for key in ("0.35_0.44", "0.45_0.54", "0.55_0.64", "0.65_0.74", "0.75_0.80"):
+            histogram[key] = max(0, to_int(histogram_raw.get(key, 0)))
+
+    return {
+        "adaptive_stop_updates": max(0, to_int(telemetry.get("adaptive_stop_updates", 0))),
+        "adaptive_tp_recalibration_updates": max(
+            0,
+            to_int(telemetry.get("adaptive_tp_recalibration_updates", 0)),
+        ),
+        "adaptive_partial_ratio_samples": max(
+            0,
+            to_int(telemetry.get("adaptive_partial_ratio_samples", 0)),
+        ),
+        "adaptive_partial_ratio_avg": max(
+            0.0,
+            to_float(telemetry.get("adaptive_partial_ratio_avg", 0.0)),
+        ),
+        "adaptive_partial_ratio_histogram": histogram,
+    }
+
+
 def build_adaptive_dataset_profile(dataset_name: str, backtest_result: Dict[str, Any]) -> Dict[str, Any]:
     regime_metrics = build_regime_metrics_from_patterns(backtest_result)
+    post_entry_telemetry = parse_post_entry_risk_telemetry(backtest_result)
     regimes = regime_metrics.get("regimes", {})
     downtrend = regimes.get("TRENDING_DOWN", {})
     uptrend = regimes.get("TRENDING_UP", {})
@@ -455,6 +645,27 @@ def build_adaptive_dataset_profile(dataset_name: str, backtest_result: Dict[str,
     if total_trades < 10:
         score -= 0.5
 
+    generated_signals = 0
+    entries_executed = 0
+    entry_funnel = backtest_result.get("entry_funnel", {})
+    if not isinstance(entry_funnel, dict):
+        entry_funnel = {}
+    strategy_signal_funnel = backtest_result.get("strategy_signal_funnel", [])
+    if isinstance(strategy_signal_funnel, list):
+        for row in strategy_signal_funnel:
+            if not isinstance(row, dict):
+                continue
+            generated_signals += max(0, to_int(row.get("generated_signals", 0)))
+            entries_executed += max(0, to_int(row.get("entries_executed", 0)))
+    if generated_signals <= 0:
+        generated_signals = max(0, to_int(entry_funnel.get("entry_rounds", 0)))
+    if entries_executed <= 0:
+        entries_executed = max(0, to_int(entry_funnel.get("entries_executed", 0)))
+    opportunity_conversion = (
+        float(entries_executed) / float(generated_signals)
+        if generated_signals > 0 else 0.0
+    )
+
     return {
         "dataset": dataset_name,
         "total_trades": int(total_trades),
@@ -465,6 +676,10 @@ def build_adaptive_dataset_profile(dataset_name: str, backtest_result: Dict[str,
         "downtrend_loss_per_trade_krw": round(downtrend_loss_per_trade, 4),
         "uptrend_expectancy_krw": round(uptrend_expectancy, 4),
         "risk_adjusted_score": round(score, 4),
+        "generated_signals": int(generated_signals),
+        "entries_executed": int(entries_executed),
+        "opportunity_conversion": round(opportunity_conversion, 4),
+        "post_entry_risk_telemetry": post_entry_telemetry,
         "regime_metrics": regime_metrics,
     }
 
@@ -477,18 +692,82 @@ def aggregate_adaptive_validation(dataset_profiles: List[Dict[str, Any]]) -> Dic
             "avg_downtrend_trade_share": 0.0,
             "avg_downtrend_loss_per_trade_krw": 0.0,
             "avg_uptrend_expectancy_krw": 0.0,
+            "avg_adaptive_stop_updates": 0.0,
+            "avg_adaptive_tp_recalibration_updates": 0.0,
+            "avg_adaptive_partial_ratio_samples": 0.0,
+            "avg_adaptive_partial_ratio": 0.0,
+            "adaptive_partial_ratio_histogram": {
+                "0.35_0.44": 0,
+                "0.45_0.54": 0,
+                "0.55_0.64": 0,
+                "0.65_0.74": 0,
+                "0.75_0.80": 0,
+            },
         }
 
     scores = [to_float(x.get("risk_adjusted_score", 0.0)) for x in dataset_profiles]
     downtrend_share = [to_float(x.get("downtrend_trade_share", 0.0)) for x in dataset_profiles]
     downtrend_loss = [to_float(x.get("downtrend_loss_per_trade_krw", 0.0)) for x in dataset_profiles]
     uptrend_exp = [to_float(x.get("uptrend_expectancy_krw", 0.0)) for x in dataset_profiles]
+    generated = [max(0.0, to_float(x.get("generated_signals", 0.0))) for x in dataset_profiles]
+    executed = [max(0.0, to_float(x.get("entries_executed", 0.0))) for x in dataset_profiles]
+    stop_updates = []
+    tp_recalibration_updates = []
+    partial_ratio_samples = []
+    partial_ratio_weighted_sum = 0.0
+    partial_ratio_histogram = {
+        "0.35_0.44": 0,
+        "0.45_0.54": 0,
+        "0.55_0.64": 0,
+        "0.65_0.74": 0,
+        "0.75_0.80": 0,
+    }
+    for profile in dataset_profiles:
+        telemetry = profile.get("post_entry_risk_telemetry", {})
+        if not isinstance(telemetry, dict):
+            telemetry = {}
+        stop_update_count = max(0.0, to_float(telemetry.get("adaptive_stop_updates", 0.0)))
+        tp_recalibration_count = max(
+            0.0,
+            to_float(telemetry.get("adaptive_tp_recalibration_updates", 0.0)),
+        )
+        ratio_samples = max(0.0, to_float(telemetry.get("adaptive_partial_ratio_samples", 0.0)))
+        ratio_avg = max(0.0, to_float(telemetry.get("adaptive_partial_ratio_avg", 0.0)))
+        stop_updates.append(stop_update_count)
+        tp_recalibration_updates.append(tp_recalibration_count)
+        partial_ratio_samples.append(ratio_samples)
+        partial_ratio_weighted_sum += ratio_avg * ratio_samples
+
+        hist = telemetry.get("adaptive_partial_ratio_histogram", {})
+        if isinstance(hist, dict):
+            for key in partial_ratio_histogram:
+                partial_ratio_histogram[key] += max(0, to_int(hist.get(key, 0)))
+
+    total_generated = sum(generated)
+    total_executed = sum(executed)
+    total_partial_ratio_samples = sum(partial_ratio_samples)
+    avg_opportunity_conversion = (
+        (total_executed / total_generated) if total_generated > 0.0 else 0.0
+    )
+    avg_adaptive_partial_ratio = (
+        partial_ratio_weighted_sum / total_partial_ratio_samples
+        if total_partial_ratio_samples > 0.0
+        else 0.0
+    )
     return {
         "dataset_count": len(dataset_profiles),
         "avg_risk_adjusted_score": round(safe_avg(scores), 4),
         "avg_downtrend_trade_share": round(safe_avg(downtrend_share), 4),
         "avg_downtrend_loss_per_trade_krw": round(safe_avg(downtrend_loss), 4),
         "avg_uptrend_expectancy_krw": round(safe_avg(uptrend_exp), 4),
+        "avg_generated_signals": round(safe_avg(generated), 4),
+        "avg_entries_executed": round(safe_avg(executed), 4),
+        "avg_opportunity_conversion": round(avg_opportunity_conversion, 4),
+        "avg_adaptive_stop_updates": round(safe_avg(stop_updates), 4),
+        "avg_adaptive_tp_recalibration_updates": round(safe_avg(tp_recalibration_updates), 4),
+        "avg_adaptive_partial_ratio_samples": round(safe_avg(partial_ratio_samples), 4),
+        "avg_adaptive_partial_ratio": round(avg_adaptive_partial_ratio, 4),
+        "adaptive_partial_ratio_histogram": partial_ratio_histogram,
     }
 
 
@@ -498,10 +777,33 @@ def build_adaptive_verdict(
     max_downtrend_trade_share: float,
     min_uptrend_expectancy_krw: float,
     min_risk_adjusted_score: float,
+    avg_total_trades: float,
+    min_avg_trades: float,
     peak_max_drawdown_pct: float,
     max_drawdown_pct_limit: float,
 ) -> Dict[str, Any]:
+    avg_downtrend_trade_share = to_float(adaptive_aggregates.get("avg_downtrend_trade_share", 0.0))
+    avg_generated_signals = to_float(adaptive_aggregates.get("avg_generated_signals", 0.0))
+    avg_opportunity_conversion = to_float(adaptive_aggregates.get("avg_opportunity_conversion", 0.0))
+
+    hostile_sample_relax_factor = 1.0
+    if avg_downtrend_trade_share >= 0.45:
+        hostile_sample_relax_factor = 0.60
+    elif avg_downtrend_trade_share >= 0.30:
+        hostile_sample_relax_factor = 0.75
+    elif avg_downtrend_trade_share >= 0.15:
+        hostile_sample_relax_factor = 0.90
+    effective_min_avg_trades = max(3.0, float(min_avg_trades) * hostile_sample_relax_factor)
+
+    min_opportunity_conversion = 0.025
+    if avg_downtrend_trade_share >= 0.45:
+        min_opportunity_conversion = 0.012
+    elif avg_downtrend_trade_share >= 0.30:
+        min_opportunity_conversion = 0.018
+    low_opportunity_observed = avg_generated_signals < 5.0
+
     checks = {
+        "sample_size_guard_pass": float(avg_total_trades) >= float(effective_min_avg_trades),
         "drawdown_guard_pass": float(peak_max_drawdown_pct) <= float(max_drawdown_pct_limit),
         "downtrend_loss_guard_pass": to_float(adaptive_aggregates.get("avg_downtrend_loss_per_trade_krw", 0.0))
         <= float(max_downtrend_loss_per_trade_krw),
@@ -511,18 +813,43 @@ def build_adaptive_verdict(
         >= float(min_uptrend_expectancy_krw),
         "risk_adjusted_score_guard_pass": to_float(adaptive_aggregates.get("avg_risk_adjusted_score", 0.0))
         >= float(min_risk_adjusted_score),
+        "opportunity_conversion_guard_pass": (
+            True if low_opportunity_observed
+            else (avg_opportunity_conversion >= float(min_opportunity_conversion))
+        ),
     }
     failed = [k for k, v in checks.items() if not bool(v)]
-    if not failed:
-        verdict = "pass"
-    elif checks["drawdown_guard_pass"] and checks["downtrend_loss_guard_pass"]:
-        verdict = "monitor"
-    else:
+    hard_fail_keys = [
+        "drawdown_guard_pass",
+        "downtrend_loss_guard_pass",
+        "uptrend_expectancy_guard_pass",
+        "risk_adjusted_score_guard_pass",
+    ]
+    hard_fail = any(not bool(checks.get(key, True)) for key in hard_fail_keys)
+
+    if hard_fail:
         verdict = "fail"
+    elif (
+        checks["sample_size_guard_pass"] and
+        checks["opportunity_conversion_guard_pass"]
+    ):
+        verdict = "pass"
+    else:
+        verdict = "inconclusive"
     return {
         "verdict": verdict,
         "checks": checks,
         "failed_checks": failed,
+        "effective_thresholds": {
+            "effective_min_avg_trades": round(effective_min_avg_trades, 4),
+            "hostile_sample_relax_factor": round(hostile_sample_relax_factor, 4),
+            "min_opportunity_conversion": round(min_opportunity_conversion, 4),
+        },
+        "context": {
+            "avg_generated_signals": round(avg_generated_signals, 4),
+            "avg_opportunity_conversion": round(avg_opportunity_conversion, 4),
+            "low_opportunity_observed": bool(low_opportunity_observed),
+        },
     }
 
 
@@ -679,13 +1006,15 @@ def main(argv=None) -> int:
         max_downtrend_trade_share=float(args.max_downtrend_trade_share),
         min_uptrend_expectancy_krw=float(args.min_uptrend_expectancy_krw),
         min_risk_adjusted_score=float(args.min_risk_adjusted_score),
+        avg_total_trades=avg_total_trades,
+        min_avg_trades=float(args.min_avg_trades),
         peak_max_drawdown_pct=peak_max_drawdown_pct,
         max_drawdown_pct_limit=float(args.max_drawdown_pct),
     )
     if str(args.validation_profile) == "legacy_gate":
         overall_gate_pass = legacy_overall_gate_pass
     else:
-        overall_gate_pass = str(adaptive_verdict.get("verdict", "fail")) != "fail"
+        overall_gate_pass = str(adaptive_verdict.get("verdict", "fail")) == "pass"
 
     report = {
         "mode": "verification_adaptive",
@@ -718,6 +1047,7 @@ def main(argv=None) -> int:
         },
         "adaptive_validation": {
             "thresholds": {
+                "min_avg_trades": float(args.min_avg_trades),
                 "max_downtrend_loss_per_trade_krw": float(args.max_downtrend_loss_per_trade_krw),
                 "max_downtrend_trade_share": float(args.max_downtrend_trade_share),
                 "min_uptrend_expectancy_krw": float(args.min_uptrend_expectancy_krw),

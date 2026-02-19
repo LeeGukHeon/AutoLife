@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 import argparse
 import json
 import shutil
@@ -544,7 +544,7 @@ def has_higher_tf_companions(primary_path: Path) -> bool:
     if pivot <= 6:
         return False
     market_token = stem[6:pivot]
-    for tf in ("5m", "60m", "240m"):
+    for tf in ("5m", "15m", "60m", "240m"):
         if not list(primary_path.parent.glob(f"upbit_{market_token}_{tf}_*.csv")):
             return False
     return True

@@ -1,4 +1,4 @@
-﻿# File Usage Map
+# File Usage Map
 
 Last updated: 2026-02-19
 
@@ -54,6 +54,10 @@ This document classifies repository files by operational criticality so cleanup 
     - `include/common/StrategyEdgeStatsShared.h`
     - `src/common/StrategyEdgeStatsShared.cpp`
     - reason: strategy-level/regime-level edge stats aggregation + key builders are now single source of truth.
+  - shared runtime diagnostics helper (live/backtest common):
+    - `include/common/RuntimeDiagnosticsShared.h`
+    - `src/common/RuntimeDiagnosticsShared.cpp`
+    - reason: regime label + rejection taxonomy + quality bucket functions are centralized for runtime/report consistency.
   - runtime strategy registration mode:
     - runtime is hard-switched to foundation-only registration:
       - registered: `Foundation Adaptive Strategy`

@@ -1,4 +1,4 @@
-﻿# Adaptive Engine Rebuild Plan (2026-02-19)
+# Adaptive Engine Rebuild Plan (2026-02-19)
 
 ## Objective
 - Stop patch-style threshold tuning and rebuild around deterministic strategy/risk logic.
