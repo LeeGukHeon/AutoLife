@@ -1,6 +1,6 @@
-# File Usage Map
+﻿# File Usage Map
 
-Last updated: 2026-02-16
+Last updated: 2026-02-19
 
 ## Purpose
 This document classifies repository files by operational criticality so cleanup can be done without breaking runtime or CI flows.
@@ -24,50 +24,49 @@ This document classifies repository files by operational criticality so cleanup 
     - `include/core/adapters/PolicyLearningPlaneAdapter.h`
     - `src/core/adapters/ExecutionPlaneAdapter.cpp`
     - `src/core/adapters/PolicyLearningPlaneAdapter.cpp`
-  - B3 first replacement-ready unit:
-    - `include/v2/strategy/StrategyConfig.h`
-    - `src/v2/strategy/StrategyConfig.cpp`
-    - `include/common/Config.h` now reads strategy config types from v2 path
-  - B3 partial stage-1 moved unit replacement:
-    - `include/v2/strategy/BreakoutStrategy.h`
-    - `src/v2/strategy/BreakoutStrategy.cpp`
-    - runtime wiring switched in:
+  - active strategy runtime units (foundation-only):
+    - `include/strategy/FoundationAdaptiveStrategy.h`
+    - `src/strategy/FoundationAdaptiveStrategy.cpp`
+    - `include/strategy/FoundationRiskPipeline.h`
+    - `src/strategy/FoundationRiskPipeline.cpp`
+    - `include/strategy/IStrategy.h`
+    - `include/strategy/StrategyManager.h`
+    - `src/strategy/StrategyManager.cpp`
+    - `include/strategy/StrategyConfig.h` (config compatibility type-only header)
+  - runtime strategy registration mode:
+    - runtime is hard-switched to foundation-only registration:
+      - registered: `Foundation Adaptive Strategy`
+      - skipped: legacy strategy pack registration
+    - enforced in:
       - `src/runtime/LiveTradingRuntime.cpp`
       - `src/runtime/BacktestRuntime.cpp`
-  - B3 stage-1 expanded strategy replacements:
-    - `include/v2/strategy/IStrategy.h`
-    - `include/v2/strategy/StrategyManager.h`
-    - `include/v2/strategy/ScalpingStrategy.h`
-    - `include/v2/strategy/MomentumStrategy.h`
-    - `include/v2/strategy/MeanReversionStrategy.h`
-    - `include/v2/strategy/GridTradingStrategy.h`
-    - `src/v2/strategy/StrategyManager.cpp`
-    - `src/v2/strategy/ScalpingStrategy.cpp`
-    - `src/v2/strategy/MomentumStrategy.cpp`
-    - `src/v2/strategy/MeanReversionStrategy.cpp`
-    - `src/v2/strategy/GridTradingStrategy.cpp`
   - legacy strategy tree state after B3 stage-1:
     - `include/strategy/` stage-1 unit headers moved to `legacy_archive/include/strategy/`
     - `src/strategy/` active sources removed (moved to `legacy_archive/src/strategy/`)
-    - active strategy runtime path is `include/v2/strategy/*` + `src/v2/strategy/*`
+    - empty legacy directories (`include/strategy`, `src/strategy`) physically removed
+    - legacy v2 strategy units physically deleted from active tree:
+      - `include/strategy/ScalpingStrategy.h`
+      - `include/strategy/MomentumStrategy.h`
+      - `include/strategy/BreakoutStrategy.h`
+      - `include/strategy/MeanReversionStrategy.h`
+      - `include/strategy/GridTradingStrategy.h`
+      - `src/strategy/ScalpingStrategy.cpp`
+      - `src/strategy/MomentumStrategy.cpp`
+      - `src/strategy/BreakoutStrategy.cpp`
+      - `src/strategy/MeanReversionStrategy.cpp`
+      - `src/strategy/GridTradingStrategy.cpp`
+      - `src/strategy/StrategyConfig.cpp`
+    - active strategy runtime path is `include/strategy/*` + `src/strategy/*`
 
-### migration-bootstrap (v2)
-- Definition: new rewrite scaffold files for v2 migration.
-- Rule: keep isolated and additive; only wire through dedicated smoke targets until shadow parity is proven.
-- Current scope:
-  - `include/v2/**/*`
-  - `src/v2/**/*`
-  - `tests/TestV2DecisionKernel.cpp`
-  - `tests/TestV2ShadowParity.cpp`
-- Current build wiring:
-  - `AutoLifeV2KernelSmokeTest` (v2 `DecisionKernel` + smoke test)
-  - `AutoLifeV2EngineBacktestSmokeTest` (v2 engine/backtest scaffold smoke test)
-  - `AutoLifeV2CompileObjects` (v2 kernel + legacy bridge adapters compile-only guard)
-  - `AutoLifeV2ShadowParityTest` (v1 core policy adapter vs v2 policy adapter shadow parity)
-- Runtime shadow artifacts:
-  - `build/Release/logs/v2_shadow_policy_parity_backtest.jsonl` (BacktestEngine policy-input parity stream)
-  - `build/Release/logs/v2_shadow_policy_parity_live.jsonl` (LiveTradingRuntime executeSignals policy-input parity stream)
-  - `build/Release/logs/wave_b_readiness_report.json` (delete-batch readiness snapshot for B1/B2/B3)
+### migration-bootstrap (retired)
+- Status: retired on 2026-02-19.
+- Removed from active tree/build:
+  - `include/v2/`, `src/v2/` (already removed)
+  - all `autolife::v2` scaffold headers/sources under `include/core/*`, `src/core/*`, `include/engine/*`, `src/engine/*`, `include/backtest/*`, `src/backtest/*`
+  - legacy shadow adapter/test stack (`Legacy*PlaneAdapter`, `DecisionKernel`, `TestV2*`, `AutoLifeV2*` targets)
+- Current policy:
+  - no runtime/compile dependency on v2 shadow-parity path
+  - no `*V2` header/cpp files remain in `include/` or `src/`
 
 ### ops-critical
 - Definition: files invoked by CI gates, runbooks, or day-to-day operations.
@@ -82,14 +81,19 @@ This document classifies repository files by operational criticality so cleanup 
   - `scripts/validate_recovery_state.py`
   - `scripts/validate_recovery_e2e.py`
   - `scripts/validate_replay_reconcile_diff.py`
-  - `scripts/validate_v2_shadow_parity.py`
-  - `scripts/assess_wave_b_readiness.py`
   - `scripts/capture_baseline.py`
   - `scripts/validate_small_seed.py`
   - `README.md`
   - `docs/STRICT_GATE_RUNBOOK_2026-02-13.md`
   - `docs/TODO_STAGE15_EXECUTION_PLAN_2026-02-13.md`
+  - `docs/VALIDATION_METHOD_REVIEW_2026-02-19.md`
+  - `docs/VERIFICATION_RESET_BASELINE_2026-02-19.md`
+  - `docs/FOUNDATION_ENGINE_STRATEGY_REVIEW_2026-02-19.md`
+  - `docs/CHAPTER_CURRENT.md`
+  - `docs/CHAPTER_HISTORY_BRIEF.md`
   - `docs/TARGET_ARCHITECTURE.md`
+  - `scripts/verify_baseline.py`
+  - `scripts/run_verification.py`
 
 ### research-aux
 - Definition: experimental assets not required for normal build/runtime/CI gate path.
@@ -102,8 +106,12 @@ This document classifies repository files by operational criticality so cleanup 
   - retention override applied (`0 days`)
   - archived payload files were hard-deleted
   - `legacy_archive/manifest.json` is retained as audit metadata only
+- Docs archive state (2026-02-19):
+  - long-form execution logs and one-off script audits moved to `docs/archive/`
+  - active execution references are maintained only in root `docs/`
 
 ## Safety Policy
 - Default retention for moved files: 7 days (overridden to 0 days for current execution).
 - Deletion process: move -> verify -> final delete.
 - No immediate deletion of `runtime-critical` files.
+

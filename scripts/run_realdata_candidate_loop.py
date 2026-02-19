@@ -43,6 +43,52 @@ def build_realdata_file_path(output_dir: pathlib.Path, market: str, tf_unit: str
     return output_dir / f"upbit_{safe_market}_{tf_unit}m_{row_count}.csv"
 
 
+def is_upbit_primary_1m_csv(path_value: pathlib.Path) -> bool:
+    name = path_value.name.lower()
+    return path_value.suffix.lower() == ".csv" and name.startswith("upbit_") and "_1m_" in name
+
+
+def is_real_data_dir(path_value: pathlib.Path) -> bool:
+    if "backtest_real" in str(path_value).lower():
+        return True
+    # Fallback heuristic for custom real-data dirs that do not contain
+    # "backtest_real" in the path but keep Upbit primary naming.
+    try:
+        return any(path_value.glob("upbit_*_1m_*.csv"))
+    except Exception:
+        return False
+
+
+def _is_default_real_live_dir_shape(path_value: pathlib.Path) -> bool:
+    parts = [str(x).lower() for x in path_value.parts]
+    return len(parts) >= 2 and parts[-2:] == ["data", "backtest_real_live"]
+
+
+def build_real_data_roots(real_data_dir: pathlib.Path, real_live_data_dir: pathlib.Path) -> List[pathlib.Path]:
+    roots: List[pathlib.Path] = []
+    seen: set[str] = set()
+
+    def _append_unique(path_value: pathlib.Path) -> None:
+        resolved = path_value.resolve()
+        key = str(resolved).lower()
+        if key in seen:
+            return
+        seen.add(key)
+        roots.append(resolved)
+
+    _append_unique(real_data_dir)
+    _append_unique(real_live_data_dir)
+
+    # Live capture often runs with cwd=build/Release, which writes datasets under
+    # build/<Config>/data/backtest_real_live. Auto-include those roots for scan.
+    if _is_default_real_live_dir_shape(real_live_data_dir.resolve()):
+        repo_root = pathlib.Path(__file__).resolve().parents[1]
+        for cfg in ("Release", "Debug"):
+            _append_unique(repo_root / "build" / cfg / "data" / "backtest_real_live")
+
+    return roots
+
+
 def has_higher_tf_companions(primary_path: pathlib.Path) -> bool:
     if not primary_path.exists():
         return False
@@ -64,17 +110,24 @@ def get_dataset_files(dirs: List[pathlib.Path], only_real_data: bool, require_hi
     for d in dirs:
         if not d.exists():
             continue
-        is_real = "backtest_real" in str(d).lower()
-        if only_real_data and not is_real:
-            continue
+        is_real_dir = is_real_data_dir(d)
         for f in sorted(d.glob("*.csv"), key=lambda x: x.name.lower()):
-            if is_real:
-                if "_1m_" not in f.name.lower():
+            is_primary_1m = is_upbit_primary_1m_csv(f)
+            if only_real_data:
+                if not is_primary_1m:
                     continue
                 if require_higher_tf and not has_higher_tf_companions(f):
                     continue
-            elif only_real_data:
+                items.append(f.resolve())
                 continue
+
+            # In mixed mode, keep full non-real datasets as-is, while real-data
+            # dirs only contribute primary 1m datasets.
+            if is_real_dir:
+                if not is_primary_1m:
+                    continue
+                if require_higher_tf and not has_higher_tf_companions(f):
+                    continue
             items.append(f.resolve())
     uniq = sorted(set(items), key=lambda x: str(x).lower())
     return uniq
@@ -104,12 +157,13 @@ def resolve_explicit_dataset_files(
                     break
         if found is None:
             raise FileNotFoundError(f"Dataset not found: {token}")
-        is_real = "backtest_real" in str(found.parent).lower() or "_1m_" in found.name.lower()
+        is_primary_1m = is_upbit_primary_1m_csv(found)
+        is_real = is_real_data_dir(found.parent) or is_primary_1m
         if only_real_data and not is_real:
             continue
-        if is_real and "_1m_" not in found.name.lower():
+        if is_real and not is_primary_1m:
             continue
-        if require_higher_tf and is_real and not has_higher_tf_companions(found):
+        if require_higher_tf and is_primary_1m and not has_higher_tf_companions(found):
             raise RuntimeError(f"Missing higher TF companions for dataset: {found}")
         resolved.append(found)
     uniq = sorted(set(resolved), key=lambda x: str(x).lower())
@@ -162,6 +216,8 @@ def run_profitability_matrix(
     matrix_script: pathlib.Path,
     datasets: List[pathlib.Path],
     gate_min_avg_trades: int,
+    matrix_config_path: pathlib.Path,
+    matrix_source_config_path: pathlib.Path,
     output_matrix_csv: pathlib.Path,
     output_profile_csv: pathlib.Path,
     output_report_json: pathlib.Path,
@@ -177,9 +233,19 @@ def run_profitability_matrix(
     ensure_directory(output_profile_csv.parent)
     ensure_directory(output_report_json.parent)
 
+    requested_workers = max(1, int(matrix_max_workers))
+    if requested_workers > 1:
+        print(
+            "[RealDataLoop] Parallel matrix workers are disabled; "
+            "forcing --max-workers=1 for profitability matrix."
+        )
     matrix_cmd = [
         sys.executable,
         str(matrix_script),
+        "--config-path",
+        str(matrix_config_path),
+        "--source-config-path",
+        str(matrix_source_config_path),
         "--dataset-names",
         *[str(x) for x in datasets],
         "--exclude-low-trade-runs-for-gate",
@@ -194,14 +260,18 @@ def run_profitability_matrix(
         "--output-json",
         str(output_report_json),
         "--max-workers",
-        str(max(1, int(matrix_max_workers))),
+        "1",
         "--backtest-retry-count",
         str(max(1, int(matrix_backtest_retry_count))),
     ]
     if enable_hostility_adaptive_thresholds:
         matrix_cmd.append("--enable-hostility-adaptive-thresholds")
+    else:
+        matrix_cmd.append("--disable-hostility-adaptive-thresholds")
     if enable_hostility_adaptive_trades_only:
         matrix_cmd.append("--enable-hostility-adaptive-trades-only")
+    else:
+        matrix_cmd.append("--disable-hostility-adaptive-trades-only")
     if require_higher_tf_companions:
         matrix_cmd.append("--require-higher-tf-companions")
     if enable_adaptive_state_io:
@@ -253,10 +323,10 @@ def print_report_snapshot(prefix: str, report: Dict[str, Any]) -> None:
             f"[RealDataLoop] {prefix}.core_full.entry_rejection_total="
             f"{core_full.get('entry_rejection_total')}"
         )
+        risk_breakdown = parse_reason_counts_json(core_full.get("entry_risk_gate_breakdown_json"))
         top_risk_reason = str(core_full.get("top_entry_risk_gate_component_reason") or "")
         top_risk_count = int(core_full.get("top_entry_risk_gate_component_count") or 0)
         if not top_risk_reason:
-            risk_breakdown = parse_reason_counts_json(core_full.get("entry_risk_gate_breakdown_json"))
             risk_components = {
                 k: int(v)
                 for k, v in risk_breakdown.items()
@@ -270,6 +340,43 @@ def print_report_snapshot(prefix: str, report: Dict[str, Any]) -> None:
                     "blocked_risk_gate_entry_quality_edge_adaptive",
                     "blocked_risk_gate_entry_quality_rr_edge",
                     "blocked_risk_gate_entry_quality_rr_edge_adaptive",
+                    "strategy_ev_pre_cat_observed",
+                    "strategy_ev_pre_cat_recovery_quality_context",
+                    "strategy_ev_pre_cat_recovery_evidence_any",
+                    "strategy_ev_pre_cat_recovery_evidence_relaxed_any",
+                    "strategy_ev_pre_cat_recovery_evidence_relaxed_recent_regime",
+                    "strategy_ev_pre_cat_recovery_evidence_relaxed_full_history",
+                    "strategy_ev_pre_cat_recovery_evidence_for_soften",
+                    "strategy_ev_pre_cat_recovery_evidence_bridge",
+                    "strategy_ev_pre_cat_recovery_evidence_bridge_surrogate",
+                    "strategy_ev_pre_cat_recovery_evidence_hysteresis_override",
+                    "strategy_ev_pre_cat_quality_hysteresis_override",
+                    "strategy_ev_pre_cat_quality_context_relaxed_overlap",
+                    "strategy_ev_pre_cat_quality_fail_regime",
+                    "strategy_ev_pre_cat_quality_fail_strength",
+                    "strategy_ev_pre_cat_quality_fail_expected_value",
+                    "strategy_ev_pre_cat_quality_fail_liquidity",
+                    "strategy_ev_pre_cat_soften_ready",
+                    "strategy_ev_pre_cat_soften_candidate_quality_and_evidence",
+                    "strategy_ev_pre_cat_soften_candidate_non_severe",
+                    "strategy_ev_pre_cat_soften_candidate_non_hostile",
+                    "strategy_ev_pre_cat_soften_candidate_rr_ok",
+                    "strategy_ev_pre_cat_severe_legacy_hits",
+                    "strategy_ev_pre_cat_severe_composite_hits",
+                    "strategy_ev_pre_cat_severe_composite_catastrophic_hits",
+                    "strategy_ev_pre_cat_severe_composite_pressure_axis_hits",
+                    "strategy_ev_pre_cat_severe_composite_pressure_only_hits",
+                    "strategy_ev_pre_cat_contextual_severe_downgrade_hits",
+                    "strategy_ev_pre_cat_severe_active_hits",
+                    "strategy_ev_pre_cat_softened_contextual",
+                    "strategy_ev_pre_cat_softened_override",
+                    "strategy_ev_pre_cat_softened_no_soft_quality_relief",
+                    "strategy_ev_pre_cat_softened_candidate_rr_failsafe",
+                    "strategy_ev_pre_cat_softened_pressure_rebound_relief",
+                    "strategy_ev_pre_cat_negative_history_quarantine_set",
+                    "strategy_ev_pre_cat_negative_history_quarantine_active",
+                    "strategy_ev_pre_cat_blocked_severe_sync",
+                    "strategy_ev_pre_cat_blocked_no_soft_path",
                 }
             }
             if risk_components:
@@ -282,6 +389,65 @@ def print_report_snapshot(prefix: str, report: Dict[str, Any]) -> None:
                 f"[RealDataLoop] {prefix}.core_full.risk_gate_component_top="
                 f"{top_risk_reason}:{top_risk_count}"
             )
+        if risk_breakdown:
+            strategy_ev_detail_keys = [
+                "blocked_risk_gate_strategy_ev_pre_catastrophic",
+                "blocked_risk_gate_strategy_ev_severe_threshold",
+                "blocked_risk_gate_strategy_ev_catastrophic_history",
+                "blocked_risk_gate_strategy_ev_loss_asymmetry",
+                "blocked_risk_gate_strategy_ev_unknown",
+                "strategy_ev_pre_cat_observed",
+                "strategy_ev_pre_cat_recovery_quality_context",
+                "strategy_ev_pre_cat_recovery_evidence_any",
+                "strategy_ev_pre_cat_recovery_evidence_relaxed_any",
+                "strategy_ev_pre_cat_recovery_evidence_relaxed_recent_regime",
+                "strategy_ev_pre_cat_recovery_evidence_relaxed_full_history",
+                "strategy_ev_pre_cat_recovery_evidence_for_soften",
+                "strategy_ev_pre_cat_recovery_evidence_bridge",
+                "strategy_ev_pre_cat_recovery_evidence_bridge_surrogate",
+                "strategy_ev_pre_cat_recovery_evidence_hysteresis_override",
+                "strategy_ev_pre_cat_quality_hysteresis_override",
+                "strategy_ev_pre_cat_quality_context_relaxed_overlap",
+                "strategy_ev_pre_cat_quality_fail_regime",
+                "strategy_ev_pre_cat_quality_fail_strength",
+                "strategy_ev_pre_cat_quality_fail_expected_value",
+                "strategy_ev_pre_cat_quality_fail_liquidity",
+                "strategy_ev_pre_cat_soften_ready",
+                "strategy_ev_pre_cat_soften_candidate_quality_and_evidence",
+                "strategy_ev_pre_cat_soften_candidate_non_severe",
+                "strategy_ev_pre_cat_soften_candidate_non_hostile",
+                "strategy_ev_pre_cat_soften_candidate_rr_ok",
+                "strategy_ev_pre_cat_severe_legacy_hits",
+                "strategy_ev_pre_cat_severe_composite_hits",
+                "strategy_ev_pre_cat_severe_composite_catastrophic_hits",
+                "strategy_ev_pre_cat_severe_composite_pressure_axis_hits",
+                "strategy_ev_pre_cat_severe_composite_pressure_only_hits",
+                "strategy_ev_pre_cat_contextual_severe_downgrade_hits",
+                "strategy_ev_pre_cat_severe_active_hits",
+                "strategy_ev_pre_cat_softened_contextual",
+                "strategy_ev_pre_cat_softened_override",
+                "strategy_ev_pre_cat_softened_no_soft_quality_relief",
+                "strategy_ev_pre_cat_softened_candidate_rr_failsafe",
+                "strategy_ev_pre_cat_softened_pressure_rebound_relief",
+                "strategy_ev_pre_cat_negative_history_quarantine_set",
+                "strategy_ev_pre_cat_negative_history_quarantine_active",
+                "strategy_ev_pre_cat_blocked_severe_sync",
+                "strategy_ev_pre_cat_blocked_no_soft_path",
+            ]
+            strategy_ev_total = int(risk_breakdown.get("blocked_risk_gate_strategy_ev", 0) or 0)
+            strategy_ev_details = {
+                key: int(risk_breakdown.get(key, 0) or 0)
+                for key in strategy_ev_detail_keys
+            }
+            if strategy_ev_total > 0 and strategy_ev_details:
+                detail_str = ", ".join(
+                    f"{key}:{value}"
+                    for key, value in sorted(
+                        strategy_ev_details.items(),
+                        key=lambda kv: kv[0],
+                    )
+                )
+                print(f"[RealDataLoop] {prefix}.core_full.strategy_ev_detail={detail_str}")
 
     threshold_info = report.get("thresholds", {})
     hostility_bundle = threshold_info.get("hostility_adaptive", {})
@@ -341,6 +507,15 @@ def main(argv=None) -> int:
         default=r".\scripts\analyze_loss_contributors.py",
     )
     parser.add_argument("--real-data-dir", "-RealDataDir", default=r".\data\backtest_real")
+    parser.add_argument(
+        "--real-live-data-dir",
+        "-RealLiveDataDir",
+        default=r".\data\backtest_real_live",
+        help=(
+            "Live-captured dataset root. If default path shape is used, "
+            "build/Release|Debug/data/backtest_real_live are auto-included for scan fallback."
+        ),
+    )
     parser.add_argument("--backtest-data-dir", "-BacktestDataDir", default=r".\data\backtest")
     parser.add_argument("--curated-data-dir", "-CuratedDataDir", default=r".\data\backtest_curated")
     parser.add_argument(
@@ -362,6 +537,20 @@ def main(argv=None) -> int:
     parser.add_argument("--output-matrix-csv", "-OutputMatrixCsv", default=r".\build\Release\logs\profitability_matrix_realdata.csv")
     parser.add_argument("--output-profile-csv", "-OutputProfileCsv", default=r".\build\Release\logs\profitability_profile_summary_realdata.csv")
     parser.add_argument("--output-report-json", "-OutputReportJson", default=r".\build\Release\logs\profitability_gate_report_realdata.json")
+    parser.add_argument(
+        "--matrix-config-path",
+        "-MatrixConfigPath",
+        default=r".\build\Release\config\config.json",
+    )
+    parser.add_argument(
+        "--matrix-source-config-path",
+        "-MatrixSourceConfigPath",
+        default="",
+        help=(
+            "Optional source config path for profitability matrix. "
+            "When empty, --matrix-config-path is used."
+        ),
+    )
     parser.add_argument(
         "--entry-rejection-output-json",
         "-EntryRejectionOutputJson",
@@ -404,7 +593,129 @@ def main(argv=None) -> int:
     )
     parser.add_argument("--loss-contributor-max-workers", "-LossContributorMaxWorkers", type=int, default=1)
     parser.add_argument("--gate-min-avg-trades", "-GateMinAvgTrades", type=int, default=8)
-    parser.add_argument("--matrix-max-workers", "-MatrixMaxWorkers", type=int, default=1)
+    parser.add_argument(
+        "--tune-selector-mode",
+        "-TuneSelectorMode",
+        choices=["objective", "pareto_objective"],
+        default="pareto_objective",
+        help="Selector mode forwarded to tune_candidate_gate_trade_density.py",
+    )
+    parser.add_argument(
+        "--tune-selector-enable-two-stage-gate",
+        "-TuneSelectorEnableTwoStageGate",
+        dest="tune_selector_enable_two_stage_gate",
+        action="store_true",
+        default=True,
+        help="Enable two-stage selector gate in tuning step.",
+    )
+    parser.add_argument(
+        "--tune-disable-selector-enable-two-stage-gate",
+        dest="tune_selector_enable_two_stage_gate",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--tune-selector-two-stage-pre-min-avg-trades",
+        "-TuneSelectorTwoStagePreMinAvgTrades",
+        type=float,
+        default=8.0,
+    )
+    parser.add_argument(
+        "--tune-selector-two-stage-pre-min-win-rate-pct",
+        "-TuneSelectorTwoStagePreMinWinRatePct",
+        type=float,
+        default=39.0,
+    )
+    parser.add_argument(
+        "--tune-selector-two-stage-pre-max-market-loss-top-share-pct",
+        "-TuneSelectorTwoStagePreMaxMarketLossTopSharePct",
+        type=float,
+        default=33.0,
+    )
+    parser.add_argument(
+        "--tune-selector-two-stage-pre-max-market-loss-hhi",
+        "-TuneSelectorTwoStagePreMaxMarketLossHhi",
+        type=float,
+        default=0.19,
+    )
+    parser.add_argument(
+        "--tune-selector-two-stage-pre-require-gate-trades-pass",
+        "-TuneSelectorTwoStagePreRequireGateTradesPass",
+        dest="tune_selector_two_stage_pre_require_gate_trades_pass",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--tune-selector-two-stage-pre-allow-gate-trades-fail",
+        dest="tune_selector_two_stage_pre_require_gate_trades_pass",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--tune-selector-two-stage-profit-min-profit-factor",
+        "-TuneSelectorTwoStageProfitMinProfitFactor",
+        type=float,
+        default=0.41,
+    )
+    parser.add_argument(
+        "--tune-selector-two-stage-profit-min-expectancy-krw",
+        "-TuneSelectorTwoStageProfitMinExpectancyKrw",
+        type=float,
+        default=-10.0,
+    )
+    parser.add_argument(
+        "--tune-selector-two-stage-profit-min-win-rate-pct",
+        "-TuneSelectorTwoStageProfitMinWinRatePct",
+        type=float,
+        default=40.0,
+    )
+    parser.add_argument(
+        "--tune-selector-two-stage-allow-pre-gate-fallback",
+        "-TuneSelectorTwoStageAllowPreGateFallback",
+        dest="tune_selector_two_stage_allow_pre_gate_fallback",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--tune-selector-two-stage-disable-pre-gate-fallback",
+        dest="tune_selector_two_stage_allow_pre_gate_fallback",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--tune-selector-enable-veto-ensemble",
+        "-TuneSelectorEnableVetoEnsemble",
+        dest="tune_selector_enable_veto_ensemble",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--tune-disable-selector-enable-veto-ensemble",
+        dest="tune_selector_enable_veto_ensemble",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--tune-selector-veto-max-market-loss-top-share-pct",
+        "-TuneSelectorVetoMaxMarketLossTopSharePct",
+        type=float,
+        default=33.0,
+    )
+    parser.add_argument(
+        "--tune-selector-veto-max-market-loss-hhi",
+        "-TuneSelectorVetoMaxMarketLossHhi",
+        type=float,
+        default=0.19,
+    )
+    parser.add_argument(
+        "--tune-selector-veto-max-avg-total-trades",
+        "-TuneSelectorVetoMaxAvgTotalTrades",
+        type=float,
+        default=150.0,
+    )
+    parser.add_argument(
+        "--matrix-max-workers",
+        "-MatrixMaxWorkers",
+        type=int,
+        default=1,
+        help="Deprecated. Validation is forced to sequential execution.",
+    )
     parser.add_argument("--matrix-backtest-retry-count", "-MatrixBacktestRetryCount", type=int, default=2)
     parser.add_argument(
         "--enable-hostility-adaptive-thresholds",
@@ -480,6 +791,12 @@ def main(argv=None) -> int:
     parser.add_argument("--verification-lock-timeout-sec", "-VerificationLockTimeoutSec", type=int, default=1800)
     parser.add_argument("--verification-lock-stale-sec", "-VerificationLockStaleSec", type=int, default=14400)
     args = parser.parse_args(argv)
+    if int(getattr(args, "matrix_max_workers", 1)) > 1:
+        print(
+            "[RealDataLoop] Parallel matrix workers are disabled; "
+            "forcing --matrix-max-workers=1."
+        )
+    args.matrix_max_workers = 1
 
     fetch_script = pathlib.Path(args.fetch_script).resolve()
     matrix_script = pathlib.Path(args.matrix_script).resolve()
@@ -489,11 +806,26 @@ def main(argv=None) -> int:
     strategy_rejection_taxonomy_script = pathlib.Path(args.strategy_rejection_taxonomy_script).resolve()
     loss_contributor_script = pathlib.Path(args.loss_contributor_script).resolve()
     real_data_dir = pathlib.Path(args.real_data_dir).resolve()
+    real_live_data_dir = pathlib.Path(args.real_live_data_dir).resolve()
     backtest_data_dir = pathlib.Path(args.backtest_data_dir).resolve()
     curated_data_dir = pathlib.Path(args.curated_data_dir).resolve()
     output_matrix_csv = pathlib.Path(args.output_matrix_csv).resolve()
     output_profile_csv = pathlib.Path(args.output_profile_csv).resolve()
     output_report_json = pathlib.Path(args.output_report_json).resolve()
+    matrix_config_path = pathlib.Path(args.matrix_config_path).resolve()
+    matrix_source_config_path = (
+        pathlib.Path(args.matrix_source_config_path).resolve()
+        if str(args.matrix_source_config_path).strip()
+        else matrix_config_path
+    )
+    if not matrix_source_config_path.exists():
+        fallback_source_config = (pathlib.Path.cwd() / "config" / "config.json").resolve()
+        if fallback_source_config.exists():
+            print(
+                "[RealDataLoop] matrix source config was missing; "
+                f"falling back to {fallback_source_config}"
+            )
+            matrix_source_config_path = fallback_source_config
     entry_rejection_output_json = pathlib.Path(args.entry_rejection_output_json).resolve()
     entry_rejection_profile_csv = pathlib.Path(args.entry_rejection_profile_csv).resolve()
     entry_rejection_dataset_csv = pathlib.Path(args.entry_rejection_dataset_csv).resolve()
@@ -504,6 +836,7 @@ def main(argv=None) -> int:
     loss_contributor_strategy_csv = pathlib.Path(args.loss_contributor_strategy_csv).resolve()
 
     ensure_directory(real_data_dir)
+    real_dataset_dirs = build_real_data_roots(real_data_dir, real_live_data_dir)
 
     if not args.skip_fetch:
         for market in args.markets:
@@ -526,7 +859,7 @@ def main(argv=None) -> int:
                 print(f"[RealDataLoop] Fetching market={market}, unit=240m, candles={args.candles4h}")
                 run_fetch_script(fetch_script, market, "240", args.candles4h, args.chunk_size, args.sleep_ms, target_4h)
 
-    dataset_dirs = [real_data_dir] if args.real_data_only else [backtest_data_dir, curated_data_dir, real_data_dir]
+    dataset_dirs = real_dataset_dirs[:] if args.real_data_only else [backtest_data_dir, curated_data_dir, *real_dataset_dirs]
     if args.dataset_names:
         datasets = resolve_explicit_dataset_files(
             dataset_names=list(args.dataset_names),
@@ -541,7 +874,8 @@ def main(argv=None) -> int:
 
     print(
         f"[RealDataLoop] dataset_mode={'realdata_only' if args.real_data_only else 'mixed'}, "
-        f"require_higher_tf={bool(args.require_higher_tf_companions)}, dataset_count={len(datasets)}"
+        f"require_higher_tf={bool(args.require_higher_tf_companions)}, dataset_count={len(datasets)}, "
+        f"real_dirs={[str(x) for x in real_dataset_dirs]}"
     )
 
     def run_verification_pipeline() -> None:
@@ -560,112 +894,168 @@ def main(argv=None) -> int:
                 f"fail_count={summary.get('invariant_fail_count')}"
             )
 
-        print(f"[RealDataLoop] Running profitability matrix with datasets={len(datasets)}")
-        if args.run_both_hostility_modes:
+        def run_matrix_and_analyses(stage_label: str) -> Dict[str, Any]:
             print(
-                "[RealDataLoop] run_both_hostility_modes is deprecated. "
-                "Using a single hostility-driven gate run."
+                f"[RealDataLoop] Running profitability matrix with datasets={len(datasets)} "
+                f"(stage={stage_label})"
             )
-
-        remove_deprecated_variant_artifacts(output_matrix_csv, output_profile_csv, output_report_json)
-
-        selected_adaptive = bool(args.enable_hostility_adaptive_thresholds)
-        selected_trades_only = (not selected_adaptive) and bool(args.enable_hostility_adaptive_trades_only)
-        report = run_profitability_matrix(
-            matrix_script=matrix_script,
-            datasets=datasets,
-            gate_min_avg_trades=args.gate_min_avg_trades,
-            output_matrix_csv=output_matrix_csv,
-            output_profile_csv=output_profile_csv,
-            output_report_json=output_report_json,
-            matrix_max_workers=args.matrix_max_workers,
-            matrix_backtest_retry_count=args.matrix_backtest_retry_count,
-            enable_hostility_adaptive_thresholds=bool(args.enable_hostility_adaptive_thresholds),
-            enable_hostility_adaptive_trades_only=selected_trades_only,
-            require_higher_tf_companions=bool(args.require_higher_tf_companions),
-            enable_adaptive_state_io=bool(args.enable_adaptive_state_io),
-            skip_core_vs_legacy_gate=bool(args.skip_core_vs_legacy_gate),
-        )
-        print_report_snapshot("selected", report)
-
-        if not args.skip_entry_rejection_analysis:
-            print("[RealDataLoop] Analyzing entry rejection reasons from matrix report")
-            rejection_cmd = [
-                sys.executable,
-                str(entry_rejection_script),
-                "--report-json",
-                str(output_report_json),
-                "--output-json",
-                str(entry_rejection_output_json),
-                "--output-profile-csv",
-                str(entry_rejection_profile_csv),
-                "--output-dataset-csv",
-                str(entry_rejection_dataset_csv),
-            ]
-            rej_proc = subprocess.run(rejection_cmd)
-            if rej_proc.returncode != 0:
-                raise RuntimeError(f"analyze_entry_rejections.py failed (exit={rej_proc.returncode})")
-
-        if not args.skip_strategy_rejection_taxonomy:
-            if args.skip_entry_rejection_analysis and not entry_rejection_output_json.exists():
-                raise RuntimeError(
-                    "strategy rejection taxonomy requested but entry rejection summary is missing: "
-                    f"{entry_rejection_output_json}"
-                )
-            taxonomy_cmd = [
-                sys.executable,
-                str(strategy_rejection_taxonomy_script),
-                "--entry-rejection-summary-json",
-                str(entry_rejection_output_json),
-                "--output-json",
-                str(strategy_rejection_taxonomy_output_json),
-                "--live-signal-funnel-taxonomy-json",
-                str(live_signal_funnel_taxonomy_json),
-            ]
-            tax_proc = subprocess.run(taxonomy_cmd)
-            if tax_proc.returncode != 0:
-                raise RuntimeError(
-                    f"generate_strategy_rejection_taxonomy_report.py failed (exit={tax_proc.returncode})"
+            if args.run_both_hostility_modes:
+                print(
+                    "[RealDataLoop] run_both_hostility_modes is deprecated. "
+                    "Using a single hostility-driven gate run."
                 )
 
-        if not args.skip_loss_contributor_analysis:
-            print("[RealDataLoop] Analyzing loss contributors by market/strategy")
-            loss_cmd = [
-                sys.executable,
-                str(loss_contributor_script),
-                "--gate-report-json",
-                str(output_report_json),
-                "--data-dirs",
-                str(backtest_data_dir),
-                str(curated_data_dir),
-                str(real_data_dir),
-                "--output-market-csv",
-                str(loss_contributor_market_csv),
-                "--output-strategy-csv",
-                str(loss_contributor_strategy_csv),
-                "--max-workers",
-                str(max(1, int(args.loss_contributor_max_workers))),
-            ]
-            loss_proc = subprocess.run(loss_cmd)
-            if loss_proc.returncode != 0:
-                raise RuntimeError(f"analyze_loss_contributors.py failed (exit={loss_proc.returncode})")
+            remove_deprecated_variant_artifacts(output_matrix_csv, output_profile_csv, output_report_json)
+
+            selected_adaptive = bool(args.enable_hostility_adaptive_thresholds)
+            selected_trades_only = (not selected_adaptive) and bool(args.enable_hostility_adaptive_trades_only)
+            report = run_profitability_matrix(
+                matrix_script=matrix_script,
+                datasets=datasets,
+                gate_min_avg_trades=args.gate_min_avg_trades,
+                matrix_config_path=matrix_config_path,
+                matrix_source_config_path=matrix_source_config_path,
+                output_matrix_csv=output_matrix_csv,
+                output_profile_csv=output_profile_csv,
+                output_report_json=output_report_json,
+                matrix_max_workers=args.matrix_max_workers,
+                matrix_backtest_retry_count=args.matrix_backtest_retry_count,
+                enable_hostility_adaptive_thresholds=bool(args.enable_hostility_adaptive_thresholds),
+                enable_hostility_adaptive_trades_only=selected_trades_only,
+                require_higher_tf_companions=bool(args.require_higher_tf_companions),
+                enable_adaptive_state_io=bool(args.enable_adaptive_state_io),
+                skip_core_vs_legacy_gate=bool(args.skip_core_vs_legacy_gate),
+            )
+            print_report_snapshot(stage_label, report)
+
+            if not args.skip_entry_rejection_analysis:
+                print("[RealDataLoop] Analyzing entry rejection reasons from matrix report")
+                rejection_cmd = [
+                    sys.executable,
+                    str(entry_rejection_script),
+                    "--report-json",
+                    str(output_report_json),
+                    "--output-json",
+                    str(entry_rejection_output_json),
+                    "--output-profile-csv",
+                    str(entry_rejection_profile_csv),
+                    "--output-dataset-csv",
+                    str(entry_rejection_dataset_csv),
+                ]
+                rej_proc = subprocess.run(rejection_cmd)
+                if rej_proc.returncode != 0:
+                    raise RuntimeError(f"analyze_entry_rejections.py failed (exit={rej_proc.returncode})")
+
+            if not args.skip_strategy_rejection_taxonomy:
+                if args.skip_entry_rejection_analysis and not entry_rejection_output_json.exists():
+                    raise RuntimeError(
+                        "strategy rejection taxonomy requested but entry rejection summary is missing: "
+                        f"{entry_rejection_output_json}"
+                    )
+                taxonomy_cmd = [
+                    sys.executable,
+                    str(strategy_rejection_taxonomy_script),
+                    "--entry-rejection-summary-json",
+                    str(entry_rejection_output_json),
+                    "--output-json",
+                    str(strategy_rejection_taxonomy_output_json),
+                    "--live-signal-funnel-taxonomy-json",
+                    str(live_signal_funnel_taxonomy_json),
+                ]
+                tax_proc = subprocess.run(taxonomy_cmd)
+                if tax_proc.returncode != 0:
+                    raise RuntimeError(
+                        f"generate_strategy_rejection_taxonomy_report.py failed (exit={tax_proc.returncode})"
+                    )
+
+            if not args.skip_loss_contributor_analysis:
+                print("[RealDataLoop] Analyzing loss contributors by market/strategy")
+                loss_cmd = [
+                    sys.executable,
+                    str(loss_contributor_script),
+                    "--gate-report-json",
+                    str(output_report_json),
+                    "--data-dirs",
+                    str(backtest_data_dir),
+                    str(curated_data_dir),
+                    *[str(x) for x in real_dataset_dirs],
+                    "--output-market-csv",
+                    str(loss_contributor_market_csv),
+                    "--output-strategy-csv",
+                    str(loss_contributor_strategy_csv),
+                    "--max-workers",
+                    str(max(1, int(args.loss_contributor_max_workers))),
+                ]
+                loss_proc = subprocess.run(loss_cmd)
+                if loss_proc.returncode != 0:
+                    raise RuntimeError(f"analyze_loss_contributors.py failed (exit={loss_proc.returncode})")
+
+            return report
+
+        run_matrix_and_analyses("pre_tune")
 
         if not args.skip_tune:
             print("[RealDataLoop] Running candidate trade-density tuning with real datasets included")
+            print(
+                "[RealDataLoop] tune_selector="
+                f"mode:{args.tune_selector_mode}, "
+                f"two_stage:{bool(args.tune_selector_enable_two_stage_gate)}, "
+                f"veto:{bool(args.tune_selector_enable_veto_ensemble)}"
+            )
             tune_cmd = [
                 sys.executable,
                 str(tune_script),
+                "--build-config-path",
+                str(matrix_config_path),
                 "--data-dir",
                 str(backtest_data_dir),
                 "--curated-data-dir",
                 str(curated_data_dir),
                 "--extra-data-dirs",
-                str(real_data_dir),
+                *[str(x) for x in real_dataset_dirs],
                 "--matrix-max-workers",
                 str(max(1, int(args.matrix_max_workers))),
                 "--matrix-backtest-retry-count",
                 str(max(1, int(args.matrix_backtest_retry_count))),
+                "--selector-mode",
+                str(args.tune_selector_mode),
+                "--selector-two-stage-pre-min-avg-trades",
+                str(float(args.tune_selector_two_stage_pre_min_avg_trades)),
+                "--selector-two-stage-pre-min-win-rate-pct",
+                str(float(args.tune_selector_two_stage_pre_min_win_rate_pct)),
+                "--selector-two-stage-pre-max-market-loss-top-share-pct",
+                str(float(args.tune_selector_two_stage_pre_max_market_loss_top_share_pct)),
+                "--selector-two-stage-pre-max-market-loss-hhi",
+                str(float(args.tune_selector_two_stage_pre_max_market_loss_hhi)),
+                "--selector-two-stage-profit-min-profit-factor",
+                str(float(args.tune_selector_two_stage_profit_min_profit_factor)),
+                "--selector-two-stage-profit-min-expectancy-krw",
+                str(float(args.tune_selector_two_stage_profit_min_expectancy_krw)),
+                "--selector-two-stage-profit-min-win-rate-pct",
+                str(float(args.tune_selector_two_stage_profit_min_win_rate_pct)),
+                "--selector-veto-max-market-loss-top-share-pct",
+                str(float(args.tune_selector_veto_max_market_loss_top_share_pct)),
+                "--selector-veto-max-market-loss-hhi",
+                str(float(args.tune_selector_veto_max_market_loss_hhi)),
+                "--selector-veto-max-avg-total-trades",
+                str(float(args.tune_selector_veto_max_avg_total_trades)),
             ]
+            if args.tune_selector_enable_two_stage_gate:
+                tune_cmd.append("--selector-enable-two-stage-gate")
+            else:
+                tune_cmd.append("--disable-selector-enable-two-stage-gate")
+            if args.tune_selector_two_stage_pre_require_gate_trades_pass:
+                tune_cmd.append("--selector-two-stage-pre-require-gate-trades-pass")
+            else:
+                tune_cmd.append("--disable-selector-two-stage-pre-require-gate-trades-pass")
+            if args.tune_selector_two_stage_allow_pre_gate_fallback:
+                tune_cmd.append("--selector-two-stage-allow-pre-gate-fallback")
+            else:
+                tune_cmd.append("--disable-selector-two-stage-allow-pre-gate-fallback")
+            if args.tune_selector_enable_veto_ensemble:
+                tune_cmd.append("--selector-enable-veto-ensemble")
+            else:
+                tune_cmd.append("--disable-selector-enable-veto-ensemble")
             if args.real_data_only:
                 tune_cmd.append("--real-data-only")
             if args.dataset_names:
@@ -687,6 +1077,8 @@ def main(argv=None) -> int:
             tune_proc = subprocess.run(tune_cmd)
             if tune_proc.returncode != 0:
                 raise RuntimeError(f"tune_candidate_gate_trade_density.py failed (exit={tune_proc.returncode})")
+            print("[RealDataLoop] Re-running matrix after tuning for final gate artifacts")
+            run_matrix_and_analyses("post_tune")
 
     lock_path = pathlib.Path(args.verification_lock_path).resolve()
     with verification_lock(

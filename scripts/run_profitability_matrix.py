@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import argparse
-import concurrent.futures
 import csv
 import json
 import math
@@ -78,6 +77,7 @@ def invoke_backtest_json(
             encoding="utf-8",
             errors="ignore",
             env=env,
+            cwd=str(exe_file.parent),
         )
         lines: List[str] = []
         if proc.stdout:
@@ -144,9 +144,150 @@ def run_profile_backtests(
         win_rate_pct = round(float(result.get("win_rate", 0.0)) * 100.0, 4)
         rejection_counts = normalize_reason_counts(result.get("entry_rejection_reason_counts", {}))
         entry_funnel = result.get("entry_funnel") if isinstance(result.get("entry_funnel"), dict) else {}
+        pre_cat_feature_snapshot = (
+            result.get("pre_cat_feature_snapshot")
+            if isinstance(result.get("pre_cat_feature_snapshot"), dict)
+            else {}
+        )
+
+        def pre_cat_branch(name: str) -> Dict[str, Any]:
+            branch = pre_cat_feature_snapshot.get(name)
+            return branch if isinstance(branch, dict) else {}
+
+        observed_branch = pre_cat_branch("observed")
+        softened_contextual_branch = pre_cat_branch("softened_contextual")
+        softened_override_branch = pre_cat_branch("softened_override")
+        blocked_severe_sync_branch = pre_cat_branch("blocked_severe_sync")
+        blocked_no_soft_path_branch = pre_cat_branch("blocked_no_soft_path")
         risk_gate_breakdown = {
             "blocked_risk_gate_total": int(entry_funnel.get("blocked_risk_gate", 0) or 0),
             "blocked_risk_gate_strategy_ev": int(entry_funnel.get("blocked_risk_gate_strategy_ev", 0) or 0),
+            "blocked_risk_gate_strategy_ev_pre_catastrophic": int(
+                entry_funnel.get("blocked_risk_gate_strategy_ev_pre_catastrophic", 0) or 0
+            ),
+            "blocked_risk_gate_strategy_ev_severe_threshold": int(
+                entry_funnel.get("blocked_risk_gate_strategy_ev_severe_threshold", 0) or 0
+            ),
+            "blocked_risk_gate_strategy_ev_catastrophic_history": int(
+                entry_funnel.get("blocked_risk_gate_strategy_ev_catastrophic_history", 0) or 0
+            ),
+            "blocked_risk_gate_strategy_ev_loss_asymmetry": int(
+                entry_funnel.get("blocked_risk_gate_strategy_ev_loss_asymmetry", 0) or 0
+            ),
+            "blocked_risk_gate_strategy_ev_unknown": int(
+                entry_funnel.get("blocked_risk_gate_strategy_ev_unknown", 0) or 0
+            ),
+            "strategy_ev_pre_cat_observed": int(
+                entry_funnel.get("strategy_ev_pre_cat_observed", 0) or 0
+            ),
+            "strategy_ev_pre_cat_recovery_quality_context": int(
+                entry_funnel.get("strategy_ev_pre_cat_recovery_quality_context", 0) or 0
+            ),
+            "strategy_ev_pre_cat_recovery_evidence_any": int(
+                entry_funnel.get("strategy_ev_pre_cat_recovery_evidence_any", 0) or 0
+            ),
+            "strategy_ev_pre_cat_recovery_evidence_relaxed_any": int(
+                entry_funnel.get("strategy_ev_pre_cat_recovery_evidence_relaxed_any", 0) or 0
+            ),
+            "strategy_ev_pre_cat_recovery_evidence_relaxed_recent_regime": int(
+                entry_funnel.get("strategy_ev_pre_cat_recovery_evidence_relaxed_recent_regime", 0) or 0
+            ),
+            "strategy_ev_pre_cat_recovery_evidence_relaxed_full_history": int(
+                entry_funnel.get("strategy_ev_pre_cat_recovery_evidence_relaxed_full_history", 0) or 0
+            ),
+            "strategy_ev_pre_cat_recovery_evidence_for_soften": int(
+                entry_funnel.get("strategy_ev_pre_cat_recovery_evidence_for_soften", 0) or 0
+            ),
+            "strategy_ev_pre_cat_recovery_evidence_bridge": int(
+                entry_funnel.get("strategy_ev_pre_cat_recovery_evidence_bridge", 0) or 0
+            ),
+            "strategy_ev_pre_cat_recovery_evidence_bridge_surrogate": int(
+                entry_funnel.get("strategy_ev_pre_cat_recovery_evidence_bridge_surrogate", 0) or 0
+            ),
+            "strategy_ev_pre_cat_recovery_evidence_hysteresis_override": int(
+                entry_funnel.get("strategy_ev_pre_cat_recovery_evidence_hysteresis_override", 0) or 0
+            ),
+            "strategy_ev_pre_cat_quality_hysteresis_override": int(
+                entry_funnel.get("strategy_ev_pre_cat_quality_hysteresis_override", 0) or 0
+            ),
+            "strategy_ev_pre_cat_quality_context_relaxed_overlap": int(
+                entry_funnel.get("strategy_ev_pre_cat_quality_context_relaxed_overlap", 0) or 0
+            ),
+            "strategy_ev_pre_cat_quality_fail_regime": int(
+                entry_funnel.get("strategy_ev_pre_cat_quality_fail_regime", 0) or 0
+            ),
+            "strategy_ev_pre_cat_quality_fail_strength": int(
+                entry_funnel.get("strategy_ev_pre_cat_quality_fail_strength", 0) or 0
+            ),
+            "strategy_ev_pre_cat_quality_fail_expected_value": int(
+                entry_funnel.get("strategy_ev_pre_cat_quality_fail_expected_value", 0) or 0
+            ),
+            "strategy_ev_pre_cat_quality_fail_liquidity": int(
+                entry_funnel.get("strategy_ev_pre_cat_quality_fail_liquidity", 0) or 0
+            ),
+            "strategy_ev_pre_cat_soften_ready": int(
+                entry_funnel.get("strategy_ev_pre_cat_soften_ready", 0) or 0
+            ),
+            "strategy_ev_pre_cat_soften_candidate_quality_and_evidence": int(
+                entry_funnel.get("strategy_ev_pre_cat_soften_candidate_quality_and_evidence", 0) or 0
+            ),
+            "strategy_ev_pre_cat_soften_candidate_non_severe": int(
+                entry_funnel.get("strategy_ev_pre_cat_soften_candidate_non_severe", 0) or 0
+            ),
+            "strategy_ev_pre_cat_soften_candidate_non_hostile": int(
+                entry_funnel.get("strategy_ev_pre_cat_soften_candidate_non_hostile", 0) or 0
+            ),
+            "strategy_ev_pre_cat_soften_candidate_rr_ok": int(
+                entry_funnel.get("strategy_ev_pre_cat_soften_candidate_rr_ok", 0) or 0
+            ),
+            "strategy_ev_pre_cat_severe_legacy_hits": int(
+                entry_funnel.get("strategy_ev_pre_cat_severe_legacy_hits", 0) or 0
+            ),
+            "strategy_ev_pre_cat_severe_composite_hits": int(
+                entry_funnel.get("strategy_ev_pre_cat_severe_composite_hits", 0) or 0
+            ),
+            "strategy_ev_pre_cat_severe_composite_catastrophic_hits": int(
+                entry_funnel.get("strategy_ev_pre_cat_severe_composite_catastrophic_hits", 0) or 0
+            ),
+            "strategy_ev_pre_cat_severe_composite_pressure_axis_hits": int(
+                entry_funnel.get("strategy_ev_pre_cat_severe_composite_pressure_axis_hits", 0) or 0
+            ),
+            "strategy_ev_pre_cat_severe_composite_pressure_only_hits": int(
+                entry_funnel.get("strategy_ev_pre_cat_severe_composite_pressure_only_hits", 0) or 0
+            ),
+            "strategy_ev_pre_cat_contextual_severe_downgrade_hits": int(
+                entry_funnel.get("strategy_ev_pre_cat_contextual_severe_downgrade_hits", 0) or 0
+            ),
+            "strategy_ev_pre_cat_severe_active_hits": int(
+                entry_funnel.get("strategy_ev_pre_cat_severe_active_hits", 0) or 0
+            ),
+            "strategy_ev_pre_cat_softened_contextual": int(
+                entry_funnel.get("strategy_ev_pre_cat_softened_contextual", 0) or 0
+            ),
+            "strategy_ev_pre_cat_softened_override": int(
+                entry_funnel.get("strategy_ev_pre_cat_softened_override", 0) or 0
+            ),
+            "strategy_ev_pre_cat_softened_no_soft_quality_relief": int(
+                entry_funnel.get("strategy_ev_pre_cat_softened_no_soft_quality_relief", 0) or 0
+            ),
+            "strategy_ev_pre_cat_softened_candidate_rr_failsafe": int(
+                entry_funnel.get("strategy_ev_pre_cat_softened_candidate_rr_failsafe", 0) or 0
+            ),
+            "strategy_ev_pre_cat_softened_pressure_rebound_relief": int(
+                entry_funnel.get("strategy_ev_pre_cat_softened_pressure_rebound_relief", 0) or 0
+            ),
+            "strategy_ev_pre_cat_negative_history_quarantine_set": int(
+                entry_funnel.get("strategy_ev_pre_cat_negative_history_quarantine_set", 0) or 0
+            ),
+            "strategy_ev_pre_cat_negative_history_quarantine_active": int(
+                entry_funnel.get("strategy_ev_pre_cat_negative_history_quarantine_active", 0) or 0
+            ),
+            "strategy_ev_pre_cat_blocked_severe_sync": int(
+                entry_funnel.get("strategy_ev_pre_cat_blocked_severe_sync", 0) or 0
+            ),
+            "strategy_ev_pre_cat_blocked_no_soft_path": int(
+                entry_funnel.get("strategy_ev_pre_cat_blocked_no_soft_path", 0) or 0
+            ),
             "blocked_risk_gate_regime": int(entry_funnel.get("blocked_risk_gate_regime", 0) or 0),
             "blocked_risk_gate_entry_quality": int(entry_funnel.get("blocked_risk_gate_entry_quality", 0) or 0),
             "blocked_risk_gate_entry_quality_rr": int(entry_funnel.get("blocked_risk_gate_entry_quality_rr", 0) or 0),
@@ -205,6 +346,9 @@ def run_profile_backtests(
             "blocked_second_stage_confirmation_rr_margin": int(
                 entry_funnel.get("blocked_second_stage_confirmation_rr_margin", 0) or 0
             ),
+            "blocked_second_stage_confirmation_rr_margin_near_miss": int(
+                entry_funnel.get("blocked_second_stage_confirmation_rr_margin_near_miss", 0) or 0
+            ),
             "blocked_second_stage_confirmation_edge_margin": int(
                 entry_funnel.get("blocked_second_stage_confirmation_edge_margin", 0) or 0
             ),
@@ -232,6 +376,118 @@ def run_profile_backtests(
             "blocked_second_stage_confirmation_hostile_dynamic_tighten_safety_adders": int(
                 entry_funnel.get("blocked_second_stage_confirmation_hostile_dynamic_tighten_safety_adders", 0) or 0
             ),
+            "second_stage_rr_margin_near_miss_observed": int(
+                entry_funnel.get("second_stage_rr_margin_near_miss_observed", 0) or 0
+            ),
+            "second_stage_rr_margin_soft_score_applied": int(
+                entry_funnel.get("second_stage_rr_margin_soft_score_applied", 0) or 0
+            ),
+            "second_stage_rr_margin_near_miss_relief_applied": int(
+                entry_funnel.get("second_stage_rr_margin_near_miss_relief_applied", 0) or 0
+            ),
+            "two_head_aggregation_rr_margin_near_miss_head_score_floor_applied": int(
+                entry_funnel.get("two_head_aggregation_rr_margin_near_miss_head_score_floor_applied", 0) or 0
+            ),
+            "two_head_aggregation_rr_margin_near_miss_floor_relax_applied": int(
+                entry_funnel.get("two_head_aggregation_rr_margin_near_miss_floor_relax_applied", 0) or 0
+            ),
+            "two_head_aggregation_rr_margin_near_miss_adaptive_floor_relax_applied": int(
+                entry_funnel.get("two_head_aggregation_rr_margin_near_miss_adaptive_floor_relax_applied", 0) or 0
+            ),
+            "two_head_aggregation_rr_margin_near_miss_surplus_compensation_applied": int(
+                entry_funnel.get("two_head_aggregation_rr_margin_near_miss_surplus_compensation_applied", 0) or 0
+            ),
+            "two_head_aggregation_override_accept": int(
+                entry_funnel.get("two_head_aggregation_override_accept", 0) or 0
+            ),
+            "two_head_aggregation_override_accept_rr_margin_near_miss": int(
+                entry_funnel.get("two_head_aggregation_override_accept_rr_margin_near_miss", 0) or 0
+            ),
+            "two_head_aggregation_rr_margin_near_miss_relief_blocked": int(
+                entry_funnel.get("two_head_aggregation_rr_margin_near_miss_relief_blocked", 0) or 0
+            ),
+            "two_head_aggregation_rr_margin_near_miss_relief_blocked_override_disallowed": int(
+                entry_funnel.get("two_head_aggregation_rr_margin_near_miss_relief_blocked_override_disallowed", 0) or 0
+            ),
+            "two_head_aggregation_rr_margin_near_miss_relief_blocked_entry_floor": int(
+                entry_funnel.get("two_head_aggregation_rr_margin_near_miss_relief_blocked_entry_floor", 0) or 0
+            ),
+            "two_head_aggregation_rr_margin_near_miss_relief_blocked_second_stage_floor": int(
+                entry_funnel.get("two_head_aggregation_rr_margin_near_miss_relief_blocked_second_stage_floor", 0) or 0
+            ),
+            "two_head_aggregation_rr_margin_near_miss_relief_blocked_aggregate_score": int(
+                entry_funnel.get("two_head_aggregation_rr_margin_near_miss_relief_blocked_aggregate_score", 0) or 0
+            ),
+            "two_head_aggregation_blocked": int(
+                entry_funnel.get("two_head_aggregation_blocked", 0) or 0
+            ),
+        }
+        observed_samples = int(observed_branch.get("samples", 0) or 0)
+        blocked_no_soft_path_samples = int(blocked_no_soft_path_branch.get("samples", 0) or 0)
+        blocked_no_soft_path_share = (
+            float(blocked_no_soft_path_samples) / float(observed_samples)
+            if observed_samples > 0
+            else 0.0
+        )
+        pre_cat_feature_snapshot_diagnostics = {
+            "observed_samples": observed_samples,
+            "softened_contextual_samples": int(softened_contextual_branch.get("samples", 0) or 0),
+            "softened_override_samples": int(softened_override_branch.get("samples", 0) or 0),
+            "blocked_severe_sync_samples": int(blocked_severe_sync_branch.get("samples", 0) or 0),
+            "blocked_no_soft_path_samples": blocked_no_soft_path_samples,
+            "blocked_no_soft_path_share": round(blocked_no_soft_path_share, 6),
+            "blocked_no_soft_avg_signal_strength": round(
+                float(blocked_no_soft_path_branch.get("avg_signal_strength", 0.0) or 0.0),
+                6,
+            ),
+            "blocked_no_soft_avg_signal_expected_value": round(
+                float(blocked_no_soft_path_branch.get("avg_signal_expected_value", 0.0) or 0.0),
+                6,
+            ),
+            "blocked_no_soft_avg_signal_liquidity": round(
+                float(blocked_no_soft_path_branch.get("avg_signal_liquidity", 0.0) or 0.0),
+                6,
+            ),
+            "blocked_no_soft_avg_signal_reward_risk": round(
+                float(blocked_no_soft_path_branch.get("avg_signal_reward_risk", 0.0) or 0.0),
+                6,
+            ),
+            "blocked_no_soft_avg_history_expectancy_krw": round(
+                float(blocked_no_soft_path_branch.get("avg_history_expectancy_krw", 0.0) or 0.0),
+                6,
+            ),
+            "blocked_no_soft_avg_history_profit_factor": round(
+                float(blocked_no_soft_path_branch.get("avg_history_profit_factor", 0.0) or 0.0),
+                6,
+            ),
+            "blocked_no_soft_avg_full_history_pressure": round(
+                float(blocked_no_soft_path_branch.get("avg_full_history_pressure", 0.0) or 0.0),
+                6,
+            ),
+            "softened_override_avg_signal_strength": round(
+                float(softened_override_branch.get("avg_signal_strength", 0.0) or 0.0),
+                6,
+            ),
+            "softened_override_avg_signal_expected_value": round(
+                float(softened_override_branch.get("avg_signal_expected_value", 0.0) or 0.0),
+                6,
+            ),
+            "softened_override_avg_history_profit_factor": round(
+                float(softened_override_branch.get("avg_history_profit_factor", 0.0) or 0.0),
+                6,
+            ),
+            "softened_contextual_avg_signal_strength": round(
+                float(softened_contextual_branch.get("avg_signal_strength", 0.0) or 0.0),
+                6,
+            ),
+            "softened_contextual_avg_signal_expected_value": round(
+                float(softened_contextual_branch.get("avg_signal_expected_value", 0.0) or 0.0),
+                6,
+            ),
+            "softened_contextual_avg_history_profit_factor": round(
+                float(softened_contextual_branch.get("avg_history_profit_factor", 0.0) or 0.0),
+                6,
+            ),
         }
 
         return {
@@ -255,6 +511,12 @@ def run_profile_backtests(
             "entry_risk_gate_breakdown_json": json.dumps(
                 risk_gate_breakdown, ensure_ascii=False, sort_keys=True, separators=(",", ":")
             ),
+            "pre_cat_feature_snapshot_diagnostics_json": json.dumps(
+                pre_cat_feature_snapshot_diagnostics,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
             "gate_trade_eligible": (
                 total_trades >= min_trades_per_run_for_gate
                 if exclude_low_trade_runs_for_gate
@@ -262,55 +524,39 @@ def run_profile_backtests(
             ),
         }
 
-    effective_workers = max(1, min(int(max_workers), len(datasets)))
-    failed: List[pathlib.Path] = []
-    if effective_workers <= 1:
-        for ds in datasets:
-            result = invoke_backtest_json(
-                exe_file,
-                ds,
-                require_higher_tf_companions,
-                max_attempts=max(1, int(backtest_retry_count)),
-                disable_adaptive_state_io=disable_adaptive_state_io,
-            )
-            rows.append(to_row(ds, result))
-        return rows
+    requested_workers = max(1, int(max_workers))
+    if requested_workers > 1:
+        print(
+            "[ProfitabilityMatrix] Parallel validation is disabled; "
+            "forcing sequential execution (--max-workers=1)."
+        )
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=effective_workers) as pool:
-        futures = {
-            pool.submit(
-                invoke_backtest_json,
-                exe_file,
-                ds,
-                require_higher_tf_companions,
-                max(1, int(backtest_retry_count)),
-                disable_adaptive_state_io,
-            ): ds
-            for ds in datasets
-        }
-        for fut in concurrent.futures.as_completed(futures):
-            ds = futures[fut]
-            try:
-                result = fut.result()
-                rows.append(to_row(ds, result))
-            except Exception:
-                failed.append(ds)
-
-    if failed:
-        for ds in failed:
-            result = invoke_backtest_json(
-                exe_file,
-                ds,
-                require_higher_tf_companions,
-                max_attempts=max(2, int(backtest_retry_count) + 1),
-                disable_adaptive_state_io=disable_adaptive_state_io,
-            )
-            rows.append(to_row(ds, result))
+    for ds in datasets:
+        result = invoke_backtest_json(
+            exe_file,
+            ds,
+            require_higher_tf_companions,
+            max_attempts=max(1, int(backtest_retry_count)),
+            disable_adaptive_state_io=disable_adaptive_state_io,
+        )
+        rows.append(to_row(ds, result))
     return rows
 
 
 def safe_avg(values: List[float]) -> float:
     return sum(values) / float(len(values)) if values else 0.0
+
+
+def safe_weighted_avg(values: List[float], weights: List[float]) -> float:
+    if not values or not weights or len(values) != len(weights):
+        return safe_avg(values)
+    total_weight = sum(max(0.0, float(w)) for w in weights)
+    if total_weight <= 0.0:
+        return safe_avg(values)
+    weighted_sum = 0.0
+    for value, weight in zip(values, weights):
+        weighted_sum += float(value) * max(0.0, float(weight))
+    return weighted_sum / total_weight
 
 
 def parse_reason_counts_json(raw: Any) -> Dict[str, int]:
@@ -659,8 +905,10 @@ def compute_effective_thresholds(
         "min_avg_trades": int(args.min_avg_trades),
     }
     effective = dict(requested)
-    full_mode = bool(args.enable_hostility_adaptive_thresholds)
     trades_only_mode = bool(getattr(args, "enable_hostility_adaptive_trades_only", False))
+    # trades-only is an explicit mode; if both flags are on, prioritize
+    # trades-only semantics to avoid silently applying full relaxations.
+    full_mode = bool(args.enable_hostility_adaptive_thresholds) and (not trades_only_mode)
     adaptive_mode = "full" if full_mode else ("trades_only" if trades_only_mode else "none")
     blend_available = bool(blended.get("available", False))
     if adaptive_mode == "none" or not blend_available:
@@ -829,6 +1077,7 @@ def main() -> int:
     resolved_config_path = pathlib.Path(args.config_path)
     if not resolved_config_path.is_absolute():
         resolved_config_path = (pathlib.Path.cwd() / resolved_config_path).resolve()
+    resolved_runtime_config_path = (resolved_exe_path.parent / "config" / "config.json").resolve()
 
     resolved_output_csv = pathlib.Path(args.output_csv).resolve()
     resolved_output_profile_csv = pathlib.Path(args.output_profile_csv).resolve()
@@ -842,11 +1091,18 @@ def main() -> int:
     ensure_parent_directory(resolved_output_json)
     ensure_parent_directory(resolved_hostility_quality_blend_output_json)
     ensure_parent_directory(resolved_walk_forward_output_json)
+    ensure_parent_directory(resolved_runtime_config_path)
 
     if not resolved_config_path.exists():
         ensure_parent_directory(resolved_config_path)
         resolved_config_path.write_text(
             resolved_source_config_path.read_text(encoding="utf-8"),
+            encoding="utf-8",
+            newline="\n",
+        )
+    if not resolved_runtime_config_path.exists():
+        resolved_runtime_config_path.write_text(
+            resolved_config_path.read_text(encoding="utf-8-sig"),
             encoding="utf-8",
             newline="\n",
         )
@@ -961,6 +1217,18 @@ def main() -> int:
         raise RuntimeError("No valid profiles selected. Check --profile-ids.")
 
     original_config_raw = resolved_config_path.read_text(encoding="utf-8-sig")
+    source_config_raw = resolved_source_config_path.read_text(encoding="utf-8-sig")
+    original_runtime_config_raw = (
+        resolved_runtime_config_path.read_text(encoding="utf-8-sig")
+        if resolved_runtime_config_path.exists()
+        else original_config_raw
+    )
+
+    def write_active_config(cfg_payload: Dict[str, Any]) -> None:
+        dump_json(resolved_config_path, cfg_payload)
+        if resolved_runtime_config_path != resolved_config_path:
+            dump_json(resolved_runtime_config_path, cfg_payload)
+
     rows: List[Dict[str, Any]] = []
 
     with verification_lock(
@@ -970,7 +1238,7 @@ def main() -> int:
     ):
         try:
             for profile in profile_specs:
-                cfg = json.loads(original_config_raw)
+                cfg = json.loads(source_config_raw)
                 apply_profile_flags(
                     cfg,
                     bool(profile["bridge"]),
@@ -978,7 +1246,7 @@ def main() -> int:
                     bool(profile["risk"]),
                     bool(profile["execution"]),
                 )
-                dump_json(resolved_config_path, cfg)
+                write_active_config(cfg)
                 rows.extend(
                     run_profile_backtests(
                         resolved_exe_path,
@@ -994,6 +1262,12 @@ def main() -> int:
                 )
         finally:
             resolved_config_path.write_text(original_config_raw, encoding="utf-8", newline="\n")
+            if resolved_runtime_config_path != resolved_config_path:
+                resolved_runtime_config_path.write_text(
+                    original_runtime_config_raw,
+                    encoding="utf-8",
+                    newline="\n",
+                )
 
     if not rows:
         raise RuntimeError("No profitability rows generated.")
@@ -1019,9 +1293,20 @@ def main() -> int:
         profitable_count = sum(1 for r in gate_items if r["profitable"])
         profitable_ratio = round((profitable_count / float(gate_run_count)), 4) if gate_run_count > 0 else 0.0
 
-        avg_profit_factor = round(safe_avg([float(r["profit_factor"]) for r in gate_items]), 4) if gate_items else 0.0
-        avg_expectancy = round(safe_avg([float(r["expectancy_krw"]) for r in gate_items]), 4) if gate_items else 0.0
-        avg_win_rate_pct = round(safe_avg([float(r["win_rate_pct"]) for r in gate_items]), 4) if gate_items else 0.0
+        profit_factors = [float(r["profit_factor"]) for r in gate_items]
+        expectancies = [float(r["expectancy_krw"]) for r in gate_items]
+        win_rates = [float(r["win_rate_pct"]) for r in gate_items]
+        trade_weights = [max(0.0, float(r["total_trades"])) for r in gate_items]
+        total_trade_weight = round(sum(trade_weights), 4) if trade_weights else 0.0
+
+        avg_profit_factor_unweighted = round(safe_avg(profit_factors), 4) if gate_items else 0.0
+        avg_expectancy_unweighted = round(safe_avg(expectancies), 4) if gate_items else 0.0
+        avg_win_rate_pct_unweighted = round(safe_avg(win_rates), 4) if gate_items else 0.0
+
+        # Gate quality metrics are trade-weighted to reduce low-sample run noise.
+        avg_profit_factor = round(safe_weighted_avg(profit_factors, trade_weights), 4) if gate_items else 0.0
+        avg_expectancy = round(safe_weighted_avg(expectancies, trade_weights), 4) if gate_items else 0.0
+        avg_win_rate_pct = round(safe_weighted_avg(win_rates, trade_weights), 4) if gate_items else 0.0
         peak_drawdown = round(max((float(r["max_drawdown_pct"]) for r in gate_items), default=0.0), 4)
         avg_trades = round(safe_avg([float(r["total_trades"]) for r in gate_items]), 4) if gate_items else 0.0
         sum_profit = round(sum(float(r["total_profit_krw"]) for r in gate_items), 4) if gate_items else 0.0
@@ -1054,6 +1339,7 @@ def main() -> int:
             )
         second_stage_component_keys = {
             "blocked_second_stage_confirmation_rr_margin",
+            "blocked_second_stage_confirmation_rr_margin_near_miss",
             "blocked_second_stage_confirmation_edge_margin",
             "blocked_second_stage_confirmation_hostile_safety_adders",
             "blocked_second_stage_confirmation_hostile_regime_safety_adders",
@@ -1063,6 +1349,9 @@ def main() -> int:
             "blocked_second_stage_confirmation_hostile_history_moderate_safety_adders",
             "blocked_second_stage_confirmation_hostile_history_severe_safety_adders",
             "blocked_second_stage_confirmation_hostile_dynamic_tighten_safety_adders",
+        }
+        second_stage_rr_margin_split_keys = {
+            "blocked_second_stage_confirmation_rr_margin_near_miss",
         }
         second_stage_hostile_split_keys = {
             "blocked_second_stage_confirmation_hostile_regime_safety_adders",
@@ -1084,9 +1373,64 @@ def main() -> int:
             "blocked_risk_gate_entry_quality_edge_adaptive",
             "blocked_risk_gate_entry_quality_rr_edge",
             "blocked_risk_gate_entry_quality_rr_edge_adaptive",
+            "strategy_ev_pre_cat_observed",
+            "strategy_ev_pre_cat_recovery_quality_context",
+            "strategy_ev_pre_cat_recovery_evidence_any",
+            "strategy_ev_pre_cat_recovery_evidence_relaxed_any",
+            "strategy_ev_pre_cat_recovery_evidence_relaxed_recent_regime",
+            "strategy_ev_pre_cat_recovery_evidence_relaxed_full_history",
+            "strategy_ev_pre_cat_recovery_evidence_for_soften",
+            "strategy_ev_pre_cat_recovery_evidence_bridge",
+            "strategy_ev_pre_cat_recovery_evidence_bridge_surrogate",
+            "strategy_ev_pre_cat_recovery_evidence_hysteresis_override",
+            "strategy_ev_pre_cat_quality_hysteresis_override",
+            "strategy_ev_pre_cat_quality_context_relaxed_overlap",
+            "strategy_ev_pre_cat_quality_fail_regime",
+            "strategy_ev_pre_cat_quality_fail_strength",
+            "strategy_ev_pre_cat_quality_fail_expected_value",
+            "strategy_ev_pre_cat_quality_fail_liquidity",
+            "strategy_ev_pre_cat_soften_ready",
+            "strategy_ev_pre_cat_soften_candidate_quality_and_evidence",
+            "strategy_ev_pre_cat_soften_candidate_non_severe",
+            "strategy_ev_pre_cat_soften_candidate_non_hostile",
+            "strategy_ev_pre_cat_soften_candidate_rr_ok",
+            "strategy_ev_pre_cat_severe_legacy_hits",
+            "strategy_ev_pre_cat_severe_composite_hits",
+            "strategy_ev_pre_cat_severe_composite_catastrophic_hits",
+            "strategy_ev_pre_cat_severe_composite_pressure_axis_hits",
+            "strategy_ev_pre_cat_severe_composite_pressure_only_hits",
+            "strategy_ev_pre_cat_contextual_severe_downgrade_hits",
+            "strategy_ev_pre_cat_severe_active_hits",
+            "strategy_ev_pre_cat_softened_contextual",
+            "strategy_ev_pre_cat_softened_override",
+            "strategy_ev_pre_cat_softened_no_soft_quality_relief",
+            "strategy_ev_pre_cat_softened_candidate_rr_failsafe",
+            "strategy_ev_pre_cat_softened_pressure_rebound_relief",
+            "strategy_ev_pre_cat_negative_history_quarantine_set",
+            "strategy_ev_pre_cat_negative_history_quarantine_active",
+            "strategy_ev_pre_cat_blocked_severe_sync",
+            "strategy_ev_pre_cat_blocked_no_soft_path",
+            "two_head_aggregation_override_accept",
+            "two_head_aggregation_override_accept_rr_margin_near_miss",
+            "two_head_aggregation_rr_margin_near_miss_head_score_floor_applied",
+            "two_head_aggregation_rr_margin_near_miss_floor_relax_applied",
+            "two_head_aggregation_rr_margin_near_miss_adaptive_floor_relax_applied",
+            "two_head_aggregation_rr_margin_near_miss_surplus_compensation_applied",
+            "two_head_aggregation_rr_margin_near_miss_relief_blocked",
+            "two_head_aggregation_rr_margin_near_miss_relief_blocked_override_disallowed",
+            "two_head_aggregation_rr_margin_near_miss_relief_blocked_entry_floor",
+            "two_head_aggregation_rr_margin_near_miss_relief_blocked_second_stage_floor",
+            "two_head_aggregation_rr_margin_near_miss_relief_blocked_aggregate_score",
+            "two_head_aggregation_blocked",
+            "second_stage_rr_margin_near_miss_observed",
+            "second_stage_rr_margin_soft_score_applied",
+            "second_stage_rr_margin_near_miss_relief_applied",
         }
         has_second_stage_split = any(
             int(risk_gate_counts.get(k, 0)) > 0 for k in second_stage_component_keys
+        )
+        has_second_stage_rr_margin_split = any(
+            int(risk_gate_counts.get(k, 0)) > 0 for k in second_stage_rr_margin_split_keys
         )
         has_second_stage_hostile_split = any(
             int(risk_gate_counts.get(k, 0)) > 0 for k in second_stage_hostile_split_keys
@@ -1096,6 +1440,8 @@ def main() -> int:
         )
         if has_second_stage_split:
             exclude_component_keys.add("blocked_second_stage_confirmation")
+        if has_second_stage_rr_margin_split:
+            exclude_component_keys.add("blocked_second_stage_confirmation_rr_margin")
         if has_second_stage_hostile_split:
             exclude_component_keys.add("blocked_second_stage_confirmation_hostile_safety_adders")
         if has_second_stage_hostile_history_split:
@@ -1139,10 +1485,14 @@ def main() -> int:
                 "profitable_runs": profitable_count,
                 "profitable_ratio": profitable_ratio,
                 "avg_profit_factor": avg_profit_factor,
+                "avg_profit_factor_unweighted": avg_profit_factor_unweighted,
                 "avg_expectancy_krw": avg_expectancy,
+                "avg_expectancy_krw_unweighted": avg_expectancy_unweighted,
                 "avg_win_rate_pct": avg_win_rate_pct,
+                "avg_win_rate_pct_unweighted": avg_win_rate_pct_unweighted,
                 "peak_max_drawdown_pct": peak_drawdown,
                 "avg_total_trades": avg_trades,
+                "gate_total_trades_weight": total_trade_weight,
                 "total_profit_sum_krw": sum_profit,
                 "entry_rejection_total": entry_rejection_total,
                 "top_entry_rejection_reason": top_rejection_reason,
@@ -1181,11 +1531,16 @@ def main() -> int:
 
     legacy_summary = next((x for x in profile_summaries if x["profile_id"] == "legacy_default"), None)
     core_full_summary = next((x for x in profile_summaries if x["profile_id"] == "core_full"), None)
+    core_vs_legacy_required_profiles = {"legacy_default", "core_full"}
+    core_vs_legacy_required_profiles_present = core_vs_legacy_required_profiles.issubset(requested_profile_ids)
     core_vs_legacy: Dict[str, Any] = {
         "comparison_available": legacy_summary is not None and core_full_summary is not None,
         "baseline_profile": "legacy_default",
         "candidate_profile": "core_full",
         "gate_skipped": bool(args.skip_core_vs_legacy_gate),
+        "requested_profile_ids": sorted(requested_profile_ids),
+        "required_profile_ids": sorted(core_vs_legacy_required_profiles),
+        "required_profiles_present": bool(core_vs_legacy_required_profiles_present),
     }
     if core_vs_legacy["comparison_available"]:
         delta_pf = round(float(core_full_summary["avg_profit_factor"]) - float(legacy_summary["avg_profit_factor"]), 4)
@@ -1216,6 +1571,11 @@ def main() -> int:
     if args.skip_core_vs_legacy_gate:
         core_vs_legacy["gate_skip_reason"] = "disabled_by_flag"
         core_vs_legacy["gate_pass"] = True
+    elif not core_vs_legacy["comparison_available"] and not core_vs_legacy_required_profiles_present:
+        # Auto-skip legacy comparison when required profiles were not requested.
+        core_vs_legacy["gate_skip_reason"] = "comparison_unavailable_missing_profiles"
+        core_vs_legacy["gate_auto_skipped"] = True
+        core_vs_legacy["gate_pass"] = True
 
     walk_forward = None
     if args.include_walk_forward:
@@ -1228,7 +1588,7 @@ def main() -> int:
         ):
             cfg = json.loads(original_config_raw)
             apply_profile_flags(cfg, True, True, True, True)
-            dump_json(resolved_config_path, cfg)
+            write_active_config(cfg)
             try:
                 proc = subprocess.run(
                     [
@@ -1250,6 +1610,12 @@ def main() -> int:
                     raise RuntimeError(f"Walk-forward failed (exit={proc.returncode})")
             finally:
                 resolved_config_path.write_text(original_config_raw, encoding="utf-8", newline="\n")
+                if resolved_runtime_config_path != resolved_config_path:
+                    resolved_runtime_config_path.write_text(
+                        original_runtime_config_raw,
+                        encoding="utf-8",
+                        newline="\n",
+                    )
 
         if resolved_walk_forward_output_json.exists():
             try:
@@ -1265,6 +1631,7 @@ def main() -> int:
         "inputs": {
             "exe_path": str(resolved_exe_path),
             "config_path": str(resolved_config_path),
+            "runtime_config_path": str(resolved_runtime_config_path),
             "source_config_path": str(resolved_source_config_path),
             "data_dir": str(resolved_data_dir),
             "datasets": [str(x) for x in dataset_paths],

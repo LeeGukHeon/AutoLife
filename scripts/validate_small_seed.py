@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 import argparse
-import concurrent.futures
 import csv
 import json
-import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
@@ -18,7 +16,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-json", "-OutputJson", default="./build/Release/logs/small_seed_summary.json")
     parser.add_argument("--seeds", "-Seeds", nargs="*", type=float, default=[50000.0, 100000.0])
     parser.add_argument("--min-trades", "-MinTrades", type=int, default=5)
-    parser.add_argument("--max-workers", "-MaxWorkers", type=int, default=max(1, min(8, os.cpu_count() or 4)))
+    parser.add_argument("--max-workers", "-MaxWorkers", type=int, default=1)
     return parser.parse_args()
 
 
@@ -71,13 +69,14 @@ def main() -> int:
 
     rows: List[Dict[str, Any]] = []
     tasks = [(seed, ds) for seed in args.seeds for ds in datasets]
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, int(args.max_workers))) as pool:
-        future_map = {
-            pool.submit(run_single, exe_path, ds, seed, args.min_trades): (seed, ds)
-            for seed, ds in tasks
-        }
-        for future in concurrent.futures.as_completed(future_map):
-            rows.append(future.result())
+    requested_workers = max(1, int(args.max_workers))
+    if requested_workers > 1:
+        print(
+            "[validate_small_seed] Parallel validation is disabled; "
+            "forcing sequential execution (--max-workers=1)."
+        )
+    for seed, ds in tasks:
+        rows.append(run_single(exe_path, ds, seed, args.min_trades))
 
     rows.sort(key=lambda r: (float(r["seed_krw"]), str(r["dataset"]).lower()))
     with output_csv.open("w", encoding="utf-8", newline="") as fh:

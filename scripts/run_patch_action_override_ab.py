@@ -105,7 +105,13 @@ def parse_args(argv=None):
     parser.add_argument("--tune-max-scenarios", "-TuneMaxScenarios", type=int, default=2)
     parser.add_argument("--tune-screen-dataset-limit", "-TuneScreenDatasetLimit", type=int, default=1)
     parser.add_argument("--tune-screen-top-k", "-TuneScreenTopK", type=int, default=1)
-    parser.add_argument("--matrix-max-workers", "-MatrixMaxWorkers", type=int, default=1)
+    parser.add_argument(
+        "--matrix-max-workers",
+        "-MatrixMaxWorkers",
+        type=int,
+        default=1,
+        help="Deprecated. Validation is forced to sequential execution.",
+    )
     parser.add_argument("--matrix-backtest-retry-count", "-MatrixBacktestRetryCount", type=int, default=1)
     parser.add_argument(
         "--tune-holdout-suppression-hint-ratio-threshold",
@@ -738,6 +744,12 @@ def _seed_patch_plan_template(path_value: Path, template_id: str) -> None:
 
 def main(argv=None) -> int:
     args = parse_args(argv)
+    if int(getattr(args, "matrix_max_workers", 1)) > 1:
+        print(
+            "[PatchActionOverrideAB] Parallel matrix workers are disabled; "
+            "forcing --matrix-max-workers=1."
+        )
+    args.matrix_max_workers = 1
     output_json = resolve_repo_path(args.output_json)
     multirun_output_json = resolve_repo_path(args.multirun_output_json)
     policy_decision_json = resolve_repo_path(args.policy_decision_json)

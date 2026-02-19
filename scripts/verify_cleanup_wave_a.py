@@ -215,7 +215,21 @@ def run_test_executables(repo_root: Path) -> Tuple[bool, List[Dict[str, Any]]]:
     rows: List[Dict[str, Any]] = []
     all_ok = True
     for exe in DEFAULT_TEST_EXES:
-        cmd = [str((repo_root / exe).resolve())]
+        exe_path = (repo_root / exe).resolve()
+        cmd = [str(exe_path)]
+        if not exe_path.exists():
+            all_ok = False
+            rows.append(
+                {
+                    "command": cmd,
+                    "exit_code": 127,
+                    "ok": False,
+                    "error": "missing_executable",
+                    "stdout_tail": [],
+                    "stderr_tail": [],
+                }
+            )
+            continue
         result = run_command(cmd, cwd=repo_root)
         ok = result.exit_code == 0
         if not ok:

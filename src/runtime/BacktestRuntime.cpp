@@ -1,10 +1,9 @@
-﻿#include "runtime/BacktestRuntime.h"
+#include "runtime/BacktestRuntime.h"
 #include "common/Logger.h"
+#include "common/MarketDataWindowPolicy.h"
 #include "common/PathUtils.h"
 #include "core/execution/OrderLifecycleStateMachine.h"
 #include "core/execution/ExecutionUpdateSchema.h"
-#include "v2/adapters/LegacyPolicyPlaneAdapter.h"
-#include "v2/orchestration/DecisionKernel.h"
 #include <iostream>
 #include <algorithm>
 #include <cctype>
@@ -17,11 +16,7 @@
 #include <set>
 #include <string_view>
 
-#include "v2/strategy/ScalpingStrategy.h"
-#include "v2/strategy/MomentumStrategy.h"
-#include "v2/strategy/BreakoutStrategy.h"
-#include "v2/strategy/MeanReversionStrategy.h"
-#include "v2/strategy/GridTradingStrategy.h"
+#include "strategy/FoundationAdaptiveStrategy.h"
 
 namespace autolife {
 namespace backtest {
@@ -34,14 +29,13 @@ constexpr double CORE_STOP_SLIPPAGE_PCT = 0.00095;   // 0.095%
 constexpr double LEGACY_ENTRY_SLIPPAGE_PCT = 0.0002; // 0.02%
 constexpr double LEGACY_EXIT_SLIPPAGE_PCT = 0.0003;  // 0.03%
 constexpr double LEGACY_STOP_SLIPPAGE_PCT = 0.0010;  // 0.10%
-// Live scanner feeds strategies with up to 200 bars on 1m timeframe.
-// Keep backtest 1m window aligned for live-like parity.
-constexpr size_t BACKTEST_CANDLE_WINDOW = 200;
-constexpr size_t TF_5M_MAX_BARS = 120;
-constexpr size_t TF_15M_MAX_BARS = 120;
-constexpr size_t TF_1H_MAX_BARS = 120;
-constexpr size_t TF_4H_MAX_BARS = 90;
-constexpr size_t TF_1D_MAX_BARS = 60;
+// Live scanner and backtest must share a single window policy.
+const size_t BACKTEST_CANDLE_WINDOW = common::targetBarsForTimeframe("1m", 200);
+const size_t TF_5M_MAX_BARS = common::targetBarsForTimeframe("5m", 120);
+const size_t TF_15M_MAX_BARS = common::targetBarsForTimeframe("15m", 120);
+const size_t TF_1H_MAX_BARS = common::targetBarsForTimeframe("1h", 120);
+const size_t TF_4H_MAX_BARS = common::targetBarsForTimeframe("4h", 90);
+const size_t TF_1D_MAX_BARS = common::targetBarsForTimeframe("1d", 60);
 
 long long getCurrentTimeMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -108,315 +102,6 @@ void appendExecutionUpdateArtifact(const autolife::core::ExecutionUpdate& update
     out << autolife::core::execution::toJson(update).dump() << "\n";
 }
 
-std::filesystem::path v2ShadowPolicyArtifactPath() {
-    return autolife::utils::PathUtils::resolveRelativePath("logs/v2_shadow_policy_parity_backtest.jsonl");
-}
-
-void resetV2ShadowPolicyArtifact() {
-    const auto path = v2ShadowPolicyArtifactPath();
-    std::filesystem::create_directories(path.parent_path());
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-}
-
-void appendV2ShadowPolicyArtifactLine(const nlohmann::json& line) {
-    const auto path = v2ShadowPolicyArtifactPath();
-    std::filesystem::create_directories(path.parent_path());
-    std::ofstream out(path, std::ios::binary | std::ios::app);
-    if (!out.is_open()) {
-        LOG_WARN("v2 shadow policy parity artifact open failed: {}", path.string());
-        return;
-    }
-    out << line.dump() << "\n";
-}
-
-autolife::v2::MarketRegime toV2MarketRegime(analytics::MarketRegime regime) {
-    switch (regime) {
-        case analytics::MarketRegime::TRENDING_UP:
-            return autolife::v2::MarketRegime::TRENDING_UP;
-        case analytics::MarketRegime::TRENDING_DOWN:
-            return autolife::v2::MarketRegime::TRENDING_DOWN;
-        case analytics::MarketRegime::RANGING:
-            return autolife::v2::MarketRegime::RANGING;
-        case analytics::MarketRegime::HIGH_VOLATILITY:
-            return autolife::v2::MarketRegime::HIGH_VOLATILITY;
-        case analytics::MarketRegime::UNKNOWN:
-        default:
-            return autolife::v2::MarketRegime::UNKNOWN;
-    }
-}
-
-autolife::v2::SignalDirection toV2SignalDirection(strategy::SignalType type) {
-    switch (type) {
-        case strategy::SignalType::BUY:
-        case strategy::SignalType::STRONG_BUY:
-            return autolife::v2::SignalDirection::LONG;
-        case strategy::SignalType::SELL:
-        case strategy::SignalType::STRONG_SELL:
-            return autolife::v2::SignalDirection::EXIT;
-        case strategy::SignalType::HOLD:
-        case strategy::SignalType::NONE:
-        default:
-            return autolife::v2::SignalDirection::NONE;
-    }
-}
-
-autolife::v2::SignalCandidate toV2SignalCandidate(const strategy::Signal& signal) {
-    autolife::v2::SignalCandidate candidate;
-    candidate.signal_id = signal.market + ":" + signal.strategy_name + ":" + std::to_string(signal.timestamp);
-    candidate.market = signal.market;
-    candidate.strategy_id = signal.strategy_name;
-    candidate.direction = toV2SignalDirection(signal.type);
-    candidate.score = signal.score;
-    candidate.strength = signal.strength;
-    candidate.expected_edge_pct = signal.expected_value;
-    candidate.reward_risk = (signal.expected_risk_pct > 1e-9)
-        ? (signal.expected_return_pct / signal.expected_risk_pct)
-        : 0.0;
-    candidate.entry_price = signal.entry_price;
-    candidate.stop_loss = signal.stop_loss;
-    candidate.take_profit_1 = signal.take_profit_1;
-    candidate.take_profit_2 = signal.take_profit_2;
-    candidate.position_fraction = signal.position_size;
-    candidate.regime = toV2MarketRegime(signal.market_regime);
-    candidate.ts_ms = signal.timestamp;
-    return candidate;
-}
-
-std::string toCoreSignalKey(const strategy::Signal& signal) {
-    return signal.market + ":" + signal.strategy_name;
-}
-
-std::string toV2SignalKey(const autolife::v2::SignalCandidate& candidate) {
-    return candidate.market + ":" + candidate.strategy_id;
-}
-
-std::set<std::string> toCoreSelectedKeySet(const std::vector<strategy::Signal>& selected) {
-    std::set<std::string> out;
-    for (const auto& signal : selected) {
-        out.insert(toCoreSignalKey(signal));
-    }
-    return out;
-}
-
-std::set<std::string> toV2SelectedKeySet(
-    const std::vector<autolife::v2::SignalCandidate>& selected
-) {
-    std::set<std::string> out;
-    for (const auto& candidate : selected) {
-        out.insert(toV2SignalKey(candidate));
-    }
-    return out;
-}
-
-std::map<std::string, int> toCoreReasonCountMap(
-    const std::vector<engine::PolicyDecisionRecord>& decisions
-) {
-    std::map<std::string, int> out;
-    for (const auto& decision : decisions) {
-        out[decision.reason] += 1;
-    }
-    return out;
-}
-
-std::map<std::string, int> toV2ReasonCountMap(
-    const std::vector<autolife::v2::PolicyDecision>& decisions
-) {
-    std::map<std::string, int> out;
-    for (const auto& decision : decisions) {
-        out[decision.reason_code] += 1;
-    }
-    return out;
-}
-
-int countReasonMismatch(
-    const std::map<std::string, int>& core_reason_counts,
-    const std::map<std::string, int>& v2_reason_counts
-) {
-    std::set<std::string> all_reasons;
-    for (const auto& item : core_reason_counts) {
-        all_reasons.insert(item.first);
-    }
-    for (const auto& item : v2_reason_counts) {
-        all_reasons.insert(item.first);
-    }
-
-    int mismatch = 0;
-    for (const auto& reason : all_reasons) {
-        const int core_count = (core_reason_counts.count(reason) > 0) ? core_reason_counts.at(reason) : 0;
-        const int v2_count = (v2_reason_counts.count(reason) > 0) ? v2_reason_counts.at(reason) : 0;
-        mismatch += std::abs(core_count - v2_count);
-    }
-    return mismatch;
-}
-
-int countV2DroppedByPolicy(const std::vector<autolife::v2::PolicyDecision>& decisions) {
-    int dropped = 0;
-    for (const auto& decision : decisions) {
-        if (!decision.accepted) {
-            dropped++;
-        }
-    }
-    return dropped;
-}
-
-nlohmann::json setToJsonArray(const std::set<std::string>& values) {
-    nlohmann::json arr = nlohmann::json::array();
-    for (const auto& value : values) {
-        arr.push_back(value);
-    }
-    return arr;
-}
-
-nlohmann::json reasonMapToJsonObject(const std::map<std::string, int>& values) {
-    nlohmann::json out = nlohmann::json::object();
-    for (const auto& item : values) {
-        out[item.first] = item.second;
-    }
-    return out;
-}
-
-void appendV2ShadowPolicyParityArtifact(
-    long long ts_ms,
-    analytics::MarketRegime dominant_regime,
-    bool small_seed_mode,
-    int max_new_orders_per_scan,
-    const std::vector<strategy::Signal>& policy_input_signals,
-    const std::vector<strategy::Signal>& core_selected_signals,
-    int core_dropped_by_policy,
-    const std::vector<engine::PolicyDecisionRecord>& core_decisions,
-    const risk::RiskManager& risk_manager,
-    engine::AdaptivePolicyController& policy_controller,
-    const engine::PerformanceStore* performance_store
-) {
-    if (policy_input_signals.empty()) {
-        return;
-    }
-
-    nlohmann::json line;
-    line["ts_ms"] = ts_ms;
-    line["dominant_regime"] = static_cast<int>(dominant_regime);
-    line["small_seed_mode"] = small_seed_mode;
-    line["max_new_orders_per_scan"] = max_new_orders_per_scan;
-    line["core_input_candidate_count"] = static_cast<int>(policy_input_signals.size());
-    line["core_selected_count"] = static_cast<int>(core_selected_signals.size());
-    line["core_decision_count"] = static_cast<int>(core_decisions.size());
-    line["core_dropped_by_policy"] = core_dropped_by_policy;
-
-    try {
-        std::vector<autolife::v2::SignalCandidate> v2_candidates;
-        v2_candidates.reserve(policy_input_signals.size());
-        for (const auto& signal : policy_input_signals) {
-            v2_candidates.push_back(toV2SignalCandidate(signal));
-        }
-
-        autolife::v2::MarketSnapshot market_snapshot;
-        market_snapshot.candidates = std::move(v2_candidates);
-        market_snapshot.dominant_regime = toV2MarketRegime(dominant_regime);
-        market_snapshot.ts_ms = ts_ms;
-
-        autolife::v2::PortfolioSnapshot portfolio_snapshot;
-        const auto risk_metrics = risk_manager.getRiskMetrics();
-        portfolio_snapshot.available_capital_krw = risk_metrics.available_capital;
-        portfolio_snapshot.invested_capital_krw = risk_metrics.invested_capital;
-        portfolio_snapshot.total_capital_krw = risk_metrics.total_capital;
-        portfolio_snapshot.daily_realized_pnl_krw = risk_metrics.realized_pnl;
-        portfolio_snapshot.ts_ms = ts_ms;
-
-        const auto positions = risk_manager.getAllPositions();
-        portfolio_snapshot.positions.reserve(positions.size());
-        for (const auto& position : positions) {
-            autolife::v2::PositionSnapshot snapshot;
-            snapshot.position_id = position.market + ":" + position.strategy_name;
-            snapshot.market = position.market;
-            snapshot.strategy_id = position.strategy_name;
-            snapshot.quantity = position.quantity;
-            snapshot.entry_price = position.entry_price;
-            snapshot.stop_loss = position.stop_loss;
-            snapshot.take_profit_1 = position.take_profit_1;
-            snapshot.take_profit_2 = position.take_profit_2;
-            snapshot.opened_ts_ms = position.entry_time;
-            portfolio_snapshot.positions.push_back(std::move(snapshot));
-        }
-
-        auto v2_policy_plane = std::make_shared<autolife::v2::LegacyPolicyPlaneAdapter>(
-            policy_controller,
-            performance_store
-        );
-        autolife::v2::DecisionKernel kernel(v2_policy_plane, nullptr, nullptr);
-
-        autolife::v2::KernelConfig kernel_config;
-        kernel_config.enable_policy_plane = true;
-        kernel_config.enable_risk_plane = false;
-        kernel_config.enable_execution_plane = false;
-        kernel_config.max_new_orders_per_cycle = std::max(1, max_new_orders_per_scan);
-        kernel_config.dry_run = true;
-
-        const auto shadow_result = kernel.runCycle(market_snapshot, portfolio_snapshot, kernel_config);
-
-        const std::set<std::string> core_selected = toCoreSelectedKeySet(core_selected_signals);
-        const std::set<std::string> v2_selected = toV2SelectedKeySet(shadow_result.policy_selected_candidates);
-
-        std::set<std::string> selected_only_core;
-        std::set<std::string> selected_only_v2;
-        std::set_difference(
-            core_selected.begin(),
-            core_selected.end(),
-            v2_selected.begin(),
-            v2_selected.end(),
-            std::inserter(selected_only_core, selected_only_core.begin())
-        );
-        std::set_difference(
-            v2_selected.begin(),
-            v2_selected.end(),
-            core_selected.begin(),
-            core_selected.end(),
-            std::inserter(selected_only_v2, selected_only_v2.begin())
-        );
-
-        const int selection_symmetric_diff_count =
-            static_cast<int>(selected_only_core.size() + selected_only_v2.size());
-        const auto core_reason_counts = toCoreReasonCountMap(core_decisions);
-        const auto v2_reason_counts = toV2ReasonCountMap(shadow_result.policy_decisions);
-        const int taxonomy_mismatch_count = countReasonMismatch(core_reason_counts, v2_reason_counts);
-
-        const int v2_dropped_by_policy = countV2DroppedByPolicy(shadow_result.policy_decisions);
-        const int dropped_count_diff = std::abs(core_dropped_by_policy - v2_dropped_by_policy);
-
-        const bool selected_set_equal = selection_symmetric_diff_count == 0;
-        const bool dropped_count_equal = dropped_count_diff == 0;
-        const bool taxonomy_equal = taxonomy_mismatch_count == 0;
-        const bool shadow_pass = selected_set_equal && dropped_count_equal && taxonomy_equal;
-
-        line["shadow_pass"] = shadow_pass;
-        line["v2_selected_count"] = static_cast<int>(shadow_result.policy_selected_candidates.size());
-        line["v2_decision_count"] = static_cast<int>(shadow_result.policy_decisions.size());
-        line["v2_dropped_by_policy"] = v2_dropped_by_policy;
-        line["checks"] = {
-            {"selected_set_equal", selected_set_equal},
-            {"dropped_count_equal", dropped_count_equal},
-            {"rejection_taxonomy_equal", taxonomy_equal}
-        };
-        line["metrics"] = {
-            {"selection_symmetric_diff_count", selection_symmetric_diff_count},
-            {"taxonomy_mismatch_count", taxonomy_mismatch_count},
-            {"dropped_count_diff", dropped_count_diff}
-        };
-        line["mismatches"] = {
-            {"selected_only_core", setToJsonArray(selected_only_core)},
-            {"selected_only_v2", setToJsonArray(selected_only_v2)}
-        };
-        line["reason_counts"] = {
-            {"core", reasonMapToJsonObject(core_reason_counts)},
-            {"v2", reasonMapToJsonObject(v2_reason_counts)}
-        };
-    } catch (const std::exception& e) {
-        line["shadow_pass"] = false;
-        line["error"] = std::string("v2_shadow_probe_exception:") + e.what();
-    }
-
-    appendV2ShadowPolicyArtifactLine(line);
-}
-
 bool passesRegimeGate(analytics::MarketRegime regime, const engine::EngineConfig& cfg) {
     if (cfg.avoid_high_volatility && regime == analytics::MarketRegime::HIGH_VOLATILITY) {
         return false;
@@ -466,14 +151,69 @@ double computeCostAwareRewardRiskFloor(
     return std::clamp(rr_floor, base_rr, base_rr + 0.65);
 }
 
+double computeImpliedLossToWinRatio(double win_rate, double profit_factor) {
+    if (profit_factor <= 1e-9 || win_rate <= 1e-6 || win_rate >= (1.0 - 1e-6)) {
+        return 0.0;
+    }
+    const double loss_rate = 1.0 - win_rate;
+    if (loss_rate <= 1e-9) {
+        return 0.0;
+    }
+    return win_rate / (loss_rate * profit_factor);
+}
+
+double computeHistoryRewardRiskAsymmetryPressure(
+    const strategy::Signal& signal,
+    const engine::EngineConfig& cfg
+) {
+    const int min_sample = std::max(10, cfg.min_strategy_trades_for_ev / 2);
+    if (signal.strategy_trade_count < min_sample || signal.strategy_profit_factor <= 1e-9) {
+        return 0.0;
+    }
+    if (signal.strategy_win_rate < 0.50 || signal.strategy_profit_factor >= 1.02) {
+        return 0.0;
+    }
+    const double loss_to_win_ratio = computeImpliedLossToWinRatio(
+        signal.strategy_win_rate,
+        signal.strategy_profit_factor
+    );
+    if (loss_to_win_ratio < 1.08) {
+        return 0.0;
+    }
+    const double asymmetry_raw = std::clamp((loss_to_win_ratio - 1.10) / 1.10, 0.0, 1.0);
+    const double sample_conf = std::clamp(
+        (static_cast<double>(signal.strategy_trade_count) - static_cast<double>(min_sample)) / 24.0,
+        0.35,
+        1.0
+    );
+    return asymmetry_raw * sample_conf;
+}
+
 bool rebalanceSignalRiskReward(strategy::Signal& signal, const engine::EngineConfig& cfg) {
     if (signal.entry_price <= 0.0 || signal.stop_loss <= 0.0 || signal.stop_loss >= signal.entry_price) {
         return false;
     }
 
-    const double risk_price = signal.entry_price - signal.stop_loss;
+    double risk_price = signal.entry_price - signal.stop_loss;
     if (risk_price <= 0.0) {
         return false;
+    }
+
+    const double asymmetry_pressure = computeHistoryRewardRiskAsymmetryPressure(signal, cfg);
+    if (asymmetry_pressure > 1e-9) {
+        const bool hostile_regime =
+            signal.market_regime == analytics::MarketRegime::HIGH_VOLATILITY ||
+            signal.market_regime == analytics::MarketRegime::TRENDING_DOWN;
+        const double tighten_scale = hostile_regime ? 0.10 : 0.18;
+        const double compressed_risk_price = risk_price * std::clamp(
+            1.0 - (tighten_scale * asymmetry_pressure),
+            0.80,
+            1.0
+        );
+        if (compressed_risk_price > 1e-9) {
+            risk_price = compressed_risk_price;
+            signal.stop_loss = signal.entry_price - risk_price;
+        }
     }
 
     if (signal.take_profit_1 <= signal.entry_price) {
@@ -484,7 +224,40 @@ bool rebalanceSignalRiskReward(strategy::Signal& signal, const engine::EngineCon
     }
 
     const double base_target_rr = computeTargetRewardRisk(signal.strength, cfg);
-    const double target_rr = computeCostAwareRewardRiskFloor(signal, cfg, base_target_rr);
+    double target_rr = computeCostAwareRewardRiskFloor(signal, cfg, base_target_rr);
+    const bool trend_cont_strategy =
+        signal.strategy_name == "Advanced Momentum" ||
+        signal.strategy_name == "Breakout Strategy";
+    const bool off_trend_regime =
+        trend_cont_strategy &&
+        signal.market_regime != analytics::MarketRegime::TRENDING_UP;
+    if (off_trend_regime) {
+        double rr_role_add = 0.14;
+        if (signal.market_regime == analytics::MarketRegime::RANGING &&
+            signal.liquidity_score > 0.0 &&
+            signal.liquidity_score < 60.0) {
+            rr_role_add += 0.06;
+        }
+        if (signal.market_regime == analytics::MarketRegime::HIGH_VOLATILITY ||
+            signal.market_regime == analytics::MarketRegime::TRENDING_DOWN) {
+            rr_role_add += 0.10;
+        }
+        if (signal.strength < 0.60) {
+            rr_role_add += 0.05;
+        }
+        if (signal.reason == "alpha_head_fallback_candidate") {
+            rr_role_add += 0.05;
+        }
+        target_rr += rr_role_add;
+    }
+    if (asymmetry_pressure > 1e-9) {
+        const bool favorable_regime =
+            signal.market_regime == analytics::MarketRegime::TRENDING_UP ||
+            signal.market_regime == analytics::MarketRegime::RANGING;
+        const double rr_boost = (favorable_regime ? 0.12 : 0.08) + (0.22 * asymmetry_pressure);
+        target_rr = std::min(target_rr + rr_boost, base_target_rr + 1.10);
+    }
+    target_rr = std::min(target_rr, base_target_rr + 1.10);
     const double current_rr = (signal.take_profit_2 - signal.entry_price) / risk_price;
     if (current_rr + 1e-9 < target_rr) {
         signal.take_profit_2 = signal.entry_price + risk_price * target_rr;
@@ -493,10 +266,22 @@ bool rebalanceSignalRiskReward(strategy::Signal& signal, const engine::EngineCon
     const double risk_pct = risk_price / std::max(1e-9, signal.entry_price);
     const double round_trip_cost_pct = computeEffectiveRoundTripCostPct(signal, cfg);
     const double tp1_cost_cover_rr = ((round_trip_cost_pct * 0.65) + 0.00015) / std::max(1e-9, risk_pct);
-    const double min_tp1_rr = std::max({1.0, target_rr * 0.60, tp1_cost_cover_rr});
+    double tp1_asymmetry_ratio = 0.60 + (0.08 * asymmetry_pressure);
+    if (off_trend_regime) {
+        tp1_asymmetry_ratio = std::max(tp1_asymmetry_ratio, 0.66);
+    }
+    const double min_tp1_rr = std::max({1.0, target_rr * tp1_asymmetry_ratio, tp1_cost_cover_rr});
     const double min_tp1 = signal.entry_price + risk_price * min_tp1_rr;
     if (signal.take_profit_1 < min_tp1) {
         signal.take_profit_1 = min_tp1;
+    }
+    if (asymmetry_pressure > 1e-9) {
+        const double min_tp2_gap_rr = 0.18 + (0.22 * asymmetry_pressure);
+        const double min_tp2_rr = min_tp1_rr + min_tp2_gap_rr;
+        const double tp2_rr = (signal.take_profit_2 - signal.entry_price) / std::max(1e-9, risk_price);
+        if (tp2_rr < min_tp2_rr) {
+            signal.take_profit_2 = signal.entry_price + risk_price * min_tp2_rr;
+        }
     }
     if (signal.take_profit_2 < signal.take_profit_1) {
         signal.take_profit_2 = signal.take_profit_1;
@@ -678,10 +463,46 @@ struct StrategyEdgeStats {
         }
         return (gross_profit > 1e-12) ? 99.9 : 0.0;
     }
+    double avgWinKrw() const {
+        return (wins > 0) ? (gross_profit / static_cast<double>(wins)) : 0.0;
+    }
+    double avgLossAbsKrw() const {
+        const int losses = std::max(0, trades - wins);
+        return (losses > 0) ? (gross_loss_abs / static_cast<double>(losses)) : 0.0;
+    }
 };
 
-std::map<std::string, StrategyEdgeStats> buildStrategyEdgeStats(const std::vector<risk::TradeHistory>& history) {
+std::map<std::string, StrategyEdgeStats> buildStrategyEdgeStats(
+    const std::vector<risk::TradeHistory>& history,
+    int max_recent_trades_per_strategy = 0
+) {
     std::map<std::string, StrategyEdgeStats> out;
+    if (max_recent_trades_per_strategy > 0) {
+        std::map<std::string, int> strategy_counts;
+        for (auto it = history.rbegin(); it != history.rend(); ++it) {
+            const auto& trade = *it;
+            if (trade.strategy_name.empty()) {
+                continue;
+            }
+            auto& used = strategy_counts[trade.strategy_name];
+            if (used >= max_recent_trades_per_strategy) {
+                continue;
+            }
+            used++;
+
+            auto& s = out[trade.strategy_name];
+            s.trades++;
+            s.net_profit += trade.profit_loss;
+            if (trade.profit_loss > 0.0) {
+                s.wins++;
+                s.gross_profit += trade.profit_loss;
+            } else if (trade.profit_loss < 0.0) {
+                s.gross_loss_abs += std::abs(trade.profit_loss);
+            }
+        }
+        return out;
+    }
+
     for (const auto& trade : history) {
         if (trade.strategy_name.empty()) {
             continue;
@@ -712,9 +533,36 @@ std::string makeMarketStrategyRegimeKey(
 }
 
 std::map<std::string, StrategyEdgeStats> buildStrategyRegimeEdgeStats(
-    const std::vector<risk::TradeHistory>& history
+    const std::vector<risk::TradeHistory>& history,
+    int max_recent_trades_per_key = 0
 ) {
     std::map<std::string, StrategyEdgeStats> out;
+    if (max_recent_trades_per_key > 0) {
+        std::map<std::string, int> key_counts;
+        for (auto it = history.rbegin(); it != history.rend(); ++it) {
+            const auto& trade = *it;
+            if (trade.strategy_name.empty()) {
+                continue;
+            }
+            const std::string key = makeStrategyRegimeKey(trade.strategy_name, trade.market_regime);
+            auto& used = key_counts[key];
+            if (used >= max_recent_trades_per_key) {
+                continue;
+            }
+            used++;
+            auto& s = out[key];
+            s.trades++;
+            s.net_profit += trade.profit_loss;
+            if (trade.profit_loss > 0.0) {
+                s.wins++;
+                s.gross_profit += trade.profit_loss;
+            } else if (trade.profit_loss < 0.0) {
+                s.gross_loss_abs += std::abs(trade.profit_loss);
+            }
+        }
+        return out;
+    }
+
     for (const auto& trade : history) {
         if (trade.strategy_name.empty()) {
             continue;
@@ -734,9 +582,38 @@ std::map<std::string, StrategyEdgeStats> buildStrategyRegimeEdgeStats(
 }
 
 std::map<std::string, StrategyEdgeStats> buildMarketStrategyRegimeEdgeStats(
-    const std::vector<risk::TradeHistory>& history
+    const std::vector<risk::TradeHistory>& history,
+    int max_recent_trades_per_key = 0
 ) {
     std::map<std::string, StrategyEdgeStats> out;
+    if (max_recent_trades_per_key > 0) {
+        std::map<std::string, int> key_counts;
+        for (auto it = history.rbegin(); it != history.rend(); ++it) {
+            const auto& trade = *it;
+            if (trade.strategy_name.empty() || trade.market.empty()) {
+                continue;
+            }
+            const std::string key = makeMarketStrategyRegimeKey(
+                trade.market, trade.strategy_name, trade.market_regime
+            );
+            auto& used = key_counts[key];
+            if (used >= max_recent_trades_per_key) {
+                continue;
+            }
+            used++;
+            auto& s = out[key];
+            s.trades++;
+            s.net_profit += trade.profit_loss;
+            if (trade.profit_loss > 0.0) {
+                s.wins++;
+                s.gross_profit += trade.profit_loss;
+            } else if (trade.profit_loss < 0.0) {
+                s.gross_loss_abs += std::abs(trade.profit_loss);
+            }
+        }
+        return out;
+    }
+
     for (const auto& trade : history) {
         if (trade.strategy_name.empty() || trade.market.empty()) {
             continue;
@@ -861,6 +738,7 @@ struct EntryQualityGateSnapshot {
     double reward_risk_gate_effective = 0.0;
     double expected_edge_gate_base = 0.0;
     double expected_edge_gate_effective = 0.0;
+    bool adaptive_relief_applied = false;
 };
 
 EntryQualityGateSnapshot evaluateEntryQualityGate(
@@ -935,6 +813,59 @@ EntryQualityGateSnapshot evaluateEntryQualityGate(
     if (snapshot.failure == EntryQualityGateSnapshot::FailureKind::ExpectedEdgeAdaptive ||
         snapshot.failure == EntryQualityGateSnapshot::FailureKind::RewardRiskAndExpectedEdgeAdaptive) {
         snapshot.adaptive_edge_source = classifyAdaptiveSource(edge_adder_history, edge_adder_regime);
+    }
+
+    if (!snapshot.pass && cfg.enable_entry_quality_adaptive_relief) {
+        const bool adaptive_only_failure =
+            snapshot.failure == EntryQualityGateSnapshot::FailureKind::RewardRiskAdaptive ||
+            snapshot.failure == EntryQualityGateSnapshot::FailureKind::ExpectedEdgeAdaptive ||
+            snapshot.failure == EntryQualityGateSnapshot::FailureKind::RewardRiskAndExpectedEdgeAdaptive;
+        const bool high_stress_regime =
+            signal.market_regime == analytics::MarketRegime::HIGH_VOLATILITY ||
+            signal.market_regime == analytics::MarketRegime::TRENDING_DOWN;
+        const bool relief_regime_ok =
+            !cfg.entry_quality_adaptive_relief_block_high_stress_regime || !high_stress_regime;
+        const bool has_min_history =
+            signal.strategy_trade_count >= std::max(0, cfg.entry_quality_adaptive_relief_min_strategy_trades);
+        const bool history_win_ok =
+            signal.strategy_win_rate >= cfg.entry_quality_adaptive_relief_min_strategy_win_rate;
+        const bool history_pf_ok =
+            signal.strategy_profit_factor <= 0.0 ||
+            signal.strategy_profit_factor >= cfg.entry_quality_adaptive_relief_min_strategy_profit_factor;
+        const bool quality_ok =
+            signal.strength >= cfg.entry_quality_adaptive_relief_min_signal_strength &&
+            signal.expected_value >= cfg.entry_quality_adaptive_relief_min_expected_value &&
+            signal.liquidity_score >= cfg.entry_quality_adaptive_relief_min_liquidity_score &&
+            has_min_history &&
+            history_win_ok &&
+            history_pf_ok &&
+            relief_regime_ok;
+        if (adaptive_only_failure && quality_ok) {
+            const double rr_relax = std::clamp(
+                cfg.entry_quality_adaptive_relief_rr_max_gap,
+                0.0,
+                0.25
+            );
+            const double edge_relax = std::clamp(
+                cfg.entry_quality_adaptive_relief_edge_max_gap,
+                0.0,
+                0.0010
+            );
+            const double relieved_rr_gate = std::max(rr_gate_base, cfg.min_reward_risk - rr_relax);
+            const double relieved_edge_gate = std::max(
+                edge_gate_base,
+                cfg.min_expected_edge_pct - edge_relax
+            );
+            const bool rr_relief_ok = snapshot.reward_risk_ratio >= relieved_rr_gate;
+            const bool edge_relief_ok = snapshot.calibrated_expected_edge_pct >= relieved_edge_gate;
+            if (rr_relief_ok && edge_relief_ok) {
+                snapshot.pass = true;
+                snapshot.failure = EntryQualityGateSnapshot::FailureKind::None;
+                snapshot.reward_risk_gate_effective = relieved_rr_gate;
+                snapshot.expected_edge_gate_effective = relieved_edge_gate;
+                snapshot.adaptive_relief_applied = true;
+            }
+        }
     }
     return snapshot;
 }
@@ -1012,6 +943,113 @@ enum class SecondStageHistorySafetySeverity {
     Severe,
 };
 
+struct SecondStageConfirmationSnapshot {
+    bool pass = false;
+    bool baseline_gate_pass = false;
+    SecondStageConfirmationFailureKind failure = SecondStageConfirmationFailureKind::None;
+    SecondStageConfirmationSafetySource safety_source = SecondStageConfirmationSafetySource::Unknown;
+    double rr_margin = 0.0;
+    double edge_margin = 0.0;
+    double min_rr_margin = 0.0;
+    double min_edge_margin = 0.0;
+    double baseline_rr_score = 0.0;
+    double baseline_edge_score = 0.0;
+    double rr_margin_score = 0.0;
+    double edge_margin_score = 0.0;
+    double rr_margin_gap = 0.0;
+    double edge_margin_gap = 0.0;
+    bool rr_margin_near_miss = false;
+    bool rr_margin_soft_score_applied = false;
+    double rr_margin_soft_score_floor_value = 0.0;
+    double head_score = 0.0;
+};
+
+struct TwoHeadEntryAggregationSnapshot {
+    bool enabled = false;
+    bool entry_head_pass = false;
+    bool second_stage_head_pass = false;
+    bool aggregate_pass = false;
+    bool override_applied = false;
+    bool override_allowed = false;
+    bool rr_margin_near_miss_relief_applied = false;
+    bool rr_margin_near_miss_head_score_floor_applied = false;
+    bool rr_margin_near_miss_floor_relax_applied = false;
+    bool rr_margin_near_miss_adaptive_floor_relax_applied = false;
+    bool rr_margin_near_miss_relief_blocked = false;
+    bool rr_margin_near_miss_relief_blocked_override_disallowed = false;
+    bool rr_margin_near_miss_relief_blocked_entry_floor = false;
+    bool rr_margin_near_miss_relief_blocked_second_stage_floor = false;
+    bool rr_margin_near_miss_relief_blocked_aggregate_score = false;
+    bool rr_margin_near_miss_surplus_compensation_applied = false;
+    bool rr_margin_near_miss_surplus_second_stage_compensated = false;
+    bool rr_margin_near_miss_surplus_aggregate_compensated = false;
+    double entry_head_score = 0.0;
+    double second_stage_head_score = 0.0;
+    double aggregate_score = 0.0;
+    double aggregate_score_before_surplus_compensation = 0.0;
+    double rr_margin_near_miss_surplus_bonus = 0.0;
+    double rr_margin_near_miss_head_score_floor_value = 0.0;
+    double rr_margin_near_miss_adaptive_floor_relax_strength = 0.0;
+    double entry_weight = 0.5;
+    double second_stage_weight = 0.5;
+    double min_entry_score = 1.0;
+    double min_second_stage_score = 1.0;
+    double min_aggregate_score = 1.0;
+    double effective_min_second_stage_score = 1.0;
+    double effective_min_aggregate_score = 1.0;
+    double entry_surplus = 0.0;
+    double entry_deficit = 0.0;
+    double second_stage_deficit = 0.0;
+    double aggregate_deficit = 0.0;
+};
+
+double computeRatioScore(double numerator, double denominator) {
+    if (!std::isfinite(numerator) || !std::isfinite(denominator) || denominator <= 1e-12) {
+        return 0.0;
+    }
+    return std::clamp(numerator / denominator, 0.0, 2.5);
+}
+
+double computeSecondStageRRMarginSoftScoreFloor(
+    const engine::EngineConfig& cfg,
+    double baseline_rr_score,
+    double rr_margin,
+    double rr_margin_gap
+) {
+    if (!cfg.enable_second_stage_rr_margin_soft_score) {
+        return 0.0;
+    }
+    if (!std::isfinite(rr_margin) || !std::isfinite(rr_margin_gap) || rr_margin >= 0.0) {
+        return 0.0;
+    }
+    const double max_gap = std::clamp(cfg.second_stage_rr_margin_soft_score_max_gap, 1e-6, 0.10);
+    if (rr_margin_gap <= 0.0 || rr_margin_gap > max_gap) {
+        return 0.0;
+    }
+    const double base_floor = std::clamp(cfg.second_stage_rr_margin_soft_score_floor, 0.0, 1.20);
+    const double gap_weight = std::clamp(
+        cfg.second_stage_rr_margin_soft_score_gap_tightness_weight,
+        0.0,
+        0.80
+    );
+    const double gap_tightness = 1.0 - std::clamp(rr_margin_gap / max_gap, 0.0, 1.0);
+    const double baseline_anchor = std::clamp(baseline_rr_score, 0.0, 1.50);
+    const double floor = base_floor + (gap_weight * gap_tightness);
+    return std::clamp(std::min(baseline_anchor, floor), 0.0, 1.50);
+}
+
+double computeEntryQualityHeadScore(const EntryQualityGateSnapshot& snapshot) {
+    const double rr_score = computeRatioScore(
+        snapshot.reward_risk_ratio,
+        snapshot.reward_risk_gate_effective
+    );
+    const double edge_score = computeRatioScore(
+        snapshot.calibrated_expected_edge_pct,
+        snapshot.expected_edge_gate_effective
+    );
+    return std::clamp(std::min(rr_score, edge_score), 0.0, 2.5);
+}
+
 SecondStageHistorySafetySeverity classifySecondStageHistorySafetySeverity(
     const strategy::Signal& signal
 ) {
@@ -1032,24 +1070,42 @@ SecondStageHistorySafetySeverity classifySecondStageHistorySafetySeverity(
     return SecondStageHistorySafetySeverity::Mild;
 }
 
-bool passesSecondStageEntryConfirmation(
+SecondStageConfirmationSnapshot evaluateSecondStageEntryConfirmation(
     const strategy::Signal& signal,
     const engine::EngineConfig& cfg,
     double reward_risk_ratio,
     double rr_gate,
     double calibrated_expected_edge_pct,
-    double edge_gate,
-    SecondStageConfirmationFailureKind* out_failure = nullptr,
-    SecondStageConfirmationSafetySource* out_safety_source = nullptr
+    double edge_gate
 ) {
-    if (out_failure != nullptr) {
-        *out_failure = SecondStageConfirmationFailureKind::None;
-    }
-    if (out_safety_source != nullptr) {
-        *out_safety_source = SecondStageConfirmationSafetySource::Unknown;
-    }
-    if (!(reward_risk_ratio >= rr_gate && calibrated_expected_edge_pct >= edge_gate)) {
-        return false;
+    SecondStageConfirmationSnapshot snapshot;
+    snapshot.baseline_rr_score = computeRatioScore(reward_risk_ratio, rr_gate);
+    snapshot.baseline_edge_score = computeRatioScore(calibrated_expected_edge_pct, edge_gate);
+    snapshot.baseline_gate_pass =
+        reward_risk_ratio >= rr_gate &&
+        calibrated_expected_edge_pct >= edge_gate;
+    if (!snapshot.baseline_gate_pass) {
+        const bool rr_failed = reward_risk_ratio < rr_gate;
+        const bool edge_failed = calibrated_expected_edge_pct < edge_gate;
+        if (rr_failed && !edge_failed) {
+            snapshot.failure = SecondStageConfirmationFailureKind::RRMarginShortfall;
+        } else if (edge_failed && !rr_failed) {
+            snapshot.failure = SecondStageConfirmationFailureKind::EdgeMarginShortfall;
+        } else {
+            const double rr_gap = std::max(0.0, rr_gate - reward_risk_ratio);
+            const double edge_gap = std::max(0.0, edge_gate - calibrated_expected_edge_pct);
+            const double rr_norm = rr_gap / std::max(rr_gate, 1e-6);
+            const double edge_norm = edge_gap / std::max(edge_gate, 1e-9);
+            snapshot.failure = (rr_norm >= edge_norm)
+                ? SecondStageConfirmationFailureKind::RRMarginShortfall
+                : SecondStageConfirmationFailureKind::EdgeMarginShortfall;
+        }
+        snapshot.head_score = std::clamp(
+            std::min(snapshot.baseline_rr_score, snapshot.baseline_edge_score),
+            0.0,
+            2.5
+        );
+        return snapshot;
     }
 
     const double round_trip_cost_pct = computeEffectiveRoundTripCostPct(signal, cfg);
@@ -1086,12 +1142,71 @@ bool passesSecondStageEntryConfirmation(
     if (signal.strategy_trade_count >= std::max(8, cfg.min_strategy_trades_for_ev / 2) &&
         (signal.strategy_win_rate < 0.45 ||
          (signal.strategy_profit_factor > 0.0 && signal.strategy_profit_factor < 0.95))) {
-        min_rr_margin += 0.03;
-        min_edge_margin += 0.00006;
-        safety_rr_add += 0.03;
-        safety_edge_add += 0.00006;
-        safety_history_rr_add += 0.03;
-        safety_history_edge_add += 0.00006;
+        const SecondStageHistorySafetySeverity history_severity =
+            classifySecondStageHistorySafetySeverity(signal);
+        double history_rr_add = 0.03;
+        double history_edge_add = 0.00006;
+        if (history_severity == SecondStageHistorySafetySeverity::Moderate) {
+            history_rr_add *= 1.05;
+            history_edge_add *= 1.05;
+        } else if (history_severity == SecondStageHistorySafetySeverity::Severe) {
+            const double severe_scale = std::clamp(
+                cfg.second_stage_history_safety_severe_scale,
+                1.0,
+                2.0
+            );
+            history_rr_add *= severe_scale;
+            history_edge_add *= severe_scale;
+
+            if (cfg.enable_second_stage_history_safety_severe_relief) {
+                const bool history_hostile_regime =
+                    signal.market_regime == analytics::MarketRegime::HIGH_VOLATILITY ||
+                    signal.market_regime == analytics::MarketRegime::TRENDING_DOWN;
+                const bool regime_relief_allowed =
+                    !cfg.second_stage_history_safety_relief_block_hostile_regime ||
+                    !history_hostile_regime;
+                const bool quality_relief_ready =
+                    regime_relief_allowed &&
+                    signal.strategy_trade_count >= std::max(
+                        cfg.second_stage_history_safety_relief_min_strategy_trades,
+                        std::max(8, cfg.min_strategy_trades_for_ev / 2)
+                    ) &&
+                    signal.strength >= cfg.second_stage_history_safety_relief_min_signal_strength &&
+                    signal.expected_value >= cfg.second_stage_history_safety_relief_min_expected_value &&
+                    signal.liquidity_score >= cfg.second_stage_history_safety_relief_min_liquidity_score;
+                if (quality_relief_ready) {
+                    const double strength_score = std::clamp(
+                        (signal.strength - cfg.second_stage_history_safety_relief_min_signal_strength) / 0.18,
+                        0.0,
+                        1.0
+                    );
+                    const double edge_score = std::clamp(
+                        (signal.expected_value - cfg.second_stage_history_safety_relief_min_expected_value) / 0.0010,
+                        0.0,
+                        1.0
+                    );
+                    const double liquidity_score = std::clamp(
+                        (signal.liquidity_score - cfg.second_stage_history_safety_relief_min_liquidity_score) / 16.0,
+                        0.0,
+                        1.0
+                    );
+                    const double relief_quality = (strength_score + edge_score + liquidity_score) / 3.0;
+                    const double relief_scale = std::clamp(
+                        cfg.second_stage_history_safety_relief_max_scale * relief_quality,
+                        0.0,
+                        0.80
+                    );
+                    history_rr_add *= (1.0 - relief_scale);
+                    history_edge_add *= (1.0 - relief_scale);
+                }
+            }
+        }
+        min_rr_margin += history_rr_add;
+        min_edge_margin += history_edge_add;
+        safety_rr_add += history_rr_add;
+        safety_edge_add += history_edge_add;
+        safety_history_rr_add += history_rr_add;
+        safety_history_edge_add += history_edge_add;
     }
     if (signal.market_regime == analytics::MarketRegime::TRENDING_UP &&
         signal.strength >= 0.74 &&
@@ -1202,10 +1317,43 @@ bool passesSecondStageEntryConfirmation(
 
     const double rr_margin = reward_risk_ratio - rr_gate;
     const double edge_margin = calibrated_expected_edge_pct - edge_gate;
+    snapshot.rr_margin = rr_margin;
+    snapshot.edge_margin = edge_margin;
+    snapshot.min_rr_margin = min_rr_margin;
+    snapshot.min_edge_margin = min_edge_margin;
+    snapshot.rr_margin_score = computeRatioScore(rr_margin, min_rr_margin);
+    snapshot.edge_margin_score = computeRatioScore(edge_margin, min_edge_margin);
+    snapshot.rr_margin_gap = std::max(0.0, min_rr_margin - rr_margin);
+    snapshot.edge_margin_gap = std::max(0.0, min_edge_margin - edge_margin);
+    const double rr_soft_score_floor = computeSecondStageRRMarginSoftScoreFloor(
+        cfg,
+        snapshot.baseline_rr_score,
+        rr_margin,
+        snapshot.rr_margin_gap
+    );
+    snapshot.rr_margin_soft_score_floor_value = rr_soft_score_floor;
+    if (rr_soft_score_floor > snapshot.rr_margin_score) {
+        snapshot.rr_margin_score = rr_soft_score_floor;
+        snapshot.rr_margin_soft_score_applied = true;
+    }
+    snapshot.head_score = std::clamp(
+        std::min(snapshot.rr_margin_score, snapshot.edge_margin_score),
+        0.0,
+        2.5
+    );
+
     const bool rr_failed = rr_margin < min_rr_margin;
     const bool edge_failed = edge_margin < min_edge_margin;
+    const bool rr_only_failed = rr_failed && !edge_failed;
+    if (cfg.enable_second_stage_rr_margin_near_miss_relief &&
+        rr_only_failed &&
+        snapshot.rr_margin_gap > 0.0 &&
+        snapshot.rr_margin_gap <= std::max(0.0, cfg.second_stage_rr_margin_near_miss_max_gap)) {
+        snapshot.rr_margin_near_miss = true;
+    }
     if (!rr_failed && !edge_failed) {
-        return true;
+        snapshot.pass = true;
+        return snapshot;
     }
 
     SecondStageConfirmationFailureKind failure = SecondStageConfirmationFailureKind::None;
@@ -1261,9 +1409,7 @@ bool passesSecondStageEntryConfirmation(
                 safety_source = SecondStageConfirmationSafetySource::DynamicTighten;
             }
         }
-        if (out_safety_source != nullptr) {
-            *out_safety_source = safety_source;
-        }
+        snapshot.safety_source = safety_source;
     } else if (rr_failed && !edge_failed) {
         failure = SecondStageConfirmationFailureKind::RRMarginShortfall;
     } else if (edge_failed && !rr_failed) {
@@ -1278,8 +1424,399 @@ bool passesSecondStageEntryConfirmation(
             : SecondStageConfirmationFailureKind::EdgeMarginShortfall;
     }
 
+    snapshot.failure = failure;
+    return snapshot;
+}
+
+bool passesSecondStageEntryConfirmation(
+    const strategy::Signal& signal,
+    const engine::EngineConfig& cfg,
+    double reward_risk_ratio,
+    double rr_gate,
+    double calibrated_expected_edge_pct,
+    double edge_gate,
+    SecondStageConfirmationFailureKind* out_failure = nullptr,
+    SecondStageConfirmationSafetySource* out_safety_source = nullptr
+) {
+    const SecondStageConfirmationSnapshot snapshot =
+        evaluateSecondStageEntryConfirmation(
+            signal,
+            cfg,
+            reward_risk_ratio,
+            rr_gate,
+            calibrated_expected_edge_pct,
+            edge_gate
+        );
     if (out_failure != nullptr) {
-        *out_failure = failure;
+        *out_failure = snapshot.failure;
+    }
+    if (out_safety_source != nullptr) {
+        *out_safety_source = snapshot.safety_source;
+    }
+    return snapshot.pass;
+}
+
+TwoHeadEntryAggregationSnapshot evaluateTwoHeadEntryAggregation(
+    const strategy::Signal& signal,
+    const engine::EngineConfig& cfg,
+    const EntryQualityGateSnapshot& entry_quality_eval,
+    const SecondStageConfirmationSnapshot& second_stage_eval
+) {
+    TwoHeadEntryAggregationSnapshot snapshot;
+    snapshot.enabled = cfg.enable_two_head_entry_second_stage_aggregation;
+    snapshot.entry_head_pass = entry_quality_eval.pass;
+    snapshot.second_stage_head_pass = second_stage_eval.pass;
+    snapshot.entry_head_score = computeEntryQualityHeadScore(entry_quality_eval);
+    snapshot.second_stage_head_score = std::clamp(second_stage_eval.head_score, 0.0, 2.5);
+    if (!std::isfinite(snapshot.second_stage_head_score) || snapshot.second_stage_head_score <= 0.0) {
+        snapshot.second_stage_head_score = std::clamp(
+            std::min(second_stage_eval.baseline_rr_score, second_stage_eval.baseline_edge_score),
+            0.0,
+            2.5
+        );
+    }
+
+    const double raw_entry_weight = std::max(0.0, cfg.two_head_entry_quality_weight);
+    const double raw_second_weight = std::max(0.0, cfg.two_head_second_stage_weight);
+    const double weight_sum = raw_entry_weight + raw_second_weight;
+    if (weight_sum > 1e-12) {
+        snapshot.entry_weight = raw_entry_weight / weight_sum;
+        snapshot.second_stage_weight = raw_second_weight / weight_sum;
+    }
+    snapshot.min_entry_score = std::clamp(cfg.two_head_min_entry_quality_score, 0.50, 1.20);
+    snapshot.min_second_stage_score = std::clamp(cfg.two_head_min_second_stage_score, 0.50, 1.20);
+    snapshot.min_aggregate_score = std::clamp(cfg.two_head_min_aggregate_score, 0.80, 1.20);
+    snapshot.effective_min_second_stage_score = snapshot.min_second_stage_score;
+    snapshot.effective_min_aggregate_score = snapshot.min_aggregate_score;
+    snapshot.aggregate_score =
+        (snapshot.entry_weight * snapshot.entry_head_score) +
+        (snapshot.second_stage_weight * snapshot.second_stage_head_score);
+    snapshot.entry_surplus = std::max(0.0, snapshot.entry_head_score - snapshot.min_entry_score);
+    snapshot.entry_deficit = std::max(0.0, snapshot.min_entry_score - snapshot.entry_head_score);
+    snapshot.second_stage_deficit = std::max(
+        0.0,
+        snapshot.min_second_stage_score - snapshot.second_stage_head_score
+    );
+    snapshot.aggregate_deficit = std::max(
+        0.0,
+        snapshot.min_aggregate_score - snapshot.aggregate_score
+    );
+
+    if (snapshot.entry_head_pass && snapshot.second_stage_head_pass) {
+        snapshot.aggregate_pass = true;
+        snapshot.override_applied = false;
+        snapshot.override_allowed = false;
+        return snapshot;
+    }
+    if (!snapshot.enabled) {
+        snapshot.aggregate_pass = false;
+        snapshot.override_applied = false;
+        snapshot.override_allowed = false;
+        return snapshot;
+    }
+
+    const bool high_stress_regime =
+        signal.market_regime == analytics::MarketRegime::HIGH_VOLATILITY ||
+        signal.market_regime == analytics::MarketRegime::TRENDING_DOWN;
+    const bool high_stress_blocked =
+        cfg.two_head_aggregation_block_high_stress_regime && high_stress_regime;
+    const bool has_min_history =
+        signal.strategy_trade_count >= std::max(0, cfg.two_head_aggregation_min_strategy_trades);
+    const double near_miss_max_gap = std::max(0.0, cfg.second_stage_rr_margin_near_miss_max_gap);
+    const bool near_miss_gap_ok =
+        second_stage_eval.rr_margin_near_miss &&
+        second_stage_eval.rr_margin_gap > 0.0 &&
+        second_stage_eval.rr_margin_gap <= near_miss_max_gap;
+    const bool near_miss_regime_allowed =
+        !cfg.second_stage_rr_margin_near_miss_block_high_stress_regime || !high_stress_regime;
+    const bool near_miss_history_ok =
+        signal.strategy_trade_count >= std::max(0, cfg.second_stage_rr_margin_near_miss_min_strategy_trades);
+    const bool near_miss_quality_ok =
+        signal.strength >= cfg.second_stage_rr_margin_near_miss_min_signal_strength &&
+        signal.expected_value >= cfg.second_stage_rr_margin_near_miss_min_expected_value &&
+        signal.liquidity_score >= cfg.second_stage_rr_margin_near_miss_min_liquidity_score;
+    double near_miss_quality_score = 0.0;
+    double near_miss_gap_tightness = 0.0;
+    if (cfg.enable_second_stage_rr_margin_near_miss_relief &&
+        near_miss_gap_ok &&
+        near_miss_regime_allowed &&
+        near_miss_history_ok &&
+        near_miss_quality_ok) {
+        const double strength_score = std::clamp(
+            (signal.strength - cfg.second_stage_rr_margin_near_miss_min_signal_strength) / 0.18,
+            0.0,
+            1.0
+        );
+        const double edge_score = std::clamp(
+            (signal.expected_value - cfg.second_stage_rr_margin_near_miss_min_expected_value) / 0.0012,
+            0.0,
+            1.0
+        );
+        const double liquidity_score = std::clamp(
+            (signal.liquidity_score - cfg.second_stage_rr_margin_near_miss_min_liquidity_score) / 16.0,
+            0.0,
+            1.0
+        );
+        near_miss_quality_score = (strength_score + edge_score + liquidity_score) / 3.0;
+        near_miss_gap_tightness = 1.0 - std::clamp(
+            second_stage_eval.rr_margin_gap / std::max(near_miss_max_gap, 1e-9),
+            0.0,
+            1.0
+        );
+        const double base_boost = std::clamp(
+            cfg.second_stage_rr_margin_near_miss_score_boost,
+            0.0,
+            0.25
+        );
+        const double boost_scale = std::clamp(
+            (0.45 * near_miss_quality_score) + (0.55 * near_miss_gap_tightness),
+            0.0,
+            1.0
+        );
+        const double applied_boost = base_boost * boost_scale;
+        if (applied_boost > 1e-12) {
+            snapshot.second_stage_head_score = std::clamp(
+                snapshot.second_stage_head_score + applied_boost,
+                0.0,
+                2.5
+            );
+            snapshot.rr_margin_near_miss_relief_applied = true;
+        }
+    }
+    if (snapshot.rr_margin_near_miss_relief_applied &&
+        cfg.enable_second_stage_rr_margin_near_miss_head_score_floor) {
+        const double floor_base = std::clamp(
+            cfg.second_stage_rr_margin_near_miss_head_score_floor_base,
+            0.0,
+            1.30
+        );
+        const double floor_q_weight = std::clamp(
+            cfg.second_stage_rr_margin_near_miss_head_score_floor_quality_weight,
+            0.0,
+            1.00
+        );
+        const double floor_gap_weight = std::clamp(
+            cfg.second_stage_rr_margin_near_miss_head_score_floor_gap_weight,
+            0.0,
+            1.00
+        );
+        const double floor_cap = std::clamp(
+            cfg.second_stage_rr_margin_near_miss_head_score_floor_max,
+            0.50,
+            1.40
+        );
+        const double floor_value = std::min(
+            floor_cap,
+            floor_base +
+                (floor_q_weight * near_miss_quality_score) +
+                (floor_gap_weight * near_miss_gap_tightness)
+        );
+        snapshot.rr_margin_near_miss_head_score_floor_value = floor_value;
+        if (floor_value > snapshot.second_stage_head_score) {
+            snapshot.second_stage_head_score = floor_value;
+            snapshot.rr_margin_near_miss_head_score_floor_applied = true;
+        }
+    }
+    double second_floor_relax = 0.0;
+    double aggregate_floor_relax = 0.0;
+    if (snapshot.rr_margin_near_miss_relief_applied &&
+        cfg.enable_two_head_rr_margin_near_miss_floor_relax) {
+        second_floor_relax = std::clamp(
+            cfg.two_head_rr_margin_near_miss_second_stage_floor_relax,
+            0.0,
+            0.20
+        );
+        aggregate_floor_relax = std::clamp(
+            cfg.two_head_rr_margin_near_miss_aggregate_floor_relax,
+            0.0,
+            0.15
+        );
+    }
+    if (snapshot.rr_margin_near_miss_relief_applied &&
+        cfg.enable_two_head_rr_margin_near_miss_adaptive_floor_relax) {
+        const double quality_weight = std::clamp(
+            cfg.two_head_rr_margin_near_miss_adaptive_floor_relax_quality_weight,
+            0.0,
+            1.00
+        );
+        const double gap_weight = std::clamp(
+            cfg.two_head_rr_margin_near_miss_adaptive_floor_relax_gap_weight,
+            0.0,
+            1.00
+        );
+        const double adaptive_weight_sum = quality_weight + gap_weight;
+        if (adaptive_weight_sum > 1e-12) {
+            const double adaptive_strength = std::clamp(
+                ((quality_weight * near_miss_quality_score) + (gap_weight * near_miss_gap_tightness)) /
+                    adaptive_weight_sum,
+                0.0,
+                1.0
+            );
+            const double min_activation = std::clamp(
+                cfg.two_head_rr_margin_near_miss_adaptive_floor_relax_min_activation,
+                0.0,
+                1.0
+            );
+            if (adaptive_strength >= min_activation) {
+                const double max_second_stage_relax = std::clamp(
+                    cfg.two_head_rr_margin_near_miss_adaptive_floor_relax_max_second_stage,
+                    0.0,
+                    0.20
+                );
+                const double max_aggregate_relax = std::clamp(
+                    cfg.two_head_rr_margin_near_miss_adaptive_floor_relax_max_aggregate,
+                    0.0,
+                    0.15
+                );
+                second_floor_relax = std::max(second_floor_relax, max_second_stage_relax * adaptive_strength);
+                aggregate_floor_relax = std::max(aggregate_floor_relax, max_aggregate_relax * adaptive_strength);
+                snapshot.rr_margin_near_miss_adaptive_floor_relax_applied = true;
+                snapshot.rr_margin_near_miss_adaptive_floor_relax_strength = adaptive_strength;
+            }
+        }
+    }
+    if (second_floor_relax > 1e-12 || aggregate_floor_relax > 1e-12) {
+        snapshot.effective_min_second_stage_score = std::max(
+            0.50,
+            snapshot.min_second_stage_score - second_floor_relax
+        );
+        snapshot.effective_min_aggregate_score = std::max(
+            0.80,
+            snapshot.min_aggregate_score - aggregate_floor_relax
+        );
+        snapshot.rr_margin_near_miss_floor_relax_applied = true;
+    }
+    snapshot.second_stage_head_pass =
+        second_stage_eval.pass ||
+        snapshot.second_stage_head_score >= snapshot.effective_min_second_stage_score;
+    snapshot.aggregate_score =
+        (snapshot.entry_weight * snapshot.entry_head_score) +
+        (snapshot.second_stage_weight * snapshot.second_stage_head_score);
+    snapshot.entry_surplus = std::max(0.0, snapshot.entry_head_score - snapshot.min_entry_score);
+    snapshot.entry_deficit = std::max(0.0, snapshot.min_entry_score - snapshot.entry_head_score);
+    snapshot.second_stage_deficit = std::max(
+        0.0,
+        snapshot.effective_min_second_stage_score - snapshot.second_stage_head_score
+    );
+    snapshot.aggregate_deficit = std::max(
+        0.0,
+        snapshot.effective_min_aggregate_score - snapshot.aggregate_score
+    );
+    snapshot.override_allowed = !high_stress_blocked && has_min_history;
+    const bool entry_floor_ok = snapshot.entry_head_score >= snapshot.min_entry_score;
+    bool second_stage_floor_ok =
+        snapshot.second_stage_head_score >= snapshot.effective_min_second_stage_score;
+    bool aggregate_score_ok =
+        snapshot.aggregate_score >= snapshot.effective_min_aggregate_score;
+
+    if (snapshot.rr_margin_near_miss_relief_applied &&
+        cfg.enable_two_head_rr_margin_near_miss_surplus_compensation) {
+        const double min_entry_surplus = std::clamp(
+            cfg.two_head_rr_margin_near_miss_surplus_min_entry_surplus,
+            0.0,
+            0.35
+        );
+        const double min_edge_score = std::clamp(
+            cfg.two_head_rr_margin_near_miss_surplus_min_edge_score,
+            0.80,
+            1.60
+        );
+        const double max_second_stage_deficit = std::clamp(
+            cfg.two_head_rr_margin_near_miss_surplus_max_second_stage_deficit,
+            0.0,
+            0.20
+        );
+        const double max_aggregate_deficit = std::clamp(
+            cfg.two_head_rr_margin_near_miss_surplus_max_aggregate_deficit,
+            0.0,
+            0.20
+        );
+        const double bonus_weight = std::clamp(
+            cfg.two_head_rr_margin_near_miss_surplus_entry_weight,
+            0.0,
+            1.50
+        );
+        const double max_bonus = std::clamp(
+            cfg.two_head_rr_margin_near_miss_surplus_max_aggregate_bonus,
+            0.0,
+            0.20
+        );
+        const double entry_surplus = std::max(0.0, snapshot.entry_head_score - snapshot.min_entry_score);
+        const double second_stage_deficit = std::max(
+            0.0,
+            snapshot.effective_min_second_stage_score - snapshot.second_stage_head_score
+        );
+        const double aggregate_deficit = std::max(
+            0.0,
+            snapshot.effective_min_aggregate_score - snapshot.aggregate_score
+        );
+        const bool entry_surplus_ok = entry_surplus >= min_entry_surplus;
+        const bool edge_score_ok = second_stage_eval.baseline_edge_score >= min_edge_score;
+        const bool second_stage_compensation_ok =
+            entry_floor_ok &&
+            entry_surplus_ok &&
+            edge_score_ok &&
+            second_stage_deficit > 0.0 &&
+            second_stage_deficit <= max_second_stage_deficit;
+        if (second_stage_compensation_ok) {
+            second_stage_floor_ok = true;
+            snapshot.rr_margin_near_miss_surplus_second_stage_compensated = true;
+        }
+
+        snapshot.aggregate_score_before_surplus_compensation = snapshot.aggregate_score;
+        const double bonus = std::min(max_bonus, entry_surplus * bonus_weight);
+        snapshot.rr_margin_near_miss_surplus_bonus = bonus;
+        const bool aggregate_compensation_ok =
+            entry_floor_ok &&
+            entry_surplus_ok &&
+            edge_score_ok &&
+            aggregate_deficit > 0.0 &&
+            aggregate_deficit <= max_aggregate_deficit &&
+            bonus > 1e-12 &&
+            (snapshot.aggregate_score + bonus) >= snapshot.effective_min_aggregate_score;
+        if (aggregate_compensation_ok) {
+            snapshot.aggregate_score = snapshot.aggregate_score + bonus;
+            aggregate_score_ok = true;
+            snapshot.rr_margin_near_miss_surplus_aggregate_compensated = true;
+        }
+        snapshot.aggregate_deficit = std::max(
+            0.0,
+            snapshot.effective_min_aggregate_score - snapshot.aggregate_score
+        );
+        snapshot.rr_margin_near_miss_surplus_compensation_applied =
+            snapshot.rr_margin_near_miss_surplus_second_stage_compensated ||
+            snapshot.rr_margin_near_miss_surplus_aggregate_compensated;
+    }
+    const bool floors_ok = entry_floor_ok && second_stage_floor_ok;
+    snapshot.aggregate_pass =
+        snapshot.override_allowed &&
+        floors_ok &&
+        aggregate_score_ok;
+    if (snapshot.rr_margin_near_miss_relief_applied && !snapshot.aggregate_pass) {
+        snapshot.rr_margin_near_miss_relief_blocked = true;
+        snapshot.rr_margin_near_miss_relief_blocked_override_disallowed =
+            !snapshot.override_allowed;
+        snapshot.rr_margin_near_miss_relief_blocked_entry_floor = !entry_floor_ok;
+        snapshot.rr_margin_near_miss_relief_blocked_second_stage_floor =
+            !second_stage_floor_ok;
+        snapshot.rr_margin_near_miss_relief_blocked_aggregate_score =
+            !aggregate_score_ok;
+    }
+    snapshot.override_applied = snapshot.aggregate_pass;
+    return snapshot;
+}
+
+bool shouldAttributeTwoHeadFailureToSecondStage(
+    const TwoHeadEntryAggregationSnapshot& snapshot
+) {
+    if (!snapshot.entry_head_pass && snapshot.second_stage_head_pass) {
+        return false;
+    }
+    if (snapshot.entry_head_pass && !snapshot.second_stage_head_pass) {
+        return true;
+    }
+    if (!snapshot.entry_head_pass && !snapshot.second_stage_head_pass) {
+        return snapshot.second_stage_deficit >= snapshot.entry_deficit;
     }
     return false;
 }
@@ -1374,67 +1911,38 @@ void BacktestEngine::init(const Config& config) {
 
     engine_config_ = config.getEngineConfig();
     resetExecutionUpdateArtifact();
-    resetV2ShadowPolicyArtifact();
     balance_krw_ = config.getInitialCapital();
     balance_asset_ = 0.0;
     max_balance_ = balance_krw_;
     loaded_tf_cursors_.clear();
     entry_funnel_ = Result::EntryFunnelSummary{};
+    pre_cat_feature_snapshot_ = Result::PreCatFeatureSnapshot{};
     strategy_generated_counts_.clear();
     strategy_selected_best_counts_.clear();
     strategy_blocked_by_risk_manager_counts_.clear();
     strategy_entries_executed_counts_.clear();
+    strategy_skipped_disabled_counts_.clear();
+    strategy_no_signal_counts_.clear();
+    strategy_collect_exception_count_ = 0;
     entry_rejection_reason_counts_.clear();
     intrabar_stop_tp_collision_count_ = 0;
     intrabar_collision_by_strategy_.clear();
+    pre_cat_recovery_hysteresis_hold_by_key_.clear();
+    pre_cat_recovery_bridge_activation_by_key_.clear();
+    pre_cat_no_soft_quality_relief_activation_by_key_.clear();
+    pre_cat_candidate_rr_failsafe_activation_by_key_.clear();
+    pre_cat_pressure_rebound_relief_activation_by_key_.clear();
+    pre_cat_negative_history_quarantine_hold_by_key_.clear();
     
     // Reset Risk Manager with initial capital
     risk_manager_ = std::make_unique<risk::RiskManager>(balance_krw_);
-    // 諛깊뀒?ㅽ듃?먯꽌???ㅼ떆媛?荑⑤떎??鍮꾪솢?깊솕 (?ㅼ떆媛꾩씠 ?꾨땶 ?쒕??덉씠???쒓컙 ?ъ슜)
+    // 백테?�트?�서???�시�?쿨다??비활?�화 (?�시간이 ?�닌 ?��??�이???�간 ?�용)
     risk_manager_->setMinReentryInterval(0);
     risk_manager_->setMaxDailyTrades(1000);
     
-    std::set<std::string> enabled;
-    for (const auto& s : engine_config_.enabled_strategies) {
-        enabled.insert(s);
-    }
-    auto should_register = [&](const std::string& name) {
-        if (enabled.empty()) {
-            return true;
-        }
-        if (enabled.count(name) > 0) {
-            return true;
-        }
-        if (name == "grid_trading" && enabled.count("grid") > 0) {
-            return true;
-        }
-        return false;
-    };
-
-    if (should_register("scalping")) {
-        auto scalping = std::make_shared<strategy::ScalpingStrategy>(http_client_);
-        strategy_manager_->registerStrategy(scalping);
-    }
-
-    if (should_register("momentum")) {
-        auto momentum = std::make_shared<strategy::MomentumStrategy>(http_client_);
-        strategy_manager_->registerStrategy(momentum);
-    }
-
-    if (should_register("breakout")) {
-        auto breakout = std::make_shared<strategy::BreakoutStrategy>(http_client_);
-        strategy_manager_->registerStrategy(breakout);
-    }
-
-    if (should_register("mean_reversion")) {
-        auto mean_rev = std::make_shared<strategy::MeanReversionStrategy>(http_client_);
-        strategy_manager_->registerStrategy(mean_rev);
-    }
-
-    if (should_register("grid_trading")) {
-        auto grid = std::make_shared<strategy::GridTradingStrategy>(http_client_);
-        strategy_manager_->registerStrategy(grid);
-    }
+    auto foundation = std::make_shared<strategy::FoundationAdaptiveStrategy>(http_client_);
+    strategy_manager_->registerStrategy(foundation);
+    LOG_INFO("Registered strategy: foundation_adaptive (legacy strategy pack disconnected)");
     
     LOG_INFO(
         "BacktestEngine initialized (core_bridge={}, core_policy={}, core_risk={}, core_execution={})",
@@ -1630,6 +2138,9 @@ void BacktestEngine::loadData(const std::string& file_path) {
 
     normalizeTimestampsToMs(history_data_);
     loadCompanionTimeframes(file_path);
+    strict_live_equivalent_data_parity_ =
+        common::hasLiveEquivalentCompanionSet(loaded_tf_candles_);
+    strict_data_parity_skip_count_ = 0;
 
     const std::string stem_lower = toLowerCopy(std::filesystem::path(file_path).stem().string());
     const std::string prefix = "upbit_";
@@ -1650,6 +2161,8 @@ void BacktestEngine::loadData(const std::string& file_path) {
              market_name_,
              history_data_.size(),
              loaded_tf_candles_.size());
+    LOG_INFO("Backtest live-equivalent data parity mode: {}",
+             strict_live_equivalent_data_parity_ ? "enabled" : "disabled");
 }
 
 void BacktestEngine::run() {
@@ -1675,9 +2188,15 @@ void BacktestEngine::processCandle(const Candle& candle) {
         current_candles_.erase(current_candles_.begin()); // Keep window size
     }
     
-    // Let each strategy enforce its own warm-up requirement.
-    // A global 100-candle gate prevents short fixture datasets from producing any signal.
-    if (current_candles_.size() < 30) return;
+    // Keep warm-up policy explicit:
+    // - relaxed mode: lightweight warm-up for synthetic/small fixtures
+    // - strict mode: live-equivalent minimum bars on 1m
+    const size_t min_1m_warmup = strict_live_equivalent_data_parity_
+        ? common::minRequiredBarsForTimeframe("1m", 120)
+        : static_cast<size_t>(30);
+    if (current_candles_.size() < min_1m_warmup) {
+        return;
+    }
 
     double current_price = candle.close;
     auto notifyStrategyClosed = [&](const risk::Position& closed_position, double exit_price) {
@@ -1707,6 +2226,26 @@ void BacktestEngine::processCandle(const Candle& candle) {
     metrics.candles_by_tf["1h"] = getTimeframeCandles("1h", candle.timestamp, 60, TF_1H_MAX_BARS);
     metrics.candles_by_tf["4h"] = getTimeframeCandles("4h", candle.timestamp, 240, TF_4H_MAX_BARS);
     metrics.candles_by_tf["1d"] = getTimeframeCandles("1d", candle.timestamp, 1440, TF_1D_MAX_BARS);
+    common::trimCandlesByPolicy(metrics.candles_by_tf);
+    auto tf_1m_it = metrics.candles_by_tf.find("1m");
+    if (tf_1m_it != metrics.candles_by_tf.end()) {
+        metrics.candles = tf_1m_it->second;
+    }
+    if (strict_live_equivalent_data_parity_) {
+        const auto data_window_check = common::checkLiveEquivalentWindow(metrics.candles_by_tf);
+        if (!data_window_check.pass) {
+            strict_data_parity_skip_count_++;
+            if (strict_data_parity_skip_count_ == 1 || (strict_data_parity_skip_count_ % 200) == 0) {
+                LOG_INFO(
+                    "Backtest strict parity skip: market={}, ts={}, reason={}",
+                    market_name_,
+                    candle.timestamp,
+                    common::buildWindowCheckSummary(data_window_check)
+                );
+            }
+            return;
+        }
+    }
     metrics.current_price = current_price;
     metrics.volatility = regime.atr_pct;
     
@@ -1817,26 +2356,6 @@ void BacktestEngine::processCandle(const Candle& candle) {
     if (position) {
         auto strategy = strategy_manager_->getStrategy(position->strategy_name);
         if (strategy) {
-            // Keep backtest exit mechanics aligned with live monitoring flow.
-            auto scalping_strategy = std::dynamic_pointer_cast<strategy::ScalpingStrategy>(strategy);
-            if (scalping_strategy && position->strategy_name == "Advanced Scalping") {
-                if (position->breakeven_trigger > 0.0 &&
-                    current_price >= position->breakeven_trigger &&
-                    position->stop_loss < position->entry_price) {
-                    risk_manager_->moveStopToBreakeven(market_name_);
-                }
-
-                if (position->trailing_start > 0.0 && current_price >= position->trailing_start) {
-                    const double new_stop = scalping_strategy->updateTrailingStop(
-                        position->entry_price,
-                        position->highest_price,
-                        current_price
-                    );
-                    risk_manager_->updateStopLoss(market_name_, new_stop, "trailing");
-                }
-                position = risk_manager_->getPosition(market_name_);
-            }
-
             // Check Exit Condition
             bool should_exit = strategy->shouldExit(
                 market_name_,
@@ -1938,14 +2457,29 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 entry_rejection_reason_counts_[kv.first] += kv.second;
             }
         };
+        strategy::StrategyManager::CollectDiagnostics collect_diag;
         auto signals = strategy_manager_->collectSignals(
             market_name_,
             metrics,
             current_candles_,
             current_price,
             risk_manager_->getRiskMetrics().available_capital,
-            regime
+            regime,
+            &collect_diag
         );
+        for (const auto& kv : collect_diag.skipped_disabled_by_strategy) {
+            if (!kv.first.empty() && kv.second > 0) {
+                strategy_skipped_disabled_counts_[kv.first] += kv.second;
+            }
+        }
+        for (const auto& kv : collect_diag.no_signal_by_strategy) {
+            if (!kv.first.empty() && kv.second > 0) {
+                strategy_no_signal_counts_[kv.first] += kv.second;
+            }
+        }
+        if (collect_diag.exception_count > 0) {
+            strategy_collect_exception_count_ += collect_diag.exception_count;
+        }
         if (signals.empty()) {
             entry_funnel_.no_signal_generated++;
             markEntryReject("no_signal_generated");
@@ -2166,24 +2700,6 @@ void BacktestEngine::processCandle(const Candle& candle) {
             core_dropped_by_policy = policy_output.dropped_by_policy;
             candidate_signals = std::move(policy_output.selected_candidates);
         }
-        if (engine_config_.enable_v2_shadow_policy_probe &&
-            core_policy_enabled &&
-            policy_controller_ &&
-            !filtered_signals.empty()) {
-            appendV2ShadowPolicyParityArtifact(
-                toMsTimestamp(candle.timestamp),
-                regime.regime,
-                small_seed_mode,
-                1,
-                filtered_signals,
-                candidate_signals,
-                core_dropped_by_policy,
-                core_policy_decisions,
-                *risk_manager_,
-                *policy_controller_,
-                performance_store_.get()
-            );
-        }
         if (core_policy_enabled && !filtered_signals.empty() && candidate_signals.empty()) {
             entry_funnel_.filtered_out_by_policy++;
             markEntryReject("filtered_out_by_policy");
@@ -2211,9 +2727,21 @@ void BacktestEngine::processCandle(const Candle& candle) {
             strategy_selected_best_counts_[best_signal.strategy_name]++;
         }
         const auto trade_history = risk_manager_->getTradeHistory();
+        const int recent_strategy_window = std::max(16, engine_config_.min_strategy_trades_for_ev);
+        const int recent_regime_window = std::max(8, engine_config_.min_strategy_trades_for_ev / 2);
+        const int recent_market_regime_window = std::max(6, engine_config_.min_strategy_trades_for_ev / 2);
         const auto strategy_edge = buildStrategyEdgeStats(trade_history);
+        const auto strategy_edge_recent = buildStrategyEdgeStats(trade_history, recent_strategy_window);
         const auto strategy_regime_edge = buildStrategyRegimeEdgeStats(trade_history);
+        const auto strategy_regime_edge_recent = buildStrategyRegimeEdgeStats(
+            trade_history,
+            recent_regime_window
+        );
         const auto market_strategy_regime_edge = buildMarketStrategyRegimeEdgeStats(trade_history);
+        const auto market_strategy_regime_edge_recent = buildMarketStrategyRegimeEdgeStats(
+            trade_history,
+            recent_market_regime_window
+        );
 
         if (best_signal.type != strategy::SignalType::NONE) {
             best_signal.market_regime = regime.regime;
@@ -2228,6 +2756,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
             const bool alpha_head_fallback_candidate =
                 isAlphaHeadFallbackCandidate(best_signal, alpha_head_mode);
             const double history_penalty_scale = alpha_head_fallback_candidate ? 0.45 : 1.0;
+            bool alpha_head_relief_eligible = true;
             const bool favorable_recovery_signal =
                 no_entry_streak_candles_ >= 45 &&
                 (best_signal.market_regime == analytics::MarketRegime::TRENDING_UP ||
@@ -2235,6 +2764,20 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 best_signal.strength >= 0.72 &&
                 best_signal.liquidity_score >= 60.0;
             bool strategy_ev_ok = true;
+            enum class StrategyEvFailKind {
+                None = 0,
+                PreCatastrophicNoRecovery,
+                SevereThresholdNoRecovery,
+                CatastrophicHistory,
+                LossAsymmetryCollapse,
+            };
+            StrategyEvFailKind strategy_ev_fail_kind = StrategyEvFailKind::None;
+            auto failStrategyEv = [&](StrategyEvFailKind kind) {
+                if (strategy_ev_fail_kind == StrategyEvFailKind::None) {
+                    strategy_ev_fail_kind = kind;
+                }
+                strategy_ev_ok = false;
+            };
             double adaptive_rr_add_history = 0.0;
             double adaptive_rr_add_regime = 0.0;
             double adaptive_edge_add_history = 0.0;
@@ -2268,6 +2811,927 @@ void BacktestEngine::processCandle(const Candle& candle) {
             auto stat_it = strategy_edge.find(best_signal.strategy_name);
             if (core_risk_enabled && stat_it != strategy_edge.end()) {
                 const auto& stat = stat_it->second;
+                const auto recent_stat_it = strategy_edge_recent.find(best_signal.strategy_name);
+                const auto regime_ev_it = strategy_regime_edge.find(
+                    makeStrategyRegimeKey(best_signal.strategy_name, best_signal.market_regime)
+                );
+                const bool has_recent_recovery =
+                    recent_stat_it != strategy_edge_recent.end() &&
+                    recent_stat_it->second.trades >= std::max(10, engine_config_.min_strategy_trades_for_ev / 2) &&
+                    recent_stat_it->second.expectancy() >= (engine_config_.min_strategy_expectancy_krw + 1.0) &&
+                    recent_stat_it->second.profitFactor() >=
+                        std::max(1.00, engine_config_.min_strategy_profit_factor) &&
+                    recent_stat_it->second.winRate() >= 0.52;
+                const bool has_regime_recovery =
+                    regime_ev_it != strategy_regime_edge.end() &&
+                    regime_ev_it->second.trades >= 8 &&
+                    regime_ev_it->second.expectancy() >= engine_config_.min_strategy_expectancy_krw &&
+                    regime_ev_it->second.profitFactor() >=
+                        std::max(0.98, engine_config_.min_strategy_profit_factor - 0.02) &&
+                    regime_ev_it->second.winRate() >= 0.50;
+                const bool has_recovery_evidence_any = has_recent_recovery || has_regime_recovery;
+                const int relaxed_recovery_min_trades = std::max(
+                    6,
+                    engine_config_.strategy_ev_pre_cat_relaxed_recovery_min_trades
+                );
+                const double relaxed_recovery_expectancy_floor =
+                    engine_config_.min_strategy_expectancy_krw -
+                    std::max(0.0, engine_config_.strategy_ev_pre_cat_relaxed_recovery_expectancy_gap_krw);
+                const double relaxed_recovery_profit_factor_floor = std::max(
+                    0.90,
+                    engine_config_.min_strategy_profit_factor -
+                    std::max(0.0, engine_config_.strategy_ev_pre_cat_relaxed_recovery_profit_factor_gap)
+                );
+                const bool has_recent_recovery_relaxed =
+                    recent_stat_it != strategy_edge_recent.end() &&
+                    recent_stat_it->second.trades >= relaxed_recovery_min_trades &&
+                    recent_stat_it->second.expectancy() >= relaxed_recovery_expectancy_floor &&
+                    recent_stat_it->second.profitFactor() >= relaxed_recovery_profit_factor_floor &&
+                    recent_stat_it->second.winRate() >= engine_config_.strategy_ev_pre_cat_relaxed_recovery_min_win_rate;
+                const bool has_regime_recovery_relaxed =
+                    regime_ev_it != strategy_regime_edge.end() &&
+                    regime_ev_it->second.trades >= relaxed_recovery_min_trades &&
+                    regime_ev_it->second.expectancy() >= relaxed_recovery_expectancy_floor &&
+                    regime_ev_it->second.profitFactor() >= relaxed_recovery_profit_factor_floor &&
+                    regime_ev_it->second.winRate() >= engine_config_.strategy_ev_pre_cat_relaxed_recovery_min_win_rate;
+                const bool has_recovery_evidence_relaxed_recent_regime =
+                    has_recent_recovery_relaxed || has_regime_recovery_relaxed;
+                const bool has_recovery_evidence_relaxed_full_history =
+                    stat.trades >= relaxed_recovery_min_trades &&
+                    stat.expectancy() >= relaxed_recovery_expectancy_floor &&
+                    stat.profitFactor() >= relaxed_recovery_profit_factor_floor &&
+                    stat.winRate() >= engine_config_.strategy_ev_pre_cat_relaxed_recovery_min_win_rate;
+                const bool has_recovery_evidence_relaxed_any =
+                    has_recovery_evidence_relaxed_recent_regime ||
+                    (engine_config_.enable_strategy_ev_pre_cat_relaxed_recovery_full_history_anchor &&
+                     has_recovery_evidence_relaxed_full_history);
+                const bool has_recovery_evidence_for_soften_raw =
+                    has_recovery_evidence_any ||
+                    (engine_config_.enable_strategy_ev_pre_cat_relaxed_recovery_evidence &&
+                     has_recovery_evidence_relaxed_any);
+                bool has_recovery_evidence_hysteresis_override = false;
+                if (engine_config_.enable_strategy_ev_pre_cat_recovery_evidence_hysteresis) {
+                    const int hysteresis_hold_steps = std::clamp(
+                        engine_config_.strategy_ev_pre_cat_recovery_evidence_hysteresis_hold_steps,
+                        1,
+                        120
+                    );
+                    const int hysteresis_min_trades = std::max(
+                        0,
+                        engine_config_.strategy_ev_pre_cat_recovery_evidence_hysteresis_min_trades
+                    );
+                    const std::string hysteresis_key = makeStrategyRegimeKey(
+                        best_signal.strategy_name,
+                        best_signal.market_regime
+                    );
+                    int& hold_steps_left = pre_cat_recovery_hysteresis_hold_by_key_[hysteresis_key];
+                    if (has_recovery_evidence_for_soften_raw && stat.trades >= hysteresis_min_trades) {
+                        hold_steps_left = hysteresis_hold_steps;
+                    } else if (!has_recovery_evidence_for_soften_raw &&
+                               hold_steps_left > 0 &&
+                               stat.trades >= hysteresis_min_trades) {
+                        --hold_steps_left;
+                        has_recovery_evidence_hysteresis_override = true;
+                    } else if (hold_steps_left > 0) {
+                        hold_steps_left = std::max(0, hold_steps_left - 1);
+                    }
+                }
+                const bool has_recovery_evidence_for_soften =
+                    has_recovery_evidence_for_soften_raw || has_recovery_evidence_hysteresis_override;
+                const bool recovery_quality_regime_ok =
+                    best_signal.market_regime == analytics::MarketRegime::TRENDING_UP ||
+                    best_signal.market_regime == analytics::MarketRegime::RANGING;
+                const bool recovery_quality_strength_ok = best_signal.strength >= 0.70;
+                const bool recovery_quality_expected_value_ok = best_signal.expected_value >= 0.00075;
+                const bool recovery_quality_liquidity_ok = best_signal.liquidity_score >= 58.0;
+                const bool recovery_quality_context =
+                    recovery_quality_regime_ok &&
+                    recovery_quality_strength_ok &&
+                    recovery_quality_expected_value_ok &&
+                    recovery_quality_liquidity_ok;
+                const bool recovery_quality_hysteresis_strength_ok =
+                    best_signal.strength >= engine_config_.strategy_ev_pre_cat_recovery_quality_hysteresis_min_strength;
+                const bool recovery_quality_hysteresis_expected_value_ok =
+                    best_signal.expected_value >= engine_config_.strategy_ev_pre_cat_recovery_quality_hysteresis_min_expected_value;
+                const bool recovery_quality_hysteresis_liquidity_ok =
+                    best_signal.liquidity_score >= engine_config_.strategy_ev_pre_cat_recovery_quality_hysteresis_min_liquidity;
+                const bool recovery_quality_context_hysteresis_relaxed =
+                    recovery_quality_regime_ok &&
+                    recovery_quality_hysteresis_strength_ok &&
+                    recovery_quality_hysteresis_expected_value_ok &&
+                    recovery_quality_hysteresis_liquidity_ok;
+                const bool recovery_quality_hysteresis_override =
+                    engine_config_.enable_strategy_ev_pre_cat_recovery_quality_hysteresis_relief &&
+                    has_recovery_evidence_hysteresis_override &&
+                    !recovery_quality_context &&
+                    recovery_quality_context_hysteresis_relaxed;
+                const bool recovery_quality_context_for_soften =
+                    recovery_quality_context || recovery_quality_hysteresis_override;
+                const StrategyEdgeStats* recent_stat =
+                    recent_stat_it != strategy_edge_recent.end() ? &recent_stat_it->second : nullptr;
+                const StrategyEdgeStats* regime_stat =
+                    regime_ev_it != strategy_regime_edge.end() ? &regime_ev_it->second : nullptr;
+                const int pre_cat_local_recent_trades = recent_stat != nullptr ? recent_stat->trades : -1;
+                const int pre_cat_local_regime_trades = regime_stat != nullptr ? regime_stat->trades : -1;
+                const int pre_cat_local_trade_scope = std::max(
+                    pre_cat_local_recent_trades,
+                    pre_cat_local_regime_trades
+                );
+                // Relief paths should be bounded by local regime/recent evidence scope first.
+                // Using only full-history trades causes permanent disablement after warm-up.
+                const int pre_cat_relief_trade_scope =
+                    pre_cat_local_trade_scope > 0 ? pre_cat_local_trade_scope : stat.trades;
+                auto computeHistoryNegativePressure = [&](const StrategyEdgeStats& edge, bool relaxed_scope) {
+                    double pressure = 0.0;
+                    const double exp_krw = edge.expectancy();
+                    const double pf = edge.profitFactor();
+                    const double wr = edge.winRate();
+                    const double avg_win_krw = edge.avgWinKrw();
+                    const double avg_loss_abs_krw = edge.avgLossAbsKrw();
+                    const double loss_to_win_ratio = (avg_win_krw > 1e-9)
+                        ? (avg_loss_abs_krw / avg_win_krw)
+                        : ((edge.trades > edge.wins) ? 2.0 : 0.0);
+                    const double exp_floor = engine_config_.min_strategy_expectancy_krw - (relaxed_scope ? 7.0 : 5.0);
+                    const double pf_floor = std::max(
+                        0.80,
+                        engine_config_.min_strategy_profit_factor - (relaxed_scope ? 0.24 : 0.18)
+                    );
+                    if (exp_krw < exp_floor) {
+                        pressure += 0.32;
+                    }
+                    if (pf < pf_floor) {
+                        pressure += 0.30;
+                    }
+                    if (wr < 0.46) {
+                        pressure += 0.20;
+                    }
+                    if (loss_to_win_ratio >= 1.45) {
+                        pressure += 0.24;
+                    }
+                    if (exp_krw < (engine_config_.min_strategy_expectancy_krw - 18.0) &&
+                        pf < std::max(0.72, engine_config_.min_strategy_profit_factor - 0.32) &&
+                        loss_to_win_ratio >= 1.70) {
+                        pressure += 0.28;
+                    }
+                    return std::clamp(pressure, 0.0, 1.0);
+                };
+                const double full_history_pressure = computeHistoryNegativePressure(stat, false);
+                const double recent_history_pressure =
+                    (recent_stat != nullptr &&
+                     recent_stat->trades >= std::max(8, engine_config_.min_strategy_trades_for_ev / 5))
+                    ? computeHistoryNegativePressure(*recent_stat, true)
+                    : 0.0;
+                const double regime_history_pressure =
+                    (regime_stat != nullptr && regime_stat->trades >= 8)
+                    ? computeHistoryNegativePressure(*regime_stat, true)
+                    : 0.0;
+                const bool severe_full_negative =
+                    stat.trades >= std::max(18, engine_config_.min_strategy_trades_for_ev / 3) &&
+                    full_history_pressure >= 0.70;
+                const int severe_full_min_trades_pre_cat = engine_config_.enable_strategy_ev_pre_cat_relaxed_severe_gate
+                    ? std::max(10, engine_config_.strategy_ev_pre_cat_relaxed_severe_min_trades)
+                    : std::max(18, engine_config_.min_strategy_trades_for_ev / 3);
+                const double severe_full_pressure_threshold_pre_cat =
+                    engine_config_.enable_strategy_ev_pre_cat_relaxed_severe_gate
+                    ? std::clamp(engine_config_.strategy_ev_pre_cat_relaxed_severe_pressure_threshold, 0.70, 0.95)
+                    : 0.70;
+                const bool severe_full_negative_pre_cat_threshold =
+                    stat.trades >= severe_full_min_trades_pre_cat &&
+                    full_history_pressure >= severe_full_pressure_threshold_pre_cat;
+                const double stat_exp_krw = stat.expectancy();
+                const double stat_pf = stat.profitFactor();
+                const double stat_wr = stat.winRate();
+                const double stat_avg_win_krw = stat.avgWinKrw();
+                const double stat_avg_loss_abs_krw = stat.avgLossAbsKrw();
+                const double stat_loss_to_win_ratio = (stat_avg_win_krw > 1e-9)
+                    ? (stat_avg_loss_abs_krw / stat_avg_win_krw)
+                    : ((stat.trades > stat.wins) ? 2.0 : 0.0);
+                const bool severe_axis_exp =
+                    stat_exp_krw < (engine_config_.min_strategy_expectancy_krw - 10.0);
+                const bool severe_axis_pf =
+                    stat_pf < std::max(0.78, engine_config_.min_strategy_profit_factor - 0.24);
+                const bool severe_axis_wr = stat_wr < 0.40;
+                const bool severe_axis_asym = stat_loss_to_win_ratio >= 1.55;
+                const int severe_axis_count =
+                    static_cast<int>(severe_axis_exp) +
+                    static_cast<int>(severe_axis_pf) +
+                    static_cast<int>(severe_axis_wr) +
+                    static_cast<int>(severe_axis_asym);
+                const bool severe_combo_catastrophic =
+                    stat_exp_krw < (engine_config_.min_strategy_expectancy_krw - 16.0) &&
+                    stat_pf < std::max(0.75, engine_config_.min_strategy_profit_factor - 0.28) &&
+                    (stat_wr < 0.36 || stat_loss_to_win_ratio >= 1.65);
+                const double severe_composite_pressure_threshold = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_composite_pressure_threshold,
+                    0.70,
+                    0.98
+                );
+                const int severe_composite_min_critical_signals = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_composite_min_critical_signals,
+                    1,
+                    4
+                );
+                const bool severe_composite_catastrophic_path =
+                    stat.trades >= severe_full_min_trades_pre_cat &&
+                    severe_combo_catastrophic;
+                const bool severe_composite_pressure_axis =
+                    stat.trades >= severe_full_min_trades_pre_cat &&
+                    full_history_pressure >= severe_composite_pressure_threshold &&
+                    severe_axis_count >= severe_composite_min_critical_signals;
+                const bool severe_composite_pressure_only =
+                    stat.trades >= severe_full_min_trades_pre_cat &&
+                    full_history_pressure >= severe_composite_pressure_threshold &&
+                    severe_axis_count < severe_composite_min_critical_signals;
+                const bool severe_full_negative_pre_cat_composite =
+                    severe_composite_catastrophic_path || severe_composite_pressure_axis;
+                const bool severe_full_negative_pre_cat =
+                    engine_config_.enable_strategy_ev_pre_cat_composite_severe_model
+                    ? severe_full_negative_pre_cat_composite
+                    : severe_full_negative_pre_cat_threshold;
+                const bool severe_recent_negative =
+                    recent_stat != nullptr &&
+                    recent_stat->trades >= std::max(8, engine_config_.min_strategy_trades_for_ev / 5) &&
+                    recent_history_pressure >= 0.62;
+                const bool severe_regime_negative =
+                    regime_stat != nullptr &&
+                    regime_stat->trades >= 8 &&
+                    regime_history_pressure >= 0.64;
+                const bool enable_strategy_ev_sync_guard =
+                    engine_config_.enable_strategy_ev_pre_cat_sync_guard;
+                const bool severe_history_sync =
+                    severe_full_negative &&
+                    (enable_strategy_ev_sync_guard
+                        ? (severe_recent_negative || severe_regime_negative)
+                        : true);
+                const bool contextual_recovery_ready =
+                    recovery_quality_context &&
+                    (enable_strategy_ev_sync_guard
+                        ? (has_recent_recovery || has_regime_recovery)
+                        : (has_recent_recovery && has_regime_recovery));
+                const bool non_hostile_regime =
+                    best_signal.market_regime != analytics::MarketRegime::HIGH_VOLATILITY &&
+                    best_signal.market_regime != analytics::MarketRegime::TRENDING_DOWN;
+                const double contextual_severe_max_pressure = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_contextual_severe_max_pressure,
+                    0.75,
+                    0.98
+                );
+                const int contextual_severe_max_axis_count = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_contextual_severe_max_axis_count,
+                    1,
+                    4
+                );
+                const bool contextual_severe_downgrade_ready =
+                    engine_config_.enable_strategy_ev_pre_cat_contextual_severe_downgrade &&
+                    severe_full_negative_pre_cat &&
+                    recovery_quality_context_for_soften &&
+                    has_recovery_evidence_for_soften &&
+                    non_hostile_regime &&
+                    full_history_pressure <= contextual_severe_max_pressure &&
+                    severe_axis_count <= contextual_severe_max_axis_count;
+                const bool severe_full_negative_pre_cat_effective =
+                    severe_full_negative_pre_cat && !contextual_severe_downgrade_ready;
+                const bool severe_history_sync_pre_cat =
+                    severe_full_negative_pre_cat_effective &&
+                    (enable_strategy_ev_sync_guard
+                        ? (severe_recent_negative || severe_regime_negative)
+                        : true);
+                const double raw_reward_risk_ratio =
+                    (best_signal.expected_risk_pct > 1e-9)
+                    ? (best_signal.expected_return_pct / best_signal.expected_risk_pct)
+                    : 0.0;
+                const double pre_cat_unsynced_override_min_strength = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_unsynced_override_min_strength,
+                    0.60,
+                    0.92
+                );
+                const double pre_cat_unsynced_override_min_expected_value = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_unsynced_override_min_expected_value,
+                    0.00040,
+                    0.00300
+                );
+                const double pre_cat_unsynced_override_min_liquidity = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_unsynced_override_min_liquidity,
+                    45.0,
+                    95.0
+                );
+                const double pre_cat_unsynced_override_min_reward_risk = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_unsynced_override_min_reward_risk,
+                    1.05,
+                    2.60
+                );
+                const double pre_cat_unsynced_override_max_full_history_pressure = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_unsynced_override_max_full_history_pressure,
+                    0.70,
+                    1.00
+                );
+                const int pre_cat_unsynced_override_max_severe_axis_count = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_unsynced_override_max_severe_axis_count,
+                    1,
+                    4
+                );
+                const bool unsynced_soft_override_ready =
+                    enable_strategy_ev_sync_guard &&
+                    non_hostile_regime &&
+                    best_signal.strength >= pre_cat_unsynced_override_min_strength &&
+                    best_signal.expected_value >= pre_cat_unsynced_override_min_expected_value &&
+                    best_signal.liquidity_score >= pre_cat_unsynced_override_min_liquidity &&
+                    (raw_reward_risk_ratio <= 0.0 ||
+                     raw_reward_risk_ratio >= pre_cat_unsynced_override_min_reward_risk) &&
+                    full_history_pressure <= pre_cat_unsynced_override_max_full_history_pressure &&
+                    severe_axis_count <= pre_cat_unsynced_override_max_severe_axis_count;
+                const double pre_cat_soften_strength_floor =
+                    recovery_quality_hysteresis_override
+                    ? std::min(0.70, engine_config_.strategy_ev_pre_cat_recovery_quality_hysteresis_min_strength)
+                    : 0.70;
+                const double pre_cat_soften_expected_value_floor =
+                    recovery_quality_hysteresis_override
+                    ? std::min(0.00070, engine_config_.strategy_ev_pre_cat_recovery_quality_hysteresis_min_expected_value)
+                    : 0.00070;
+                const double pre_cat_soften_liquidity_floor =
+                    recovery_quality_hysteresis_override
+                    ? std::min(58.0, engine_config_.strategy_ev_pre_cat_recovery_quality_hysteresis_min_liquidity)
+                    : 58.0;
+                const int pre_cat_recovery_bridge_max_trades = std::max(
+                    8,
+                    engine_config_.strategy_ev_pre_cat_recovery_evidence_bridge_max_strategy_trades
+                );
+                const double pre_cat_recovery_bridge_max_full_history_pressure = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_recovery_evidence_bridge_max_full_history_pressure,
+                    0.70,
+                    1.00
+                );
+                const int pre_cat_recovery_bridge_max_severe_axis_count = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_recovery_evidence_bridge_max_severe_axis_count,
+                    1,
+                    4
+                );
+                const int pre_cat_recovery_bridge_max_activations_per_key = std::max(
+                    1,
+                    engine_config_.strategy_ev_pre_cat_recovery_evidence_bridge_max_activations_per_key
+                );
+                const std::string pre_cat_recovery_bridge_key = makeStrategyRegimeKey(
+                    best_signal.strategy_name,
+                    best_signal.market_regime
+                );
+                const int pre_cat_negative_history_quarantine_hold_steps = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_negative_history_quarantine_hold_steps,
+                    1,
+                    60
+                );
+                const double pre_cat_negative_history_quarantine_min_full_history_pressure = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_negative_history_quarantine_min_full_history_pressure,
+                    0.70,
+                    1.00
+                );
+                const double pre_cat_negative_history_quarantine_max_history_pf = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_negative_history_quarantine_max_history_pf,
+                    0.20,
+                    1.20
+                );
+                const double pre_cat_negative_history_quarantine_max_history_expectancy_krw =
+                    engine_config_.strategy_ev_pre_cat_negative_history_quarantine_max_history_expectancy_krw;
+                int& pre_cat_negative_history_quarantine_hold_left =
+                    pre_cat_negative_history_quarantine_hold_by_key_[pre_cat_recovery_bridge_key];
+                bool pre_cat_negative_history_quarantine_active = false;
+                if (engine_config_.enable_strategy_ev_pre_cat_negative_history_quarantine &&
+                    pre_cat_negative_history_quarantine_hold_left > 0) {
+                    pre_cat_negative_history_quarantine_active = true;
+                    entry_funnel_.strategy_ev_pre_cat_negative_history_quarantine_active++;
+                    pre_cat_negative_history_quarantine_hold_left =
+                        std::max(0, pre_cat_negative_history_quarantine_hold_left - 1);
+                }
+                const int pre_cat_recovery_bridge_activations_used =
+                    pre_cat_recovery_bridge_activation_by_key_.count(pre_cat_recovery_bridge_key) > 0
+                    ? pre_cat_recovery_bridge_activation_by_key_.at(pre_cat_recovery_bridge_key)
+                    : 0;
+                const bool pre_cat_recovery_bridge_surrogate_ready =
+                    engine_config_.enable_strategy_ev_pre_cat_recovery_evidence_bridge_surrogate &&
+                    !has_recovery_evidence_relaxed_any &&
+                    pre_cat_relief_trade_scope <= std::max(12, pre_cat_recovery_bridge_max_trades / 2) &&
+                    best_signal.strength >= std::max(0.72, pre_cat_soften_strength_floor + 0.02) &&
+                    best_signal.expected_value >= std::max(0.00100, pre_cat_soften_expected_value_floor + 0.00020) &&
+                    best_signal.liquidity_score >= std::max(60.0, pre_cat_soften_liquidity_floor + 2.0) &&
+                    full_history_pressure <= std::min(pre_cat_recovery_bridge_max_full_history_pressure, 0.92) &&
+                    recent_history_pressure <= 0.78 &&
+                    regime_history_pressure <= 0.80 &&
+                    severe_axis_count <= std::min(pre_cat_recovery_bridge_max_severe_axis_count, 2);
+                const bool pre_cat_recovery_bridge_ready =
+                    engine_config_.enable_strategy_ev_pre_cat_recovery_evidence_bridge &&
+                    !has_recovery_evidence_for_soften &&
+                    pre_cat_recovery_bridge_activations_used <
+                        pre_cat_recovery_bridge_max_activations_per_key &&
+                    pre_cat_relief_trade_scope <= pre_cat_recovery_bridge_max_trades &&
+                    (has_recovery_evidence_relaxed_any || pre_cat_recovery_bridge_surrogate_ready) &&
+                    recovery_quality_context_for_soften &&
+                    non_hostile_regime &&
+                    !severe_full_negative_pre_cat_effective &&
+                    (raw_reward_risk_ratio <= 0.0 || raw_reward_risk_ratio >= 1.18) &&
+                    full_history_pressure <= pre_cat_recovery_bridge_max_full_history_pressure &&
+                    severe_axis_count <= pre_cat_recovery_bridge_max_severe_axis_count;
+                const bool has_recovery_evidence_for_soften_effective =
+                    has_recovery_evidence_for_soften || pre_cat_recovery_bridge_ready;
+                const bool pre_cat_soften_candidate_quality_and_evidence =
+                    recovery_quality_context_for_soften && has_recovery_evidence_for_soften_effective;
+                const bool pre_cat_soften_candidate_non_severe =
+                    pre_cat_soften_candidate_quality_and_evidence && !severe_full_negative_pre_cat_effective;
+                const bool pre_cat_soften_candidate_non_hostile =
+                    pre_cat_soften_candidate_non_severe && non_hostile_regime;
+                const bool pre_cat_soften_candidate_rr_ok =
+                    pre_cat_soften_candidate_non_hostile &&
+                    (raw_reward_risk_ratio <= 0.0 || raw_reward_risk_ratio >= 1.18);
+                const bool pre_cat_soften_non_severe_ready =
+                    engine_config_.enable_strategy_ev_pre_cat_soften_non_severe &&
+                    pre_cat_soften_candidate_rr_ok &&
+                    best_signal.strength >= pre_cat_soften_strength_floor &&
+                    best_signal.expected_value >= pre_cat_soften_expected_value_floor &&
+                    best_signal.liquidity_score >= pre_cat_soften_liquidity_floor;
+                const int pre_cat_no_soft_quality_relief_max_trades = std::max(
+                    8,
+                    engine_config_.strategy_ev_pre_cat_no_soft_quality_relief_max_strategy_trades
+                );
+                const double pre_cat_no_soft_quality_relief_min_strength = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_no_soft_quality_relief_min_strength,
+                    0.60,
+                    0.90
+                );
+                const double pre_cat_no_soft_quality_relief_min_expected_value = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_no_soft_quality_relief_min_expected_value,
+                    0.00040,
+                    0.00250
+                );
+                const double pre_cat_no_soft_quality_relief_min_liquidity = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_no_soft_quality_relief_min_liquidity,
+                    48.0,
+                    90.0
+                );
+                const double pre_cat_no_soft_quality_relief_min_reward_risk = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_no_soft_quality_relief_min_reward_risk,
+                    1.10,
+                    2.40
+                );
+                const double pre_cat_no_soft_quality_relief_max_full_history_pressure = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_no_soft_quality_relief_max_full_history_pressure,
+                    0.70,
+                    1.00
+                );
+                const int pre_cat_no_soft_quality_relief_max_severe_axis_count = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_no_soft_quality_relief_max_severe_axis_count,
+                    1,
+                    4
+                );
+                const int pre_cat_no_soft_quality_relief_max_activations_per_key = std::max(
+                    1,
+                    engine_config_.strategy_ev_pre_cat_no_soft_quality_relief_max_activations_per_key
+                );
+                const std::string pre_cat_no_soft_quality_relief_key = makeStrategyRegimeKey(
+                    best_signal.strategy_name,
+                    best_signal.market_regime
+                );
+                const int pre_cat_no_soft_quality_relief_activations_used =
+                    pre_cat_no_soft_quality_relief_activation_by_key_.count(pre_cat_no_soft_quality_relief_key) > 0
+                    ? pre_cat_no_soft_quality_relief_activation_by_key_.at(pre_cat_no_soft_quality_relief_key)
+                    : 0;
+                const bool pre_cat_no_soft_quality_relief_ready =
+                    engine_config_.enable_strategy_ev_pre_cat_no_soft_quality_relief &&
+                    !has_recovery_evidence_for_soften_effective &&
+                    pre_cat_no_soft_quality_relief_activations_used <
+                        pre_cat_no_soft_quality_relief_max_activations_per_key &&
+                    pre_cat_relief_trade_scope <= pre_cat_no_soft_quality_relief_max_trades &&
+                    recovery_quality_context_for_soften &&
+                    !severe_full_negative_pre_cat_effective &&
+                    best_signal.strength >= pre_cat_no_soft_quality_relief_min_strength &&
+                    best_signal.expected_value >= pre_cat_no_soft_quality_relief_min_expected_value &&
+                    best_signal.liquidity_score >= pre_cat_no_soft_quality_relief_min_liquidity &&
+                    (raw_reward_risk_ratio <= 0.0 ||
+                     raw_reward_risk_ratio >= pre_cat_no_soft_quality_relief_min_reward_risk) &&
+                    full_history_pressure <= pre_cat_no_soft_quality_relief_max_full_history_pressure &&
+                    severe_axis_count <= pre_cat_no_soft_quality_relief_max_severe_axis_count;
+                const int pre_cat_pressure_rebound_relief_max_trades = std::max(
+                    8,
+                    engine_config_.strategy_ev_pre_cat_pressure_rebound_relief_max_strategy_trades
+                );
+                const double pre_cat_pressure_rebound_relief_min_strength = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_pressure_rebound_relief_min_strength,
+                    0.60,
+                    0.92
+                );
+                const double pre_cat_pressure_rebound_relief_min_expected_value = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_pressure_rebound_relief_min_expected_value,
+                    0.00040,
+                    0.00300
+                );
+                const double pre_cat_pressure_rebound_relief_min_liquidity = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_pressure_rebound_relief_min_liquidity,
+                    45.0,
+                    95.0
+                );
+                const double pre_cat_pressure_rebound_relief_min_reward_risk = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_pressure_rebound_relief_min_reward_risk,
+                    1.05,
+                    2.60
+                );
+                const double pre_cat_pressure_rebound_relief_min_full_history_pressure = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_pressure_rebound_relief_min_full_history_pressure,
+                    0.70,
+                    1.00
+                );
+                const double pre_cat_pressure_rebound_relief_max_recent_history_pressure = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_pressure_rebound_relief_max_recent_history_pressure,
+                    0.50,
+                    0.98
+                );
+                const double pre_cat_pressure_rebound_relief_max_regime_history_pressure = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_pressure_rebound_relief_max_regime_history_pressure,
+                    0.50,
+                    0.98
+                );
+                const int pre_cat_pressure_rebound_relief_max_severe_axis_count = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_pressure_rebound_relief_max_severe_axis_count,
+                    1,
+                    4
+                );
+                const int pre_cat_pressure_rebound_relief_max_activations_per_key = std::max(
+                    1,
+                    engine_config_.strategy_ev_pre_cat_pressure_rebound_relief_max_activations_per_key
+                );
+                const int pre_cat_pressure_rebound_relief_activations_used =
+                    pre_cat_pressure_rebound_relief_activation_by_key_.count(pre_cat_no_soft_quality_relief_key) > 0
+                    ? pre_cat_pressure_rebound_relief_activation_by_key_.at(pre_cat_no_soft_quality_relief_key)
+                    : 0;
+                const bool pre_cat_pressure_rebound_relief_ready =
+                    engine_config_.enable_strategy_ev_pre_cat_pressure_rebound_relief &&
+                    !has_recovery_evidence_for_soften_effective &&
+                    pre_cat_pressure_rebound_relief_activations_used <
+                        pre_cat_pressure_rebound_relief_max_activations_per_key &&
+                    pre_cat_relief_trade_scope <= pre_cat_pressure_rebound_relief_max_trades &&
+                    recovery_quality_context_for_soften &&
+                    non_hostile_regime &&
+                    !severe_history_sync_pre_cat &&
+                    best_signal.strength >= pre_cat_pressure_rebound_relief_min_strength &&
+                    best_signal.expected_value >= pre_cat_pressure_rebound_relief_min_expected_value &&
+                    best_signal.liquidity_score >= pre_cat_pressure_rebound_relief_min_liquidity &&
+                    (raw_reward_risk_ratio <= 0.0 ||
+                     raw_reward_risk_ratio >= pre_cat_pressure_rebound_relief_min_reward_risk) &&
+                    full_history_pressure >= pre_cat_pressure_rebound_relief_min_full_history_pressure &&
+                    recent_history_pressure <= pre_cat_pressure_rebound_relief_max_recent_history_pressure &&
+                    regime_history_pressure <= pre_cat_pressure_rebound_relief_max_regime_history_pressure &&
+                    severe_axis_count <= pre_cat_pressure_rebound_relief_max_severe_axis_count;
+                const bool pre_cat_candidate_rr_failsafe_enabled =
+                    engine_config_.enable_strategy_ev_pre_cat_candidate_rr_failsafe;
+                const int pre_cat_candidate_rr_failsafe_max_trades = std::max(
+                    8,
+                    engine_config_.strategy_ev_pre_cat_candidate_rr_failsafe_max_strategy_trades
+                );
+                const double pre_cat_candidate_rr_failsafe_min_strength = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_candidate_rr_failsafe_min_strength,
+                    0.60,
+                    0.92
+                );
+                const double pre_cat_candidate_rr_failsafe_min_expected_value = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_candidate_rr_failsafe_min_expected_value,
+                    0.00040,
+                    0.00300
+                );
+                const double pre_cat_candidate_rr_failsafe_min_liquidity = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_candidate_rr_failsafe_min_liquidity,
+                    45.0,
+                    95.0
+                );
+                const double pre_cat_candidate_rr_failsafe_min_reward_risk = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_candidate_rr_failsafe_min_reward_risk,
+                    1.05,
+                    2.60
+                );
+                const double pre_cat_candidate_rr_failsafe_max_full_history_pressure = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_candidate_rr_failsafe_max_full_history_pressure,
+                    0.70,
+                    1.00
+                );
+                const int pre_cat_candidate_rr_failsafe_max_severe_axis_count = std::clamp(
+                    engine_config_.strategy_ev_pre_cat_candidate_rr_failsafe_max_severe_axis_count,
+                    1,
+                    4
+                );
+                const int pre_cat_candidate_rr_failsafe_max_activations_per_key = std::max(
+                    1,
+                    engine_config_.strategy_ev_pre_cat_candidate_rr_failsafe_max_activations_per_key
+                );
+                const int pre_cat_candidate_rr_failsafe_activations_used =
+                    pre_cat_candidate_rr_failsafe_activation_by_key_.count(pre_cat_no_soft_quality_relief_key) > 0
+                    ? pre_cat_candidate_rr_failsafe_activation_by_key_.at(pre_cat_no_soft_quality_relief_key)
+                    : 0;
+                const bool pre_cat_candidate_rr_failsafe_ready =
+                    pre_cat_candidate_rr_failsafe_enabled &&
+                    !engine_config_.enable_strategy_ev_pre_cat_soften_non_severe &&
+                    pre_cat_soften_candidate_rr_ok &&
+                    pre_cat_candidate_rr_failsafe_activations_used <
+                        pre_cat_candidate_rr_failsafe_max_activations_per_key &&
+                    pre_cat_relief_trade_scope <= pre_cat_candidate_rr_failsafe_max_trades &&
+                    best_signal.strength >= pre_cat_candidate_rr_failsafe_min_strength &&
+                    best_signal.expected_value >= pre_cat_candidate_rr_failsafe_min_expected_value &&
+                    best_signal.liquidity_score >= pre_cat_candidate_rr_failsafe_min_liquidity &&
+                    (raw_reward_risk_ratio <= 0.0 ||
+                     raw_reward_risk_ratio >= pre_cat_candidate_rr_failsafe_min_reward_risk) &&
+                    full_history_pressure <= pre_cat_candidate_rr_failsafe_max_full_history_pressure &&
+                    severe_axis_count <= pre_cat_candidate_rr_failsafe_max_severe_axis_count;
+                const bool pre_cat_soften_ready =
+                    pre_cat_soften_non_severe_ready ||
+                    pre_cat_candidate_rr_failsafe_ready ||
+                    pre_cat_pressure_rebound_relief_ready;
+                const double pre_cat_sync_override_max_full_history_pressure = std::min(
+                    contextual_severe_max_pressure,
+                    pre_cat_unsynced_override_max_full_history_pressure
+                );
+                const int pre_cat_sync_override_max_severe_axis_count = std::max(
+                    1,
+                    std::min(
+                        contextual_severe_max_axis_count,
+                        pre_cat_unsynced_override_max_severe_axis_count
+                    )
+                );
+                const bool pre_cat_sync_override_quality_ready =
+                    recovery_quality_context_for_soften &&
+                    has_recovery_evidence_for_soften &&
+                    non_hostile_regime;
+                const bool pre_cat_sync_override_ready =
+                    severe_history_sync_pre_cat &&
+                    pre_cat_sync_override_quality_ready &&
+                    best_signal.strength >= pre_cat_soften_strength_floor &&
+                    best_signal.expected_value >= pre_cat_soften_expected_value_floor &&
+                    best_signal.liquidity_score >= pre_cat_soften_liquidity_floor &&
+                    (raw_reward_risk_ratio <= 0.0 ||
+                     raw_reward_risk_ratio >= 1.18) &&
+                    full_history_pressure <= pre_cat_sync_override_max_full_history_pressure &&
+                    severe_axis_count <= pre_cat_sync_override_max_severe_axis_count;
+                auto capturePreCatFeatureSnapshot = [&](Result::PreCatFeatureSnapshotBranch& branch) {
+                    const int sample_index = ++branch.samples;
+                    auto updateAvg = [&](double& avg, double value) {
+                        if (!std::isfinite(value)) {
+                            return;
+                        }
+                        avg += (value - avg) / static_cast<double>(sample_index);
+                    };
+
+                    if (recovery_quality_context) {
+                        branch.recovery_quality_context_hits++;
+                    }
+                    if (has_recovery_evidence_for_soften_effective) {
+                        branch.recovery_evidence_hits++;
+                    }
+                    if (has_recovery_evidence_relaxed_any) {
+                        branch.recovery_evidence_relaxed_hits++;
+                    }
+                    if (has_recovery_evidence_hysteresis_override) {
+                        branch.recovery_evidence_hysteresis_hits++;
+                    }
+                    if (non_hostile_regime) {
+                        branch.non_hostile_regime_hits++;
+                    }
+                    if (severe_history_sync_pre_cat) {
+                        branch.severe_active_hits++;
+                    }
+                    if (contextual_severe_downgrade_ready) {
+                        branch.contextual_downgrade_hits++;
+                    }
+                    if (pre_cat_soften_ready) {
+                        branch.soften_ready_hits++;
+                    }
+                    if (pre_cat_soften_candidate_rr_ok) {
+                        branch.soften_candidate_rr_ok_hits++;
+                    }
+                    if (severe_axis_count >= severe_composite_min_critical_signals) {
+                        branch.severe_axis_ge_threshold_hits++;
+                    }
+
+                    updateAvg(branch.avg_signal_strength, best_signal.strength);
+                    updateAvg(branch.avg_signal_expected_value, best_signal.expected_value);
+                    updateAvg(branch.avg_signal_liquidity, best_signal.liquidity_score);
+                    updateAvg(branch.avg_signal_reward_risk, raw_reward_risk_ratio);
+                    updateAvg(branch.avg_history_expectancy_krw, stat_exp_krw);
+                    updateAvg(branch.avg_history_profit_factor, stat_pf);
+                    updateAvg(branch.avg_history_win_rate, stat_wr);
+                    updateAvg(branch.avg_history_trades, static_cast<double>(stat.trades));
+                    updateAvg(branch.avg_history_loss_to_win, stat_loss_to_win_ratio);
+                    updateAvg(branch.avg_full_history_pressure, full_history_pressure);
+                    updateAvg(branch.avg_recent_history_pressure, recent_history_pressure);
+                    updateAvg(branch.avg_regime_history_pressure, regime_history_pressure);
+                    updateAvg(branch.avg_severe_axis_count, static_cast<double>(severe_axis_count));
+                };
+                if (stat.trades >= std::max(12, engine_config_.min_strategy_trades_for_ev / 4)) {
+                    const double wr = stat.winRate();
+                    const double pf = stat.profitFactor();
+                    const double exp_krw = stat.expectancy();
+                    const bool pre_catastrophic =
+                        exp_krw < (engine_config_.min_strategy_expectancy_krw - 5.0) &&
+                        pf < std::max(0.88, engine_config_.min_strategy_profit_factor - 0.18) &&
+                        wr < 0.60;
+                    if (pre_catastrophic) {
+                        capturePreCatFeatureSnapshot(pre_cat_feature_snapshot_.observed);
+                        entry_funnel_.strategy_ev_pre_cat_observed++;
+                        if (recovery_quality_context) {
+                            entry_funnel_.strategy_ev_pre_cat_recovery_quality_context++;
+                        }
+                        if (has_recent_recovery || has_regime_recovery) {
+                            entry_funnel_.strategy_ev_pre_cat_recovery_evidence_any++;
+                        }
+                        if (has_recovery_evidence_relaxed_any) {
+                            entry_funnel_.strategy_ev_pre_cat_recovery_evidence_relaxed_any++;
+                        }
+                        if (has_recovery_evidence_relaxed_recent_regime) {
+                            entry_funnel_.strategy_ev_pre_cat_recovery_evidence_relaxed_recent_regime++;
+                        }
+                        if (has_recovery_evidence_relaxed_full_history) {
+                            entry_funnel_.strategy_ev_pre_cat_recovery_evidence_relaxed_full_history++;
+                        }
+                        if (has_recovery_evidence_for_soften) {
+                            entry_funnel_.strategy_ev_pre_cat_recovery_evidence_for_soften++;
+                        }
+                        if (pre_cat_recovery_bridge_ready) {
+                            entry_funnel_.strategy_ev_pre_cat_recovery_evidence_bridge++;
+                            if (pre_cat_recovery_bridge_surrogate_ready) {
+                                entry_funnel_.strategy_ev_pre_cat_recovery_evidence_bridge_surrogate++;
+                            }
+                        }
+                        if (has_recovery_evidence_hysteresis_override) {
+                            entry_funnel_.strategy_ev_pre_cat_recovery_evidence_hysteresis_override++;
+                        }
+                        if (recovery_quality_hysteresis_override) {
+                            entry_funnel_.strategy_ev_pre_cat_quality_hysteresis_override++;
+                        }
+                        if (recovery_quality_context && has_recovery_evidence_relaxed_any) {
+                            entry_funnel_.strategy_ev_pre_cat_quality_context_relaxed_overlap++;
+                        }
+                        if (!recovery_quality_regime_ok) {
+                            entry_funnel_.strategy_ev_pre_cat_quality_fail_regime++;
+                        }
+                        if (!recovery_quality_strength_ok) {
+                            entry_funnel_.strategy_ev_pre_cat_quality_fail_strength++;
+                        }
+                        if (!recovery_quality_expected_value_ok) {
+                            entry_funnel_.strategy_ev_pre_cat_quality_fail_expected_value++;
+                        }
+                        if (!recovery_quality_liquidity_ok) {
+                            entry_funnel_.strategy_ev_pre_cat_quality_fail_liquidity++;
+                        }
+                        if (severe_full_negative_pre_cat_threshold) {
+                            entry_funnel_.strategy_ev_pre_cat_severe_legacy_hits++;
+                        }
+                        if (severe_full_negative_pre_cat_composite) {
+                            entry_funnel_.strategy_ev_pre_cat_severe_composite_hits++;
+                        }
+                        if (severe_composite_catastrophic_path) {
+                            entry_funnel_.strategy_ev_pre_cat_severe_composite_catastrophic_hits++;
+                        }
+                        if (severe_composite_pressure_axis) {
+                            entry_funnel_.strategy_ev_pre_cat_severe_composite_pressure_axis_hits++;
+                        }
+                        if (severe_composite_pressure_only) {
+                            entry_funnel_.strategy_ev_pre_cat_severe_composite_pressure_only_hits++;
+                        }
+                        if (contextual_severe_downgrade_ready) {
+                            entry_funnel_.strategy_ev_pre_cat_contextual_severe_downgrade_hits++;
+                        }
+                        if (severe_history_sync_pre_cat) {
+                            entry_funnel_.strategy_ev_pre_cat_severe_active_hits++;
+                        }
+                        if (pre_cat_soften_candidate_quality_and_evidence) {
+                            entry_funnel_.strategy_ev_pre_cat_soften_candidate_quality_and_evidence++;
+                        }
+                        if (pre_cat_soften_candidate_non_severe) {
+                            entry_funnel_.strategy_ev_pre_cat_soften_candidate_non_severe++;
+                        }
+                        if (pre_cat_soften_candidate_non_hostile) {
+                            entry_funnel_.strategy_ev_pre_cat_soften_candidate_non_hostile++;
+                        }
+                        if (pre_cat_soften_candidate_rr_ok) {
+                            entry_funnel_.strategy_ev_pre_cat_soften_candidate_rr_ok++;
+                        }
+                        if (pre_cat_soften_ready) {
+                            entry_funnel_.strategy_ev_pre_cat_soften_ready++;
+                        }
+                        if (pre_cat_negative_history_quarantine_active) {
+                            capturePreCatFeatureSnapshot(pre_cat_feature_snapshot_.blocked_no_soft_path);
+                            entry_funnel_.strategy_ev_pre_cat_blocked_no_soft_path++;
+                            failStrategyEv(StrategyEvFailKind::PreCatastrophicNoRecovery);
+                        } else if (contextual_recovery_ready) {
+                            capturePreCatFeatureSnapshot(pre_cat_feature_snapshot_.softened_contextual);
+                            entry_funnel_.strategy_ev_pre_cat_softened_contextual++;
+                            required_strength_floor = std::max(
+                                required_strength_floor,
+                                alpha_head_fallback_candidate ? 0.58 : 0.62
+                            );
+                            addAdaptiveHistory(
+                                0.06 * history_penalty_scale,
+                                0.00010 * history_penalty_scale
+                            );
+                        } else if (pre_cat_sync_override_ready) {
+                            capturePreCatFeatureSnapshot(pre_cat_feature_snapshot_.softened_override);
+                            entry_funnel_.strategy_ev_pre_cat_softened_override++;
+                            required_strength_floor = std::max(
+                                required_strength_floor,
+                                alpha_head_fallback_candidate ? 0.66 : 0.70
+                            );
+                            addAdaptiveHistory(
+                                0.11 * history_penalty_scale,
+                                0.00016 * history_penalty_scale
+                            );
+                        } else if (severe_history_sync_pre_cat) {
+                            capturePreCatFeatureSnapshot(pre_cat_feature_snapshot_.blocked_severe_sync);
+                            entry_funnel_.strategy_ev_pre_cat_blocked_severe_sync++;
+                            failStrategyEv(StrategyEvFailKind::PreCatastrophicNoRecovery);
+                        } else if (unsynced_soft_override_ready ||
+                                   pre_cat_soften_ready ||
+                                   pre_cat_no_soft_quality_relief_ready) {
+                            capturePreCatFeatureSnapshot(pre_cat_feature_snapshot_.softened_override);
+                            entry_funnel_.strategy_ev_pre_cat_softened_override++;
+                            const bool used_no_soft_quality_relief =
+                                pre_cat_no_soft_quality_relief_ready &&
+                                !unsynced_soft_override_ready &&
+                                !pre_cat_soften_ready;
+                            const bool used_candidate_rr_failsafe =
+                                pre_cat_candidate_rr_failsafe_ready &&
+                                !unsynced_soft_override_ready &&
+                                !pre_cat_soften_non_severe_ready &&
+                                !pre_cat_no_soft_quality_relief_ready &&
+                                !pre_cat_pressure_rebound_relief_ready;
+                            const bool used_pressure_rebound_relief =
+                                pre_cat_pressure_rebound_relief_ready &&
+                                !unsynced_soft_override_ready &&
+                                !pre_cat_soften_non_severe_ready &&
+                                !pre_cat_candidate_rr_failsafe_ready &&
+                                !pre_cat_no_soft_quality_relief_ready;
+                            const bool used_recovery_evidence_bridge =
+                                pre_cat_recovery_bridge_ready &&
+                                !unsynced_soft_override_ready &&
+                                !used_no_soft_quality_relief &&
+                                !used_candidate_rr_failsafe &&
+                                !used_pressure_rebound_relief;
+                            if (used_no_soft_quality_relief) {
+                                pre_cat_no_soft_quality_relief_activation_by_key_[pre_cat_no_soft_quality_relief_key]++;
+                                entry_funnel_.strategy_ev_pre_cat_softened_no_soft_quality_relief++;
+                                required_strength_floor = std::max(
+                                    required_strength_floor,
+                                    alpha_head_fallback_candidate ? 0.63 : 0.67
+                                );
+                                addAdaptiveHistory(
+                                    0.09 * history_penalty_scale,
+                                    0.00014 * history_penalty_scale
+                                );
+                            } else if (used_candidate_rr_failsafe) {
+                                pre_cat_candidate_rr_failsafe_activation_by_key_[pre_cat_no_soft_quality_relief_key]++;
+                                entry_funnel_.strategy_ev_pre_cat_softened_candidate_rr_failsafe++;
+                                required_strength_floor = std::max(
+                                    required_strength_floor,
+                                    alpha_head_fallback_candidate ? 0.65 : 0.69
+                                );
+                                addAdaptiveHistory(
+                                    0.10 * history_penalty_scale,
+                                    0.00015 * history_penalty_scale
+                                );
+                            } else if (used_pressure_rebound_relief) {
+                                pre_cat_pressure_rebound_relief_activation_by_key_[pre_cat_no_soft_quality_relief_key]++;
+                                entry_funnel_.strategy_ev_pre_cat_softened_pressure_rebound_relief++;
+                                required_strength_floor = std::max(
+                                    required_strength_floor,
+                                    alpha_head_fallback_candidate ? 0.66 : 0.70
+                                );
+                                addAdaptiveHistory(
+                                    0.12 * history_penalty_scale,
+                                    0.00018 * history_penalty_scale
+                                );
+                            } else {
+                                required_strength_floor = std::max(
+                                    required_strength_floor,
+                                    alpha_head_fallback_candidate ? 0.60 : 0.64
+                                );
+                                addAdaptiveHistory(
+                                    0.07 * history_penalty_scale,
+                                    0.00012 * history_penalty_scale
+                                );
+                            }
+                            if (used_recovery_evidence_bridge) {
+                                pre_cat_recovery_bridge_activation_by_key_[pre_cat_recovery_bridge_key]++;
+                            }
+                        } else {
+                            capturePreCatFeatureSnapshot(pre_cat_feature_snapshot_.blocked_no_soft_path);
+                            entry_funnel_.strategy_ev_pre_cat_blocked_no_soft_path++;
+                            const bool pre_cat_negative_history_quarantine_set_ready =
+                                engine_config_.enable_strategy_ev_pre_cat_negative_history_quarantine &&
+                                full_history_pressure >=
+                                    pre_cat_negative_history_quarantine_min_full_history_pressure &&
+                                stat_pf <= pre_cat_negative_history_quarantine_max_history_pf &&
+                                stat_exp_krw <=
+                                    pre_cat_negative_history_quarantine_max_history_expectancy_krw;
+                            if (pre_cat_negative_history_quarantine_set_ready) {
+                                pre_cat_negative_history_quarantine_hold_by_key_[pre_cat_recovery_bridge_key] =
+                                    pre_cat_negative_history_quarantine_hold_steps;
+                                entry_funnel_.strategy_ev_pre_cat_negative_history_quarantine_set++;
+                            }
+                            failStrategyEv(StrategyEvFailKind::PreCatastrophicNoRecovery);
+                        }
+                    }
+                }
                 if (stat.trades >= engine_config_.min_strategy_trades_for_ev) {
                     const double exp_krw = stat.expectancy();
                     const double pf = stat.profitFactor();
@@ -2281,10 +3745,28 @@ void BacktestEngine::processCandle(const Candle& candle) {
                         if (exp_krw < (engine_config_.min_strategy_expectancy_krw - 15.0) &&
                             pf < std::max(0.75, engine_config_.min_strategy_profit_factor - 0.20)) {
                             if (alpha_head_fallback_candidate) {
-                                required_strength_floor = std::max(required_strength_floor, 0.62);
-                                addAdaptiveHistory(0.08, 0.00012);
+                                const bool catastrophic_history =
+                                    stat.trades >= std::max(18, engine_config_.min_strategy_trades_for_ev / 2) &&
+                                    (exp_krw < (engine_config_.min_strategy_expectancy_krw - 28.0) ||
+                                     pf < std::max(0.65, engine_config_.min_strategy_profit_factor - 0.45));
+                                if (catastrophic_history) {
+                                    failStrategyEv(StrategyEvFailKind::CatastrophicHistory);
+                                } else {
+                                    required_strength_floor = std::max(required_strength_floor, 0.62);
+                                    addAdaptiveHistory(0.08, 0.00012);
+                                }
                             } else {
-                                strategy_ev_ok = false;
+                                if (severe_history_sync) {
+                                    failStrategyEv(StrategyEvFailKind::SevereThresholdNoRecovery);
+                                } else if (unsynced_soft_override_ready) {
+                                    required_strength_floor = std::max(required_strength_floor, 0.63);
+                                    addAdaptiveHistory(
+                                        0.10 * history_penalty_scale,
+                                        0.00016 * history_penalty_scale
+                                    );
+                                } else {
+                                    failStrategyEv(StrategyEvFailKind::SevereThresholdNoRecovery);
+                                }
                             }
                         }
                     }
@@ -2293,6 +3775,61 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     const double wr = stat.winRate();
                     const double pf = stat.profitFactor();
                     const double exp_krw = stat.expectancy();
+                    const double avg_win_krw = stat.avgWinKrw();
+                    const double avg_loss_abs_krw = stat.avgLossAbsKrw();
+                    const double loss_to_win_ratio = (avg_win_krw > 1e-9)
+                        ? (avg_loss_abs_krw / avg_win_krw)
+                        : 0.0;
+                    if (stat.trades >= 10) {
+                        const bool weak_history = exp_krw < -2.0 || pf < 0.95;
+                        const bool asymmetry_history = wr >= 0.50 && loss_to_win_ratio >= 1.35;
+                        if (weak_history || asymmetry_history) {
+                            alpha_head_relief_eligible = false;
+                        }
+                    }
+                    // Generic reward-risk asymmetry guard:
+                    // if win-rate looks acceptable but expectancy is still negative,
+                    // enforce tighter gates because loss magnitude is dominating.
+                    if (stat.trades >= 10 &&
+                        exp_krw < 0.0 &&
+                        pf < 1.00 &&
+                        wr >= 0.50 &&
+                        loss_to_win_ratio >= 1.30) {
+                        const double asymmetry_pressure = std::clamp(
+                            (loss_to_win_ratio - 1.20) / 1.20,
+                            0.0,
+                            1.0
+                        );
+                        required_strength_floor = std::max(
+                            required_strength_floor,
+                            alpha_head_fallback_candidate ? 0.58 : 0.62
+                        );
+                        addAdaptiveHistory(
+                            (0.08 + (0.10 * asymmetry_pressure)) * history_penalty_scale,
+                            (0.00014 + (0.00018 * asymmetry_pressure)) * history_penalty_scale
+                        );
+                        if (stat.trades >= 14 &&
+                            exp_krw < -6.0 &&
+                            pf < 0.85 &&
+                            loss_to_win_ratio >= 1.65) {
+                            if (alpha_head_fallback_candidate) {
+                                required_strength_floor = std::max(required_strength_floor, 0.70);
+                                addAdaptiveHistory(0.16, 0.00024);
+                            } else {
+                                if (severe_history_sync) {
+                                    failStrategyEv(StrategyEvFailKind::LossAsymmetryCollapse);
+                                } else if (unsynced_soft_override_ready) {
+                                    required_strength_floor = std::max(required_strength_floor, 0.64);
+                                    addAdaptiveHistory(
+                                        0.11 * history_penalty_scale,
+                                        0.00017 * history_penalty_scale
+                                    );
+                                } else {
+                                    failStrategyEv(StrategyEvFailKind::LossAsymmetryCollapse);
+                                }
+                            }
+                        }
+                    }
                     const double history_confidence = std::clamp(
                         (static_cast<double>(stat.trades) - 8.0) / 24.0,
                         0.35,
@@ -2358,6 +3895,146 @@ void BacktestEngine::processCandle(const Candle& candle) {
             auto regime_it = strategy_regime_edge.find(
                 makeStrategyRegimeKey(best_signal.strategy_name, best_signal.market_regime)
             );
+            auto regime_recent_it = strategy_regime_edge_recent.find(
+                makeStrategyRegimeKey(best_signal.strategy_name, best_signal.market_regime)
+            );
+            auto market_regime_it = market_strategy_regime_edge.find(
+                makeMarketStrategyRegimeKey(
+                    best_signal.market,
+                    best_signal.strategy_name,
+                    best_signal.market_regime
+                )
+            );
+            auto market_regime_recent_it = market_strategy_regime_edge_recent.find(
+                makeMarketStrategyRegimeKey(
+                    best_signal.market,
+                    best_signal.strategy_name,
+                    best_signal.market_regime
+                )
+            );
+            auto computeContextSeverity = [&](const StrategyEdgeStats* full_stat,
+                                              const StrategyEdgeStats* recent_stat,
+                                              bool market_scope) {
+                double severity = 0.0;
+                auto accumulate = [&](const StrategyEdgeStats* stat, bool recent_weighted) {
+                    if (!stat) {
+                        return;
+                    }
+                    const int min_trades = market_scope ? 4 : 6;
+                    if (stat->trades < min_trades) {
+                        return;
+                    }
+                    const double wr = stat->winRate();
+                    const double pf = stat->profitFactor();
+                    const double exp_krw = stat->expectancy();
+                    const double avg_win = stat->avgWinKrw();
+                    const double avg_loss_abs = stat->avgLossAbsKrw();
+                    const double loss_to_win_ratio = (avg_win > 1e-9)
+                        ? (avg_loss_abs / avg_win)
+                        : ((stat->trades > stat->wins) ? 2.0 : 0.0);
+
+                    const double weight = recent_weighted ? 1.0 : 0.65;
+                    const double exp_cut = market_scope ? -14.0 : -12.0;
+                    const double pf_cut = market_scope ? 0.90 : 0.92;
+                    const double wr_cut = market_scope ? 0.42 : 0.44;
+                    const double asym_cut = market_scope ? 1.40 : 1.32;
+                    const double severe_exp_cut = market_scope ? -22.0 : -18.0;
+                    const double severe_pf_cut = market_scope ? 0.82 : 0.85;
+                    const double severe_asym_cut = market_scope ? 1.65 : 1.58;
+
+                    if (exp_krw < exp_cut) {
+                        severity += 0.24 * weight;
+                    }
+                    if (pf < pf_cut) {
+                        severity += 0.20 * weight;
+                    }
+                    if (wr < wr_cut) {
+                        severity += 0.12 * weight;
+                    }
+                    if (loss_to_win_ratio > asym_cut) {
+                        severity += 0.18 * weight;
+                    }
+                    if (exp_krw < severe_exp_cut &&
+                        pf < severe_pf_cut &&
+                        loss_to_win_ratio > severe_asym_cut) {
+                        severity += 0.26 * weight;
+                    }
+                };
+
+                accumulate(full_stat, false);
+                accumulate(recent_stat, true);
+                return std::clamp(severity, 0.0, 1.0);
+            };
+            const StrategyEdgeStats* regime_full_stat =
+                (regime_it != strategy_regime_edge.end()) ? &regime_it->second : nullptr;
+            const StrategyEdgeStats* regime_recent_stat =
+                (regime_recent_it != strategy_regime_edge_recent.end()) ? &regime_recent_it->second : nullptr;
+            const StrategyEdgeStats* market_full_stat =
+                (market_regime_it != market_strategy_regime_edge.end()) ? &market_regime_it->second : nullptr;
+            const StrategyEdgeStats* market_recent_stat =
+                (market_regime_recent_it != market_strategy_regime_edge_recent.end())
+                ? &market_regime_recent_it->second
+                : nullptr;
+            const double regime_context_severity =
+                computeContextSeverity(regime_full_stat, regime_recent_stat, false);
+            const double market_context_severity =
+                computeContextSeverity(market_full_stat, market_recent_stat, true);
+            bool enable_loser_context_quarantine = false;
+            const double blended_context_severity = std::clamp(
+                (0.62 * regime_context_severity) + (0.38 * market_context_severity),
+                0.0,
+                1.0
+            );
+            const bool has_dual_recent_context =
+                regime_recent_stat != nullptr && market_recent_stat != nullptr;
+            const bool severe_context_overlap =
+                regime_context_severity >= 0.58 && market_context_severity >= 0.52;
+            double loser_context_severity = blended_context_severity;
+            if (severe_context_overlap) {
+                loser_context_severity = std::min(1.0, loser_context_severity + 0.08);
+            }
+            if (!has_dual_recent_context) {
+                loser_context_severity *= 0.60;
+            }
+            const bool strategy_history_deeply_negative =
+                stat_it != strategy_edge.end() &&
+                stat_it->second.trades >= std::max(12, engine_config_.min_strategy_trades_for_ev / 2) &&
+                stat_it->second.expectancy() <= (engine_config_.min_strategy_expectancy_krw - 12.0) &&
+                stat_it->second.profitFactor() <=
+                    std::max(0.86, engine_config_.min_strategy_profit_factor - 0.12);
+            if (enable_loser_context_quarantine &&
+                core_risk_enabled &&
+                loser_context_severity >= 0.80 &&
+                severe_context_overlap &&
+                strategy_history_deeply_negative) {
+                const StrategyEdgeStats* block_ref = market_recent_stat
+                    ? market_recent_stat
+                    : (regime_recent_stat ? regime_recent_stat : (market_full_stat ? market_full_stat : regime_full_stat));
+                if (block_ref) {
+                    markPatternBlockOrSoften(
+                        block_ref->trades,
+                        block_ref->expectancy(),
+                        block_ref->winRate(),
+                        block_ref->profitFactor()
+                    );
+                }
+                alpha_head_relief_eligible = false;
+            } else if (enable_loser_context_quarantine &&
+                       core_risk_enabled &&
+                       loser_context_severity >= 0.48 &&
+                       severe_context_overlap) {
+                required_strength_floor = std::max(
+                    required_strength_floor,
+                    0.59 + (0.04 * loser_context_severity)
+                );
+                addAdaptiveRegime(
+                    (0.05 + (0.08 * loser_context_severity)) * history_penalty_scale,
+                    (0.00008 + (0.00012 * loser_context_severity)) * history_penalty_scale
+                );
+                if (loser_context_severity >= 0.62 && strategy_history_deeply_negative) {
+                    alpha_head_relief_eligible = false;
+                }
+            }
             if (core_risk_enabled && regime_it != strategy_regime_edge.end()) {
                 const auto& stat = regime_it->second;
                 if (stat.trades >= 6) {
@@ -2454,13 +4131,6 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     addAdaptiveRegime(rr_band_add, edge_band_add);
                 }
             }
-            auto market_regime_it = market_strategy_regime_edge.find(
-                makeMarketStrategyRegimeKey(
-                    best_signal.market,
-                    best_signal.strategy_name,
-                    best_signal.market_regime
-                )
-            );
             if (core_risk_enabled && market_regime_it != market_strategy_regime_edge.end()) {
                 const auto& stat = market_regime_it->second;
                 if (stat.trades >= 4) {
@@ -2816,8 +4486,12 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     best_signal.market_regime == analytics::MarketRegime::HIGH_VOLATILITY ||
                     best_signal.market_regime == analytics::MarketRegime::TRENDING_DOWN ||
                     (best_signal.liquidity_score > 0.0 && best_signal.liquidity_score < 50.0);
-                const double rr_relax = hostile_or_thin ? 0.06 : 0.16;
-                const double edge_relax = hostile_or_thin ? 0.00035 : 0.00100;
+                double rr_relax = hostile_or_thin ? 0.06 : 0.16;
+                double edge_relax = hostile_or_thin ? 0.00035 : 0.00100;
+                if (!alpha_head_relief_eligible) {
+                    rr_relax *= 0.35;
+                    edge_relax *= 0.30;
+                }
                 tuned_cfg.min_reward_risk = std::max(1.03, tuned_cfg.min_reward_risk - rr_relax);
                 tuned_cfg.min_expected_edge_pct = std::max(
                     std::max(0.00035, engine_config_.min_expected_edge_pct * 0.35),
@@ -2877,30 +4551,80 @@ void BacktestEngine::processCandle(const Candle& candle) {
             const bool entry_quality_gate_ok =
                 !core_risk_enabled ||
                 entry_quality_eval.pass;
-            const bool risk_gate_ok =
+            const bool risk_gate_prereq_ok =
                 !core_risk_enabled ||
-                (strategy_ev_ok &&
-                 pattern_strength_ok &&
-                 regime_gate_ok &&
-                 entry_quality_gate_ok);
+                (strategy_ev_ok && regime_gate_ok);
             const double reward_risk_ratio = entry_quality_eval.reward_risk_ratio;
             const double calibrated_expected_edge_pct = entry_quality_eval.calibrated_expected_edge_pct;
-            SecondStageConfirmationFailureKind second_stage_failure =
-                SecondStageConfirmationFailureKind::None;
-            SecondStageConfirmationSafetySource second_stage_safety_source =
-                SecondStageConfirmationSafetySource::Unknown;
+            const SecondStageConfirmationSnapshot second_stage_eval =
+                !core_risk_enabled ||
+                !rr_rebalance_ok
+                ? SecondStageConfirmationSnapshot{}
+                : evaluateSecondStageEntryConfirmation(
+                    best_signal,
+                    tuned_cfg,
+                    reward_risk_ratio,
+                    entry_quality_eval.reward_risk_gate_effective,
+                    calibrated_expected_edge_pct,
+                    entry_quality_eval.expected_edge_gate_effective
+                );
             const bool second_stage_ok =
                 !core_risk_enabled ||
-                (rr_rebalance_ok &&
-                 passesSecondStageEntryConfirmation(
-                     best_signal,
-                     tuned_cfg,
-                     reward_risk_ratio,
-                     tuned_cfg.min_reward_risk,
-                     calibrated_expected_edge_pct,
-                     tuned_cfg.min_expected_edge_pct,
-                     &second_stage_failure,
-                     &second_stage_safety_source));
+                (rr_rebalance_ok && second_stage_eval.pass);
+            const TwoHeadEntryAggregationSnapshot two_head_eval =
+                !core_risk_enabled ||
+                !rr_rebalance_ok
+                ? TwoHeadEntryAggregationSnapshot{}
+                : evaluateTwoHeadEntryAggregation(
+                    best_signal,
+                    tuned_cfg,
+                    entry_quality_eval,
+                    second_stage_eval
+                );
+            if (core_risk_enabled && rr_rebalance_ok && second_stage_eval.rr_margin_near_miss) {
+                entry_funnel_.second_stage_rr_margin_near_miss_observed++;
+            }
+            if (core_risk_enabled && rr_rebalance_ok && second_stage_eval.rr_margin_soft_score_applied) {
+                entry_funnel_.second_stage_rr_margin_soft_score_applied++;
+            }
+            if (core_risk_enabled && rr_rebalance_ok && two_head_eval.rr_margin_near_miss_relief_applied) {
+                entry_funnel_.second_stage_rr_margin_near_miss_relief_applied++;
+            }
+            if (core_risk_enabled && rr_rebalance_ok && two_head_eval.rr_margin_near_miss_head_score_floor_applied) {
+                entry_funnel_.two_head_aggregation_rr_margin_near_miss_head_score_floor_applied++;
+            }
+            if (core_risk_enabled && rr_rebalance_ok && two_head_eval.rr_margin_near_miss_floor_relax_applied) {
+                entry_funnel_.two_head_aggregation_rr_margin_near_miss_floor_relax_applied++;
+            }
+            if (core_risk_enabled && rr_rebalance_ok && two_head_eval.rr_margin_near_miss_adaptive_floor_relax_applied) {
+                entry_funnel_.two_head_aggregation_rr_margin_near_miss_adaptive_floor_relax_applied++;
+            }
+            if (core_risk_enabled && rr_rebalance_ok && two_head_eval.rr_margin_near_miss_surplus_compensation_applied) {
+                entry_funnel_.two_head_aggregation_rr_margin_near_miss_surplus_compensation_applied++;
+            }
+            if (core_risk_enabled && rr_rebalance_ok && two_head_eval.rr_margin_near_miss_relief_blocked) {
+                entry_funnel_.two_head_aggregation_rr_margin_near_miss_relief_blocked++;
+                if (two_head_eval.rr_margin_near_miss_relief_blocked_override_disallowed) {
+                    entry_funnel_.two_head_aggregation_rr_margin_near_miss_relief_blocked_override_disallowed++;
+                }
+                if (two_head_eval.rr_margin_near_miss_relief_blocked_entry_floor) {
+                    entry_funnel_.two_head_aggregation_rr_margin_near_miss_relief_blocked_entry_floor++;
+                }
+                if (two_head_eval.rr_margin_near_miss_relief_blocked_second_stage_floor) {
+                    entry_funnel_.two_head_aggregation_rr_margin_near_miss_relief_blocked_second_stage_floor++;
+                }
+                if (two_head_eval.rr_margin_near_miss_relief_blocked_aggregate_score) {
+                    entry_funnel_.two_head_aggregation_rr_margin_near_miss_relief_blocked_aggregate_score++;
+                }
+            }
+            const bool two_head_gate_ok =
+                !core_risk_enabled ||
+                ((tuned_cfg.enable_two_head_entry_second_stage_aggregation
+                    ? two_head_eval.aggregate_pass
+                    : (entry_quality_gate_ok && second_stage_ok)));
+            const bool risk_gate_ok =
+                !core_risk_enabled ||
+                (risk_gate_prereq_ok && two_head_gate_ok);
             if (!pattern_strength_ok) {
                 entry_funnel_.blocked_pattern_gate++;
                 if (!archetype_ready) {
@@ -2911,16 +4635,72 @@ void BacktestEngine::processCandle(const Candle& candle) {
             } else if (!rr_rebalance_ok) {
                 entry_funnel_.blocked_rr_rebalance++;
                 markEntryReject("blocked_rr_rebalance");
-            } else if (!risk_gate_ok || !second_stage_ok) {
+            } else if (!risk_gate_ok) {
                 entry_funnel_.blocked_risk_gate++;
-                if (!risk_gate_ok) {
+                if (!risk_gate_prereq_ok) {
                     if (!strategy_ev_ok) {
                         entry_funnel_.blocked_risk_gate_strategy_ev++;
+                        switch (strategy_ev_fail_kind) {
+                            case StrategyEvFailKind::PreCatastrophicNoRecovery:
+                                entry_funnel_.blocked_risk_gate_strategy_ev_pre_catastrophic++;
+                                break;
+                            case StrategyEvFailKind::SevereThresholdNoRecovery:
+                                entry_funnel_.blocked_risk_gate_strategy_ev_severe_threshold++;
+                                break;
+                            case StrategyEvFailKind::CatastrophicHistory:
+                                entry_funnel_.blocked_risk_gate_strategy_ev_catastrophic_history++;
+                                break;
+                            case StrategyEvFailKind::LossAsymmetryCollapse:
+                                entry_funnel_.blocked_risk_gate_strategy_ev_loss_asymmetry++;
+                                break;
+                            case StrategyEvFailKind::None:
+                            default:
+                                entry_funnel_.blocked_risk_gate_strategy_ev_unknown++;
+                                break;
+                        }
                         markEntryReject("blocked_risk_gate_strategy_ev");
                     } else if (!regime_gate_ok) {
                         entry_funnel_.blocked_risk_gate_regime++;
                         markEntryReject("blocked_risk_gate_regime");
-                    } else if (!entry_quality_gate_ok) {
+                    } else {
+                        entry_funnel_.blocked_risk_gate_other++;
+                        markEntryReject("blocked_risk_gate_other");
+                    }
+                } else {
+                    if (core_risk_enabled &&
+                        tuned_cfg.enable_two_head_entry_second_stage_aggregation &&
+                        !two_head_eval.aggregate_pass) {
+                        entry_funnel_.two_head_aggregation_blocked++;
+                        if (two_head_eval.rr_margin_near_miss_relief_blocked) {
+                            LOG_INFO(
+                                "{} near-miss relief blocked [{}]: override_disallowed={}, entry_floor={}, second_floor={}, aggregate_score={}, head_floor_applied={}, head_floor_value={:.4f}, floor_relax={}, adaptive_floor_relax={}, adaptive_relax_strength={:.4f}, surplus_comp={}, surplus_second={}, surplus_agg={}, entry_surplus={:.4f}, second_deficit={:.4f}, aggregate_deficit={:.4f}, edge_score={:.4f}, surplus_bonus={:.4f}",
+                                market_name_,
+                                best_signal.strategy_name,
+                                two_head_eval.rr_margin_near_miss_relief_blocked_override_disallowed,
+                                two_head_eval.rr_margin_near_miss_relief_blocked_entry_floor,
+                                two_head_eval.rr_margin_near_miss_relief_blocked_second_stage_floor,
+                                two_head_eval.rr_margin_near_miss_relief_blocked_aggregate_score,
+                                two_head_eval.rr_margin_near_miss_head_score_floor_applied,
+                                two_head_eval.rr_margin_near_miss_head_score_floor_value,
+                                two_head_eval.rr_margin_near_miss_floor_relax_applied,
+                                two_head_eval.rr_margin_near_miss_adaptive_floor_relax_applied,
+                                two_head_eval.rr_margin_near_miss_adaptive_floor_relax_strength,
+                                two_head_eval.rr_margin_near_miss_surplus_compensation_applied,
+                                two_head_eval.rr_margin_near_miss_surplus_second_stage_compensated,
+                                two_head_eval.rr_margin_near_miss_surplus_aggregate_compensated,
+                                two_head_eval.entry_surplus,
+                                two_head_eval.second_stage_deficit,
+                                two_head_eval.aggregate_deficit,
+                                second_stage_eval.baseline_edge_score,
+                                two_head_eval.rr_margin_near_miss_surplus_bonus
+                            );
+                        }
+                    }
+                    const bool attribute_second_stage =
+                        tuned_cfg.enable_two_head_entry_second_stage_aggregation
+                        ? shouldAttributeTwoHeadFailureToSecondStage(two_head_eval)
+                        : (entry_quality_gate_ok && !second_stage_ok);
+                    if (!attribute_second_stage && !entry_quality_gate_ok) {
                         entry_funnel_.blocked_risk_gate_entry_quality++;
                         switch (entry_quality_eval.failure) {
                             case EntryQualityGateSnapshot::FailureKind::InvalidPriceLevels:
@@ -2997,57 +4777,118 @@ void BacktestEngine::processCandle(const Candle& candle) {
                                 break;
                         }
                         markEntryReject(entryQualityFailureReasonCode(entry_quality_eval));
+                    } else if (attribute_second_stage && !second_stage_ok) {
+                        entry_funnel_.blocked_second_stage_confirmation++;
+                        switch (second_stage_eval.failure) {
+                            case SecondStageConfirmationFailureKind::RRMarginShortfall:
+                                entry_funnel_.blocked_second_stage_confirmation_rr_margin++;
+                                if (second_stage_eval.rr_margin_near_miss) {
+                                    entry_funnel_.blocked_second_stage_confirmation_rr_margin_near_miss++;
+                                }
+                                break;
+                            case SecondStageConfirmationFailureKind::EdgeMarginShortfall:
+                                entry_funnel_.blocked_second_stage_confirmation_edge_margin++;
+                                break;
+                            case SecondStageConfirmationFailureKind::HostileSafetyAdders:
+                                entry_funnel_.blocked_second_stage_confirmation_hostile_safety_adders++;
+                                switch (second_stage_eval.safety_source) {
+                                    case SecondStageConfirmationSafetySource::Regime:
+                                        entry_funnel_.blocked_second_stage_confirmation_hostile_regime_safety_adders++;
+                                        break;
+                                    case SecondStageConfirmationSafetySource::Liquidity:
+                                        entry_funnel_.blocked_second_stage_confirmation_hostile_liquidity_safety_adders++;
+                                        break;
+                                    case SecondStageConfirmationSafetySource::StrategyHistory:
+                                        entry_funnel_.blocked_second_stage_confirmation_hostile_history_safety_adders++;
+                                        switch (classifySecondStageHistorySafetySeverity(best_signal)) {
+                                            case SecondStageHistorySafetySeverity::Mild:
+                                                entry_funnel_.blocked_second_stage_confirmation_hostile_history_mild_safety_adders++;
+                                                break;
+                                            case SecondStageHistorySafetySeverity::Moderate:
+                                                entry_funnel_.blocked_second_stage_confirmation_hostile_history_moderate_safety_adders++;
+                                                break;
+                                            case SecondStageHistorySafetySeverity::Severe:
+                                                entry_funnel_.blocked_second_stage_confirmation_hostile_history_severe_safety_adders++;
+                                                break;
+                                        }
+                                        break;
+                                    case SecondStageConfirmationSafetySource::DynamicTighten:
+                                        entry_funnel_.blocked_second_stage_confirmation_hostile_dynamic_tighten_safety_adders++;
+                                        break;
+                                    case SecondStageConfirmationSafetySource::Unknown:
+                                    default:
+                                        break;
+                                }
+                                break;
+                            case SecondStageConfirmationFailureKind::None:
+                            default:
+                                break;
+                        }
+                        markEntryReject("blocked_second_stage_confirmation");
+                    } else if (!entry_quality_gate_ok) {
+                        entry_funnel_.blocked_risk_gate_entry_quality++;
+                        markEntryReject(entryQualityFailureReasonCode(entry_quality_eval));
+                    } else if (!second_stage_ok) {
+                        entry_funnel_.blocked_second_stage_confirmation++;
+                        markEntryReject("blocked_second_stage_confirmation");
                     } else {
                         entry_funnel_.blocked_risk_gate_other++;
                         markEntryReject("blocked_risk_gate_other");
                     }
-                } else {
-                    entry_funnel_.blocked_second_stage_confirmation++;
-                    switch (second_stage_failure) {
-                        case SecondStageConfirmationFailureKind::RRMarginShortfall:
-                            entry_funnel_.blocked_second_stage_confirmation_rr_margin++;
-                            break;
-                        case SecondStageConfirmationFailureKind::EdgeMarginShortfall:
-                            entry_funnel_.blocked_second_stage_confirmation_edge_margin++;
-                            break;
-                        case SecondStageConfirmationFailureKind::HostileSafetyAdders:
-                            entry_funnel_.blocked_second_stage_confirmation_hostile_safety_adders++;
-                            switch (second_stage_safety_source) {
-                                case SecondStageConfirmationSafetySource::Regime:
-                                    entry_funnel_.blocked_second_stage_confirmation_hostile_regime_safety_adders++;
-                                    break;
-                                case SecondStageConfirmationSafetySource::Liquidity:
-                                    entry_funnel_.blocked_second_stage_confirmation_hostile_liquidity_safety_adders++;
-                                    break;
-                                case SecondStageConfirmationSafetySource::StrategyHistory:
-                                    entry_funnel_.blocked_second_stage_confirmation_hostile_history_safety_adders++;
-                                    switch (classifySecondStageHistorySafetySeverity(best_signal)) {
-                                        case SecondStageHistorySafetySeverity::Mild:
-                                            entry_funnel_.blocked_second_stage_confirmation_hostile_history_mild_safety_adders++;
-                                            break;
-                                        case SecondStageHistorySafetySeverity::Moderate:
-                                            entry_funnel_.blocked_second_stage_confirmation_hostile_history_moderate_safety_adders++;
-                                            break;
-                                        case SecondStageHistorySafetySeverity::Severe:
-                                            entry_funnel_.blocked_second_stage_confirmation_hostile_history_severe_safety_adders++;
-                                            break;
-                                    }
-                                    break;
-                                case SecondStageConfirmationSafetySource::DynamicTighten:
-                                    entry_funnel_.blocked_second_stage_confirmation_hostile_dynamic_tighten_safety_adders++;
-                                    break;
-                                case SecondStageConfirmationSafetySource::Unknown:
-                                default:
-                                    break;
-                            }
-                            break;
-                        case SecondStageConfirmationFailureKind::None:
-                        default:
-                            break;
-                    }
-                    markEntryReject("blocked_second_stage_confirmation");
                 }
-            } else if (pattern_strength_ok && rr_rebalance_ok && risk_gate_ok && second_stage_ok) {
+            } else if (pattern_strength_ok && rr_rebalance_ok && risk_gate_ok) {
+                if (core_risk_enabled &&
+                    tuned_cfg.enable_two_head_entry_second_stage_aggregation &&
+                    two_head_eval.override_applied) {
+                    entry_funnel_.two_head_aggregation_override_accept++;
+                    if (two_head_eval.rr_margin_near_miss_relief_applied) {
+                        entry_funnel_.two_head_aggregation_override_accept_rr_margin_near_miss++;
+                    }
+                    LOG_INFO(
+                        "{} two-head aggregation override accepted [{}]: entry_score {:.3f}, second_score {:.3f}, agg {:.3f}",
+                        market_name_,
+                        best_signal.strategy_name,
+                        two_head_eval.entry_head_score,
+                        two_head_eval.second_stage_head_score,
+                        two_head_eval.aggregate_score
+                    );
+                    if (two_head_eval.rr_margin_near_miss_relief_applied) {
+                        LOG_INFO(
+                            "{} two-head near-miss relief [{}]: rr_gap {:.4f}, min_rr_margin {:.4f}, head_floor_applied={}, head_floor_value={:.4f}, floor_relax={}, adaptive_floor_relax={}, adaptive_relax_strength={:.4f}, surplus_comp={}, surplus_second={}, surplus_agg={}, surplus_bonus {:.4f}, eff_second_floor {:.3f}, eff_agg_floor {:.3f}",
+                            market_name_,
+                            best_signal.strategy_name,
+                            second_stage_eval.rr_margin_gap,
+                            second_stage_eval.min_rr_margin,
+                            two_head_eval.rr_margin_near_miss_head_score_floor_applied,
+                            two_head_eval.rr_margin_near_miss_head_score_floor_value,
+                            two_head_eval.rr_margin_near_miss_floor_relax_applied,
+                            two_head_eval.rr_margin_near_miss_adaptive_floor_relax_applied,
+                            two_head_eval.rr_margin_near_miss_adaptive_floor_relax_strength,
+                            two_head_eval.rr_margin_near_miss_surplus_compensation_applied,
+                            two_head_eval.rr_margin_near_miss_surplus_second_stage_compensated,
+                            two_head_eval.rr_margin_near_miss_surplus_aggregate_compensated,
+                            two_head_eval.rr_margin_near_miss_surplus_bonus,
+                            two_head_eval.effective_min_second_stage_score,
+                            two_head_eval.effective_min_aggregate_score
+                        );
+                    }
+                }
+                if (core_risk_enabled && entry_quality_eval.adaptive_relief_applied) {
+                    const double relief_scale = std::clamp(
+                        tuned_cfg.entry_quality_adaptive_relief_position_scale,
+                        0.20,
+                        1.0
+                    );
+                    LOG_INFO("{} entry-quality adaptive relief applied [{}]: rr {:.2f}>=gate {:.2f}, edge {:.3f}%>=gate {:.3f}%, size_scale {:.2f}x",
+                             market_name_,
+                             best_signal.strategy_name,
+                             reward_risk_ratio,
+                             entry_quality_eval.reward_risk_gate_effective,
+                             calibrated_expected_edge_pct * 100.0,
+                             entry_quality_eval.expected_edge_gate_effective * 100.0,
+                             relief_scale);
+                    best_signal.position_size *= relief_scale;
+                }
                 const double min_order_krw = std::max(5000.0, engine_config_.min_order_krw);
                 const double available_cash_for_gate = risk_manager_->getRiskMetrics().available_capital;
                 const bool has_min_order_capital = available_cash_for_gate >= min_order_krw;
@@ -3510,6 +5351,12 @@ BacktestEngine::Result BacktestEngine::getResult() const {
     for (const auto& [name, _] : strategy_entries_executed_counts_) {
         strategy_names.insert(name);
     }
+    for (const auto& [name, _] : strategy_skipped_disabled_counts_) {
+        strategy_names.insert(name);
+    }
+    for (const auto& [name, _] : strategy_no_signal_counts_) {
+        strategy_names.insert(name);
+    }
     for (const auto& strategy_name : strategy_names) {
         Result::StrategySignalFunnel item;
         item.strategy_name = strategy_name;
@@ -3522,6 +5369,16 @@ BacktestEngine::Result BacktestEngine::getResult() const {
         item.entries_executed = strategy_entries_executed_counts_.count(strategy_name)
             ? strategy_entries_executed_counts_.at(strategy_name) : 0;
         result.strategy_signal_funnel.push_back(std::move(item));
+
+        Result::StrategyCollectionSummary collect_item;
+        collect_item.strategy_name = strategy_name;
+        collect_item.skipped_disabled = strategy_skipped_disabled_counts_.count(strategy_name)
+            ? strategy_skipped_disabled_counts_.at(strategy_name) : 0;
+        collect_item.no_signal = strategy_no_signal_counts_.count(strategy_name)
+            ? strategy_no_signal_counts_.at(strategy_name) : 0;
+        collect_item.generated = strategy_generated_counts_.count(strategy_name)
+            ? strategy_generated_counts_.at(strategy_name) : 0;
+        result.strategy_collection_summaries.push_back(std::move(collect_item));
     }
     std::sort(result.strategy_signal_funnel.begin(), result.strategy_signal_funnel.end(),
         [](const Result::StrategySignalFunnel& a, const Result::StrategySignalFunnel& b) {
@@ -3530,7 +5387,19 @@ BacktestEngine::Result BacktestEngine::getResult() const {
             }
             return a.strategy_name < b.strategy_name;
         });
+    std::sort(result.strategy_collection_summaries.begin(), result.strategy_collection_summaries.end(),
+        [](const Result::StrategyCollectionSummary& a, const Result::StrategyCollectionSummary& b) {
+            if (a.no_signal != b.no_signal) {
+                return a.no_signal > b.no_signal;
+            }
+            if (a.generated != b.generated) {
+                return a.generated > b.generated;
+            }
+            return a.strategy_name < b.strategy_name;
+        });
+    result.strategy_collect_exception_count = strategy_collect_exception_count_;
     result.entry_funnel = entry_funnel_;
+    result.pre_cat_feature_snapshot = pre_cat_feature_snapshot_;
     return result;
 }
 

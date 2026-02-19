@@ -1,4 +1,4 @@
-﻿cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.20)
 
 if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
     if(DEFINED ENV{VCPKG_ROOT} AND EXISTS "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
@@ -41,12 +41,9 @@ set(LIB_SOURCES
     src/analytics/MarketScanner.cpp
     src/analytics/TechnicalIndicators.cpp
     src/analytics/OrderbookAnalyzer.cpp
-    src/v2/strategy/StrategyManager.cpp
-    src/v2/strategy/ScalpingStrategy.cpp
-    src/v2/strategy/MomentumStrategy.cpp
-    src/v2/strategy/BreakoutStrategy.cpp
-    src/v2/strategy/MeanReversionStrategy.cpp
-    src/v2/strategy/GridTradingStrategy.cpp
+    src/strategy/StrategyManager.cpp
+    src/strategy/FoundationRiskPipeline.cpp
+    src/strategy/FoundationAdaptiveStrategy.cpp
     src/risk/RiskManager.cpp
     src/runtime/LiveTradingRuntime.cpp
     src/engine/AdaptivePolicyController.cpp
@@ -54,8 +51,6 @@ set(LIB_SOURCES
     src/core/adapters/ExecutionPlaneAdapter.cpp
     src/core/adapters/PolicyLearningPlaneAdapter.cpp
     src/core/adapters/UpbitComplianceAdapter.cpp
-    src/v2/orchestration/DecisionKernel.cpp
-    src/v2/adapters/LegacyPolicyPlaneAdapter.cpp
     src/core/execution/OrderLifecycleStateMachine.cpp
     src/core/orchestration/TradingCycleCoordinator.cpp
     src/core/state/EventJournalJsonl.cpp
@@ -67,7 +62,15 @@ set(LIB_SOURCES
     src/analytics/RegimeDetector.cpp
 )
 
-add_executable(AutoLifeTrading src/main.cpp ${LIB_SOURCES})
+add_executable(
+    AutoLifeTrading
+    src/main.cpp
+    src/app/BacktestCliHandler.cpp
+    src/app/BacktestInteractiveHandler.cpp
+    src/app/BacktestReportFormatter.cpp
+    src/app/LiveModeHandler.cpp
+    ${LIB_SOURCES}
+)
 add_executable(AutoLifeCancelOrder src/tools/CancelOrder.cpp src/common/Config.cpp src/common/PathUtils.cpp src/common/Logger.cpp src/network/JwtGenerator.cpp src/network/UpbitHttpClient.cpp src/execution/RateLimiter.cpp)
 add_executable(
     AutoLifeLiveExecutionProbe
@@ -226,63 +229,6 @@ add_executable(
 )
 target_link_libraries(AutoLifeRateLimiterComplianceTest PRIVATE nlohmann_json::nlohmann_json spdlog::spdlog)
 target_compile_definitions(AutoLifeRateLimiterComplianceTest PRIVATE
-    _WIN32_WINNT=0x0A00
-    NOMINMAX
-)
-
-add_executable(
-    AutoLifeV2KernelSmokeTest
-    tests/TestV2DecisionKernel.cpp
-    src/v2/orchestration/DecisionKernel.cpp
-)
-
-add_executable(
-    AutoLifeV2EngineBacktestSmokeTest
-    tests/TestV2EngineBacktestScaffold.cpp
-    src/v2/orchestration/DecisionKernel.cpp
-    src/v2/engine/TradingEngineV2.cpp
-    src/v2/backtest/BacktestEngineV2.cpp
-)
-
-add_library(
-    AutoLifeV2CompileObjects OBJECT
-    src/v2/orchestration/DecisionKernel.cpp
-    src/v2/adapters/LegacyPolicyPlaneAdapter.cpp
-    src/v2/adapters/LegacyRiskPlaneAdapter.cpp
-    src/v2/adapters/LegacyExecutionPlaneAdapter.cpp
-    src/v2/engine/TradingEngineV2.cpp
-    src/v2/backtest/BacktestEngineV2.cpp
-    src/v2/strategy/StrategyManager.cpp
-    src/v2/strategy/ScalpingStrategy.cpp
-    src/v2/strategy/MomentumStrategy.cpp
-    src/v2/strategy/BreakoutStrategy.cpp
-    src/v2/strategy/MeanReversionStrategy.cpp
-    src/v2/strategy/GridTradingStrategy.cpp
-    src/v2/strategy/StrategyConfig.cpp
-)
-target_compile_definitions(AutoLifeV2CompileObjects PRIVATE
-    _WIN32_WINNT=0x0A00
-    NOMINMAX
-)
-target_link_libraries(AutoLifeV2CompileObjects PRIVATE
-    CURL::libcurl
-    OpenSSL::SSL
-    OpenSSL::Crypto
-    nlohmann_json::nlohmann_json
-    spdlog::spdlog
-    Boost::system
-    Boost::thread
-)
-
-add_executable(
-    AutoLifeV2ShadowParityTest
-    tests/TestV2ShadowParity.cpp
-    src/engine/AdaptivePolicyController.cpp
-    src/core/adapters/PolicyLearningPlaneAdapter.cpp
-    src/v2/adapters/LegacyPolicyPlaneAdapter.cpp
-)
-target_link_libraries(AutoLifeV2ShadowParityTest PRIVATE nlohmann_json::nlohmann_json)
-target_compile_definitions(AutoLifeV2ShadowParityTest PRIVATE
     _WIN32_WINNT=0x0A00
     NOMINMAX
 )

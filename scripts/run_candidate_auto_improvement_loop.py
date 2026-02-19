@@ -301,6 +301,156 @@ def parse_args(argv=None):
         choices=["balanced", "profitable_ratio_priority"],
         default="balanced",
     )
+    parser.add_argument(
+        "--tune-selector-mode",
+        "-TuneSelectorMode",
+        choices=["objective", "pareto_objective"],
+        default="pareto_objective",
+    )
+    parser.add_argument(
+        "--tune-selector-enable-two-stage-gate",
+        "-TuneSelectorEnableTwoStageGate",
+        dest="tune_selector_enable_two_stage_gate",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--tune-disable-selector-enable-two-stage-gate",
+        dest="tune_selector_enable_two_stage_gate",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--tune-selector-two-stage-pre-min-avg-trades",
+        "-TuneSelectorTwoStagePreMinAvgTrades",
+        type=float,
+        default=8.0,
+    )
+    parser.add_argument(
+        "--tune-selector-two-stage-pre-min-win-rate-pct",
+        "-TuneSelectorTwoStagePreMinWinRatePct",
+        type=float,
+        default=39.0,
+    )
+    parser.add_argument(
+        "--tune-selector-two-stage-pre-max-market-loss-top-share-pct",
+        "-TuneSelectorTwoStagePreMaxMarketLossTopSharePct",
+        type=float,
+        default=33.0,
+    )
+    parser.add_argument(
+        "--tune-selector-two-stage-pre-max-market-loss-hhi",
+        "-TuneSelectorTwoStagePreMaxMarketLossHhi",
+        type=float,
+        default=0.19,
+    )
+    parser.add_argument(
+        "--tune-selector-two-stage-pre-require-gate-trades-pass",
+        "-TuneSelectorTwoStagePreRequireGateTradesPass",
+        dest="tune_selector_two_stage_pre_require_gate_trades_pass",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--tune-selector-two-stage-pre-allow-gate-trades-fail",
+        dest="tune_selector_two_stage_pre_require_gate_trades_pass",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--tune-selector-two-stage-profit-min-profit-factor",
+        "-TuneSelectorTwoStageProfitMinProfitFactor",
+        type=float,
+        default=0.41,
+    )
+    parser.add_argument(
+        "--tune-selector-two-stage-profit-min-expectancy-krw",
+        "-TuneSelectorTwoStageProfitMinExpectancyKrw",
+        type=float,
+        default=-10.0,
+    )
+    parser.add_argument(
+        "--tune-selector-two-stage-profit-min-win-rate-pct",
+        "-TuneSelectorTwoStageProfitMinWinRatePct",
+        type=float,
+        default=40.0,
+    )
+    parser.add_argument(
+        "--tune-selector-two-stage-allow-pre-gate-fallback",
+        "-TuneSelectorTwoStageAllowPreGateFallback",
+        dest="tune_selector_two_stage_allow_pre_gate_fallback",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--tune-selector-two-stage-disable-pre-gate-fallback",
+        dest="tune_selector_two_stage_allow_pre_gate_fallback",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--tune-selector-enable-veto-ensemble",
+        "-TuneSelectorEnableVetoEnsemble",
+        dest="tune_selector_enable_veto_ensemble",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--tune-disable-selector-enable-veto-ensemble",
+        dest="tune_selector_enable_veto_ensemble",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--tune-selector-veto-max-market-loss-top-share-pct",
+        "-TuneSelectorVetoMaxMarketLossTopSharePct",
+        type=float,
+        default=33.0,
+    )
+    parser.add_argument(
+        "--tune-selector-veto-max-market-loss-hhi",
+        "-TuneSelectorVetoMaxMarketLossHhi",
+        type=float,
+        default=0.19,
+    )
+    parser.add_argument(
+        "--tune-selector-veto-max-avg-total-trades",
+        "-TuneSelectorVetoMaxAvgTotalTrades",
+        type=float,
+        default=150.0,
+    )
+    parser.add_argument(
+        "--tune-enable-selector-baseline-readiness-veto",
+        "-TuneEnableSelectorBaselineReadinessVeto",
+        dest="tune_enable_selector_baseline_readiness_veto",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--tune-disable-selector-baseline-readiness-veto",
+        dest="tune_enable_selector_baseline_readiness_veto",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--tune-selector-baseline-readiness-veto-fail-closed",
+        "-TuneSelectorBaselineReadinessVetoFailClosed",
+        dest="tune_selector_baseline_readiness_veto_fail_closed",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--tune-selector-baseline-readiness-veto-fail-open",
+        dest="tune_selector_baseline_readiness_veto_fail_closed",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--tune-baseline-readiness-max-drawdown-delta-pct",
+        "-TuneBaselineReadinessMaxDrawdownDeltaPct",
+        type=float,
+        default=0.30,
+    )
+    parser.add_argument(
+        "--tune-baseline-readiness-expectancy-tolerance-krw",
+        "-TuneBaselineReadinessExpectancyToleranceKrw",
+        type=float,
+        default=0.0,
+    )
     parser.add_argument("--real-data-only", "-RealDataOnly", action="store_true")
     parser.add_argument(
         "--require-higher-tf-companions",
@@ -325,7 +475,13 @@ def parse_args(argv=None):
         help="Enable adaptive strategy state I/O during matrix backtests inside loop.",
     )
     parser.add_argument("--sync-source-config", "-SyncSourceConfig", action="store_true")
-    parser.add_argument("--matrix-max-workers", "-MatrixMaxWorkers", type=int, default=1)
+    parser.add_argument(
+        "--matrix-max-workers",
+        "-MatrixMaxWorkers",
+        type=int,
+        default=1,
+        help="Deprecated. Validation is forced to sequential execution.",
+    )
     parser.add_argument("--matrix-backtest-retry-count", "-MatrixBacktestRetryCount", type=int, default=2)
     parser.add_argument(
         "--run-parity-invariant",
@@ -1545,6 +1701,66 @@ def apply_combo_to_config_object(config_obj: Dict[str, Any], combo: Dict[str, An
         ("hostility_pause_recent_win_rate", float),
         ("backtest_hostility_pause_candles", int),
         ("backtest_hostility_pause_candles_extreme", int),
+        ("enable_entry_quality_adaptive_relief", bool),
+        ("entry_quality_adaptive_relief_rr_max_gap", float),
+        ("entry_quality_adaptive_relief_edge_max_gap", float),
+        ("entry_quality_adaptive_relief_min_signal_strength", float),
+        ("entry_quality_adaptive_relief_min_expected_value", float),
+        ("entry_quality_adaptive_relief_min_liquidity_score", float),
+        ("entry_quality_adaptive_relief_position_scale", float),
+        ("entry_quality_adaptive_relief_min_strategy_trades", int),
+        ("entry_quality_adaptive_relief_min_strategy_win_rate", float),
+        ("entry_quality_adaptive_relief_min_strategy_profit_factor", float),
+        ("entry_quality_adaptive_relief_block_high_stress_regime", bool),
+        ("second_stage_history_safety_severe_scale", float),
+        ("enable_second_stage_history_safety_severe_relief", bool),
+        ("second_stage_history_safety_relief_max_scale", float),
+        ("second_stage_history_safety_relief_min_strategy_trades", int),
+        ("second_stage_history_safety_relief_min_signal_strength", float),
+        ("second_stage_history_safety_relief_min_expected_value", float),
+        ("second_stage_history_safety_relief_min_liquidity_score", float),
+        ("second_stage_history_safety_relief_block_hostile_regime", bool),
+        ("enable_two_head_entry_second_stage_aggregation", bool),
+        ("two_head_entry_quality_weight", float),
+        ("two_head_second_stage_weight", float),
+        ("two_head_min_entry_quality_score", float),
+        ("two_head_min_second_stage_score", float),
+        ("two_head_min_aggregate_score", float),
+        ("two_head_aggregation_block_high_stress_regime", bool),
+        ("two_head_aggregation_min_strategy_trades", int),
+        ("enable_two_head_rr_margin_near_miss_floor_relax", bool),
+        ("two_head_rr_margin_near_miss_second_stage_floor_relax", float),
+        ("two_head_rr_margin_near_miss_aggregate_floor_relax", float),
+        ("enable_two_head_rr_margin_near_miss_adaptive_floor_relax", bool),
+        ("two_head_rr_margin_near_miss_adaptive_floor_relax_min_activation", float),
+        ("two_head_rr_margin_near_miss_adaptive_floor_relax_max_second_stage", float),
+        ("two_head_rr_margin_near_miss_adaptive_floor_relax_max_aggregate", float),
+        ("two_head_rr_margin_near_miss_adaptive_floor_relax_quality_weight", float),
+        ("two_head_rr_margin_near_miss_adaptive_floor_relax_gap_weight", float),
+        ("enable_two_head_rr_margin_near_miss_surplus_compensation", bool),
+        ("two_head_rr_margin_near_miss_surplus_min_entry_surplus", float),
+        ("two_head_rr_margin_near_miss_surplus_min_edge_score", float),
+        ("two_head_rr_margin_near_miss_surplus_max_second_stage_deficit", float),
+        ("two_head_rr_margin_near_miss_surplus_max_aggregate_deficit", float),
+        ("two_head_rr_margin_near_miss_surplus_entry_weight", float),
+        ("two_head_rr_margin_near_miss_surplus_max_aggregate_bonus", float),
+        ("enable_second_stage_rr_margin_near_miss_relief", bool),
+        ("second_stage_rr_margin_near_miss_max_gap", float),
+        ("second_stage_rr_margin_near_miss_min_signal_strength", float),
+        ("second_stage_rr_margin_near_miss_min_expected_value", float),
+        ("second_stage_rr_margin_near_miss_min_liquidity_score", float),
+        ("second_stage_rr_margin_near_miss_min_strategy_trades", int),
+        ("second_stage_rr_margin_near_miss_block_high_stress_regime", bool),
+        ("second_stage_rr_margin_near_miss_score_boost", float),
+        ("enable_second_stage_rr_margin_soft_score", bool),
+        ("second_stage_rr_margin_soft_score_max_gap", float),
+        ("second_stage_rr_margin_soft_score_floor", float),
+        ("second_stage_rr_margin_soft_score_gap_tightness_weight", float),
+        ("enable_second_stage_rr_margin_near_miss_head_score_floor", bool),
+        ("second_stage_rr_margin_near_miss_head_score_floor_base", float),
+        ("second_stage_rr_margin_near_miss_head_score_floor_quality_weight", float),
+        ("second_stage_rr_margin_near_miss_head_score_floor_gap_weight", float),
+        ("second_stage_rr_margin_near_miss_head_score_floor_max", float),
     ]:
         if key in combo:
             trading[key] = cast(combo[key])
@@ -1585,12 +1801,17 @@ def select_best_combo_from_tune_summary(
     summary = payload.get("summary")
     if not isinstance(combos, list) or not isinstance(summary, list):
         raise RuntimeError(f"Invalid tune summary json: {tune_summary_path}")
+    selector_meta = payload.get("selector") or {}
+    if not isinstance(selector_meta, dict):
+        selector_meta = {}
+    selected_combo_id = str(payload.get("best_combo_id", "") or "").strip()
     combo_by_id = {}
     for combo in combos:
         if isinstance(combo, dict):
             combo_by_id[str(combo.get("combo_id", ""))] = combo
 
-    candidates = []
+    candidates: List[Dict[str, Any]] = []
+    candidate_by_id: Dict[str, Dict[str, Any]] = {}
     for row in summary:
         if not isinstance(row, dict):
             continue
@@ -1617,34 +1838,44 @@ def select_best_combo_from_tune_summary(
             gate_bonus += 60.0
         if bool(row.get("gate_trades_pass", False)):
             gate_bonus += 40.0
-        candidates.append(
-            {
-                "combo_id": combo_id,
-                "combo": combo_by_id[combo_id],
-                "objective_score": objective,
-                "objective_with_gate_bonus": round(objective + gate_bonus, 6),
-                "avg_profit_factor": float(row.get("avg_profit_factor", 0.0)),
-                "avg_expectancy_krw": float(row.get("avg_expectancy_krw", 0.0)),
-                "profitable_ratio": float(row.get("profitable_ratio", 0.0)),
-                "avg_win_rate_pct": float(row.get("avg_win_rate_pct", 0.0)),
-                "avg_total_trades": float(row.get("avg_total_trades", 0.0)),
-                "overall_gate_pass": bool(row.get("overall_gate_pass", False)),
-                "profile_gate_pass": bool(row.get("profile_gate_pass", False)),
-                "bottleneck_scenario_family": str(row.get("bottleneck_scenario_family", "")),
-                "holdout_failure_suppression_active": bool(
-                    row.get("holdout_failure_suppression_active", False)
-                ),
-                "holdout_failure_suppressed_family": bool(
-                    row.get("holdout_failure_suppressed_family", False)
-                ),
-                "holdout_failure_suppression_reason": str(
-                    row.get("holdout_failure_suppression_reason", "")
-                ),
-                "report_json": str(row.get("report_json", "")),
-            }
-        )
+        candidate = {
+            "combo_id": combo_id,
+            "combo": combo_by_id[combo_id],
+            "objective_score": objective,
+            "objective_with_gate_bonus": round(objective + gate_bonus, 6),
+            "avg_profit_factor": float(row.get("avg_profit_factor", 0.0)),
+            "avg_expectancy_krw": float(row.get("avg_expectancy_krw", 0.0)),
+            "profitable_ratio": float(row.get("profitable_ratio", 0.0)),
+            "avg_win_rate_pct": float(row.get("avg_win_rate_pct", 0.0)),
+            "avg_total_trades": float(row.get("avg_total_trades", 0.0)),
+            "overall_gate_pass": bool(row.get("overall_gate_pass", False)),
+            "profile_gate_pass": bool(row.get("profile_gate_pass", False)),
+            "bottleneck_scenario_family": str(row.get("bottleneck_scenario_family", "")),
+            "holdout_failure_suppression_active": bool(
+                row.get("holdout_failure_suppression_active", False)
+            ),
+            "holdout_failure_suppressed_family": bool(
+                row.get("holdout_failure_suppressed_family", False)
+            ),
+            "holdout_failure_suppression_reason": str(
+                row.get("holdout_failure_suppression_reason", "")
+            ),
+            "report_json": str(row.get("report_json", "")),
+            "selector_mode_requested": str(selector_meta.get("requested_mode", "")),
+            "selector_mode_applied": str(selector_meta.get("applied_mode", "")),
+            "selector_reason": str(selector_meta.get("reason", "")),
+            "selector_candidate_row_count": int(selector_meta.get("selector_candidate_row_count", 0) or 0),
+            "selection_source": "",
+        }
+        candidates.append(candidate)
+        candidate_by_id[combo_id] = candidate
     if not candidates:
         raise RuntimeError("No candidate combo rows from tuning summary.")
+    if selected_combo_id and selected_combo_id in candidate_by_id:
+        selected = dict(candidate_by_id[selected_combo_id])
+        selected["selection_source"] = "tune_summary_best_combo_id"
+        return selected
+
     candidates.sort(
         key=lambda x: (
             float(x["objective_with_gate_bonus"]),
@@ -1656,11 +1887,19 @@ def select_best_combo_from_tune_summary(
         ),
         reverse=True,
     )
-    return candidates[0]
+    selected = dict(candidates[0])
+    selected["selection_source"] = "auto_objective_fallback"
+    return selected
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
+    if int(getattr(args, "matrix_max_workers", 1)) > 1:
+        print(
+            "[AutoImprove] Parallel matrix workers are disabled; "
+            "forcing --matrix-max-workers=1."
+        )
+    args.matrix_max_workers = 1
     build_config_path = resolve_repo_path(args.build_config_path)
     source_config_path = resolve_repo_path(args.source_config_path)
     gate_report_path = resolve_repo_path(args.gate_report_json)
@@ -1881,8 +2120,10 @@ def main(argv=None) -> int:
             real_loop_argv.extend(["--verification-lock-stale-sec", str(max(10, int(args.verification_lock_stale_sec)))])
             if args.enable_hostility_adaptive_targets:
                 real_loop_argv.append("--enable-hostility-adaptive-thresholds")
+                real_loop_argv.append("--enable-hostility-adaptive-trades-only")
             else:
                 real_loop_argv.append("--disable-hostility-adaptive-thresholds")
+                real_loop_argv.append("--disable-hostility-adaptive-trades-only")
             if args.require_higher_tf_companions:
                 real_loop_argv.append("--require-higher-tf-companions")
             else:
@@ -2199,6 +2440,9 @@ def main(argv=None) -> int:
                     "iteration": iteration,
                     "phase": "baseline",
                     "selected_combo": "",
+                    "selected_combo_selection_source": "",
+                    "selected_combo_selector_mode_applied": "",
+                    "selected_combo_selector_reason": "",
                     "post_apply_skipped_same_combo": False,
                     "overall_gate_pass": bool(snapshot["overall_gate_pass"]),
                     "core_vs_legacy_gate_pass": bool(snapshot["core_vs_legacy_gate_pass"]),
@@ -2381,7 +2625,57 @@ def main(argv=None) -> int:
                 str(tune_hint_guardrail_ratio_iter),
                 "--hint-impact-guardrail-tighten-scale",
                 str(tune_hint_guardrail_tighten_scale_iter),
+                "--selector-mode",
+                str(args.tune_selector_mode),
+                "--selector-two-stage-pre-min-avg-trades",
+                str(float(args.tune_selector_two_stage_pre_min_avg_trades)),
+                "--selector-two-stage-pre-min-win-rate-pct",
+                str(float(args.tune_selector_two_stage_pre_min_win_rate_pct)),
+                "--selector-two-stage-pre-max-market-loss-top-share-pct",
+                str(float(args.tune_selector_two_stage_pre_max_market_loss_top_share_pct)),
+                "--selector-two-stage-pre-max-market-loss-hhi",
+                str(float(args.tune_selector_two_stage_pre_max_market_loss_hhi)),
+                "--selector-two-stage-profit-min-profit-factor",
+                str(float(args.tune_selector_two_stage_profit_min_profit_factor)),
+                "--selector-two-stage-profit-min-expectancy-krw",
+                str(float(args.tune_selector_two_stage_profit_min_expectancy_krw)),
+                "--selector-two-stage-profit-min-win-rate-pct",
+                str(float(args.tune_selector_two_stage_profit_min_win_rate_pct)),
+                "--selector-veto-max-market-loss-top-share-pct",
+                str(float(args.tune_selector_veto_max_market_loss_top_share_pct)),
+                "--selector-veto-max-market-loss-hhi",
+                str(float(args.tune_selector_veto_max_market_loss_hhi)),
+                "--selector-veto-max-avg-total-trades",
+                str(float(args.tune_selector_veto_max_avg_total_trades)),
+                "--baseline-readiness-max-drawdown-delta-pct",
+                str(float(args.tune_baseline_readiness_max_drawdown_delta_pct)),
+                "--baseline-readiness-expectancy-tolerance-krw",
+                str(float(args.tune_baseline_readiness_expectancy_tolerance_krw)),
             ]
+            if bool(args.tune_selector_enable_two_stage_gate):
+                tune_argv.append("--selector-enable-two-stage-gate")
+            else:
+                tune_argv.append("--disable-selector-enable-two-stage-gate")
+            if bool(args.tune_selector_two_stage_pre_require_gate_trades_pass):
+                tune_argv.append("--selector-two-stage-pre-require-gate-trades-pass")
+            else:
+                tune_argv.append("--disable-selector-two-stage-pre-require-gate-trades-pass")
+            if bool(args.tune_selector_two_stage_allow_pre_gate_fallback):
+                tune_argv.append("--selector-two-stage-allow-pre-gate-fallback")
+            else:
+                tune_argv.append("--disable-selector-two-stage-allow-pre-gate-fallback")
+            if bool(args.tune_selector_enable_veto_ensemble):
+                tune_argv.append("--selector-enable-veto-ensemble")
+            else:
+                tune_argv.append("--disable-selector-enable-veto-ensemble")
+            if bool(args.tune_enable_selector_baseline_readiness_veto):
+                tune_argv.append("--enable-selector-baseline-readiness-veto")
+            else:
+                tune_argv.append("--disable-selector-baseline-readiness-veto")
+            if bool(args.tune_selector_baseline_readiness_veto_fail_closed):
+                tune_argv.append("--selector-baseline-readiness-veto-fail-closed")
+            else:
+                tune_argv.append("--selector-baseline-readiness-veto-fail-open")
             if tune_enable_hint_guardrail_iter:
                 tune_argv.append("--enable-hint-impact-guardrail")
             else:
@@ -2424,6 +2718,8 @@ def main(argv=None) -> int:
             else:
                 tune_argv.append("--disable-hostility-adaptive-thresholds")
                 tune_argv.append("--disable-effective-thresholds-for-objective")
+            # Keep tune-stage behavior explicit and stable across downstream default changes.
+            tune_argv.append("--disable-hostility-adaptive-trades-only")
             if args.skip_core_vs_legacy_gate:
                 tune_argv.append("--skip-core-vs-legacy-gate")
             rc = tune_candidate_gate_trade_density.main(tune_argv)
@@ -2445,7 +2741,9 @@ def main(argv=None) -> int:
             )
             print(
                 f"[AutoImprove] Iteration {iteration} selected_combo={best_combo['combo_id']} "
-                f"objective={best_combo['objective_with_gate_bonus']}"
+                f"objective={best_combo['objective_with_gate_bonus']}, "
+                f"source={best_combo.get('selection_source', '')}, "
+                f"selector={best_combo.get('selector_mode_applied', '')}"
             )
             if bool(tune_holdout_suppression_snapshot.get("active", False)):
                 print(
@@ -2606,6 +2904,9 @@ def main(argv=None) -> int:
                     "persist_triggered": bool(holdout_suppression_persist_triggered_iter),
                     "selected_combo": selected_combo_id,
                     "selected_combo_family": str(best_combo.get("bottleneck_scenario_family", "")),
+                    "selected_combo_selection_source": str(best_combo.get("selection_source", "")),
+                    "selected_combo_selector_mode_applied": str(best_combo.get("selector_mode_applied", "")),
+                    "selected_combo_selector_reason": str(best_combo.get("selector_reason", "")),
                     "selected_combo_suppressed_family": bool(
                         best_combo.get("holdout_failure_suppressed_family", False)
                     ),
@@ -2643,6 +2944,9 @@ def main(argv=None) -> int:
                     "iteration": iteration,
                     "phase": "post_apply",
                     "selected_combo": selected_combo_id,
+                    "selected_combo_selection_source": str(best_combo.get("selection_source", "")),
+                    "selected_combo_selector_mode_applied": str(best_combo.get("selector_mode_applied", "")),
+                    "selected_combo_selector_reason": str(best_combo.get("selector_reason", "")),
                     "post_apply_skipped_same_combo": bool(skip_post_apply_run),
                     "overall_gate_pass": bool(post_snapshot["overall_gate_pass"]),
                     "core_vs_legacy_gate_pass": bool(post_snapshot["core_vs_legacy_gate_pass"]),

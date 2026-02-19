@@ -1,5 +1,6 @@
 #include "analytics/MarketScanner.h"
 #include "analytics/OrderbookAnalyzer.h"
+#include "common/MarketDataWindowPolicy.h"
 #include "common/Logger.h"
 #include <algorithm>
 #include <numeric>
@@ -12,9 +13,9 @@
 namespace {
 constexpr int kScanMarketLimit = 25;
 constexpr int kTf5mMarketLimit = kScanMarketLimit;
-constexpr int kTf1hMarketLimit = 15;
-constexpr int kTf4hMarketLimit = 8;
-constexpr int kTf1dMarketLimit = 8;
+constexpr int kTf1hMarketLimit = kScanMarketLimit;
+constexpr int kTf4hMarketLimit = kScanMarketLimit;
+constexpr int kTf1dMarketLimit = kScanMarketLimit;
 constexpr int kIncrementalFetchCount = 3;
 constexpr auto kMinCandleApiInterval = std::chrono::milliseconds(120);
 constexpr auto kMinFullSyncInterval = std::chrono::milliseconds(30LL * 60LL * 1000LL);
@@ -67,7 +68,7 @@ MarketScanner::MarketScanner(std::shared_ptr<network::UpbitHttpClient> client)
 }
 
 std::vector<CoinMetrics> MarketScanner::scanAllMarkets() {
-    LOG_INFO("전체 마켓 스캔 시작 (최적화 v2)...");
+    LOG_INFO("전체 마켓 스캔 시작 (최적화 경로)...");
     
     auto start_time = std::chrono::steady_clock::now();
     auto all_markets = getAllKRWMarkets();
@@ -161,11 +162,11 @@ std::vector<CoinMetrics> MarketScanner::scanAllMarkets() {
     std::map<std::string, std::vector<Candle>> candles_map_4h;
     std::map<std::string, std::vector<Candle>> candles_map_1d;
 
-    const int CANDLES_1M = 200;
-    const int CANDLES_5M = 120;
-    const int CANDLES_1H = 120;
-    const int CANDLES_4H = 90;
-    const int CANDLES_1D = 60;
+    const int CANDLES_1M = static_cast<int>(common::targetBarsForTimeframe("1m", 200));
+    const int CANDLES_5M = static_cast<int>(common::targetBarsForTimeframe("5m", 120));
+    const int CANDLES_1H = static_cast<int>(common::targetBarsForTimeframe("1h", 120));
+    const int CANDLES_4H = static_cast<int>(common::targetBarsForTimeframe("4h", 90));
+    const int CANDLES_1D = static_cast<int>(common::targetBarsForTimeframe("1d", 60));
 
     for (const auto& market : top_markets) {
         auto candles = getCandlesWithRollingCache(market, "1", CANDLES_1M, false);
@@ -263,7 +264,11 @@ if (ticker_map.find(market) != ticker_map.end()) {
             metrics.candles = candles_map_1m[market];
             metrics.candles_by_tf["1m"] = metrics.candles;
 
-            auto candles_15m = aggregateCandlesByStep(metrics.candles, 15, 120);
+            auto candles_15m = aggregateCandlesByStep(
+                metrics.candles,
+                15,
+                common::targetBarsForTimeframe("15m", 120)
+            );
             if (!candles_15m.empty()) {
                 metrics.candles_by_tf["15m"] = std::move(candles_15m);
             }
@@ -278,7 +283,11 @@ if (ticker_map.find(market) != ticker_map.end()) {
         if (candles_map_5m.find(market) != candles_map_5m.end()) {
             metrics.candles_by_tf["5m"] = candles_map_5m[market];
             if (metrics.candles_by_tf.find("15m") == metrics.candles_by_tf.end()) {
-                auto candles_15m = aggregateCandlesByStep(candles_map_5m[market], 3, 120);
+                auto candles_15m = aggregateCandlesByStep(
+                    candles_map_5m[market],
+                    3,
+                    common::targetBarsForTimeframe("15m", 120)
+                );
                 if (!candles_15m.empty()) {
                     metrics.candles_by_tf["15m"] = std::move(candles_15m);
                 }
@@ -295,6 +304,12 @@ if (ticker_map.find(market) != ticker_map.end()) {
 
         if (candles_map_1d.find(market) != candles_map_1d.end()) {
             metrics.candles_by_tf["1d"] = candles_map_1d[market];
+        }
+
+        common::trimCandlesByPolicy(metrics.candles_by_tf);
+        auto tf_1m = metrics.candles_by_tf.find("1m");
+        if (tf_1m != metrics.candles_by_tf.end()) {
+            metrics.candles = tf_1m->second;
         }
 
         // [수정] 유동성 점수 기준 현실화 (예: 1,000억 기준 100점)

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <cstdint>
 #include <string>
@@ -9,7 +9,7 @@
 #include "analytics/RegimeDetector.h"
 #include "common/Types.h"
 #include "engine/AdaptivePolicyController.h"
-#include "v2/strategy/IStrategy.h"
+#include "strategy/IStrategy.h"
 
 namespace autolife {
 namespace core {
