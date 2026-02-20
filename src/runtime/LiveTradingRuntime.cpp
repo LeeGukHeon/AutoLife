@@ -16,6 +16,7 @@
 #include "common/RuntimeDiagnosticsShared.h"
 #include "common/SignalPolicyShared.h"
 #include "common/StrategyEdgeStatsShared.h"
+#include "common/ExecutionGuardPolicyShared.h"
 #include <chrono>
 #include <thread>
 #include <algorithm>
@@ -61,6 +62,9 @@ using autolife::common::signal_policy::rebalanceSignalRiskReward;
 using autolife::common::signal_policy::computeStrategyHistoryWinProbPrior;
 using autolife::common::signal_policy::computeCalibratedExpectedEdgePct;
 using autolife::common::signal_policy::computeContextualEdgeGateFloor;
+using autolife::common::execution_guard::computeLiveScanPrefilterThresholds;
+using autolife::common::execution_guard::computeRealtimeEntryVetoThresholds;
+using autolife::common::execution_guard::computeDynamicSlippageThresholds;
 using autolife::common::runtime_diag::classifySignalRejectionGroup;
 
 enum class SecondStageConfirmationFailureKind {
@@ -1016,6 +1020,50 @@ std::string toLowerCopy(const std::string& s) {
     return out;
 }
 
+long long timeframeDurationMs(const std::string& timeframe_key) {
+    if (timeframe_key == "1m") return 60LL * 1000LL;
+    if (timeframe_key == "5m") return 5LL * 60LL * 1000LL;
+    if (timeframe_key == "15m") return 15LL * 60LL * 1000LL;
+    if (timeframe_key == "1h" || timeframe_key == "60m") return 60LL * 60LL * 1000LL;
+    if (timeframe_key == "4h" || timeframe_key == "240m") return 4LL * 60LL * 60LL * 1000LL;
+    if (timeframe_key == "1d" || timeframe_key == "day" || timeframe_key == "d") {
+        return 24LL * 60LL * 60LL * 1000LL;
+    }
+    return 0LL;
+}
+
+size_t dropTrailingUnconfirmedCandles(
+    std::map<std::string, std::vector<autolife::Candle>>& candles_by_tf,
+    long long now_ms
+) {
+    size_t dropped = 0;
+    if (now_ms <= 0) {
+        return dropped;
+    }
+
+    for (auto& entry : candles_by_tf) {
+        const long long duration_ms = timeframeDurationMs(entry.first);
+        if (duration_ms <= 0) {
+            continue;
+        }
+        auto& candles = entry.second;
+        while (!candles.empty()) {
+            const auto& last = candles.back();
+            if (last.timestamp <= 0) {
+                break;
+            }
+            const bool is_unconfirmed = (last.timestamp + duration_ms) > now_ms;
+            if (!is_unconfirmed) {
+                break;
+            }
+            candles.pop_back();
+            dropped++;
+        }
+    }
+
+    return dropped;
+}
+
 std::vector<autolife::Candle> aggregateCandlesByStep(
     const std::vector<autolife::Candle>& source,
     size_t step,
@@ -1394,6 +1442,8 @@ bool TradingEngine::start() {
     pre_cat_candidate_rr_failsafe_activation_by_key_.clear();
     pre_cat_pressure_rebound_relief_activation_by_key_.clear();
     pre_cat_negative_history_quarantine_hold_by_key_.clear();
+    live_warmup_scans_completed_ = 0;
+    live_warmup_done_ = !config_.enable_live_cache_warmup;
 
     loadState();
     loadLearningState();
@@ -1543,6 +1593,86 @@ void TradingEngine::run() {
 
                 scanMarkets();
                 captureLiveMtfDatasetSnapshotIfDue();
+
+                if (config_.mode == TradingMode::LIVE &&
+                    config_.enable_live_cache_warmup &&
+                    !live_warmup_done_) {
+                    live_warmup_scans_completed_++;
+
+                    int ready_markets = 0;
+                    int evaluated_markets = 0;
+                    for (const auto& coin : scanned_markets_) {
+                        analytics::CoinMetrics warmup_metrics = coin;
+                        if (warmup_metrics.candles_by_tf.find("1m") == warmup_metrics.candles_by_tf.end() &&
+                            !warmup_metrics.candles.empty()) {
+                            warmup_metrics.candles_by_tf["1m"] = warmup_metrics.candles;
+                        }
+                        ensureParityCompanionTimeframes(warmup_metrics);
+                        if (config_.use_confirmed_candle_only_for_signals) {
+                            dropTrailingUnconfirmedCandles(
+                                warmup_metrics.candles_by_tf,
+                                getCurrentTimestampMs()
+                            );
+                        }
+                        common::trimCandlesByPolicy(warmup_metrics.candles_by_tf);
+                        const auto window_check =
+                            common::checkLiveEquivalentWindow(warmup_metrics.candles_by_tf);
+                        evaluated_markets++;
+                        if (window_check.pass) {
+                            ready_markets++;
+                        }
+                    }
+
+                    const double ready_ratio = (evaluated_markets > 0)
+                        ? static_cast<double>(ready_markets) / static_cast<double>(evaluated_markets)
+                        : 0.0;
+                    const bool warmup_scan_ok =
+                        live_warmup_scans_completed_ >= config_.live_cache_warmup_min_scans;
+                    const bool warmup_ready_ok =
+                        ready_ratio >= config_.live_cache_warmup_min_ready_ratio;
+
+                    if (warmup_scan_ok && warmup_ready_ok) {
+                        live_warmup_done_ = true;
+                        LOG_INFO(
+                            "Live cache warm-up complete: scans={} (min {}), ready_markets={}/{}, ready_ratio={:.2f} (min {:.2f})",
+                            live_warmup_scans_completed_,
+                            config_.live_cache_warmup_min_scans,
+                            ready_markets,
+                            evaluated_markets,
+                            ready_ratio,
+                            config_.live_cache_warmup_min_ready_ratio
+                        );
+                    } else {
+                        LOG_INFO(
+                            "Live cache warm-up in progress: scans={} (min {}), ready_markets={}/{}, ready_ratio={:.2f} (min {:.2f})",
+                            live_warmup_scans_completed_,
+                            config_.live_cache_warmup_min_scans,
+                            ready_markets,
+                            evaluated_markets,
+                            ready_ratio,
+                            config_.live_cache_warmup_min_ready_ratio
+                        );
+                        nlohmann::json payload;
+                        payload["reason"] = "live_cache_warmup_active";
+                        payload["scans_completed"] = live_warmup_scans_completed_;
+                        payload["min_scans"] = config_.live_cache_warmup_min_scans;
+                        payload["ready_markets"] = ready_markets;
+                        payload["evaluated_markets"] = evaluated_markets;
+                        payload["ready_ratio"] = ready_ratio;
+                        payload["min_ready_ratio"] = config_.live_cache_warmup_min_ready_ratio;
+                        appendJournalEvent(
+                            core::JournalEventType::NO_TRADE,
+                            "MULTI",
+                            "warmup_guard",
+                            payload
+                        );
+                        pending_signals_.clear();
+                        last_scan_time = std::chrono::steady_clock::now();
+                        updateMetrics();
+                        continue;
+                    }
+                }
+
                 generateSignals();
                 learnOptimalFilterValue();
                 executeSignals();
@@ -1584,21 +1714,25 @@ void TradingEngine::scanMarkets() {
         });
 
     std::vector<analytics::CoinMetrics> filtered;
-    const double MAX_SPREAD_PCT = 0.35;
+    const auto scan_prefilter_thresholds = computeLiveScanPrefilterThresholds(
+        config_,
+        scanned_markets_,
+        market_hostility_ewma_
+    );
     for (const auto& coin : scanned_markets_) {
-        if (coin.volume_24h < config_.min_volume_krw) {
+        if (coin.volume_24h < scan_prefilter_thresholds.min_volume_krw) {
             continue;
         }
         if (!coin.orderbook_snapshot.valid) {
             continue;
         }
-        if (coin.orderbook_snapshot.spread_pct > MAX_SPREAD_PCT) {
+        if (coin.orderbook_snapshot.spread_pct > scan_prefilter_thresholds.max_spread_pct) {
             continue;
         }
         if (coin.orderbook_snapshot.best_bid <= 0.0 || coin.orderbook_snapshot.best_ask <= 0.0) {
             continue;
         }
-        if (coin.orderbook_snapshot.ask_notional < config_.min_order_krw * 5.0) {
+        if (coin.orderbook_snapshot.ask_notional < scan_prefilter_thresholds.min_ask_notional_krw) {
             continue;
         }
 
@@ -1610,6 +1744,20 @@ void TradingEngine::scanMarkets() {
     }
 
     scanned_markets_ = filtered;
+    LOG_INFO("Scan prefilter(dynamic): min_vol={:.0f}, max_spread={:.3f}%, min_ask_notional={:.0f}, hostility={:.3f}",
+             scan_prefilter_thresholds.min_volume_krw,
+             scan_prefilter_thresholds.max_spread_pct * 100.0,
+             scan_prefilter_thresholds.min_ask_notional_krw,
+             market_hostility_ewma_);
+
+    const long long now_ms = getCurrentTimestampMs();
+    for (const auto& coin : scanned_markets_) {
+        if (coin.orderbook_snapshot.best_ask <= 0.0) {
+            continue;
+        }
+        recent_best_ask_by_market_[coin.market] = coin.orderbook_snapshot.best_ask;
+        recent_best_ask_timestamp_by_market_[coin.market] = now_ms;
+    }
 
     LOG_INFO("Scanned markets: {}", scanned_markets_.size());
 
@@ -1860,6 +2008,17 @@ void TradingEngine::generateSignals() {
                 signal_metrics.candles_by_tf["1m"] = signal_metrics.candles;
             }
             ensureParityCompanionTimeframes(signal_metrics);
+            if (config_.use_confirmed_candle_only_for_signals) {
+                const size_t dropped_unconfirmed = dropTrailingUnconfirmedCandles(
+                    signal_metrics.candles_by_tf,
+                    getCurrentTimestampMs()
+                );
+                if (dropped_unconfirmed > 0) {
+                    LOG_INFO("{} - dropped {} trailing unconfirmed candle(s) before signal generation",
+                             coin.market,
+                             static_cast<int>(dropped_unconfirmed));
+                }
+            }
             common::trimCandlesByPolicy(signal_metrics.candles_by_tf);
 
             auto tf_1m_it = signal_metrics.candles_by_tf.find("1m");
@@ -4259,7 +4418,16 @@ void TradingEngine::executeSignals() {
         risk_pct = std::clamp(risk_pct, 0.0, 0.25);
 
         const double fee_rate = Config::getInstance().getFeeRate();
-        const double slippage_guard_pct = std::clamp(config_.max_slippage_pct * 1.5, 0.0005, 0.02);
+        const auto dynamic_buy_slippage = computeDynamicSlippageThresholds(
+            config_,
+            market_hostility_ewma_,
+            true,
+            signal.market_regime,
+            signal.strength,
+            signal.liquidity_score,
+            signal.expected_value
+        );
+        const double slippage_guard_pct = dynamic_buy_slippage.guard_slippage_pct;
         const double stop_guard_pct = std::clamp((risk_pct > 1e-9) ? risk_pct : 0.03, 0.01, 0.20);
         const double exit_retention = std::max(0.50, 1.0 - stop_guard_pct - slippage_guard_pct - fee_rate);
         const double min_required_krw = std::max(config_.min_order_krw, config_.min_order_krw / exit_retention);
@@ -4401,6 +4569,85 @@ bool TradingEngine::executeBuyOrder(
             return false;
         }
 
+        if (config_.enable_realtime_entry_veto) {
+            const long long now_ms = getCurrentTimestampMs();
+            const int tracking_window_seconds = std::max(
+                10,
+                config_.realtime_entry_veto_tracking_window_seconds
+            );
+            const auto veto_thresholds = computeRealtimeEntryVetoThresholds(
+                config_,
+                signal,
+                market_hostility_ewma_
+            );
+            const auto snapshot = analytics::OrderbookAnalyzer::analyze(
+                units,
+                std::max(config_.min_order_krw, 50000.0)
+            );
+            if (!snapshot.valid || snapshot.best_ask <= 0.0) {
+                LOG_WARN("{} buy vetoed: invalid realtime orderbook snapshot", market);
+                return false;
+            }
+            if (snapshot.spread_pct > veto_thresholds.max_spread_pct) {
+                LOG_WARN(
+                    "{} buy vetoed: spread {:.4f}% > {:.4f}% (dynamic)",
+                    market,
+                    snapshot.spread_pct * 100.0,
+                    veto_thresholds.max_spread_pct * 100.0
+                );
+                return false;
+            }
+            if (snapshot.imbalance < veto_thresholds.min_orderbook_imbalance) {
+                LOG_WARN(
+                    "{} buy vetoed: orderbook imbalance {:.3f} < {:.3f} (dynamic)",
+                    market,
+                    snapshot.imbalance,
+                    veto_thresholds.min_orderbook_imbalance
+                );
+                return false;
+            }
+
+            const double max_drop_pct = std::max(0.0001, veto_thresholds.max_drop_pct);
+            const double drop_vs_signal = (signal.entry_price > 0.0)
+                ? ((signal.entry_price - snapshot.best_ask) / signal.entry_price)
+                : 0.0;
+            if (drop_vs_signal > max_drop_pct) {
+                LOG_WARN(
+                    "{} buy vetoed: rapid drop vs signal price {:.4f}% > {:.4f}%",
+                    market,
+                    drop_vs_signal * 100.0,
+                    max_drop_pct * 100.0
+                );
+                return false;
+            }
+
+            auto prev_price_it = recent_best_ask_by_market_.find(market);
+            auto prev_ts_it = recent_best_ask_timestamp_by_market_.find(market);
+            if (prev_price_it != recent_best_ask_by_market_.end() &&
+                prev_ts_it != recent_best_ask_timestamp_by_market_.end() &&
+                prev_price_it->second > 0.0) {
+                const long long age_ms = now_ms - prev_ts_it->second;
+                if (age_ms >= 0 &&
+                    age_ms <= static_cast<long long>(tracking_window_seconds) * 1000LL) {
+                    const double drop_vs_recent =
+                        (prev_price_it->second - snapshot.best_ask) / prev_price_it->second;
+                    if (drop_vs_recent > max_drop_pct) {
+                        LOG_WARN(
+                            "{} buy vetoed: rapid drop vs recent best ask {:.4f}% > {:.4f}% (age={}s)",
+                            market,
+                            drop_vs_recent * 100.0,
+                            max_drop_pct * 100.0,
+                            age_ms / 1000
+                        );
+                        return false;
+                    }
+                }
+            }
+
+            recent_best_ask_by_market_[market] = snapshot.best_ask;
+            recent_best_ask_timestamp_by_market_[market] = now_ms;
+        }
+
         double best_ask_price = calculateOptimalBuyPrice(market, signal.entry_price, orderbook); // ????釉먮폁???????????븍툖?????1???
         
         // 2. ???????????곷♧?????????????????????????????
@@ -4408,13 +4655,22 @@ bool TradingEngine::executeBuyOrder(
         
         // Keep execution minimum aligned with stop-loss survivability and exchange minimum.
         const double fee_rate = Config::getInstance().getFeeRate();
+        const auto dynamic_buy_slippage = computeDynamicSlippageThresholds(
+            config_,
+            market_hostility_ewma_,
+            true,
+            signal.market_regime,
+            signal.strength,
+            signal.liquidity_score,
+            signal.expected_value
+        );
         double signal_risk_pct = 0.0;
         if (signal.entry_price > 0.0 && signal.stop_loss > 0.0 && signal.stop_loss < signal.entry_price) {
             signal_risk_pct = (signal.entry_price - signal.stop_loss) / signal.entry_price;
         }
         signal_risk_pct = std::clamp(signal_risk_pct, 0.0, 0.25);
         const double stop_guard_pct = std::clamp((signal_risk_pct > 1e-9) ? signal_risk_pct : 0.03, 0.01, 0.20);
-        const double slippage_guard_pct = std::clamp(config_.max_slippage_pct * 1.5, 0.0005, 0.02);
+        const double slippage_guard_pct = dynamic_buy_slippage.guard_slippage_pct;
         const double exit_retention = std::max(0.50, 1.0 - stop_guard_pct - slippage_guard_pct - fee_rate);
         const double MIN_ORDER_BUFFER = std::max(config_.min_order_krw, config_.min_order_krw / exit_retention);
         double invest_amount = 0.0;
@@ -4484,9 +4740,9 @@ bool TradingEngine::executeBuyOrder(
             best_ask_price
         );
 
-        if (slippage_pct > config_.max_slippage_pct) {
+        if (slippage_pct > dynamic_buy_slippage.max_slippage_pct) {
             LOG_WARN("{} ?????? ????? {:.3f}% > {:.3f}% (??遺얘턁?????????遺얘턁????怨뚮옩????影?ろ뀮????",
-                     market, slippage_pct * 100.0, config_.max_slippage_pct * 100.0);
+                     market, slippage_pct * 100.0, dynamic_buy_slippage.max_slippage_pct * 100.0);
             return false;
         }
 
@@ -4927,6 +5183,16 @@ bool TradingEngine::executeSellOrder(
     // ??????熬곣뫖利당춯??쎾퐲??????釉먮폁???????????븍툖?????
     double sell_quantity = std::floor(position.quantity * 0.9999 * 100000000.0) / 100000000.0;
     double invest_amount = sell_quantity * current_price;
+    const auto dynamic_sell_slippage = computeDynamicSlippageThresholds(
+        config_,
+        market_hostility_ewma_,
+        false,
+        position.market_regime,
+        position.signal_strength,
+        position.liquidity_score,
+        position.expected_value,
+        reason
+    );
     
     // 1. ????釉먮폁?????????????????꾩룆梨???耀붾굝????????⑤챶裕?????????곷♧?????????????釉먮폁???????????(????釉먮폁?怨?땡?塋???????????釉먮폁?????????? 5,000 KRW)
     if (invest_amount < config_.min_order_krw) {
@@ -4951,9 +5217,9 @@ bool TradingEngine::executeSellOrder(
             current_price
         );
 
-        if (slippage_pct > config_.max_slippage_pct) {
+        if (slippage_pct > dynamic_sell_slippage.max_slippage_pct) {
             LOG_WARN("{} ?????? ????? {:.3f}% > {:.3f}% (??????遺얘턁????怨뚮옩????影?ろ뀮????",
-                     market, slippage_pct * 100.0, config_.max_slippage_pct * 100.0);
+                     market, slippage_pct * 100.0, dynamic_sell_slippage.max_slippage_pct * 100.0);
             return false;
         }
         LOG_INFO("??遺얘턁?????????붺몭??????? ??遺얘턁??????傭??? {} (??????꾩룆梨띰쭕?????Β?뗫쑄????????쎛: {})", sell_price, current_price);
@@ -5095,6 +5361,16 @@ bool TradingEngine::executePartialSell(const std::string& market, const risk::Po
         return false;
     }
     double invest_amount = sell_quantity * current_price;
+    const auto dynamic_partial_sell_slippage = computeDynamicSlippageThresholds(
+        config_,
+        market_hostility_ewma_,
+        false,
+        position.market_regime,
+        position.signal_strength,
+        position.liquidity_score,
+        position.expected_value,
+        "partial_take_profit"
+    );
     // If partial amount cannot satisfy exchange minimum, avoid fake half-close.
     if (invest_amount < config_.min_order_krw) {
         const double full_notional = position.quantity * current_price;
@@ -5146,9 +5422,9 @@ bool TradingEngine::executePartialSell(const std::string& market, const risk::Po
             current_price
         );
 
-        if (slippage_pct > config_.max_slippage_pct) {
+        if (slippage_pct > dynamic_partial_sell_slippage.max_slippage_pct) {
             LOG_WARN("{} ?????? ????? {:.3f}% > {:.3f}% (??????됱삩??????????遺얘턁????怨뚮옩????影?ろ뀮????",
-                     market, slippage_pct * 100.0, config_.max_slippage_pct * 100.0);
+                     market, slippage_pct * 100.0, dynamic_partial_sell_slippage.max_slippage_pct * 100.0);
             return false;
         }
     } catch (const std::exception&) {

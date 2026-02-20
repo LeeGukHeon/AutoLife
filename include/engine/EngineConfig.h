@@ -40,6 +40,20 @@ struct EngineConfig {
     int max_new_orders_per_scan = 2;
     bool dry_run = false;
     bool allow_live_orders = false;
+    // Live signal quality guard:
+    // use only confirmed candles (drop potentially in-progress latest bar).
+    bool use_confirmed_candle_only_for_signals = true;
+    // Live entry veto: one final microstructure check just before buy submit.
+    bool enable_realtime_entry_veto = true;
+    int realtime_entry_veto_tracking_window_seconds = 90;
+    double realtime_entry_veto_max_drop_pct = 0.0035;            // 0.35%
+    double realtime_entry_veto_max_spread_pct = 0.0030;          // 0.30%
+    double realtime_entry_veto_min_orderbook_imbalance = -0.35;  // [-1, +1]
+    // Live warm-up: keep scanning (cache build) but block new entries until
+    // minimum scan count and parity-ready ratio are satisfied.
+    bool enable_live_cache_warmup = true;
+    int live_cache_warmup_min_scans = 5;
+    double live_cache_warmup_min_ready_ratio = 0.75;
     bool enable_live_mtf_dataset_capture = true;
     int live_mtf_dataset_capture_interval_seconds = 300;
     std::string live_mtf_dataset_capture_output_dir = "data/backtest_real_live";

@@ -5,6 +5,8 @@
 #include "common/RuntimeDiagnosticsShared.h"
 #include "common/SignalPolicyShared.h"
 #include "common/StrategyEdgeStatsShared.h"
+#include "common/ExecutionGuardPolicyShared.h"
+#include "analytics/OrderbookAnalyzer.h"
 #include "execution/OrderLifecycleStateMachine.h"
 #include "execution/ExecutionUpdateSchema.h"
 #include <iostream>
@@ -170,6 +172,8 @@ using autolife::common::signal_policy::rebalanceSignalRiskReward;
 using autolife::common::signal_policy::computeStrategyHistoryWinProbPrior;
 using autolife::common::signal_policy::computeCalibratedExpectedEdgePct;
 using autolife::common::signal_policy::computeContextualEdgeGateFloor;
+using autolife::common::execution_guard::computeRealtimeEntryVetoThresholds;
+using autolife::common::execution_guard::computeDynamicSlippageThresholds;
 using autolife::common::strategy_edge::StrategyEdgeStats;
 using autolife::common::strategy_edge::buildStrategyEdgeStats;
 using autolife::common::strategy_edge::makeStrategyRegimeKey;
@@ -1373,6 +1377,7 @@ void BacktestEngine::init(const Config& config) {
     max_balance_ = balance_krw_;
     loaded_tf_cursors_.clear();
     entry_funnel_ = Result::EntryFunnelSummary{};
+    shadow_funnel_ = Result::ShadowFunnelSummary{};
     pre_cat_feature_snapshot_ = Result::PreCatFeatureSnapshot{};
     strategy_generated_counts_.clear();
     strategy_selected_best_counts_.clear();
@@ -1397,6 +1402,8 @@ void BacktestEngine::init(const Config& config) {
     adaptive_partial_ratio_samples_ = 0;
     adaptive_partial_ratio_sum_ = 0.0;
     adaptive_partial_ratio_histogram_ = {0, 0, 0, 0, 0};
+    recent_best_ask_price_ = 0.0;
+    recent_best_ask_timestamp_ms_ = 0;
     
     // Reset Risk Manager with initial capital
     risk_manager_ = std::make_unique<risk::RiskManager>(balance_krw_);
@@ -1813,6 +1820,13 @@ void BacktestEngine::processCandle(const Candle& candle) {
             units.push_back(unit);
         }
         metrics.orderbook_units = units;
+        metrics.orderbook_snapshot = analytics::OrderbookAnalyzer::analyze(units, 1000000.0);
+        if (metrics.orderbook_snapshot.valid) {
+            // Keep synthetic flow fields aligned with live orderbook-derived values.
+            metrics.order_book_imbalance = std::clamp(metrics.orderbook_snapshot.imbalance, -0.7, 0.7);
+            metrics.buy_pressure = std::clamp(50.0 + (metrics.order_book_imbalance * 35.0), 10.0, 90.0);
+            metrics.sell_pressure = std::clamp(100.0 - metrics.buy_pressure, 10.0, 90.0);
+        }
     }
 
     // 3. Monitor & Exit Positions
@@ -1826,7 +1840,21 @@ void BacktestEngine::processCandle(const Candle& candle) {
     if (risk_manager_->isDrawdownExceeded()) {
         if (position) {
             const risk::Position closed_position = *position;
-            const double forced_exit = current_price * (1.0 - exitSlippagePct(engine_config_));
+            const auto drawdown_slippage = computeDynamicSlippageThresholds(
+                engine_config_,
+                market_hostility_ewma_,
+                false,
+                position->market_regime,
+                position->signal_strength,
+                position->liquidity_score,
+                position->expected_value,
+                "max_drawdown"
+            );
+            const double forced_exit_slippage = std::min(
+                exitSlippagePct(engine_config_),
+                drawdown_slippage.max_slippage_pct
+            );
+            const double forced_exit = current_price * (1.0 - forced_exit_slippage);
             Order dd_order;
             dd_order.market = market_name_;
             dd_order.side = OrderSide::SELL;
@@ -1868,7 +1896,21 @@ void BacktestEngine::processCandle(const Candle& candle) {
 
             if (stop_touched) {
                 const risk::Position closed_position = *position;
-                const double stop_fill = position->stop_loss * (1.0 - stopSlippagePct(engine_config_));
+                const auto stop_slippage = computeDynamicSlippageThresholds(
+                    engine_config_,
+                    market_hostility_ewma_,
+                    false,
+                    position->market_regime,
+                    position->signal_strength,
+                    position->liquidity_score,
+                    position->expected_value,
+                    "stop_loss"
+                );
+                const double stop_fill_slippage = std::min(
+                    stopSlippagePct(engine_config_),
+                    stop_slippage.max_slippage_pct
+                );
+                const double stop_fill = position->stop_loss * (1.0 - stop_fill_slippage);
                 Order sl_order;
                 sl_order.market = market_name_;
                 sl_order.side = OrderSide::SELL;
@@ -1881,7 +1923,21 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 position = nullptr;
             } else {
                 if (!position->half_closed && tp1_touched) {
-                    const double tp1_fill = position->take_profit_1 * (1.0 - exitSlippagePct(engine_config_));
+                    const auto tp1_slippage = computeDynamicSlippageThresholds(
+                        engine_config_,
+                        market_hostility_ewma_,
+                        false,
+                        position->market_regime,
+                        position->signal_strength,
+                        position->liquidity_score,
+                        position->expected_value,
+                        "take_profit_1"
+                    );
+                    const double tp1_fill_slippage = std::min(
+                        exitSlippagePct(engine_config_),
+                        tp1_slippage.max_slippage_pct
+                    );
+                    const double tp1_fill = position->take_profit_1 * (1.0 - tp1_fill_slippage);
                     const double partial_ratio = std::clamp(
                         risk_manager_->getAdaptivePartialExitRatio(market_name_),
                         0.35,
@@ -1940,7 +1996,21 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     const bool tp2_touched_after_partial = tp2_touched || (candle.high >= position->take_profit_2);
                     if (tp2_touched_after_partial) {
                         const risk::Position closed_position = *position;
-                        const double tp2_fill = position->take_profit_2 * (1.0 - exitSlippagePct(engine_config_));
+                        const auto tp2_slippage = computeDynamicSlippageThresholds(
+                            engine_config_,
+                            market_hostility_ewma_,
+                            false,
+                            position->market_regime,
+                            position->signal_strength,
+                            position->liquidity_score,
+                            position->expected_value,
+                            "take_profit_2"
+                        );
+                        const double tp2_fill_slippage = std::min(
+                            exitSlippagePct(engine_config_),
+                            tp2_slippage.max_slippage_pct
+                        );
+                        const double tp2_fill = position->take_profit_2 * (1.0 - tp2_fill_slippage);
                         Order tp2_order;
                         tp2_order.market = market_name_;
                         tp2_order.side = OrderSide::SELL;
@@ -1953,12 +2023,26 @@ void BacktestEngine::processCandle(const Candle& candle) {
                         position = nullptr;
                     } else if (should_exit) {
                         const risk::Position closed_position = *position;
+                        const auto strategy_exit_slippage = computeDynamicSlippageThresholds(
+                            engine_config_,
+                            market_hostility_ewma_,
+                            false,
+                            position->market_regime,
+                            position->signal_strength,
+                            position->liquidity_score,
+                            position->expected_value,
+                            "strategy_exit"
+                        );
+                        const double strategy_exit_fill_slippage = std::min(
+                            exitSlippagePct(engine_config_),
+                            strategy_exit_slippage.max_slippage_pct
+                        );
                         // Execute Sell
                         Order order;
                         order.market = market_name_;
                         order.side = OrderSide::SELL;
                         order.volume = position->quantity;
-                        order.price = current_price * (1.0 - exitSlippagePct(engine_config_));
+                        order.price = current_price * (1.0 - strategy_exit_fill_slippage);
                         order.strategy_name = position->strategy_name;
                         executeOrder(order, order.price);
                         risk_manager_->exitPosition(market_name_, order.price, "StrategyExit");
@@ -2198,39 +2282,33 @@ void BacktestEngine::processCandle(const Candle& candle) {
         filter_threshold = std::clamp(filter_threshold, 0.35, 0.98);
         min_expected_value = std::clamp(min_expected_value, -0.0002, 0.0050);
 
-        std::vector<strategy::Signal> filtered_signals;
-        strategy::StrategyManager::FilterDiagnostics manager_filter_diag;
+        double primary_manager_min_strength = filter_threshold;
+        double primary_manager_min_expected_value = min_expected_value;
         if (alpha_head_mode) {
             // Alpha-head mode mirrors live multi-candidate flow but still applies
             // a permissive quality prefilter to avoid extremely weak signals.
-            double alpha_min_strength = 0.34;
-            double alpha_min_expected_value = -0.00015;
+            primary_manager_min_strength = 0.34;
+            primary_manager_min_expected_value = -0.00015;
             if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
-                alpha_min_strength = 0.42;
-                alpha_min_expected_value = 0.00005;
+                primary_manager_min_strength = 0.42;
+                primary_manager_min_expected_value = 0.00005;
             } else if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
-                alpha_min_strength = 0.45;
-                alpha_min_expected_value = 0.00008;
+                primary_manager_min_strength = 0.45;
+                primary_manager_min_expected_value = 0.00008;
             } else if (regime.regime == analytics::MarketRegime::RANGING) {
-                alpha_min_strength = 0.36;
-                alpha_min_expected_value = -0.00008;
+                primary_manager_min_strength = 0.36;
+                primary_manager_min_expected_value = -0.00008;
             }
-            filtered_signals = strategy_manager_->filterSignalsWithDiagnostics(
-                signals,
-                alpha_min_strength,
-                alpha_min_expected_value,
-                regime.regime,
-                &manager_filter_diag
-            );
-        } else {
-            filtered_signals = strategy_manager_->filterSignalsWithDiagnostics(
-                signals,
-                filter_threshold,
-                min_expected_value,
-                regime.regime,
-                &manager_filter_diag
-            );
         }
+        std::vector<strategy::Signal> filtered_signals;
+        strategy::StrategyManager::FilterDiagnostics manager_filter_diag;
+        filtered_signals = strategy_manager_->filterSignalsWithDiagnostics(
+            signals,
+            primary_manager_min_strength,
+            primary_manager_min_expected_value,
+            regime.regime,
+            &manager_filter_diag
+        );
         if (!signals.empty() && filtered_signals.empty()) {
             entry_funnel_.filtered_out_by_manager++;
             markEntryReject("filtered_out_by_manager");
@@ -2285,6 +2363,90 @@ void BacktestEngine::processCandle(const Candle& candle) {
         if (best_signal.type != strategy::SignalType::NONE && !best_signal.strategy_name.empty()) {
             strategy_selected_best_counts_[best_signal.strategy_name]++;
         }
+
+        // Shadow-only candidate probe:
+        // evaluate relaxed candidate supply without touching actual order flow.
+        shadow_funnel_.rounds++;
+        shadow_funnel_.primary_generated_signals += static_cast<int>(signals.size());
+        shadow_funnel_.primary_after_manager_filter += static_cast<int>(filtered_signals.size());
+        shadow_funnel_.primary_after_policy_filter += static_cast<int>(candidate_signals.size());
+        if (best_signal.type != strategy::SignalType::NONE) {
+            shadow_funnel_.primary_best_signal_available++;
+        }
+        if (!signals.empty()) {
+            constexpr double kShadowStrengthRelax = 0.06;
+            constexpr double kShadowExpectedValueRelax = 0.00012;
+            const double shadow_min_strength = std::clamp(
+                primary_manager_min_strength - kShadowStrengthRelax,
+                0.25,
+                0.95
+            );
+            const double shadow_min_expected_value = std::clamp(
+                primary_manager_min_expected_value - kShadowExpectedValueRelax,
+                -0.00035,
+                0.0050
+            );
+
+            strategy::StrategyManager::FilterDiagnostics shadow_filter_diag;
+            auto shadow_filtered_signals = strategy_manager_->filterSignalsWithDiagnostics(
+                signals,
+                shadow_min_strength,
+                shadow_min_expected_value,
+                regime.regime,
+                &shadow_filter_diag
+            );
+
+            std::vector<strategy::Signal> shadow_candidate_signals = shadow_filtered_signals;
+            if (core_policy_enabled && policy_controller_) {
+                engine::PolicyInput shadow_policy_input;
+                shadow_policy_input.candidates = shadow_filtered_signals;
+                shadow_policy_input.small_seed_mode = small_seed_mode;
+                shadow_policy_input.max_new_orders_per_scan = 1;
+                shadow_policy_input.dominant_regime = regime.regime;
+                if (performance_store_) {
+                    shadow_policy_input.strategy_stats = &performance_store_->byStrategy();
+                    shadow_policy_input.bucket_stats = &performance_store_->byBucket();
+                }
+                auto shadow_policy_output = policy_controller_->selectCandidates(shadow_policy_input);
+                shadow_candidate_signals = std::move(shadow_policy_output.selected_candidates);
+            }
+
+            strategy::Signal shadow_best_signal;
+            strategy::StrategyManager::SelectionDiagnostics shadow_select_diag;
+            if (!shadow_candidate_signals.empty()) {
+                if (core_bridge_enabled) {
+                    shadow_best_signal = strategy_manager_->selectRobustSignalWithDiagnostics(
+                        shadow_candidate_signals,
+                        regime.regime,
+                        &shadow_select_diag
+                    );
+                } else {
+                    shadow_best_signal = strategy_manager_->selectBestSignal(shadow_candidate_signals);
+                }
+            }
+
+            const int primary_manager_count = static_cast<int>(filtered_signals.size());
+            const int primary_policy_count = static_cast<int>(candidate_signals.size());
+            const int shadow_manager_count = static_cast<int>(shadow_filtered_signals.size());
+            const int shadow_policy_count = static_cast<int>(shadow_candidate_signals.size());
+
+            shadow_funnel_.shadow_after_manager_filter += shadow_manager_count;
+            shadow_funnel_.shadow_after_policy_filter += shadow_policy_count;
+            if (shadow_best_signal.type != strategy::SignalType::NONE) {
+                shadow_funnel_.shadow_best_signal_available++;
+            }
+            if (shadow_policy_count > primary_policy_count) {
+                shadow_funnel_.supply_improved_rounds++;
+            }
+
+            const double manager_base = std::max(1.0, static_cast<double>(signals.size()));
+            const double policy_base = std::max(1.0, static_cast<double>(filtered_signals.size()));
+            shadow_funnel_.manager_supply_lift_sum +=
+                (static_cast<double>(shadow_manager_count - primary_manager_count) / manager_base);
+            shadow_funnel_.policy_supply_lift_sum +=
+                (static_cast<double>(shadow_policy_count - primary_policy_count) / policy_base);
+        }
+
         const auto trade_history = risk_manager_->getTradeHistory();
         const int recent_strategy_window = std::max(16, engine_config_.min_strategy_trades_for_ev);
         const int recent_regime_window = std::max(8, engine_config_.min_strategy_trades_for_ev / 2);
@@ -4462,6 +4624,74 @@ void BacktestEngine::processCandle(const Candle& candle) {
                              relief_scale);
                     best_signal.position_size *= relief_scale;
                 }
+                const auto dynamic_buy_slippage = computeDynamicSlippageThresholds(
+                    engine_config_,
+                    market_hostility_ewma_,
+                    true,
+                    best_signal.market_regime,
+                    best_signal.strength,
+                    best_signal.liquidity_score,
+                    best_signal.expected_value
+                );
+                bool realtime_entry_veto_ok = true;
+                std::string realtime_entry_veto_reason;
+                if (engine_config_.enable_realtime_entry_veto) {
+                    const auto veto_thresholds = computeRealtimeEntryVetoThresholds(
+                        engine_config_,
+                        best_signal.market_regime,
+                        best_signal.strength,
+                        best_signal.liquidity_score,
+                        market_hostility_ewma_
+                    );
+                    const auto& snapshot = metrics.orderbook_snapshot;
+                    const long long now_ms = toMsTimestamp(candle.timestamp);
+                    if (!snapshot.valid || snapshot.best_ask <= 0.0) {
+                        realtime_entry_veto_ok = false;
+                        realtime_entry_veto_reason = "blocked_realtime_entry_veto_invalid_orderbook";
+                    } else if (snapshot.spread_pct > veto_thresholds.max_spread_pct) {
+                        realtime_entry_veto_ok = false;
+                        realtime_entry_veto_reason = "blocked_realtime_entry_veto_spread";
+                    } else if (snapshot.imbalance < veto_thresholds.min_orderbook_imbalance) {
+                        realtime_entry_veto_ok = false;
+                        realtime_entry_veto_reason = "blocked_realtime_entry_veto_imbalance";
+                    } else {
+                        const double max_drop_pct = std::max(0.0001, veto_thresholds.max_drop_pct);
+                        const double drop_vs_signal = (best_signal.entry_price > 0.0)
+                            ? ((best_signal.entry_price - snapshot.best_ask) / best_signal.entry_price)
+                            : 0.0;
+                        if (drop_vs_signal > max_drop_pct) {
+                            realtime_entry_veto_ok = false;
+                            realtime_entry_veto_reason = "blocked_realtime_entry_veto_drop_vs_signal";
+                        } else if (recent_best_ask_price_ > 0.0 &&
+                                   recent_best_ask_timestamp_ms_ > 0) {
+                            const long long age_ms = now_ms - recent_best_ask_timestamp_ms_;
+                            const int tracking_window_seconds = std::max(
+                                10,
+                                engine_config_.realtime_entry_veto_tracking_window_seconds
+                            );
+                            if (age_ms >= 0 &&
+                                age_ms <= static_cast<long long>(tracking_window_seconds) * 1000LL) {
+                                const double drop_vs_recent =
+                                    (recent_best_ask_price_ - snapshot.best_ask) / recent_best_ask_price_;
+                                if (drop_vs_recent > max_drop_pct) {
+                                    realtime_entry_veto_ok = false;
+                                    realtime_entry_veto_reason = "blocked_realtime_entry_veto_drop_vs_recent";
+                                }
+                            }
+                        }
+                    }
+                    if (snapshot.valid && snapshot.best_ask > 0.0) {
+                        recent_best_ask_price_ = snapshot.best_ask;
+                        recent_best_ask_timestamp_ms_ = now_ms;
+                    }
+                }
+                if (!realtime_entry_veto_ok) {
+                    entry_funnel_.blocked_risk_gate_other++;
+                    const char* veto_reason_code = realtime_entry_veto_reason.empty()
+                        ? "blocked_realtime_entry_veto"
+                        : realtime_entry_veto_reason.c_str();
+                    markEntryReject(veto_reason_code);
+                } else {
                 const double min_order_krw = std::max(5000.0, engine_config_.min_order_krw);
                 const double fee_rate = Config::getInstance().getFeeRate();
                 const double stop_guard_pct = [&]() {
@@ -4473,7 +4703,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     }
                     return 0.03;
                 }();
-                const double slip_guard_pct = std::clamp(stopSlippagePct(engine_config_) * 1.25, 0.0005, 0.02);
+                const double slip_guard_pct = dynamic_buy_slippage.guard_slippage_pct;
                 const double exit_retention = std::max(0.50, 1.0 - stop_guard_pct - slip_guard_pct - fee_rate);
                 const double min_safe_order_krw = std::max(min_order_krw, min_order_krw / exit_retention);
                 const double min_executable_order_krw =
@@ -4490,24 +4720,29 @@ void BacktestEngine::processCandle(const Candle& candle) {
                         0.0,
                         1.0
                     );
-                    // Validate Risk
-                    const bool can_enter_position = risk_manager_->canEnterPosition(
-                        market_name_,
-                        current_price * (1.0 + entrySlippagePct(engine_config_)),
-                        effective_position_size,
-                        best_signal.strategy_name
-                    );
-                    if (!can_enter_position) {
-                        entry_funnel_.blocked_risk_manager++;
-                        markEntryReject("blocked_risk_manager");
-                        if (!best_signal.strategy_name.empty()) {
-                            strategy_blocked_by_risk_manager_counts_[best_signal.strategy_name]++;
-                        }
+                    const double modeled_entry_slippage_pct = entrySlippagePct(engine_config_);
+                    if (modeled_entry_slippage_pct > dynamic_buy_slippage.max_slippage_pct) {
+                        entry_funnel_.blocked_risk_gate_other++;
+                        markEntryReject("blocked_dynamic_slippage_cap");
                     } else {
+                        // Validate Risk
+                        const bool can_enter_position = risk_manager_->canEnterPosition(
+                            market_name_,
+                            current_price * (1.0 + modeled_entry_slippage_pct),
+                            effective_position_size,
+                            best_signal.strategy_name
+                        );
+                        if (!can_enter_position) {
+                            entry_funnel_.blocked_risk_manager++;
+                            markEntryReject("blocked_risk_manager");
+                            if (!best_signal.strategy_name.empty()) {
+                                strategy_blocked_by_risk_manager_counts_[best_signal.strategy_name]++;
+                            }
+                        } else {
                     // Execute Buy
                     double available_cash = risk_manager_->getRiskMetrics().available_capital;
-                    double fill_price = current_price * (1.0 + entrySlippagePct(engine_config_));
-                    const double fee_rate = Config::getInstance().getFeeRate();
+                    double fill_price = current_price * (1.0 + modeled_entry_slippage_pct);
+                    const double fee_rate_exec = Config::getInstance().getFeeRate();
                     const double fee_reserve = std::clamp(engine_config_.order_fee_reserve_pct, 0.0, 0.02);
                     const double spendable_capital = available_cash / (1.0 + fee_reserve);
                     const bool capital_gate_ok = spendable_capital >= min_executable_order_krw;
@@ -4524,8 +4759,8 @@ void BacktestEngine::processCandle(const Candle& candle) {
                         }
 
                         const double order_amount = std::clamp(desired_order_krw, min_executable_order_krw, max_order_krw);
-                        const double quantity = order_amount / (fill_price * (1.0 + fee_rate));
-                        const double fee = quantity * fill_price * fee_rate;
+                        const double quantity = order_amount / (fill_price * (1.0 + fee_rate_exec));
+                        const double fee = quantity * fill_price * fee_rate_exec;
                         const bool order_sizing_ok =
                             quantity > 0.0 && available_cash >= (quantity * fill_price) + fee;
 
@@ -4595,7 +4830,9 @@ void BacktestEngine::processCandle(const Candle& candle) {
                         entry_funnel_.blocked_min_order_or_capital++;
                         markEntryReject("blocked_min_order_or_capital");
                     }
+                        }
                     }
+                }
                 }
             }
         }
@@ -4996,6 +5233,17 @@ BacktestEngine::Result BacktestEngine::getResult() const {
         });
     result.strategy_collect_exception_count = strategy_collect_exception_count_;
     result.entry_funnel = entry_funnel_;
+    result.shadow_funnel = shadow_funnel_;
+    if (result.shadow_funnel.rounds > 0) {
+        const double rounds = static_cast<double>(result.shadow_funnel.rounds);
+        result.shadow_funnel.avg_manager_supply_lift =
+            result.shadow_funnel.manager_supply_lift_sum / rounds;
+        result.shadow_funnel.avg_policy_supply_lift =
+            result.shadow_funnel.policy_supply_lift_sum / rounds;
+    } else {
+        result.shadow_funnel.avg_manager_supply_lift = 0.0;
+        result.shadow_funnel.avg_policy_supply_lift = 0.0;
+    }
     result.pre_cat_feature_snapshot = pre_cat_feature_snapshot_;
     result.post_entry_risk_telemetry.adaptive_stop_updates = adaptive_stop_update_count_;
     result.post_entry_risk_telemetry.adaptive_tp_recalibration_updates = adaptive_tp_recalibration_count_;

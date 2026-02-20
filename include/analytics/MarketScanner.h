@@ -19,7 +19,7 @@ struct CoinMetrics {
     std::string market;                  // 마켓 코드
     double current_price;                 // 현재가
     double volume_24h;                    // 24시간 거래량
-    double volume_surge_ratio;            // 거래량 급증률 (평균 대비 %)
+    double volume_surge_ratio;            // 거래량 급증 배율 (1.0 = 평균)
     double price_change_rate;             // 가격 변동률
     double price_momentum;                // 가격 모멘텀 (RSI 기반)
     double order_book_imbalance;         // 호가 불균형 (-1 ~ +1)
@@ -37,7 +37,7 @@ struct CoinMetrics {
     std::vector<Candle> candles;
     std::map<std::string, std::vector<Candle>> candles_by_tf;
     
-    CoinMetrics() : current_price(0), volume_24h(0), volume_surge_ratio(0),
+    CoinMetrics() : current_price(0), volume_24h(0), volume_surge_ratio(1.0),
                     price_change_rate(0), price_momentum(0), 
                     order_book_imbalance(0), buy_pressure(0), sell_pressure(0),
                     buy_wall_count(0), sell_wall_count(0),

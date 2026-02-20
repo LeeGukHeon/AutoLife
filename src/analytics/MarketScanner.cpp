@@ -406,23 +406,15 @@ CoinMetrics MarketScanner::analyzeMarket(const std::string& market) {
 
 double MarketScanner::detectVolumeSurge(const std::string& market) {
     try {
-        auto ticker = client_->getTicker(market);
-        if (ticker.empty()) return 0.0;
-        
-        double current_volume = ticker[0]["acc_trade_volume_24h"].get<double>();
-        
-        // 최근 7일 평균 거래량 계산
-        double avg_volume = getAverageVolume(market, 168); // 168시간 = 7일
-        
-        if (avg_volume < 0.0001) return 0.0;
-        
-        // 급증률 계산 (%)
-        double surge_ratio = (current_volume / avg_volume) * 100.0;
-        
-        return surge_ratio;
-        
+        // Backtest와 동일한 의미의 ratio 스케일(1.0=평균)을 유지한다.
+        // 1m 최근 캔들의 notional(close*volume) 기준으로 급증 배율을 계산한다.
+        auto recent_1m = getRecentCandles(market, "1", 20);
+        if (!recent_1m.empty()) {
+            return analyzeVolumeSurge(recent_1m);
+        }
+        return 1.0;
     } catch (const std::exception&) {
-        return 0.0;
+        return 1.0;
     }
 }
 
@@ -632,9 +624,8 @@ double MarketScanner::calculateCompositeScore(const CoinMetrics& metrics) {
     // liquidity_score가 이미 0~100으로 스케일링 되어 있다면 그대로 사용
     score += metrics.liquidity_score * LIQUIDITY_WEIGHT;
 
-    // 2. Volume Surge (대형주 배려를 위해 분모 상향조정 또는 로그 스케일 검토)
-    // 평소 대비 150%만 터져도 대형주에겐 큰 의미이므로 기준을 150으로 낮춤
-    double volume_score = std::min(100.0, (metrics.volume_surge_ratio / 150.0) * 100.0);
+    // 2. Volume Surge (ratio scale: 1.0=평균, 1.5=강한 급증)
+    double volume_score = std::clamp((metrics.volume_surge_ratio / 1.5) * 100.0, 0.0, 100.0);
     score += volume_score * VOLUME_WEIGHT;
     
     // 3. Price Momentum
@@ -928,22 +919,28 @@ std::pair<int, int> MarketScanner::analyzeWalls(const nlohmann::json& orderbook)
 // 1. 거래량 급증 분석
 double MarketScanner::analyzeVolumeSurge(const std::vector<Candle>& candles) {
     try {
-        if (candles.size() < 2) return 0.0;
-        
-        // 최신 캔들 (마지막 인덱스)
-        double recent_volume = candles.back().volume;
-        
-        // 과거 평균 거래량 (최신 제외)
-        double total_volume = 0.0;
-        for (size_t i = 0; i < candles.size() - 1; ++i) {
-            total_volume += candles[i].volume;
+        // BacktestRuntime::buildCoinMetricsFromCandle과 같은 스케일:
+        // 현재 notional / 직전 19개 평균 notional (1.0 = 평균)
+        if (candles.size() < 20) {
+            return 1.0;
         }
-        
-        double avg_volume = total_volume / (candles.size() - 1);
-        if (avg_volume < 0.0001) return 0.0;
-        
-        return (recent_volume / avg_volume) * 100.0;
-    } catch (...) { return 0.0; }
+
+        const size_t last = candles.size() - 1;
+        double avg_vol = 0.0;
+        double avg_notional = 0.0;
+        for (size_t i = candles.size() - 20; i < last; ++i) {
+            avg_vol += candles[i].volume;
+            avg_notional += (candles[i].close * candles[i].volume);
+        }
+        avg_vol /= 19.0;
+        avg_notional /= 19.0;
+
+        const double current_notional = candles[last].close * candles[last].volume;
+        if (avg_notional > 0.0) {
+            return current_notional / avg_notional;
+        }
+        return (avg_vol > 0.0) ? (candles[last].volume / avg_vol) : 1.0;
+    } catch (...) { return 1.0; }
 }
 
 // 2. 변동성 분석 (ATR 기반)

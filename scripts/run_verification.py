@@ -29,6 +29,16 @@ def is_upbit_primary_1m_dataset(dataset_path: pathlib.Path) -> bool:
     return stem.startswith("upbit_") and "_1m_" in stem
 
 
+def has_higher_tf_companions(data_dir: pathlib.Path, primary_1m_dataset: pathlib.Path) -> bool:
+    if not is_upbit_primary_1m_dataset(primary_1m_dataset):
+        return False
+    prefix = primary_1m_dataset.stem.split("_1m_", 1)[0]
+    for tf in ("5m", "15m", "60m", "240m"):
+        if not any(data_dir.glob(f"{prefix}_{tf}_*.csv")):
+            return False
+    return True
+
+
 def parse_backtest_json(proc: subprocess.CompletedProcess) -> Dict[str, Any]:
     lines: List[str] = []
     if proc.stdout:
@@ -97,6 +107,206 @@ def to_float(value: Any) -> float:
         return float(value)
     except Exception:
         return 0.0
+
+
+def nested_get(payload: Any, path: List[str], default: Any) -> Any:
+    current = payload
+    for key in path:
+        if not isinstance(current, dict):
+            return default
+        current = current.get(key)
+    if current is None:
+        return default
+    return current
+
+
+def load_report_json(path_value: pathlib.Path) -> Dict[str, Any]:
+    if not path_value.exists():
+        return {}
+    try:
+        with path_value.open("r", encoding="utf-8") as fp:
+            payload = json.load(fp)
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def normalize_dataset_list(value: Any) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    out: List[str] = []
+    for item in value:
+        token = str(item).strip()
+        if token:
+            out.append(token)
+    return out
+
+
+def extract_report_metrics(report: Dict[str, Any]) -> Dict[str, Any]:
+    failure_primary_group = nested_get(
+        report,
+        ["diagnostics", "failure_attribution", "primary_non_execution_group"],
+        "",
+    )
+    if not str(failure_primary_group).strip():
+        failure_primary_group = nested_get(
+            report,
+            ["diagnostics", "aggregate", "primary_non_execution_group", "name"],
+            "unknown",
+        )
+    return {
+        "dataset_count": max(0, to_int(report.get("dataset_count", 0))),
+        "datasets": normalize_dataset_list(report.get("datasets", [])),
+        "avg_profit_factor": to_float(nested_get(report, ["aggregates", "avg_profit_factor"], 0.0)),
+        "avg_expectancy_krw": to_float(nested_get(report, ["aggregates", "avg_expectancy_krw"], 0.0)),
+        "avg_total_trades": to_float(nested_get(report, ["aggregates", "avg_total_trades"], 0.0)),
+        "peak_max_drawdown_pct": to_float(
+            nested_get(report, ["aggregates", "peak_max_drawdown_pct"], 0.0)
+        ),
+        "avg_primary_candidate_conversion": to_float(
+            nested_get(
+                report,
+                ["adaptive_validation", "aggregates", "avg_primary_candidate_conversion"],
+                0.0,
+            )
+        ),
+        "avg_shadow_candidate_conversion": to_float(
+            nested_get(
+                report,
+                ["adaptive_validation", "aggregates", "avg_shadow_candidate_conversion"],
+                0.0,
+            )
+        ),
+        "avg_shadow_candidate_supply_lift": to_float(
+            nested_get(
+                report,
+                ["adaptive_validation", "aggregates", "avg_shadow_candidate_supply_lift"],
+                0.0,
+            )
+        ),
+        "overall_gate_pass": bool(report.get("overall_gate_pass", False)),
+        "adaptive_verdict": str(
+            nested_get(report, ["adaptive_validation", "verdict", "verdict"], "fail")
+        ).strip()
+        or "fail",
+        "primary_non_execution_group": str(failure_primary_group).strip() or "unknown",
+        "generated_at": str(report.get("generated_at", "")).strip(),
+    }
+
+
+def build_baseline_comparison(
+    current_report: Dict[str, Any],
+    baseline_report_path: pathlib.Path,
+) -> Dict[str, Any]:
+    baseline_report = load_report_json(baseline_report_path)
+    output: Dict[str, Any] = {
+        "baseline_report_path": str(baseline_report_path),
+        "available": bool(baseline_report),
+        "reason": "",
+    }
+    if not baseline_report:
+        output["reason"] = "baseline_report_missing_or_invalid"
+        return output
+
+    current_metrics = extract_report_metrics(current_report)
+    baseline_metrics = extract_report_metrics(baseline_report)
+    current_dataset_set = set(current_metrics.get("datasets", []))
+    baseline_dataset_set = set(baseline_metrics.get("datasets", []))
+    comparable_dataset_set = bool(current_dataset_set) and (current_dataset_set == baseline_dataset_set)
+    overlap_count = len(current_dataset_set & baseline_dataset_set)
+    missing_in_current = sorted(list(baseline_dataset_set - current_dataset_set))
+    added_in_current = sorted(list(current_dataset_set - baseline_dataset_set))
+
+    deltas = {
+        "avg_profit_factor": round(
+            to_float(current_metrics.get("avg_profit_factor", 0.0))
+            - to_float(baseline_metrics.get("avg_profit_factor", 0.0)),
+            6,
+        ),
+        "avg_expectancy_krw": round(
+            to_float(current_metrics.get("avg_expectancy_krw", 0.0))
+            - to_float(baseline_metrics.get("avg_expectancy_krw", 0.0)),
+            6,
+        ),
+        "avg_total_trades": round(
+            to_float(current_metrics.get("avg_total_trades", 0.0))
+            - to_float(baseline_metrics.get("avg_total_trades", 0.0)),
+            6,
+        ),
+        "peak_max_drawdown_pct": round(
+            to_float(current_metrics.get("peak_max_drawdown_pct", 0.0))
+            - to_float(baseline_metrics.get("peak_max_drawdown_pct", 0.0)),
+            6,
+        ),
+        "avg_primary_candidate_conversion": round(
+            to_float(current_metrics.get("avg_primary_candidate_conversion", 0.0))
+            - to_float(baseline_metrics.get("avg_primary_candidate_conversion", 0.0)),
+            6,
+        ),
+        "avg_shadow_candidate_conversion": round(
+            to_float(current_metrics.get("avg_shadow_candidate_conversion", 0.0))
+            - to_float(baseline_metrics.get("avg_shadow_candidate_conversion", 0.0)),
+            6,
+        ),
+        "avg_shadow_candidate_supply_lift": round(
+            to_float(current_metrics.get("avg_shadow_candidate_supply_lift", 0.0))
+            - to_float(baseline_metrics.get("avg_shadow_candidate_supply_lift", 0.0)),
+            6,
+        ),
+    }
+
+    checks: Dict[str, Any] = {}
+    failed_checks: List[str] = []
+    if comparable_dataset_set:
+        checks = {
+            "profit_factor_non_degrade_pass": to_float(current_metrics.get("avg_profit_factor", 0.0))
+            >= to_float(baseline_metrics.get("avg_profit_factor", 0.0)),
+            "expectancy_non_degrade_pass": to_float(current_metrics.get("avg_expectancy_krw", 0.0))
+            >= to_float(baseline_metrics.get("avg_expectancy_krw", 0.0)),
+            "drawdown_non_worse_pass": to_float(current_metrics.get("peak_max_drawdown_pct", 0.0))
+            <= to_float(baseline_metrics.get("peak_max_drawdown_pct", 0.0)),
+            "primary_candidate_conversion_non_degrade_pass": to_float(
+                current_metrics.get("avg_primary_candidate_conversion", 0.0)
+            )
+            >= to_float(baseline_metrics.get("avg_primary_candidate_conversion", 0.0)),
+            "shadow_supply_lift_non_degrade_pass": to_float(
+                current_metrics.get("avg_shadow_candidate_supply_lift", 0.0)
+            )
+            >= to_float(baseline_metrics.get("avg_shadow_candidate_supply_lift", 0.0)),
+        }
+        failed_checks = [key for key, value in checks.items() if not bool(value)]
+
+    output.update(
+        {
+            "baseline_generated_at": str(baseline_metrics.get("generated_at", "")),
+            "current_generated_at": str(current_metrics.get("generated_at", "")),
+            "comparable_dataset_set": comparable_dataset_set,
+            "dataset_overlap_count": int(overlap_count),
+            "dataset_missing_in_current": missing_in_current,
+            "dataset_added_in_current": added_in_current,
+            "current": current_metrics,
+            "baseline": baseline_metrics,
+            "deltas": deltas,
+            "status_changes": {
+                "overall_gate_pass_changed": bool(current_metrics.get("overall_gate_pass", False))
+                != bool(baseline_metrics.get("overall_gate_pass", False)),
+                "adaptive_verdict_changed": str(current_metrics.get("adaptive_verdict", "fail"))
+                != str(baseline_metrics.get("adaptive_verdict", "fail")),
+                "primary_non_execution_group_changed": str(
+                    current_metrics.get("primary_non_execution_group", "unknown")
+                )
+                != str(baseline_metrics.get("primary_non_execution_group", "unknown")),
+            },
+            "non_degradation_contract": {
+                "applied": comparable_dataset_set,
+                "all_pass": (len(failed_checks) == 0) if comparable_dataset_set else None,
+                "checks": checks,
+                "failed_checks": failed_checks,
+                "reason": "" if comparable_dataset_set else "dataset_set_mismatch",
+            },
+        }
+    )
+    return output
 
 
 def normalized_reason_counts(value: Any) -> Dict[str, int]:
@@ -251,6 +461,9 @@ def build_dataset_diagnostics(dataset_name: str, backtest_result: Dict[str, Any]
     entry_funnel = backtest_result.get("entry_funnel", {})
     if not isinstance(entry_funnel, dict):
         entry_funnel = {}
+    shadow_funnel_raw = backtest_result.get("shadow_funnel", {})
+    if not isinstance(shadow_funnel_raw, dict):
+        shadow_funnel_raw = {}
 
     entry_rounds = max(0, to_int(entry_funnel.get("entry_rounds", 0)))
     skipped_due_to_open_position = max(0, to_int(entry_funnel.get("skipped_due_to_open_position", 0)))
@@ -267,6 +480,52 @@ def build_dataset_diagnostics(dataset_name: str, backtest_result: Dict[str, Any]
     blocked_min_order_or_capital = max(0, to_int(entry_funnel.get("blocked_min_order_or_capital", 0)))
     blocked_order_sizing = max(0, to_int(entry_funnel.get("blocked_order_sizing", 0)))
     entries_executed = max(0, to_int(entry_funnel.get("entries_executed", 0)))
+    shadow_rounds = max(0, to_int(shadow_funnel_raw.get("rounds", 0)))
+    shadow_primary_generated_signals = max(
+        0, to_int(shadow_funnel_raw.get("primary_generated_signals", 0))
+    )
+    shadow_primary_after_manager_filter = max(
+        0, to_int(shadow_funnel_raw.get("primary_after_manager_filter", 0))
+    )
+    shadow_shadow_after_manager_filter = max(
+        0, to_int(shadow_funnel_raw.get("shadow_after_manager_filter", 0))
+    )
+    shadow_primary_after_policy_filter = max(
+        0, to_int(shadow_funnel_raw.get("primary_after_policy_filter", 0))
+    )
+    shadow_shadow_after_policy_filter = max(
+        0, to_int(shadow_funnel_raw.get("shadow_after_policy_filter", 0))
+    )
+    shadow_primary_best_signal_available = max(
+        0, to_int(shadow_funnel_raw.get("primary_best_signal_available", 0))
+    )
+    shadow_shadow_best_signal_available = max(
+        0, to_int(shadow_funnel_raw.get("shadow_best_signal_available", 0))
+    )
+    shadow_supply_improved_rounds = max(
+        0, to_int(shadow_funnel_raw.get("supply_improved_rounds", 0))
+    )
+    shadow_avg_manager_supply_lift = to_float(
+        shadow_funnel_raw.get("avg_manager_supply_lift", 0.0)
+    )
+    shadow_avg_policy_supply_lift = to_float(
+        shadow_funnel_raw.get("avg_policy_supply_lift", 0.0)
+    )
+    shadow_generated_denominator = max(1, shadow_primary_generated_signals)
+    shadow_policy_supply_lift_per_signal = (
+        float(shadow_shadow_after_policy_filter - shadow_primary_after_policy_filter)
+        / float(shadow_generated_denominator)
+    )
+    shadow_contract = {
+        "shadow_probe_active": shadow_rounds > 0,
+        "candidate_supply_lift_positive": (
+            shadow_shadow_after_policy_filter > shadow_primary_after_policy_filter
+        ),
+        "best_signal_lift_non_negative": (
+            shadow_shadow_best_signal_available >= shadow_primary_best_signal_available
+        ),
+    }
+    shadow_contract["all_pass"] = all(bool(v) for v in shadow_contract.values())
 
     candidate_generation = (
         no_signal_generated
@@ -349,6 +608,24 @@ def build_dataset_diagnostics(dataset_name: str, backtest_result: Dict[str, Any]
         "strategy_funnel": strategy_diag,
         "strategy_collection": strategy_collection_diag,
         "post_entry_risk_telemetry": post_entry_telemetry,
+        "shadow_funnel": {
+            "rounds": int(shadow_rounds),
+            "primary_generated_signals": int(shadow_primary_generated_signals),
+            "primary_after_manager_filter": int(shadow_primary_after_manager_filter),
+            "shadow_after_manager_filter": int(shadow_shadow_after_manager_filter),
+            "primary_after_policy_filter": int(shadow_primary_after_policy_filter),
+            "shadow_after_policy_filter": int(shadow_shadow_after_policy_filter),
+            "primary_best_signal_available": int(shadow_primary_best_signal_available),
+            "shadow_best_signal_available": int(shadow_shadow_best_signal_available),
+            "supply_improved_rounds": int(shadow_supply_improved_rounds),
+            "avg_manager_supply_lift": round(shadow_avg_manager_supply_lift, 6),
+            "avg_policy_supply_lift": round(shadow_avg_policy_supply_lift, 6),
+            "policy_supply_lift_per_generated_signal": round(
+                shadow_policy_supply_lift_per_signal,
+                6,
+            ),
+        },
+        "shadow_contract": shadow_contract,
         "strategy_collect_exception_count": max(
             0, to_int(backtest_result.get("strategy_collect_exception_count", 0))
         ),
@@ -378,6 +655,21 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
             "0.65_0.74": 0,
             "0.75_0.80": 0,
         },
+    }
+    aggregate_shadow: Dict[str, Any] = {
+        "rounds": 0,
+        "primary_generated_signals": 0,
+        "primary_after_manager_filter": 0,
+        "shadow_after_manager_filter": 0,
+        "primary_after_policy_filter": 0,
+        "shadow_after_policy_filter": 0,
+        "primary_best_signal_available": 0,
+        "shadow_best_signal_available": 0,
+        "supply_improved_rounds": 0,
+        "avg_manager_supply_lift_acc": 0.0,
+        "avg_policy_supply_lift_acc": 0.0,
+        "dataset_with_shadow_probe": 0,
+        "contract_all_pass_count": 0,
     }
 
     for item in dataset_diagnostics:
@@ -454,6 +746,53 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
                         to_int(histogram.get(key, 0)),
                     )
 
+        shadow_funnel = item.get("shadow_funnel", {})
+        if isinstance(shadow_funnel, dict):
+            aggregate_shadow["rounds"] += max(0, to_int(shadow_funnel.get("rounds", 0)))
+            aggregate_shadow["primary_generated_signals"] += max(
+                0,
+                to_int(shadow_funnel.get("primary_generated_signals", 0)),
+            )
+            aggregate_shadow["primary_after_manager_filter"] += max(
+                0,
+                to_int(shadow_funnel.get("primary_after_manager_filter", 0)),
+            )
+            aggregate_shadow["shadow_after_manager_filter"] += max(
+                0,
+                to_int(shadow_funnel.get("shadow_after_manager_filter", 0)),
+            )
+            aggregate_shadow["primary_after_policy_filter"] += max(
+                0,
+                to_int(shadow_funnel.get("primary_after_policy_filter", 0)),
+            )
+            aggregate_shadow["shadow_after_policy_filter"] += max(
+                0,
+                to_int(shadow_funnel.get("shadow_after_policy_filter", 0)),
+            )
+            aggregate_shadow["primary_best_signal_available"] += max(
+                0,
+                to_int(shadow_funnel.get("primary_best_signal_available", 0)),
+            )
+            aggregate_shadow["shadow_best_signal_available"] += max(
+                0,
+                to_int(shadow_funnel.get("shadow_best_signal_available", 0)),
+            )
+            aggregate_shadow["supply_improved_rounds"] += max(
+                0,
+                to_int(shadow_funnel.get("supply_improved_rounds", 0)),
+            )
+            aggregate_shadow["avg_manager_supply_lift_acc"] += to_float(
+                shadow_funnel.get("avg_manager_supply_lift", 0.0)
+            )
+            aggregate_shadow["avg_policy_supply_lift_acc"] += to_float(
+                shadow_funnel.get("avg_policy_supply_lift", 0.0)
+            )
+            aggregate_shadow["dataset_with_shadow_probe"] += 1
+
+        shadow_contract = item.get("shadow_contract", {})
+        if isinstance(shadow_contract, dict) and bool(shadow_contract.get("all_pass", False)):
+            aggregate_shadow["contract_all_pass_count"] += 1
+
     non_execution_total = (
         aggregate_groups["candidate_generation"]
         + aggregate_groups["quality_and_risk_gate"]
@@ -471,6 +810,34 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
     primary_group_share = (
         (float(primary_group_count) / float(non_execution_total)) if non_execution_total > 0 else 0.0
     )
+    shadow_dataset_count = max(0, to_int(aggregate_shadow.get("dataset_with_shadow_probe", 0)))
+    aggregate_shadow_summary = {
+        "rounds": int(aggregate_shadow["rounds"]),
+        "primary_generated_signals": int(aggregate_shadow["primary_generated_signals"]),
+        "primary_after_manager_filter": int(aggregate_shadow["primary_after_manager_filter"]),
+        "shadow_after_manager_filter": int(aggregate_shadow["shadow_after_manager_filter"]),
+        "primary_after_policy_filter": int(aggregate_shadow["primary_after_policy_filter"]),
+        "shadow_after_policy_filter": int(aggregate_shadow["shadow_after_policy_filter"]),
+        "primary_best_signal_available": int(aggregate_shadow["primary_best_signal_available"]),
+        "shadow_best_signal_available": int(aggregate_shadow["shadow_best_signal_available"]),
+        "supply_improved_rounds": int(aggregate_shadow["supply_improved_rounds"]),
+        "avg_manager_supply_lift": round(
+            (aggregate_shadow["avg_manager_supply_lift_acc"] / float(shadow_dataset_count))
+            if shadow_dataset_count > 0 else 0.0,
+            6,
+        ),
+        "avg_policy_supply_lift": round(
+            (aggregate_shadow["avg_policy_supply_lift_acc"] / float(shadow_dataset_count))
+            if shadow_dataset_count > 0 else 0.0,
+            6,
+        ),
+        "contract_all_pass_count": int(aggregate_shadow["contract_all_pass_count"]),
+        "contract_all_pass_rate": round(
+            (float(aggregate_shadow["contract_all_pass_count"]) / float(shadow_dataset_count))
+            if shadow_dataset_count > 0 else 0.0,
+            4,
+        ),
+    }
 
     return {
         "dataset_count": len(dataset_diagnostics),
@@ -486,6 +853,7 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         "top_loss_pattern_cells": top_loss_pattern_cells(aggregate_pattern_profit_map, limit=10),
         "top_non_execution_group_vote_counts": top_group_votes,
         "post_entry_risk_telemetry": aggregate_post_entry_telemetry,
+        "shadow_funnel": aggregate_shadow_summary,
     }
 
 
@@ -650,6 +1018,9 @@ def build_adaptive_dataset_profile(dataset_name: str, backtest_result: Dict[str,
     entry_funnel = backtest_result.get("entry_funnel", {})
     if not isinstance(entry_funnel, dict):
         entry_funnel = {}
+    shadow_funnel_raw = backtest_result.get("shadow_funnel", {})
+    if not isinstance(shadow_funnel_raw, dict):
+        shadow_funnel_raw = {}
     strategy_signal_funnel = backtest_result.get("strategy_signal_funnel", [])
     if isinstance(strategy_signal_funnel, list):
         for row in strategy_signal_funnel:
@@ -665,6 +1036,28 @@ def build_adaptive_dataset_profile(dataset_name: str, backtest_result: Dict[str,
         float(entries_executed) / float(generated_signals)
         if generated_signals > 0 else 0.0
     )
+    shadow_generated_signals = max(
+        generated_signals,
+        max(0, to_int(shadow_funnel_raw.get("primary_generated_signals", 0))),
+    )
+    shadow_policy_candidates = max(
+        0,
+        to_int(shadow_funnel_raw.get("shadow_after_policy_filter", 0)),
+    )
+    primary_policy_candidates = max(
+        0,
+        to_int(shadow_funnel_raw.get("primary_after_policy_filter", 0)),
+    )
+    shadow_opportunity_conversion = (
+        float(shadow_policy_candidates) / float(shadow_generated_signals)
+        if shadow_generated_signals > 0
+        else 0.0
+    )
+    primary_candidate_conversion = (
+        float(primary_policy_candidates) / float(shadow_generated_signals)
+        if shadow_generated_signals > 0
+        else 0.0
+    )
 
     return {
         "dataset": dataset_name,
@@ -679,6 +1072,12 @@ def build_adaptive_dataset_profile(dataset_name: str, backtest_result: Dict[str,
         "generated_signals": int(generated_signals),
         "entries_executed": int(entries_executed),
         "opportunity_conversion": round(opportunity_conversion, 4),
+        "primary_candidate_conversion": round(primary_candidate_conversion, 4),
+        "shadow_candidate_conversion": round(shadow_opportunity_conversion, 4),
+        "shadow_candidate_supply_lift": round(
+            shadow_opportunity_conversion - primary_candidate_conversion,
+            4,
+        ),
         "post_entry_risk_telemetry": post_entry_telemetry,
         "regime_metrics": regime_metrics,
     }
@@ -692,6 +1091,9 @@ def aggregate_adaptive_validation(dataset_profiles: List[Dict[str, Any]]) -> Dic
             "avg_downtrend_trade_share": 0.0,
             "avg_downtrend_loss_per_trade_krw": 0.0,
             "avg_uptrend_expectancy_krw": 0.0,
+            "avg_primary_candidate_conversion": 0.0,
+            "avg_shadow_candidate_conversion": 0.0,
+            "avg_shadow_candidate_supply_lift": 0.0,
             "avg_adaptive_stop_updates": 0.0,
             "avg_adaptive_tp_recalibration_updates": 0.0,
             "avg_adaptive_partial_ratio_samples": 0.0,
@@ -711,6 +1113,15 @@ def aggregate_adaptive_validation(dataset_profiles: List[Dict[str, Any]]) -> Dic
     uptrend_exp = [to_float(x.get("uptrend_expectancy_krw", 0.0)) for x in dataset_profiles]
     generated = [max(0.0, to_float(x.get("generated_signals", 0.0))) for x in dataset_profiles]
     executed = [max(0.0, to_float(x.get("entries_executed", 0.0))) for x in dataset_profiles]
+    primary_candidate_conversion = [
+        max(0.0, to_float(x.get("primary_candidate_conversion", 0.0))) for x in dataset_profiles
+    ]
+    shadow_candidate_conversion = [
+        max(0.0, to_float(x.get("shadow_candidate_conversion", 0.0))) for x in dataset_profiles
+    ]
+    shadow_candidate_supply_lift = [
+        to_float(x.get("shadow_candidate_supply_lift", 0.0)) for x in dataset_profiles
+    ]
     stop_updates = []
     tp_recalibration_updates = []
     partial_ratio_samples = []
@@ -763,6 +1174,18 @@ def aggregate_adaptive_validation(dataset_profiles: List[Dict[str, Any]]) -> Dic
         "avg_generated_signals": round(safe_avg(generated), 4),
         "avg_entries_executed": round(safe_avg(executed), 4),
         "avg_opportunity_conversion": round(avg_opportunity_conversion, 4),
+        "avg_primary_candidate_conversion": round(
+            safe_avg(primary_candidate_conversion),
+            4,
+        ),
+        "avg_shadow_candidate_conversion": round(
+            safe_avg(shadow_candidate_conversion),
+            4,
+        ),
+        "avg_shadow_candidate_supply_lift": round(
+            safe_avg(shadow_candidate_supply_lift),
+            4,
+        ),
         "avg_adaptive_stop_updates": round(safe_avg(stop_updates), 4),
         "avg_adaptive_tp_recalibration_updates": round(safe_avg(tp_recalibration_updates), 4),
         "avg_adaptive_partial_ratio_samples": round(safe_avg(partial_ratio_samples), 4),
@@ -785,6 +1208,15 @@ def build_adaptive_verdict(
     avg_downtrend_trade_share = to_float(adaptive_aggregates.get("avg_downtrend_trade_share", 0.0))
     avg_generated_signals = to_float(adaptive_aggregates.get("avg_generated_signals", 0.0))
     avg_opportunity_conversion = to_float(adaptive_aggregates.get("avg_opportunity_conversion", 0.0))
+    avg_primary_candidate_conversion = to_float(
+        adaptive_aggregates.get("avg_primary_candidate_conversion", 0.0)
+    )
+    avg_shadow_candidate_conversion = to_float(
+        adaptive_aggregates.get("avg_shadow_candidate_conversion", 0.0)
+    )
+    avg_shadow_candidate_supply_lift = to_float(
+        adaptive_aggregates.get("avg_shadow_candidate_supply_lift", 0.0)
+    )
 
     hostile_sample_relax_factor = 1.0
     if avg_downtrend_trade_share >= 0.45:
@@ -848,6 +1280,9 @@ def build_adaptive_verdict(
         "context": {
             "avg_generated_signals": round(avg_generated_signals, 4),
             "avg_opportunity_conversion": round(avg_opportunity_conversion, 4),
+            "avg_primary_candidate_conversion": round(avg_primary_candidate_conversion, 4),
+            "avg_shadow_candidate_conversion": round(avg_shadow_candidate_conversion, 4),
+            "avg_shadow_candidate_supply_lift": round(avg_shadow_candidate_supply_lift, 4),
             "low_opportunity_observed": bool(low_opportunity_observed),
         },
     }
@@ -860,8 +1295,8 @@ def main(argv=None) -> int:
     parser.add_argument("--exe-path", default=r".\build\Release\AutoLifeTrading.exe")
     parser.add_argument("--config-path", default=r".\build\Release\config\config.json")
     parser.add_argument("--source-config-path", default=r".\config\config.json")
-    parser.add_argument("--data-dir", default=r".\data\backtest")
-    parser.add_argument("--dataset-names", nargs="*", default=["simulation_2000.csv", "simulation_large.csv"])
+    parser.add_argument("--data-dir", default=r".\data\backtest_real")
+    parser.add_argument("--dataset-names", nargs="*", default=[])
     parser.add_argument(
         "--data-mode",
         choices=["fixed", "refresh_if_missing", "refresh_force"],
@@ -869,6 +1304,10 @@ def main(argv=None) -> int:
     )
     parser.add_argument("--output-csv", default=r".\build\Release\logs\verification_matrix.csv")
     parser.add_argument("--output-json", default=r".\build\Release\logs\verification_report.json")
+    parser.add_argument(
+        "--baseline-report-path",
+        default=r".\build\Release\logs\verification_report_baseline_current.json",
+    )
     parser.add_argument(
         "--validation-profile",
         choices=["adaptive", "legacy_gate"],
@@ -898,6 +1337,11 @@ def main(argv=None) -> int:
     data_dir = resolve_path(args.data_dir, "Data directory")
     output_csv = resolve_path(args.output_csv, "Output csv", must_exist=False)
     output_json = resolve_path(args.output_json, "Output json", must_exist=False)
+    baseline_report_path = resolve_path(
+        args.baseline_report_path,
+        "Baseline report",
+        must_exist=False,
+    )
     lock_path = resolve_path(args.verification_lock_path, "Verification lock", must_exist=False)
 
     ensure_parent(config_path)
@@ -917,6 +1361,20 @@ def main(argv=None) -> int:
         dataset_paths.append(candidate)
     if not dataset_paths:
         raise RuntimeError("No datasets configured.")
+
+    if bool(args.require_higher_tf_companions):
+        for dataset_path in dataset_paths:
+            if not is_upbit_primary_1m_dataset(dataset_path):
+                raise RuntimeError(
+                    "When --require-higher-tf-companions is enabled, "
+                    "only upbit_*_1m_*.csv datasets are allowed: "
+                    f"{dataset_path.name}"
+                )
+            if not has_higher_tf_companions(data_dir, dataset_path):
+                raise RuntimeError(
+                    "Missing companion timeframe csv (5m/15m/60m/240m) for dataset: "
+                    f"{dataset_path.name}"
+                )
 
     rows: List[Dict[str, Any]] = []
     dataset_diagnostics: List[Dict[str, Any]] = []
@@ -1068,10 +1526,15 @@ def main(argv=None) -> int:
         "artifacts": {
             "output_csv": str(output_csv),
             "output_json": str(output_json),
+            "baseline_report_path": str(baseline_report_path),
             "config_path": str(config_path),
             "source_config_path": str(source_config_path),
         },
     }
+    report["baseline_comparison"] = build_baseline_comparison(
+        current_report=report,
+        baseline_report_path=baseline_report_path,
+    )
 
     ensure_parent(output_json)
     with output_json.open("w", encoding="utf-8", newline="\n") as fp:
@@ -1091,6 +1554,29 @@ def main(argv=None) -> int:
         "[Verification] primary_non_execution_group="
         f"{failure_attribution.get('primary_non_execution_group', 'unknown')}"
     )
+    baseline_comparison = report.get("baseline_comparison", {})
+    if isinstance(baseline_comparison, dict) and bool(baseline_comparison.get("available", False)):
+        deltas = baseline_comparison.get("deltas", {})
+        if not isinstance(deltas, dict):
+            deltas = {}
+        contract = baseline_comparison.get("non_degradation_contract", {})
+        contract_tag = "skip"
+        if isinstance(contract, dict) and bool(contract.get("applied", False)):
+            contract_tag = "pass" if bool(contract.get("all_pass", False)) else "fail"
+        print(
+            "[Verification] baseline_delta_pf="
+            f"{deltas.get('avg_profit_factor', 0.0)} "
+            f"baseline_delta_exp={deltas.get('avg_expectancy_krw', 0.0)} "
+            f"baseline_contract={contract_tag}"
+        )
+    else:
+        reason = ""
+        if isinstance(baseline_comparison, dict):
+            reason = str(baseline_comparison.get("reason", "")).strip()
+        print(
+            "[Verification] baseline_comparison=unavailable "
+            f"reason={reason or 'baseline_report_missing_or_invalid'}"
+        )
     print(f"[Verification] report_json={output_json}")
     return 0
 

@@ -45,6 +45,7 @@ set(LIB_SOURCES
     src/common/SignalPolicyShared.cpp
     src/common/RuntimeDiagnosticsShared.cpp
     src/common/StrategyEdgeStatsShared.cpp
+    src/common/ExecutionGuardPolicyShared.cpp
     src/network/JwtGenerator.cpp
     src/network/UpbitHttpClient.cpp
     src/network/UpbitMyOrderWebSocketClient.cpp

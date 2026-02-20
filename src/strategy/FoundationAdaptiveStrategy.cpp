@@ -102,10 +102,11 @@ MtfConfirmation evaluateMtfConfirmation(
     switch (regime) {
         case analytics::MarketRegime::TRENDING_UP:
             out.pass =
-                out.momentum_15m >= -0.0015 &&
-                out.ema_gap_15m >= -0.0010 &&
-                out.momentum_1h >= -0.0040 &&
-                out.score >= 0.46;
+                out.momentum_15m >= -0.0012 &&
+                out.ema_gap_15m >= -0.0008 &&
+                out.momentum_1h >= -0.0038 &&
+                out.rsi_15m <= 68.0 &&
+                out.score >= 0.47;
             out.reject_reason = "foundation_no_signal_mtf_uptrend_mismatch";
             break;
         case analytics::MarketRegime::RANGING:
@@ -330,10 +331,30 @@ EntryGateDecision evaluateEntryGate(
     analytics::MarketRegime regime
 ) {
     EntryGateDecision decision;
-    decision.core_liquidity_pass = (
+    const bool base_liquidity_pass = (
         metrics.liquidity_score >= 45.0 &&
         metrics.volume_surge_ratio >= 0.75
     );
+    const bool tight_spread_context =
+        metrics.orderbook_snapshot.valid &&
+        metrics.orderbook_snapshot.spread_pct > 0.0 &&
+        metrics.orderbook_snapshot.spread_pct <= 0.0018;
+    const bool low_vol_context =
+        metrics.volatility > 0.0 &&
+        metrics.volatility <= 2.2;
+    const bool narrow_liquidity_relief_context =
+        tight_spread_context &&
+        low_vol_context &&
+        regime != analytics::MarketRegime::HIGH_VOLATILITY &&
+        regime != analytics::MarketRegime::TRENDING_DOWN;
+    const bool narrow_liquidity_relief_pass =
+        narrow_liquidity_relief_context &&
+        metrics.liquidity_score >= 40.0 &&
+        metrics.volume_surge_ratio >= 0.68 &&
+        metrics.order_book_imbalance > -0.10 &&
+        metrics.buy_pressure >= (metrics.sell_pressure * 0.90);
+
+    decision.core_liquidity_pass = base_liquidity_pass || narrow_liquidity_relief_pass;
     decision.low_liquidity_relaxed_path = (
         regime == analytics::MarketRegime::TRENDING_UP &&
         metrics.liquidity_score < 45.0 &&
@@ -403,18 +424,39 @@ EntryGateDecision evaluateEntryGate(
 
     switch (regime) {
         case analytics::MarketRegime::TRENDING_UP: {
+            const double ret3 = rollingReturn(closes, 3);
+            const double ret5 = rollingReturn(closes, 5);
+            const double ret20 = rollingReturn(closes, 20);
+            const double ret20_floor = (metrics.liquidity_score >= 60.0) ? 0.0008 : 0.0004;
+            const bool overextended_uptrend = (rsi >= 68.0 && ret5 >= 0.0045);
             if (!(current_price > ema_fast &&
                   ema_fast > ema_slow &&
                   rsi >= 45.0 && rsi <= 72.0 &&
-                  metrics.order_book_imbalance > -0.12)) {
+                  metrics.order_book_imbalance > -0.12 &&
+                  metrics.buy_pressure >= (metrics.sell_pressure * 0.92) &&
+                  ret5 >= -0.0010 &&
+                  ret20 >= ret20_floor) ||
+                overextended_uptrend) {
                 decision.reject_reason = "foundation_no_signal_uptrend_structure";
+                return decision;
+            }
+            const bool low_vol_high_liq_uptrend =
+                metrics.liquidity_score >= 62.0 &&
+                metrics.volatility > 0.0 &&
+                metrics.volatility <= 1.7;
+            const double ema_premium = (ema_fast > 1e-9)
+                ? ((current_price - ema_fast) / ema_fast)
+                : 0.0;
+            const bool exhaustion_risk =
+                rsi >= 63.0 &&
+                (ret3 >= 0.0038 || ret5 >= 0.0055 || ema_premium >= 0.0045);
+            if (low_vol_high_liq_uptrend && exhaustion_risk) {
+                decision.reject_reason = "foundation_no_signal_uptrend_exhaustion_guard";
                 return decision;
             }
             if (metrics.liquidity_score < 55.0 &&
                 metrics.volatility > 0.0 &&
                 metrics.volatility <= 1.8) {
-                const double ret5 = rollingReturn(closes, 5);
-                const double ret20 = rollingReturn(closes, 20);
                 if (!(metrics.volume_surge_ratio >= 0.88 &&
                       metrics.order_book_imbalance >= -0.05 &&
                       rsi <= 70.0 &&
@@ -431,6 +473,16 @@ EntryGateDecision evaluateEntryGate(
             if (!(current_price <= bb_middle &&
                   rsi <= 42.0 &&
                   metrics.order_book_imbalance > -0.20)) {
+                const bool narrow_ranging_relief =
+                    narrow_liquidity_relief_pass &&
+                    current_price <= bb_middle * 1.0015 &&
+                    rsi <= 44.0 &&
+                    metrics.order_book_imbalance > -0.16 &&
+                    metrics.buy_pressure >= (metrics.sell_pressure * 0.90);
+                if (narrow_ranging_relief) {
+                    decision.pass = true;
+                    return decision;
+                }
                 decision.reject_reason = "foundation_no_signal_ranging_structure";
                 return decision;
             }

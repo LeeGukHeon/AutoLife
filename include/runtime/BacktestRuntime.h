@@ -168,6 +168,21 @@ public:
             int blocked_order_sizing = 0;
             int entries_executed = 0;
         };
+        struct ShadowFunnelSummary {
+            int rounds = 0;
+            int primary_generated_signals = 0;
+            int primary_after_manager_filter = 0;
+            int shadow_after_manager_filter = 0;
+            int primary_after_policy_filter = 0;
+            int shadow_after_policy_filter = 0;
+            int primary_best_signal_available = 0;
+            int shadow_best_signal_available = 0;
+            int supply_improved_rounds = 0;
+            double manager_supply_lift_sum = 0.0;
+            double policy_supply_lift_sum = 0.0;
+            double avg_manager_supply_lift = 0.0;
+            double avg_policy_supply_lift = 0.0;
+        };
         struct PreCatFeatureSnapshotBranch {
             int samples = 0;
             int recovery_quality_context_hits = 0;
@@ -247,6 +262,7 @@ public:
         std::vector<StrategyCollectionSummary> strategy_collection_summaries;
         int strategy_collect_exception_count = 0;
         EntryFunnelSummary entry_funnel;
+        ShadowFunnelSummary shadow_funnel;
         PreCatFeatureSnapshot pre_cat_feature_snapshot;
         PostEntryRiskTelemetry post_entry_risk_telemetry;
     };
@@ -272,6 +288,8 @@ private:
     int no_entry_streak_candles_ = 0;   // Regime-aware minimum activation helper
     double market_hostility_ewma_ = 0.0;
     int hostile_entry_pause_candles_ = 0;
+    double recent_best_ask_price_ = 0.0;
+    long long recent_best_ask_timestamp_ms_ = 0;
     bool was_open_position_prev_candle_ = false; // Count open-position skip once per holding episode
     struct PendingBacktestOrder {
         Order order;
@@ -319,6 +337,7 @@ private:
     int adaptive_partial_ratio_samples_ = 0;
     double adaptive_partial_ratio_sum_ = 0.0;
     std::array<int, 5> adaptive_partial_ratio_histogram_{{0, 0, 0, 0, 0}};
+    Result::ShadowFunnelSummary shadow_funnel_;
 
     // Simulation Methods
     void processCandle(const Candle& candle);

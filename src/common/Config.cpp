@@ -221,6 +221,40 @@ void Config::load(const std::string& path) {
             engine_config_.mode = (mode_str == "LIVE") ? engine::TradingMode::LIVE : engine::TradingMode::PAPER;
             engine_config_.dry_run = t.value("dry_run", false);
             engine_config_.allow_live_orders = t.value("allow_live_orders", false);
+            engine_config_.use_confirmed_candle_only_for_signals =
+                t.value("use_confirmed_candle_only_for_signals", true);
+            engine_config_.enable_realtime_entry_veto =
+                t.value("enable_realtime_entry_veto", true);
+            engine_config_.realtime_entry_veto_tracking_window_seconds = std::max(
+                10,
+                t.value("realtime_entry_veto_tracking_window_seconds", 90)
+            );
+            engine_config_.realtime_entry_veto_max_drop_pct = std::clamp(
+                t.value("realtime_entry_veto_max_drop_pct", 0.0035),
+                0.0002,
+                0.05
+            );
+            engine_config_.realtime_entry_veto_max_spread_pct = std::clamp(
+                t.value("realtime_entry_veto_max_spread_pct", 0.0030),
+                0.0001,
+                0.05
+            );
+            engine_config_.realtime_entry_veto_min_orderbook_imbalance = std::clamp(
+                t.value("realtime_entry_veto_min_orderbook_imbalance", -0.35),
+                -1.0,
+                1.0
+            );
+            engine_config_.enable_live_cache_warmup =
+                t.value("enable_live_cache_warmup", true);
+            engine_config_.live_cache_warmup_min_scans = std::max(
+                1,
+                t.value("live_cache_warmup_min_scans", 5)
+            );
+            engine_config_.live_cache_warmup_min_ready_ratio = std::clamp(
+                t.value("live_cache_warmup_min_ready_ratio", 0.75),
+                0.0,
+                1.0
+            );
             engine_config_.enable_live_mtf_dataset_capture =
                 t.value("enable_live_mtf_dataset_capture", true);
             engine_config_.live_mtf_dataset_capture_interval_seconds =

@@ -309,6 +309,10 @@ private:
     // Counts open-position skips once per market holding episode to avoid
     // per-scan overcount distortion in bottleneck diagnostics.
     std::map<std::string, bool> open_position_skip_latch_;
+    std::map<std::string, double> recent_best_ask_by_market_;
+    std::map<std::string, long long> recent_best_ask_timestamp_by_market_;
+    int live_warmup_scans_completed_ = 0;
+    bool live_warmup_done_ = false;
     std::chrono::steady_clock::time_point last_live_mtf_capture_time_{};
     std::map<std::string, long long> live_mtf_capture_last_timestamp_by_file_;
     std::map<std::string, int> pre_cat_recovery_hysteresis_hold_by_key_;

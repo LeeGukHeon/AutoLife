@@ -2,7 +2,35 @@
 #include "common/Logger.h"
 #include <cmath>
 #include <algorithm>
+#include <ctime>
+#include <iomanip>
 #include <numeric>
+#include <sstream>
+
+namespace {
+long long parseUtcIsoToEpochMs(const std::string& iso_utc) {
+    if (iso_utc.empty()) {
+        return 0;
+    }
+
+    std::tm tm_utc{};
+    std::istringstream ss(iso_utc);
+    ss >> std::get_time(&tm_utc, "%Y-%m-%dT%H:%M:%S");
+    if (ss.fail()) {
+        return 0;
+    }
+
+#if defined(_WIN32)
+    std::time_t seconds = _mkgmtime(&tm_utc);
+#else
+    std::time_t seconds = timegm(&tm_utc);
+#endif
+    if (seconds < 0) {
+        return 0;
+    }
+    return static_cast<long long>(seconds) * 1000LL;
+}
+} // namespace
 
 namespace autolife {
 namespace analytics {
@@ -493,6 +521,9 @@ std::vector<Candle> TechnicalIndicators::jsonToCandles(const nlohmann::json& jso
         c.close = getDouble(jc["trade_price"]);
         c.volume = getDouble(jc["candle_acc_trade_volume"]);
         c.timestamp = jc.value("timestamp", 0LL);
+        if (c.timestamp == 0) {
+            c.timestamp = parseUtcIsoToEpochMs(jc.value("candle_date_time_utc", ""));
+        }
         
         candles.push_back(c);
     }

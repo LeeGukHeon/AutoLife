@@ -284,6 +284,21 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
         {"blocked_order_sizing", result.entry_funnel.blocked_order_sizing},
         {"entries_executed", result.entry_funnel.entries_executed}
     };
+    j["shadow_funnel"] = {
+        {"rounds", result.shadow_funnel.rounds},
+        {"primary_generated_signals", result.shadow_funnel.primary_generated_signals},
+        {"primary_after_manager_filter", result.shadow_funnel.primary_after_manager_filter},
+        {"shadow_after_manager_filter", result.shadow_funnel.shadow_after_manager_filter},
+        {"primary_after_policy_filter", result.shadow_funnel.primary_after_policy_filter},
+        {"shadow_after_policy_filter", result.shadow_funnel.shadow_after_policy_filter},
+        {"primary_best_signal_available", result.shadow_funnel.primary_best_signal_available},
+        {"shadow_best_signal_available", result.shadow_funnel.shadow_best_signal_available},
+        {"supply_improved_rounds", result.shadow_funnel.supply_improved_rounds},
+        {"manager_supply_lift_sum", result.shadow_funnel.manager_supply_lift_sum},
+        {"policy_supply_lift_sum", result.shadow_funnel.policy_supply_lift_sum},
+        {"avg_manager_supply_lift", result.shadow_funnel.avg_manager_supply_lift},
+        {"avg_policy_supply_lift", result.shadow_funnel.avg_policy_supply_lift}
+    };
 
     j["pre_cat_feature_snapshot"] = {
         {"observed", preCatSnapshotBranchToJson(result.pre_cat_feature_snapshot.observed)},
