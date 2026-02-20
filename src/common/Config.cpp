@@ -369,6 +369,26 @@ void Config::load(const std::string& path) {
                 0.0,
                 0.010
             );
+            engine_config_.probabilistic_primary_min_h5_calibrated = std::clamp(
+                t.value("probabilistic_primary_min_h5_calibrated", 0.48),
+                0.0,
+                1.0
+            );
+            engine_config_.probabilistic_primary_min_h5_margin = std::clamp(
+                t.value("probabilistic_primary_min_h5_margin", -0.03),
+                -0.50,
+                0.20
+            );
+            engine_config_.probabilistic_primary_min_liquidity_score = std::clamp(
+                t.value("probabilistic_primary_min_liquidity_score", 42.0),
+                0.0,
+                100.0
+            );
+            engine_config_.probabilistic_primary_min_signal_strength = std::clamp(
+                t.value("probabilistic_primary_min_signal_strength", 0.34),
+                0.0,
+                1.0
+            );
             engine_config_.foundation_signal_supply_fallback_enabled =
                 t.value("foundation_signal_supply_fallback_enabled", true);
             engine_config_.manager_soft_queue_enabled =
@@ -575,126 +595,6 @@ void Config::load(const std::string& path) {
             engine_config_.hostility_pause_recent_win_rate = t.value("hostility_pause_recent_win_rate", 0.40);
             engine_config_.backtest_hostility_pause_candles = t.value("backtest_hostility_pause_candles", 36);
             engine_config_.backtest_hostility_pause_candles_extreme = t.value("backtest_hostility_pause_candles_extreme", 60);
-            engine_config_.enable_entry_quality_adaptive_relief =
-                t.value("enable_entry_quality_adaptive_relief", true);
-            engine_config_.entry_quality_adaptive_relief_rr_max_gap =
-                t.value("entry_quality_adaptive_relief_rr_max_gap", 0.08);
-            engine_config_.entry_quality_adaptive_relief_edge_max_gap =
-                t.value("entry_quality_adaptive_relief_edge_max_gap", 0.00012);
-            engine_config_.entry_quality_adaptive_relief_min_signal_strength =
-                t.value("entry_quality_adaptive_relief_min_signal_strength", 0.68);
-            engine_config_.entry_quality_adaptive_relief_min_expected_value =
-                t.value("entry_quality_adaptive_relief_min_expected_value", 0.00035);
-            engine_config_.entry_quality_adaptive_relief_min_liquidity_score =
-                t.value("entry_quality_adaptive_relief_min_liquidity_score", 58.0);
-            engine_config_.entry_quality_adaptive_relief_min_strategy_trades =
-                t.value("entry_quality_adaptive_relief_min_strategy_trades", 16);
-            engine_config_.entry_quality_adaptive_relief_min_strategy_win_rate =
-                t.value("entry_quality_adaptive_relief_min_strategy_win_rate", 0.47);
-            engine_config_.entry_quality_adaptive_relief_min_strategy_profit_factor =
-                t.value("entry_quality_adaptive_relief_min_strategy_profit_factor", 0.98);
-            engine_config_.entry_quality_adaptive_relief_block_high_stress_regime =
-                t.value("entry_quality_adaptive_relief_block_high_stress_regime", true);
-            engine_config_.entry_quality_adaptive_relief_position_scale =
-                t.value("entry_quality_adaptive_relief_position_scale", 0.80);
-            engine_config_.second_stage_history_safety_severe_scale =
-                t.value("second_stage_history_safety_severe_scale", 1.00);
-            engine_config_.enable_second_stage_history_safety_severe_relief =
-                t.value("enable_second_stage_history_safety_severe_relief", true);
-            engine_config_.second_stage_history_safety_relief_max_scale =
-                t.value("second_stage_history_safety_relief_max_scale", 0.45);
-            engine_config_.second_stage_history_safety_relief_min_strategy_trades =
-                t.value("second_stage_history_safety_relief_min_strategy_trades", 12);
-            engine_config_.second_stage_history_safety_relief_min_signal_strength =
-                t.value("second_stage_history_safety_relief_min_signal_strength", 0.68);
-            engine_config_.second_stage_history_safety_relief_min_expected_value =
-                t.value("second_stage_history_safety_relief_min_expected_value", 0.00045);
-            engine_config_.second_stage_history_safety_relief_min_liquidity_score =
-                t.value("second_stage_history_safety_relief_min_liquidity_score", 58.0);
-            engine_config_.second_stage_history_safety_relief_block_hostile_regime =
-                t.value("second_stage_history_safety_relief_block_hostile_regime", false);
-            engine_config_.enable_two_head_entry_second_stage_aggregation =
-                t.value("enable_two_head_entry_second_stage_aggregation", true);
-            engine_config_.two_head_entry_quality_weight =
-                t.value("two_head_entry_quality_weight", 0.55);
-            engine_config_.two_head_second_stage_weight =
-                t.value("two_head_second_stage_weight", 0.45);
-            engine_config_.two_head_min_entry_quality_score =
-                t.value("two_head_min_entry_quality_score", 0.90);
-            engine_config_.two_head_min_second_stage_score =
-                t.value("two_head_min_second_stage_score", 0.88);
-            engine_config_.two_head_min_aggregate_score =
-                t.value("two_head_min_aggregate_score", 0.98);
-            engine_config_.two_head_aggregation_block_high_stress_regime =
-                t.value("two_head_aggregation_block_high_stress_regime", false);
-            engine_config_.two_head_aggregation_min_strategy_trades =
-                t.value("two_head_aggregation_min_strategy_trades", 8);
-            engine_config_.enable_two_head_rr_margin_near_miss_floor_relax =
-                t.value("enable_two_head_rr_margin_near_miss_floor_relax", false);
-            engine_config_.two_head_rr_margin_near_miss_second_stage_floor_relax =
-                t.value("two_head_rr_margin_near_miss_second_stage_floor_relax", 0.06);
-            engine_config_.two_head_rr_margin_near_miss_aggregate_floor_relax =
-                t.value("two_head_rr_margin_near_miss_aggregate_floor_relax", 0.03);
-            engine_config_.enable_two_head_rr_margin_near_miss_adaptive_floor_relax =
-                t.value("enable_two_head_rr_margin_near_miss_adaptive_floor_relax", false);
-            engine_config_.two_head_rr_margin_near_miss_adaptive_floor_relax_min_activation =
-                t.value("two_head_rr_margin_near_miss_adaptive_floor_relax_min_activation", 0.45);
-            engine_config_.two_head_rr_margin_near_miss_adaptive_floor_relax_max_second_stage =
-                t.value("two_head_rr_margin_near_miss_adaptive_floor_relax_max_second_stage", 0.08);
-            engine_config_.two_head_rr_margin_near_miss_adaptive_floor_relax_max_aggregate =
-                t.value("two_head_rr_margin_near_miss_adaptive_floor_relax_max_aggregate", 0.04);
-            engine_config_.two_head_rr_margin_near_miss_adaptive_floor_relax_quality_weight =
-                t.value("two_head_rr_margin_near_miss_adaptive_floor_relax_quality_weight", 0.55);
-            engine_config_.two_head_rr_margin_near_miss_adaptive_floor_relax_gap_weight =
-                t.value("two_head_rr_margin_near_miss_adaptive_floor_relax_gap_weight", 0.45);
-            engine_config_.enable_two_head_rr_margin_near_miss_surplus_compensation =
-                t.value("enable_two_head_rr_margin_near_miss_surplus_compensation", false);
-            engine_config_.two_head_rr_margin_near_miss_surplus_min_entry_surplus =
-                t.value("two_head_rr_margin_near_miss_surplus_min_entry_surplus", 0.05);
-            engine_config_.two_head_rr_margin_near_miss_surplus_min_edge_score =
-                t.value("two_head_rr_margin_near_miss_surplus_min_edge_score", 1.03);
-            engine_config_.two_head_rr_margin_near_miss_surplus_max_second_stage_deficit =
-                t.value("two_head_rr_margin_near_miss_surplus_max_second_stage_deficit", 0.05);
-            engine_config_.two_head_rr_margin_near_miss_surplus_max_aggregate_deficit =
-                t.value("two_head_rr_margin_near_miss_surplus_max_aggregate_deficit", 0.04);
-            engine_config_.two_head_rr_margin_near_miss_surplus_entry_weight =
-                t.value("two_head_rr_margin_near_miss_surplus_entry_weight", 0.35);
-            engine_config_.two_head_rr_margin_near_miss_surplus_max_aggregate_bonus =
-                t.value("two_head_rr_margin_near_miss_surplus_max_aggregate_bonus", 0.05);
-            engine_config_.enable_second_stage_rr_margin_near_miss_relief =
-                t.value("enable_second_stage_rr_margin_near_miss_relief", true);
-            engine_config_.second_stage_rr_margin_near_miss_max_gap =
-                t.value("second_stage_rr_margin_near_miss_max_gap", 0.02);
-            engine_config_.second_stage_rr_margin_near_miss_min_signal_strength =
-                t.value("second_stage_rr_margin_near_miss_min_signal_strength", 0.70);
-            engine_config_.second_stage_rr_margin_near_miss_min_expected_value =
-                t.value("second_stage_rr_margin_near_miss_min_expected_value", 0.00055);
-            engine_config_.second_stage_rr_margin_near_miss_min_liquidity_score =
-                t.value("second_stage_rr_margin_near_miss_min_liquidity_score", 60.0);
-            engine_config_.second_stage_rr_margin_near_miss_min_strategy_trades =
-                t.value("second_stage_rr_margin_near_miss_min_strategy_trades", 12);
-            engine_config_.second_stage_rr_margin_near_miss_block_high_stress_regime =
-                t.value("second_stage_rr_margin_near_miss_block_high_stress_regime", true);
-            engine_config_.second_stage_rr_margin_near_miss_score_boost =
-                t.value("second_stage_rr_margin_near_miss_score_boost", 0.08);
-            engine_config_.enable_second_stage_rr_margin_soft_score =
-                t.value("enable_second_stage_rr_margin_soft_score", false);
-            engine_config_.second_stage_rr_margin_soft_score_max_gap =
-                t.value("second_stage_rr_margin_soft_score_max_gap", 0.02);
-            engine_config_.second_stage_rr_margin_soft_score_floor =
-                t.value("second_stage_rr_margin_soft_score_floor", 0.70);
-            engine_config_.second_stage_rr_margin_soft_score_gap_tightness_weight =
-                t.value("second_stage_rr_margin_soft_score_gap_tightness_weight", 0.20);
-            engine_config_.enable_second_stage_rr_margin_near_miss_head_score_floor =
-                t.value("enable_second_stage_rr_margin_near_miss_head_score_floor", false);
-            engine_config_.second_stage_rr_margin_near_miss_head_score_floor_base =
-                t.value("second_stage_rr_margin_near_miss_head_score_floor_base", 0.0);
-            engine_config_.second_stage_rr_margin_near_miss_head_score_floor_quality_weight =
-                t.value("second_stage_rr_margin_near_miss_head_score_floor_quality_weight", 0.0);
-            engine_config_.second_stage_rr_margin_near_miss_head_score_floor_gap_weight =
-                t.value("second_stage_rr_margin_near_miss_head_score_floor_gap_weight", 0.0);
-            engine_config_.second_stage_rr_margin_near_miss_head_score_floor_max =
-                t.value("second_stage_rr_margin_near_miss_head_score_floor_max", 1.0);
 
             if (t.contains("enabled_strategies")) {
                 engine_config_.enabled_strategies = t["enabled_strategies"].get<std::vector<std::string>>();

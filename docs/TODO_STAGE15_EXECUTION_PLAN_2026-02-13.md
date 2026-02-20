@@ -90,11 +90,38 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
     - adaptive partial-exit ratio
   - 라이브 비동기 체결 경로에 pending metadata 적용(체결 시점 metadata 보존)
   - 상태 저장/복원 및 저널 리플레이(open/close/reduce) 확률 메타 직렬화 반영
+- [x] 확률 1순위 + 최소조건(minimums) 선택 경로 반영.
+  - 공통 최소조건(레짐 보정 포함): `h5_calibrated`, `h5_margin`, `liquidity`, `signal_strength`
+  - 신규 설정:
+    - `probabilistic_primary_min_h5_calibrated`
+    - `probabilistic_primary_min_h5_margin`
+    - `probabilistic_primary_min_liquidity_score`
+    - `probabilistic_primary_min_signal_strength`
+  - 라이브:
+    - 스캔 후보 필터 후 `probabilistic priority score` 기준 정렬
+    - 실행 직전 후보군도 동일 기준 정렬 + minimum 미달 즉시 제외
+  - 백테스트:
+    - manager filter 이후 후보를 동일 minimum으로 컷 + 확률 우선 정렬
+    - best signal 선택을 확률 우선으로 고정(legacy selector는 비-primary 경로에서만 사용)
+- [x] 확률 1순위 모드에서 `운영 필수 게이트` 중심 경로로 정리(1차).
+  - live/backtest 공통:
+    - 유지: 레짐 차단, 최소주문/수수료/슬리피지/리스크매니저/실시간 미세구조 veto
+    - 우회(확률 1순위 모드 한정): 전략 EV hard-block, entry-quality/two-head 강제 통과
+  - 코드 정리:
+    - 비운영 hard gate의 실제 강제 분기 축소
+    - live small-seed winrate hard gate 삭제(비운영 품질 게이트)
+    - `probabilistic_primary_rank_first` 토글 제거(확률 1순위 상시 적용)
+- [x] Runtime 미사용 대형 보조 게이트 블록 물리 삭제(2차).
+  - `src/runtime/BacktestRuntime.cpp`: EntryQuality/SecondStage/TwoHead helper dead path 제거
+  - `src/runtime/LiveTradingRuntime.cpp`: SecondStage/TwoHead helper dead path 제거
+  - `include/engine/EngineConfig.h` / `src/common/Config.cpp`: helper 전용 dead config 키 제거
+  - 엔트리 블록 구문오류(else/brace mismatch) 복구 후 Release 빌드/스모크 재통과
 
 ## Next (Strict Order)
 1. Runtime↔Risk 결합 반영 기준 baseline 재생성(현재 로직 스냅샷 고정).
 2. Live/backtest same-slice regression(손익/공급량/후행리스크 telemetry) 검증.
-3. Hard gate 비활성 유지 상태에서 score/expected_value + risk coupling 영향 분석.
+3. 잔여 dead telemetry/config 정리:
+   현재 항상 0으로 남는 legacy funnel counter/설정 키를 단계적으로 축소.
 
 ## Guardrails
 - Sequential only (`--max-workers 1` policy).

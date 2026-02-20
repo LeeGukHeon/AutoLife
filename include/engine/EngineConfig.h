@@ -84,6 +84,13 @@ struct EngineConfig {
     double probabilistic_primary_promotion_min_calibrated = 0.47;
     double probabilistic_primary_promotion_max_strength_gap = 0.12;
     double probabilistic_primary_promotion_max_ev_gap = 0.00045;
+    // Probabilistic-primary minimum conditions:
+    // rank by probabilistic confidence first, but enforce these baseline
+    // operating constraints before entry.
+    double probabilistic_primary_min_h5_calibrated = 0.48;
+    double probabilistic_primary_min_h5_margin = -0.03;
+    double probabilistic_primary_min_liquidity_score = 42.0;
+    double probabilistic_primary_min_signal_strength = 0.34;
     // Candidate supply controls (runtime primary path).
     bool foundation_signal_supply_fallback_enabled = true;
     bool manager_soft_queue_enabled = true;
@@ -198,87 +205,6 @@ struct EngineConfig {
     double hostility_pause_recent_win_rate = 0.40;
     int backtest_hostility_pause_candles = 36;
     int backtest_hostility_pause_candles_extreme = 60;
-    // Entry-quality topology relief: allow limited adaptive-gate relief only
-    // for strong/high-quality signals, while reducing position size.
-    bool enable_entry_quality_adaptive_relief = true;
-    double entry_quality_adaptive_relief_rr_max_gap = 0.08;
-    double entry_quality_adaptive_relief_edge_max_gap = 0.00012;
-    double entry_quality_adaptive_relief_min_signal_strength = 0.68;
-    double entry_quality_adaptive_relief_min_expected_value = 0.00035;
-    double entry_quality_adaptive_relief_min_liquidity_score = 58.0;
-    int entry_quality_adaptive_relief_min_strategy_trades = 16;
-    double entry_quality_adaptive_relief_min_strategy_win_rate = 0.47;
-    double entry_quality_adaptive_relief_min_strategy_profit_factor = 0.98;
-    bool entry_quality_adaptive_relief_block_high_stress_regime = true;
-    double entry_quality_adaptive_relief_position_scale = 0.80;
-    // Second-stage history safety: keep severe-history pressure bounded while
-    // allowing limited quality-conditioned relief in non-hostile regimes.
-    double second_stage_history_safety_severe_scale = 1.00;
-    bool enable_second_stage_history_safety_severe_relief = true;
-    double second_stage_history_safety_relief_max_scale = 0.45;
-    int second_stage_history_safety_relief_min_strategy_trades = 12;
-    double second_stage_history_safety_relief_min_signal_strength = 0.68;
-    double second_stage_history_safety_relief_min_expected_value = 0.00045;
-    double second_stage_history_safety_relief_min_liquidity_score = 58.0;
-    bool second_stage_history_safety_relief_block_hostile_regime = false;
-    // Two-head aggregation for entry acceptance:
-    // combine entry-quality and second-stage head scores so one near-miss head
-    // can be compensated by the other under bounded conditions.
-    bool enable_two_head_entry_second_stage_aggregation = true;
-    double two_head_entry_quality_weight = 0.55;
-    double two_head_second_stage_weight = 0.45;
-    double two_head_min_entry_quality_score = 0.90;
-    double two_head_min_second_stage_score = 0.88;
-    double two_head_min_aggregate_score = 0.98;
-    bool two_head_aggregation_block_high_stress_regime = false;
-    int two_head_aggregation_min_strategy_trades = 8;
-    bool enable_two_head_rr_margin_near_miss_floor_relax = false;
-    double two_head_rr_margin_near_miss_second_stage_floor_relax = 0.06;
-    double two_head_rr_margin_near_miss_aggregate_floor_relax = 0.03;
-    // Adaptive near-miss floor-relax:
-    // scales floor relaxation by quality/gap tightness to reduce blunt tuning.
-    bool enable_two_head_rr_margin_near_miss_adaptive_floor_relax = false;
-    double two_head_rr_margin_near_miss_adaptive_floor_relax_min_activation = 0.45;
-    double two_head_rr_margin_near_miss_adaptive_floor_relax_max_second_stage = 0.08;
-    double two_head_rr_margin_near_miss_adaptive_floor_relax_max_aggregate = 0.04;
-    double two_head_rr_margin_near_miss_adaptive_floor_relax_quality_weight = 0.55;
-    double two_head_rr_margin_near_miss_adaptive_floor_relax_gap_weight = 0.45;
-    // Near-miss surplus compensation:
-    // keep floors unchanged, but allow bounded compensation only when
-    // entry-head surplus and edge quality are strong.
-    bool enable_two_head_rr_margin_near_miss_surplus_compensation = false;
-    double two_head_rr_margin_near_miss_surplus_min_entry_surplus = 0.05;
-    double two_head_rr_margin_near_miss_surplus_min_edge_score = 1.03;
-    double two_head_rr_margin_near_miss_surplus_max_second_stage_deficit = 0.05;
-    double two_head_rr_margin_near_miss_surplus_max_aggregate_deficit = 0.04;
-    double two_head_rr_margin_near_miss_surplus_entry_weight = 0.35;
-    double two_head_rr_margin_near_miss_surplus_max_aggregate_bonus = 0.05;
-    // RR-margin near-miss relief:
-    // allow a bounded score bump only when second-stage RR margin miss is small
-    // and overall signal quality/history conditions are strong.
-    bool enable_second_stage_rr_margin_near_miss_relief = true;
-    double second_stage_rr_margin_near_miss_max_gap = 0.02;
-    double second_stage_rr_margin_near_miss_min_signal_strength = 0.70;
-    double second_stage_rr_margin_near_miss_min_expected_value = 0.00055;
-    double second_stage_rr_margin_near_miss_min_liquidity_score = 60.0;
-    int second_stage_rr_margin_near_miss_min_strategy_trades = 12;
-    bool second_stage_rr_margin_near_miss_block_high_stress_regime = true;
-    double second_stage_rr_margin_near_miss_score_boost = 0.08;
-    // Soft-score path for slight negative RR margin.
-    // Keeps second-stage head score from collapsing to zero when miss is small.
-    bool enable_second_stage_rr_margin_soft_score = false;
-    double second_stage_rr_margin_soft_score_max_gap = 0.02;
-    double second_stage_rr_margin_soft_score_floor = 0.70;
-    double second_stage_rr_margin_soft_score_gap_tightness_weight = 0.20;
-    // Optional floor for near-miss second-stage head score.
-    // Helps avoid score collapse when RR margin is slightly below zero but
-    // quality/gap context is still strong.
-    bool enable_second_stage_rr_margin_near_miss_head_score_floor = false;
-    double second_stage_rr_margin_near_miss_head_score_floor_base = 0.0;
-    double second_stage_rr_margin_near_miss_head_score_floor_quality_weight = 0.0;
-    double second_stage_rr_margin_near_miss_head_score_floor_gap_weight = 0.0;
-    double second_stage_rr_margin_near_miss_head_score_floor_max = 1.0;
-
     std::vector<std::string> enabled_strategies;
 
     EngineConfig()

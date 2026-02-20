@@ -51,7 +51,7 @@ Title: `Probabilistic Hybrid Foundation`
 
 ## Current Snapshot (at document update)
 - Active batch: `none`
-- Status: `phase-4 probabilistic-primary strict/fastpass hardening applied (manager bottleneck + model-first routing 재정렬)`
+- Status: `phase-4 probabilistic-primary strict/fastpass hardening + rank-first minimums + operational-gate-only path(1차) 적용`
 - Artifacts:
   - `data/backtest_probabilistic/probabilistic_bundle_manifest.json`
   - `build/Release/logs/probabilistic_bundle_summary.json`
@@ -242,6 +242,21 @@ Title: `Probabilistic Hybrid Foundation`
   - 스모크 실행: `data/backtest/sample_trend_pullback_1m.csv` 기준 실행 정상(종료코드 0).
   - 주의: 샘플 데이터는 MTF context 부족으로 확률 피처 빌드 실패 로그가 발생하며,
     이는 v2 strict-primary 정책에서 의도된 차단 동작.
+
+## Runtime Dead-Path Trim (2026-02-21)
+- 적용 파일:
+  - `src/runtime/BacktestRuntime.cpp`
+  - `src/runtime/LiveTradingRuntime.cpp`
+  - `include/engine/EngineConfig.h`
+  - `src/common/Config.cpp`
+- 변경:
+  - `probabilistic_primary_rank_first` 토글/파싱 제거(확률 1순위 고정).
+  - 실행 경로에서 더 이상 호출되지 않는 대형 보조 게이트 블록(EntryQuality/SecondStage/TwoHead 집계 helper) 제거.
+  - 위 helper 전용 dead config key 파싱/필드 제거(`EngineConfig`, `Config.cpp`).
+  - 운영 경로 분기 오류(`BacktestRuntime.cpp` entry block brace mismatch) 복구.
+- 검증:
+  - Release build: `AutoLifeTrading` 성공.
+  - 스모크: `AutoLifeTrading --backtest data/backtest/sample_trend_pullback_1m.csv --json` 정상 종료(코드 0).
 
 ## What Was Trimmed
 - 기존 장문 작업내역은 아래로 보관:
