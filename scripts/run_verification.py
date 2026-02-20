@@ -1388,6 +1388,17 @@ def main(argv=None) -> int:
         dataset_paths.append(candidate)
     if not dataset_paths:
         raise RuntimeError("No datasets configured.")
+    dataset_key_counts: Dict[str, int] = {}
+    for path_value in dataset_paths:
+        key = str(path_value.resolve()).lower()
+        dataset_key_counts[key] = dataset_key_counts.get(key, 0) + 1
+    duplicated = sorted([k for k, c in dataset_key_counts.items() if int(c) > 1])
+    if duplicated:
+        duplicate_names = [pathlib.Path(x).name for x in duplicated]
+        raise RuntimeError(
+            "Duplicate datasets configured (remove duplicates to keep verification weighting stable): "
+            + ",".join(duplicate_names)
+        )
 
     if bool(args.require_higher_tf_companions):
         for dataset_path in dataset_paths:

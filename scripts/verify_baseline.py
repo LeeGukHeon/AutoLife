@@ -41,6 +41,16 @@ def _split_dataset_tokens(raw: str) -> List[str]:
     return [x.strip() for x in str(raw or "").split(",") if x.strip()]
 
 
+def _find_duplicate_strings(values: List[str]) -> List[str]:
+    counts = {}
+    for item in values:
+        key = str(item).strip().lower()
+        if not key:
+            continue
+        counts[key] = counts.get(key, 0) + 1
+    return sorted([k for k, c in counts.items() if int(c) > 1])
+
+
 def _has_realdata_higher_tf_companions(data_dir: pathlib.Path, primary_1m_file: pathlib.Path) -> bool:
     stem = primary_1m_file.stem
     if "_1m_" not in stem:
@@ -446,7 +456,19 @@ def main(argv=None) -> int:
 
     if not datasets:
         raise RuntimeError("No datasets provided.")
+    duplicated_tokens = _find_duplicate_strings(datasets)
+    if duplicated_tokens:
+        raise RuntimeError(
+            "Duplicate dataset tokens are not allowed: "
+            + ",".join(duplicated_tokens)
+        )
     dataset_paths = [resolve_dataset_path(data_dir, token) for token in datasets]
+    duplicated_paths = _find_duplicate_strings([str(x.resolve()) for x in dataset_paths])
+    if duplicated_paths:
+        raise RuntimeError(
+            "Duplicate dataset paths are not allowed: "
+            + ",".join(pathlib.Path(x).name for x in duplicated_paths)
+        )
     _validate_realdata_only_dataset_selection(data_dir, dataset_paths)
 
     run_refresh_if_needed(

@@ -1340,6 +1340,20 @@ Title: `Verification Reset Baseline`
      - fail case (expected):
        - `python scripts/verify_baseline.py --datasets upbit_KRW_BTC_1m_12000.csv --require-baseline-contract-pass --output-tag strict_contract_fail_case`
        - reason: `baseline contract not applied: dataset_set_mismatch`
+60. Dataset dedupe guard added for verification input integrity (2026-02-20):
+   - objective:
+     - prevent accidental duplicate dataset weighting in verification aggregates.
+   - changes:
+     - `scripts/verify_baseline.py`
+       - hard-fail when duplicate dataset tokens or duplicate resolved dataset paths are provided.
+     - `scripts/run_verification.py`
+       - hard-fail when duplicate dataset paths are configured in `--dataset-names`.
+   - validation:
+     - pass:
+       - `python scripts/verify_baseline.py --output-tag dedupe_guard_pass_smoke` PASS
+     - fail (expected):
+       - `python scripts/verify_baseline.py --datasets upbit_KRW_BTC_1m_12000.csv,upbit_KRW_BTC_1m_12000.csv --output-tag dedupe_guard_fail_smoke`
+       - reason: `Duplicate dataset tokens are not allowed`
 
 ## Remaining In This Chapter
 1. Continue engine/strategy root-cause deep dive based on diagnostics:
