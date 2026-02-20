@@ -372,8 +372,13 @@ def main(argv=None) -> int:
     data_dir = fixed_data_dir
 
     datasets = _split_dataset_tokens(str(args.datasets))
-    using_default_tokens = tuple(datasets) == _DEFAULT_DATASET_TOKENS
-    if not datasets or using_default_tokens:
+    using_legacy_default_tokens = tuple(datasets) == _DEFAULT_DATASET_TOKENS
+    if using_legacy_default_tokens:
+        raise RuntimeError(
+            "Legacy synthetic default dataset tokens are no longer accepted. "
+            "Use --datasets with upbit_*_1m_*.csv or omit --datasets for realdata auto-discovery."
+        )
+    if not datasets:
         discovered, missing_companion = discover_default_realdata_datasets(data_dir)
         if not discovered:
             raise RuntimeError(

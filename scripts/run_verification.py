@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+from collections import Counter
 import csv
 import json
 import os
@@ -45,10 +46,29 @@ def parse_backtest_json(proc: subprocess.CompletedProcess) -> Dict[str, Any]:
         lines.extend(proc.stdout.splitlines())
     if proc.stderr:
         lines.extend(proc.stderr.splitlines())
+    parsed: Dict[str, Any] = {}
+    has_parsed = False
     for line in reversed(lines):
         text = line.strip()
         if text.startswith("{") and text.endswith("}"):
-            return json.loads(text)
+            try:
+                value = json.loads(text)
+            except Exception:
+                continue
+            if isinstance(value, dict):
+                parsed = value
+                has_parsed = True
+                break
+    if int(proc.returncode) != 0:
+        tail = " || ".join([x.strip() for x in lines[-5:] if str(x).strip()])[:800]
+        parsed_hint = ""
+        if has_parsed:
+            parsed_hint = f" parsed_json={json.dumps(parsed, ensure_ascii=False)[:400]}"
+        raise RuntimeError(
+            f"Backtest failed (exit={proc.returncode}).{parsed_hint} tail={tail}"
+        )
+    if has_parsed:
+        return parsed
     raise RuntimeError(f"Backtest JSON output not found (exit={proc.returncode})")
 
 
@@ -210,12 +230,18 @@ def build_baseline_comparison(
 
     current_metrics = extract_report_metrics(current_report)
     baseline_metrics = extract_report_metrics(baseline_report)
-    current_dataset_set = set(current_metrics.get("datasets", []))
-    baseline_dataset_set = set(baseline_metrics.get("datasets", []))
-    comparable_dataset_set = bool(current_dataset_set) and (current_dataset_set == baseline_dataset_set)
-    overlap_count = len(current_dataset_set & baseline_dataset_set)
-    missing_in_current = sorted(list(baseline_dataset_set - current_dataset_set))
-    added_in_current = sorted(list(current_dataset_set - baseline_dataset_set))
+    current_datasets = normalize_dataset_list(current_metrics.get("datasets", []))
+    baseline_datasets = normalize_dataset_list(baseline_metrics.get("datasets", []))
+    current_dataset_counter = Counter(current_datasets)
+    baseline_dataset_counter = Counter(baseline_datasets)
+    comparable_dataset_set = (
+        bool(current_datasets)
+        and bool(baseline_datasets)
+        and (current_dataset_counter == baseline_dataset_counter)
+    )
+    overlap_count = int(sum((current_dataset_counter & baseline_dataset_counter).values()))
+    missing_in_current = sorted(list((baseline_dataset_counter - current_dataset_counter).elements()))
+    added_in_current = sorted(list((current_dataset_counter - baseline_dataset_counter).elements()))
 
     deltas = {
         "avg_profit_factor": round(
@@ -1254,6 +1280,7 @@ def build_adaptive_verdict(
     hard_fail_keys = [
         "drawdown_guard_pass",
         "downtrend_loss_guard_pass",
+        "downtrend_trade_share_guard_pass",
         "uptrend_expectancy_guard_pass",
         "risk_adjusted_score_guard_pass",
     ]

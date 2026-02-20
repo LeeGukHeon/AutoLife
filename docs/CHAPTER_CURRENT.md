@@ -1276,6 +1276,51 @@ Title: `Verification Reset Baseline`
        - `baseline_delta_pf=0.0`
        - `baseline_delta_exp=0.0`
        - `baseline_contract=pass`
+57. Verification integrity hardening patch applied (2026-02-20):
+   - objective:
+     - remove false-pass/false-compare paths in verification pipeline.
+   - changes:
+     - `scripts/run_verification.py`
+       - backtest JSON parser now:
+         - ignores malformed trailing JSON lines
+         - hard-fails on non-zero backtest exit code (with tail diagnostics)
+       - adaptive verdict hard-fail now includes:
+         - `downtrend_trade_share_guard_pass`
+       - baseline comparability now uses multiset equality (`Counter`) instead of plain set equality.
+     - `scripts/verify_baseline.py`
+       - legacy synthetic default tokens (`simulation_2000.csv,simulation_large.csv`) are now hard-fail.
+       - realdata auto-discovery is triggered only when `--datasets` is omitted.
+   - validation:
+     - parser failure-path test:
+       - non-zero exit + JSON payload -> `RuntimeError` (expected)
+     - parser malformed-tail recovery:
+       - valid JSON + malformed trailing line -> valid JSON parsed (expected)
+     - adaptive verdict guard test:
+       - excessive downtrend trade share -> `verdict=fail` (expected)
+     - baseline comparability test:
+       - duplicate-mismatch dataset list -> contract `applied=false` (expected)
+     - realdata command smoke:
+       - `python scripts/verify_baseline.py --output-tag integrity_after_patch` PASS
+58. Baseline re-anchored after verification-logic hardening (2026-02-20):
+   - objective:
+     - reset canonical baseline because verification contract/parser/adaptive-fail rules changed.
+   - commands:
+     - `python scripts/verify_baseline.py --build-first --cmake-path D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build-jobs 1 --output-tag baseline_reset_20260220_v2`
+     - `python scripts/verify_baseline.py --output-tag baseline_reset_20260220_v2_r2`
+   - canonical artifacts:
+     - `build/Release/logs/verification_report_baseline_reset_20260220_v2.json`
+     - `build/Release/logs/verification_matrix_baseline_reset_20260220_v2.csv`
+   - baseline pointer updated:
+     - `build/Release/logs/verification_report_baseline_current.json`
+     - `build/Release/logs/verification_matrix_baseline_current.csv`
+   - summary:
+     - `dataset_count=6`
+     - `avg_profit_factor=0.4392`
+     - `avg_expectancy_krw=-25.0062`
+     - `overall_gate_pass=false`
+     - `adaptive_verdict=fail`
+   - reproducibility:
+     - `v2` and `v2_r2` outputs matched on key aggregates.
 
 ## Remaining In This Chapter
 1. Continue engine/strategy root-cause deep dive based on diagnostics:
