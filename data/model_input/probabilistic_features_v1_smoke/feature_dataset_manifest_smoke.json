@@ -1,0 +1,54 @@
+{
+  "version": "prob_features_v1",
+  "started_at_utc": "2026-02-20T09:10:21.276508+00:00",
+  "finished_at_utc": "2026-02-20T09:10:40.548393+00:00",
+  "input_dir": "D:\\MyApps\\AutoLife\\data\\backtest_probabilistic",
+  "output_dir": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v1_smoke",
+  "anchor_tf": "1m",
+  "context_tfs": [
+    5,
+    15,
+    60,
+    240
+  ],
+  "markets": [
+    "KRW-BTC",
+    "KRW-XLM"
+  ],
+  "roundtrip_cost_bps": 12.0,
+  "label_h1": 1,
+  "label_h5": 5,
+  "max_rows_per_market": 15000,
+  "job_count": 2,
+  "success_count": 2,
+  "failed_count": 0,
+  "total_feature_rows": 30000,
+  "total_output_bytes": 11519053,
+  "jobs": [
+    {
+      "market": "KRW-BTC",
+      "anchor_input_path": "D:\\MyApps\\AutoLife\\data\\backtest_probabilistic\\upbit_KRW_BTC_1m_full.csv",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v1_smoke\\prob_features_KRW_BTC_1m_v1.csv",
+      "anchor_rows": 1053039,
+      "feature_rows_written": 15000,
+      "skipped_warmup": 30,
+      "skipped_missing_context": 0,
+      "from_utc": "2024-02-18T03:13:57.792000+00:00",
+      "to_utc": "2024-02-28T13:12:59.988000+00:00",
+      "output_size_bytes": 5988279
+    },
+    {
+      "market": "KRW-XLM",
+      "anchor_input_path": "D:\\MyApps\\AutoLife\\data\\backtest_probabilistic\\upbit_KRW_XLM_1m_full.csv",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v1_smoke\\prob_features_KRW_XLM_1m_v1.csv",
+      "anchor_rows": 1053039,
+      "feature_rows_written": 15000,
+      "skipped_warmup": 30,
+      "skipped_missing_context": 0,
+      "from_utc": "2023-09-22T17:46:49.968000+00:00",
+      "to_utc": "2023-10-08T05:41:33.579000+00:00",
+      "output_size_bytes": 5530774
+    }
+  ],
+  "failed": []
+}

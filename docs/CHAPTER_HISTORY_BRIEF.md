@@ -1,76 +1,77 @@
-# Chapter History (Brief)
+﻿# Chapter History (Brief)
 
-This file is intentionally concise.
-Keep each completed chapter to 2-4 lines.
+This file stays short.
+Detailed logs are archived.
 
 ## Entries
-- 2026-02-19 | `CH-00` | Reset docs baseline and archive oversized logs.
-  - Active TODO reduced to short actionable format.
-  - Validation method risks documented in `docs/VALIDATION_METHOD_REVIEW_2026-02-19.md`.
-- 2026-02-19 | `CH-01` (in progress) | Verification reset baseline implementation started.
-  - Added `scripts/run_verification.py` as new minimal entrypoint.
-  - Added `scripts/verify_baseline.py` wrapper and updated README/runbook commands.
-  - Baseline smoke completed (`simulation_2000.csv`): gate pass true.
-  - Started `main.cpp` reporting-layer extraction (`BacktestReportFormatter`) and build-smoke passed.
-  - Split CLI backtest path into `BacktestCliHandler` and re-verified JSON/wrapper smoke.
-  - Split live interactive path into `LiveModeHandler`; `main.cpp` reduced to 367 lines and re-verified smoke.
-  - Split interactive backtest path into `BacktestInteractiveHandler`; `main.cpp` reduced to 81 lines and re-verified smoke.
-  - Added shared data-window parity policy and strict live-equivalent backtest mode (companion-set gated).
-  - Added `fixed/refresh_*` data-mode separation; gate baseline fixed, refresh for robustness only.
-  - Added data-mode smoke artifacts:
-    - `build/Release/logs/verification_report_data_mode_fixed_smoke.json`
-    - `build/Release/logs/verification_report_data_mode_refresh_if_missing_smoke.json`
-  - Added verification report bottleneck diagnostics (`diagnostics.aggregate/per_dataset/failure_attribution`) for engine/strategy root-cause analysis.
-  - Added strategy collection-stage diagnostics (`top_no_signal`, `strategy_collect_exception_count`) to separate generation bottleneck from gate bottleneck.
-  - Added foundation strategy/risk prefilter pipeline (`FoundationRiskPipeline`) and connected `StrategyManager` to the new decomposed rule path.
-  - Disconnected runtime path from legacy select/prefilter logic and switched verification baseline default to adaptive profile (`validation_profile=adaptive`).
-  - Physically pruned unreachable legacy selection block in `StrategyManager` and re-verified adaptive/legacy compatibility smokes.
-  - Removed residual empty legacy strategy directories (`include/strategy`, `src/strategy`) to simplify tree view.
-  - Added `FoundationAdaptiveStrategy` and hard-switched runtime registration to foundation-only mode.
-  - Removed remaining scalping-specific runtime downcast logic from live/backtest monitoring path.
-  - Excluded/deleted unused legacy v2 strategy units from compile and active tree.
-  - Flattened `include/v2`, `src/v2` into canonical locations (`strategy`, `core`, `engine`, `backtest`) and removed both folders.
-  - Purged remaining v2/legacy shadow stack (runtime probe, `AutoLifeV2*` targets, `Legacy*PlaneAdapter`, `DecisionKernel`, `*V2` engine/backtest/contracts/tests).
-  - Finalized active-path naming cleanup: `run_verification.py` entrypoint, `verification_report/matrix` artifacts, `getPrimaryTakeProfit()`.
-  - Removed residual preset fallback file: `config/presets/legacy_fallback.json`.
-  - Audited core-vs-external runtime ownership and confirmed active dependency chain (`core` bridge + `execution/engine/risk`).
-  - Validated backtest data-loader ownership (`DataHistory`) and kept it in active path (`BacktestRuntime` direct dependency).
-  - Flattened active runtime bridge tree from `core/*` folders into domain folders (`engine/execution/risk/state`) and removed `include/core`, `src/core`.
-  - Hardened overfit-risk gate rule: `requiresTypedArchetype(...)` narrowed from near-global enforcement to archetype-sensitive strategy families only.
-  - Started runtime gate commonization by promoting `isAlphaHeadFallbackCandidate(...)` and `normalizeSignalStopLossByRegime(...)` into `common/SignalPolicyShared`.
-  - Default runtime profile hardened: `config/config.json` now sets `use_strategy_alpha_head_mode=false`.
-  - Reduced default CMake build to `AutoLifeTrading` only (`AUTOLIFE_BUILD_GATE_TESTS=OFF`) and revalidated with fresh `build_fresh` configure/build.
-  - Completed runtime commonization phase-2A by extracting duplicated edge stats/key-builder helpers into `common/StrategyEdgeStatsShared` and wiring both runtimes to shared helpers.
-  - Normalized core runtime/risk/config files to UTF-8 to unblock safe large-file patching and reduce `C4828` warning noise.
-  - Completed runtime commonization phase-2B by centralizing regime/rejection/bucket diagnostics into `common/RuntimeDiagnosticsShared`.
-  - Added fixed-mode reproducibility recheck (same command x2) and confirmed gate-critical fields match.
-  - Added no-signal pattern-signature extraction (`regime|vol|liq`) from backtest runtime and surfaced it into verification diagnostics/failure attribution.
-  - Root-cause evidence now points to low-liquidity dominant no-signal patterns across regimes (not coin-specific hardcoding).
-  - Added shared contextual edge-floor gate (`computeContextualEdgeGateFloor`) and wired both backtest/live.
-  - Real-data 6-set recheck: expectancy/trade-count improved, but adaptive verdict still fail (`primary_non_execution_group=candidate_generation`).
-  - Added entry-quality edge-gap bucket diagnostics (`entry_quality_edge_gap_buckets`) and aggregate attribution in verification reports.
-  - Confirmed current edge-gate misses are mostly `>2bp` (not near-miss), and `simulation_large.csv` losses are uptrend/stop-loss concentrated.
-  - Expanded pattern diagnostics to include `volatility_bucket`/`liquidity_bucket` and added `top_loss_pattern_cells` attribution to verification.
-  - Confirmed dominant loss cell is `TRENDING_UP + vol_low + liq_low + FOUNDATION_UPTREND_CONTINUATION`; quarantine-gating experiments were rolled back due over-suppression.
-  - Added quality-guarded strategy experiment path and measured synthetic uplift under low-liquidity uptrend context.
-  - Hardened adaptive validation with `sample_size_guard_pass` so low-trade-count “pass” is blocked (`overall_gate_pass=false` when sample is insufficient).
-  - Added shared post-entry adaptive risk controls in `RiskManager` (breakeven/trailing/time-guard stop tightening) and connected both `BacktestRuntime`/`LiveTradingRuntime` to the same path.
-  - Backtest applies adaptive tightening after candle exit checks to avoid same-candle lookahead bias; build + CLI backtest smoke re-validated.
-  - Hardened account-size neutrality: entry now enforces min-order survivability at stop-loss, and live/backtest sizing both use safe minimum executable order (risk/slippage/fee aware).
-  - Fixed partial-sell dust edge case: removed fake half-close path; now fallback is full take-profit if possible, otherwise protective-state arm only.
-  - Fixed "dead KRW loss limit" behavior: daily KRW loss guard now auto-binds to daily-start-capital * daily-loss-pct (tighter-of logic), so small accounts are covered without separate mode.
-  - Added dynamic position-cap adaptation: effective max positions now follows deployable capital, and entry position_size auto-scales by occupancy pressure + capital buffer ratio.
-  - Added post-entry adaptive TP/cadence alignment: shared adaptive partial-exit ratio API wired to both live/backtest; `RiskManager` now recalibrates TP1/TP2 for hostile uptrend/stagnation/runner contexts.
-  - Validation judgement policy refined: adaptive verdict semantics now documented as `pass|fail|inconclusive` with regime-aware sample logic + opportunity-conversion check.
-  - `scripts/run_verification.py` semantics aligned: removed `monitor`, added dynamic `effective_min_avg_trades` + opportunity-conversion guard; adaptive gate pass now requires verdict `pass`.
-  - Added post-entry telemetry export pipeline: backtest JSON now emits `post_entry_risk_telemetry` (adaptive stop/TP trigger counts + partial-ratio histogram), and verification report aggregates the same metrics.
-  - Fixed strategy no-signal reason propagation bug (`processStrategySignal` default-return loss) so rejection attribution is now explicit (`foundation_no_signal_*`).
-  - Rebuilt backtest synthetic liquidity metric to notional-based scaling; validated gain on `simulation_2000.csv` while multi-dataset gate still fails on `simulation_large.csv` quality.
-  - Added hostile uptrend RR/EV recalibration in `FoundationAdaptiveStrategy` (pattern-level: `TRENDING_UP + low_liq + low_vol`), replacing aggressive RR expansion with bounded calibration.
-  - Multi verification now reproducibly passes (`avg_pf=1.2337`, `avg_expectancy_krw=4.4895`, `overall_gate_pass=true`) with `repro1/repro2` parity.
-  - Real-data period-shift comparison completed (current vs 2024-03 vs 2024-11, 6 markets, MTF companions).
-  - Found strict-parity dependency on 15m companion (`entry_rounds=0` when missing); after adding 15m, all windows still failed with candidate-generation bottleneck dominance.
-- 2026-02-20 | CH-01 (in progress) | MTF entry + native 15m companion policy tightened.
-  - Scanner now loads native 15m with rolling-cache incremental updates; live runtime no longer resamples 15m from 1m/5m.
-  - Foundation strategy entry uses 5m/15m/1h confirmation head and emits explicit foundation_no_signal_mtf_* reasons.
-  - strict companion requirement unified to 5m/15m/60m/240m across CLI/interactive + major real-data tuning scripts.
+- 2026-02-19 | `CH-00` | Reset baseline and moved oversized logs to archive.
+- 2026-02-19 | `CH-01` started | Main runtime split + legacy cleanup + validation baseline normalization.
+- 2026-02-20 | `CH-01` | Probabilistic-hybrid transition activated.
+  - Added sequential bundle collector: `scripts/fetch_probabilistic_training_bundle.py`
+  - Added split generator: `scripts/generate_probabilistic_split_manifest.py`
+  - Added feature contract seed: `config/model/probabilistic_feature_contract_v1.json`
+- 2026-02-20 | `CH-01` | Data foundation expansion.
+  - `60m/240m` completed (EOS 404 excluded)
+  - `5m/15m` completed
+  - `1m recent-2y` completed for MTF set (`1/5/15/60/240`)
+- 2026-02-20 | `CH-01` | Fetch stability hardening.
+  - Manifest immediate flush (`progress_pct`, `current_job`, `run_state`)
+  - Candle fetch stagnant-loop break added to prevent excessive repeated paging
+- 2026-02-20 | `CH-01` | Feature build pipeline bootstrapped.
+  - Added `scripts/build_probabilistic_feature_dataset.py` (1m anchor + 5/15/60/240 context + leakage-safe labels).
+  - Completed full v1 feature dataset build on mixed major/alt universe for regime generalization.
+  - Final scale: 9 markets, 9,477,036 rows, about 3.48 GB output.
+- 2026-02-20 | `CH-01` | Data source contract fixed.
+  - Upbit API inputs are limited to raw OHLCV candles.
+  - Indicators/labels/features are generated locally and shared by live/backtest logic.
+- 2026-02-20 | `CH-01` | Full feature quality validation completed.
+  - Added `scripts/validate_probabilistic_feature_dataset.py`.
+  - Result: pass (9/9 files, 9,477,036 rows, leakage mismatch 0).
+- 2026-02-20 | `CH-01` | Contract/split freeze completed on final feature dataset.
+  - `config/model/probabilistic_feature_contract_v1.json` frozen with explicit 43-column schema.
+  - Generated feature-based walk-forward split manifest:
+    `data/model_input/probabilistic_features_v1_full_20260220_181345/probabilistic_split_manifest_v1.json`.
+- 2026-02-20 | `CH-01` | Baseline regenerated on frozen feature split.
+  - Added `scripts/generate_probabilistic_baseline.py`.
+  - Weighted test snapshot: `h5_logloss=0.6743`, `h5_brier=0.2406`, `h5_accuracy=0.6025`, `h5_mean_edge_bps=-12.1554`.
+- 2026-02-20 | `CH-01` | Initial probabilistic model training completed.
+  - Added `scripts/train_probabilistic_pattern_model.py` (streaming SGD + Platt calibration).
+  - Full run: 9/9 datasets pass.
+  - Weighted test: `h5_logloss=0.6606`, `h5_brier=0.2342`, `h5_accuracy=0.6025`.
+  - Selected-edge (`~11.05%` coverage): `-10.5596 bps`.
+- 2026-02-20 | `CH-01` | Walk-forward decomposition + inference parity completed.
+  - Added `scripts/generate_probabilistic_walkforward_report.py`.
+  - Added `scripts/validate_probabilistic_inference_parity.py`.
+  - Parity result: pass (`worst_cal_diff=1.721e-15`, tol `1e-9`).
+- 2026-02-20 | `CH-01` | Runtime bundle prepared for C++ integration.
+  - Added `scripts/export_probabilistic_runtime_bundle.py`.
+  - Added `scripts/validate_runtime_bundle_parity.py`.
+  - Bundle parity result: pass (`worst_diff=1.110e-16`, tol `1e-9`).
+- 2026-02-20 | `CH-01` | Runtime wiring phase started.
+  - Added `src/analytics/ProbabilisticRuntimeFeatures.cpp` (Python contract-aligned transform).
+  - Live/backtest runtime signal path connected to probabilistic runtime bundle.
+  - Build path fixed in active docs:
+    `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe`.
+- 2026-02-20 | `CH-01` | Core-rescue structural cleanup + bottleneck shift confirmed.
+  - `StrategyManager` core-rescue path changed from duplicate `shouldEnter` recheck to `reason-eligible + safety-floor` rescue.
+  - `FoundationAdaptiveStrategy` entry gate logic unified into one snapshot path (`generateSignal`/`shouldEnter` parity).
+  - Regression: `no_signal_generated_share 0.977 -> 0.5687`, while bottleneck moved to manager prefilter (`strength/ev`).
+- 2026-02-20 | `CH-01` | Probabilistic-primary runtime refactor applied.
+  - Scan stage now has market-level probabilistic prefilter (`probabilistic_market_prefilter`).
+  - Signal stage applies probabilistic snapshot as primary overlay (score/strength/filter).
+  - Entry sizing now scales by probabilistic margin (`position_size` dynamic scale).
+  - New config knobs added for primary mode and scan prefilter tuning.
+- 2026-02-20 | `CH-01` | Probabilistic-primary structural follow-up v1.
+  - Experiment env paths moved to config-driven toggles (`signal_supply_fallback`, `manager_soft_queue`).
+  - Added low-liquidity ranging probe path and wired fallback signal into runtime relief path.
+  - Added probabilistic near-miss edge relief in both backtest/live entry-quality heads.
+  - Result: candidate supply improved (`no_signal` share down, primary conversion up), but profitability unchanged and bottleneck shifted to `entry_quality_edge_base`.
+- 2026-02-20 | `CH-01` | Probabilistic-primary hardening v2.
+  - Added manager fast-pass for high-confidence probabilistic signals (`manager_probabilistic_primary_fastpass`).
+  - Scaled manager penalty in `FoundationRiskPipeline` by probabilistic confidence instead of fixed stacking.
+  - Switched live/backtest probabilistic snapshot inference to strict primary mode (fail-open -> fail-closed).
+  - Added explicit reject taxonomy for bundle/market/feature/inference failures.
+
+## Archive Pointer
+- `docs/archive/CHAPTER_CURRENT_FULLLOG_2026-02-20.md`
+- `docs/archive/TODO_STAGE15_EXECUTION_PLAN_2026-02-13_FULLLOG_2026-02-19.md`

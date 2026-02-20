@@ -411,6 +411,16 @@ def main(argv=None) -> int:
             "non_degradation_contract does not pass."
         ),
     )
+    parser.add_argument(
+        "--enable-experiment-a-signal-supply",
+        action="store_true",
+        help="Enable Foundation strategy candidate-supply experiment A path.",
+    )
+    parser.add_argument(
+        "--enable-experiment-b-manager-soft-queue",
+        action="store_true",
+        help="Enable manager prefilter soft-queue experiment B path.",
+    )
     args = parser.parse_args(argv)
 
     repo_root = pathlib.Path(__file__).resolve().parents[1]
@@ -543,6 +553,10 @@ def main(argv=None) -> int:
         str(baseline_report_path),
     ]
     cmd.append("--require-higher-tf-companions")
+    if bool(args.enable_experiment_a_signal_supply):
+        cmd.append("--enable-experiment-a-signal-supply")
+    if bool(args.enable_experiment_b_manager_soft_queue):
+        cmd.append("--enable-experiment-b-manager-soft-queue")
 
     proc = subprocess.run(cmd)
     if int(proc.returncode) != 0:

@@ -9,6 +9,7 @@
 #include "backtest/DataHistory.h"
 #include "strategy/StrategyManager.h"
 #include "analytics/RegimeDetector.h"
+#include "analytics/ProbabilisticRuntimeModel.h"
 #include "risk/RiskManager.h"
 #include "engine/AdaptivePolicyController.h"
 #include "engine/PerformanceStore.h"
@@ -303,6 +304,8 @@ private:
     std::shared_ptr<network::UpbitHttpClient> http_client_; // Mockable
     std::unique_ptr<strategy::StrategyManager> strategy_manager_;
     std::unique_ptr<analytics::RegimeDetector> regime_detector_;
+    analytics::ProbabilisticRuntimeModel probabilistic_runtime_model_;
+    bool probabilistic_runtime_model_loaded_ = false;
     std::unique_ptr<engine::AdaptivePolicyController> policy_controller_;
     std::unique_ptr<engine::PerformanceStore> performance_store_;
     std::unique_ptr<risk::RiskManager> risk_manager_;

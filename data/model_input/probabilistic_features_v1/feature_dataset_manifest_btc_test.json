@@ -1,0 +1,41 @@
+{
+  "version": "prob_features_v1",
+  "started_at_utc": "2026-02-20T09:12:21.412271+00:00",
+  "finished_at_utc": "2026-02-20T09:12:32.253359+00:00",
+  "input_dir": "D:\\MyApps\\AutoLife\\data\\backtest_probabilistic",
+  "output_dir": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v1",
+  "anchor_tf": "1m",
+  "context_tfs": [
+    5,
+    15,
+    60,
+    240
+  ],
+  "markets": [
+    "KRW-BTC"
+  ],
+  "roundtrip_cost_bps": 12.0,
+  "label_h1": 1,
+  "label_h5": 5,
+  "max_rows_per_market": 10000,
+  "job_count": 1,
+  "success_count": 1,
+  "failed_count": 0,
+  "total_feature_rows": 10000,
+  "total_output_bytes": 88609176,
+  "jobs": [
+    {
+      "market": "KRW-BTC",
+      "anchor_input_path": "D:\\MyApps\\AutoLife\\data\\backtest_probabilistic\\upbit_KRW_BTC_1m_full.csv",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v1\\prob_features_KRW_BTC_1m_v1.csv",
+      "anchor_rows": 1053039,
+      "feature_rows_written": 10000,
+      "skipped_warmup": 30,
+      "skipped_missing_context": 0,
+      "from_utc": "2024-02-18T03:13:57.792000+00:00",
+      "to_utc": "2024-02-25T01:52:58.121000+00:00",
+      "output_size_bytes": 88609176
+    }
+  ],
+  "failed": []
+}

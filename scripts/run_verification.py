@@ -77,6 +77,8 @@ def run_backtest(
     dataset_path: pathlib.Path,
     require_higher_tf_companions: bool,
     disable_adaptive_state_io: bool,
+    enable_experiment_a_signal_supply: bool,
+    enable_experiment_b_manager_soft_queue: bool,
 ) -> Dict[str, Any]:
     cmd = [str(exe_path), "--backtest", str(dataset_path), "--json"]
     if require_higher_tf_companions and is_upbit_primary_1m_dataset(dataset_path):
@@ -86,6 +88,14 @@ def run_backtest(
         env["AUTOLIFE_DISABLE_ADAPTIVE_STATE_IO"] = "1"
     else:
         env.pop("AUTOLIFE_DISABLE_ADAPTIVE_STATE_IO", None)
+    if enable_experiment_a_signal_supply:
+        env["AUTOLIFE_ENABLE_EXPERIMENT_A_SIGNAL_SUPPLY"] = "1"
+    else:
+        env.pop("AUTOLIFE_ENABLE_EXPERIMENT_A_SIGNAL_SUPPLY", None)
+    if enable_experiment_b_manager_soft_queue:
+        env["AUTOLIFE_ENABLE_EXPERIMENT_B_MANAGER_SOFT_QUEUE"] = "1"
+    else:
+        env.pop("AUTOLIFE_ENABLE_EXPERIMENT_B_MANAGER_SOFT_QUEUE", None)
     proc = subprocess.run(
         cmd,
         capture_output=True,
@@ -352,6 +362,87 @@ def top_reason_rows(reason_counts: Dict[str, int], limit: int = 5) -> List[Dict[
     return [{"reason": key, "count": int(count)} for key, count in ordered[: max(1, int(limit))]]
 
 
+def filter_reason_counts_by_prefix(
+    reason_counts: Dict[str, int],
+    prefixes: List[str],
+    exclude_exact: List[str] = None,
+) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    norm_prefixes = [str(x).strip().lower() for x in prefixes if str(x).strip()]
+    exclude_set = {
+        str(x).strip().lower()
+        for x in (exclude_exact or [])
+        if str(x).strip()
+    }
+    if not norm_prefixes:
+        return out
+    for key, value in reason_counts.items():
+        reason = str(key).strip()
+        if not reason:
+            continue
+        reason_lc = reason.lower()
+        if reason_lc in exclude_set:
+            continue
+        if any(reason_lc.startswith(prefix) for prefix in norm_prefixes):
+            out[reason] = out.get(reason, 0) + max(0, to_int(value))
+    return out
+
+
+def build_candidate_generation_ab_playbook(
+    component_shares: Dict[str, float],
+    top_no_signal_reasons: List[Dict[str, Any]],
+    top_manager_prefilter_reasons: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    no_signal_share = to_float(component_shares.get("no_signal_generated_share", 0.0))
+    manager_share = to_float(component_shares.get("filtered_out_by_manager_share", 0.0))
+    no_best_share = to_float(component_shares.get("no_best_signal_share", 0.0))
+
+    if no_signal_share >= 0.60:
+        items.append(
+            {
+                "arm": "A_signal_supply",
+                "trigger": "no_signal_generated share >= 0.60",
+                "focus": "strategy-level candidate generation path",
+                "target_metric": "candidate_generation_components.no_signal_generated_share",
+                "evidence_reason": top_no_signal_reasons[0]["reason"] if top_no_signal_reasons else "",
+                "proposal": (
+                    "Add context-gated fallback archetype only for dominant no-signal market patterns "
+                    "(keep low frequency; do not globally relax thresholds)."
+                ),
+            }
+        )
+    if manager_share >= 0.10:
+        items.append(
+            {
+                "arm": "B_manager_prefilter",
+                "trigger": "filtered_out_by_manager share >= 0.10",
+                "focus": "manager prefilter staging",
+                "target_metric": "candidate_generation_components.filtered_out_by_manager_share",
+                "evidence_reason": top_manager_prefilter_reasons[0]["reason"] if top_manager_prefilter_reasons else "",
+                "proposal": (
+                    "Split manager prefilter into hard safety reject vs soft score queue, "
+                    "then evaluate supply lift against shadow policy path."
+                ),
+            }
+        )
+    if no_best_share >= 0.15:
+        items.append(
+            {
+                "arm": "C_best_signal_selection",
+                "trigger": "no_best_signal share >= 0.15",
+                "focus": "selection ranking / tie-break quality",
+                "target_metric": "candidate_generation_components.no_best_signal_share",
+                "evidence_reason": "",
+                "proposal": (
+                    "Audit ranking collapse cases and add deterministic tie-break diagnostics "
+                    "before changing scoring weights."
+                ),
+            }
+        )
+    return items
+
+
 def top_pattern_rows(pattern_counts: Dict[str, int], limit: int = 5) -> List[Dict[str, Any]]:
     ordered = sorted(pattern_counts.items(), key=lambda item: (-int(item[1]), item[0]))
     return [{"pattern": key, "count": int(count)} for key, count in ordered[: max(1, int(limit))]]
@@ -605,6 +696,46 @@ def build_dataset_diagnostics(dataset_name: str, backtest_result: Dict[str, Any]
     edge_gap_bucket_counts = normalized_reason_counts(
         backtest_result.get("entry_quality_edge_gap_buckets", {})
     )
+    no_signal_reason_counts = filter_reason_counts_by_prefix(
+        reason_counts,
+        ["foundation_no_signal_", "no_signal_"],
+        exclude_exact=["no_signal_generated"],
+    )
+    manager_prefilter_reason_counts = filter_reason_counts_by_prefix(
+        reason_counts,
+        ["filtered_out_by_manager"],
+    )
+    policy_prefilter_reason_counts = filter_reason_counts_by_prefix(
+        reason_counts,
+        ["filtered_out_by_policy"],
+    )
+    candidate_components = {
+        "no_signal_generated": int(no_signal_generated),
+        "filtered_out_by_manager": int(filtered_out_by_manager),
+        "filtered_out_by_policy": int(filtered_out_by_policy),
+        "no_best_signal": int(no_best_signal),
+    }
+    candidate_total = max(0, sum(candidate_components.values()))
+    candidate_denom = float(max(1, candidate_total))
+    candidate_component_shares = {
+        "no_signal_generated_share": round(float(no_signal_generated) / candidate_denom, 4),
+        "filtered_out_by_manager_share": round(float(filtered_out_by_manager) / candidate_denom, 4),
+        "filtered_out_by_policy_share": round(float(filtered_out_by_policy) / candidate_denom, 4),
+        "no_best_signal_share": round(float(no_best_signal) / candidate_denom, 4),
+    }
+    ordered_candidate_components = sorted(
+        candidate_components.items(),
+        key=lambda item: (-int(item[1]), item[0]),
+    )
+    primary_candidate_component_name, primary_candidate_component_count = ordered_candidate_components[0]
+    top_no_signal_reason_rows = top_reason_rows(no_signal_reason_counts, limit=8)
+    top_manager_prefilter_reason_rows = top_reason_rows(manager_prefilter_reason_counts, limit=8)
+    top_policy_prefilter_reason_rows = top_reason_rows(policy_prefilter_reason_counts, limit=8)
+    ab_playbook_rows = build_candidate_generation_ab_playbook(
+        component_shares=candidate_component_shares,
+        top_no_signal_reasons=top_no_signal_reason_rows,
+        top_manager_prefilter_reasons=top_manager_prefilter_reason_rows,
+    )
     pattern_profit_map = build_pattern_cell_profit_map(backtest_result.get("pattern_summaries", []))
     strategy_diag = build_strategy_funnel_diagnostics(backtest_result.get("strategy_signal_funnel", []))
     strategy_collection_diag = build_strategy_collection_diagnostics(
@@ -627,6 +758,30 @@ def build_dataset_diagnostics(dataset_name: str, backtest_result: Dict[str, Any]
         "rejection_reason_counts": reason_counts,
         "no_signal_pattern_counts": no_signal_pattern_counts,
         "top_no_signal_patterns": top_pattern_rows(no_signal_pattern_counts, limit=5),
+        "candidate_generation_breakdown": {
+            "total": int(candidate_total),
+            "components": candidate_components,
+            "component_shares": candidate_component_shares,
+            "primary_component": {
+                "name": str(primary_candidate_component_name),
+                "count": int(primary_candidate_component_count),
+                "share": round(float(primary_candidate_component_count) / candidate_denom, 4),
+            },
+            "no_signal_reason_counts": no_signal_reason_counts,
+            "manager_prefilter_reason_counts": manager_prefilter_reason_counts,
+            "policy_prefilter_reason_counts": policy_prefilter_reason_counts,
+            "top_no_signal_reasons": top_no_signal_reason_rows,
+            "top_manager_prefilter_reasons": top_manager_prefilter_reason_rows,
+            "top_policy_prefilter_reasons": top_policy_prefilter_reason_rows,
+            "shadow_policy_supply_lift_absolute": int(
+                shadow_shadow_after_policy_filter - shadow_primary_after_policy_filter
+            ),
+            "shadow_policy_supply_lift_per_generated_signal": round(
+                shadow_policy_supply_lift_per_signal,
+                6,
+            ),
+            "ab_playbook_candidates": ab_playbook_rows,
+        },
         "entry_quality_edge_gap_buckets": edge_gap_bucket_counts,
         "top_entry_quality_edge_gap_buckets": top_pattern_rows(edge_gap_bucket_counts, limit=5),
         "pattern_cell_profit_map": pattern_profit_map,
@@ -670,6 +825,15 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
     aggregate_edge_gap_buckets: Dict[str, int] = {}
     aggregate_pattern_profit_map: Dict[str, Dict[str, float]] = {}
     top_group_votes: Dict[str, int] = {}
+    aggregate_candidate_components: Dict[str, int] = {
+        "no_signal_generated": 0,
+        "filtered_out_by_manager": 0,
+        "filtered_out_by_policy": 0,
+        "no_best_signal": 0,
+    }
+    aggregate_no_signal_reasons: Dict[str, int] = {}
+    aggregate_manager_prefilter_reasons: Dict[str, int] = {}
+    aggregate_policy_prefilter_reasons: Dict[str, int] = {}
     aggregate_post_entry_telemetry: Dict[str, Any] = {
         "adaptive_stop_updates": 0,
         "adaptive_tp_recalibration_updates": 0,
@@ -750,6 +914,41 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
             name = str(top_group.get("name", "")).strip()
             if name:
                 top_group_votes[name] = top_group_votes.get(name, 0) + 1
+
+        candidate_breakdown = item.get("candidate_generation_breakdown", {})
+        if isinstance(candidate_breakdown, dict):
+            components = candidate_breakdown.get("components", {})
+            if isinstance(components, dict):
+                for key in aggregate_candidate_components:
+                    aggregate_candidate_components[key] += max(0, to_int(components.get(key, 0)))
+
+            no_signal_reasons = candidate_breakdown.get("no_signal_reason_counts", {})
+            if isinstance(no_signal_reasons, dict):
+                for k, v in no_signal_reasons.items():
+                    rk = str(k).strip()
+                    if not rk:
+                        continue
+                    aggregate_no_signal_reasons[rk] = aggregate_no_signal_reasons.get(rk, 0) + max(0, to_int(v))
+
+            manager_reasons = candidate_breakdown.get("manager_prefilter_reason_counts", {})
+            if isinstance(manager_reasons, dict):
+                for k, v in manager_reasons.items():
+                    rk = str(k).strip()
+                    if not rk:
+                        continue
+                    aggregate_manager_prefilter_reasons[rk] = (
+                        aggregate_manager_prefilter_reasons.get(rk, 0) + max(0, to_int(v))
+                    )
+
+            policy_reasons = candidate_breakdown.get("policy_prefilter_reason_counts", {})
+            if isinstance(policy_reasons, dict):
+                for k, v in policy_reasons.items():
+                    rk = str(k).strip()
+                    if not rk:
+                        continue
+                    aggregate_policy_prefilter_reasons[rk] = (
+                        aggregate_policy_prefilter_reasons.get(rk, 0) + max(0, to_int(v))
+                    )
 
         post_entry_telemetry = item.get("post_entry_risk_telemetry", {})
         if isinstance(post_entry_telemetry, dict):
@@ -864,6 +1063,45 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
             4,
         ),
     }
+    candidate_component_total = max(0, sum(aggregate_candidate_components.values()))
+    candidate_component_denom = float(max(1, candidate_component_total))
+    ordered_candidate_components = sorted(
+        aggregate_candidate_components.items(),
+        key=lambda item: (-int(item[1]), item[0]),
+    )
+    primary_candidate_component_name, primary_candidate_component_count = ordered_candidate_components[0]
+    aggregate_candidate_component_shares = {
+        "no_signal_generated_share": round(
+            float(aggregate_candidate_components["no_signal_generated"]) / candidate_component_denom,
+            4,
+        ),
+        "filtered_out_by_manager_share": round(
+            float(aggregate_candidate_components["filtered_out_by_manager"]) / candidate_component_denom,
+            4,
+        ),
+        "filtered_out_by_policy_share": round(
+            float(aggregate_candidate_components["filtered_out_by_policy"]) / candidate_component_denom,
+            4,
+        ),
+        "no_best_signal_share": round(
+            float(aggregate_candidate_components["no_best_signal"]) / candidate_component_denom,
+            4,
+        ),
+    }
+    aggregate_top_no_signal_reasons = top_reason_rows(aggregate_no_signal_reasons, limit=10)
+    aggregate_top_manager_prefilter_reasons = top_reason_rows(
+        aggregate_manager_prefilter_reasons,
+        limit=10,
+    )
+    aggregate_top_policy_prefilter_reasons = top_reason_rows(
+        aggregate_policy_prefilter_reasons,
+        limit=10,
+    )
+    aggregate_ab_playbook = build_candidate_generation_ab_playbook(
+        component_shares=aggregate_candidate_component_shares,
+        top_no_signal_reasons=aggregate_top_no_signal_reasons,
+        top_manager_prefilter_reasons=aggregate_top_manager_prefilter_reasons,
+    )
 
     return {
         "dataset_count": len(dataset_diagnostics),
@@ -877,6 +1115,22 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         "top_no_signal_patterns": top_pattern_rows(aggregate_no_signal_patterns, limit=8),
         "top_entry_quality_edge_gap_buckets": top_pattern_rows(aggregate_edge_gap_buckets, limit=8),
         "top_loss_pattern_cells": top_loss_pattern_cells(aggregate_pattern_profit_map, limit=10),
+        "candidate_generation_analysis": {
+            "components": aggregate_candidate_components,
+            "component_shares": aggregate_candidate_component_shares,
+            "primary_component": {
+                "name": str(primary_candidate_component_name),
+                "count": int(primary_candidate_component_count),
+                "share": round(
+                    float(primary_candidate_component_count) / candidate_component_denom,
+                    4,
+                ),
+            },
+            "top_no_signal_reasons": aggregate_top_no_signal_reasons,
+            "top_manager_prefilter_reasons": aggregate_top_manager_prefilter_reasons,
+            "top_policy_prefilter_reasons": aggregate_top_policy_prefilter_reasons,
+            "ab_playbook_candidates": aggregate_ab_playbook,
+        },
         "top_non_execution_group_vote_counts": top_group_votes,
         "post_entry_risk_telemetry": aggregate_post_entry_telemetry,
         "shadow_funnel": aggregate_shadow_summary,
@@ -914,6 +1168,27 @@ def build_failure_attribution(
         first_loss = top_loss_pattern_cells_rows[0]
         if isinstance(first_loss, dict):
             primary_loss_pattern_cell = str(first_loss.get("pattern", "")).strip()
+    candidate_generation_analysis = aggregate_diagnostics.get("candidate_generation_analysis", {})
+    if not isinstance(candidate_generation_analysis, dict):
+        candidate_generation_analysis = {}
+    primary_candidate_component = ""
+    primary_candidate_component_share = 0.0
+    primary_component = candidate_generation_analysis.get("primary_component", {})
+    if isinstance(primary_component, dict):
+        primary_candidate_component = str(primary_component.get("name", "")).strip()
+        primary_candidate_component_share = to_float(primary_component.get("share", 0.0))
+    primary_no_signal_reason = ""
+    top_no_signal_reasons = candidate_generation_analysis.get("top_no_signal_reasons", [])
+    if isinstance(top_no_signal_reasons, list) and top_no_signal_reasons:
+        first_reason = top_no_signal_reasons[0]
+        if isinstance(first_reason, dict):
+            primary_no_signal_reason = str(first_reason.get("reason", "")).strip()
+    primary_manager_prefilter_reason = ""
+    top_manager_prefilter_reasons = candidate_generation_analysis.get("top_manager_prefilter_reasons", [])
+    if isinstance(top_manager_prefilter_reasons, list) and top_manager_prefilter_reasons:
+        first_reason = top_manager_prefilter_reasons[0]
+        if isinstance(first_reason, dict):
+            primary_manager_prefilter_reason = str(first_reason.get("reason", "")).strip()
 
     hypothesis = "balanced_or_data_limited"
     next_focus: List[str] = []
@@ -924,6 +1199,15 @@ def build_failure_attribution(
             "Check whether manager prefilter and expected-value floor are too strict.",
             "Extract shared market-pattern signatures where no_signal_generated dominates.",
         ]
+        if primary_candidate_component:
+            next_focus.append(
+                "Primary candidate component: "
+                f"{primary_candidate_component} (share={round(primary_candidate_component_share, 4)})."
+            )
+        if primary_no_signal_reason:
+            next_focus.append(f"Top no-signal reason: {primary_no_signal_reason}")
+        if primary_manager_prefilter_reason:
+            next_focus.append(f"Top manager prefilter reason: {primary_manager_prefilter_reason}")
     elif primary_group_name == "quality_and_risk_gate":
         hypothesis = "risk_gate_overconstraint_or_quality_mismatch"
         next_focus = [
@@ -946,6 +1230,10 @@ def build_failure_attribution(
         "primary_no_signal_pattern": primary_no_signal_pattern,
         "primary_entry_quality_edge_gap_bucket": primary_edge_gap_bucket,
         "primary_loss_pattern_cell": primary_loss_pattern_cell,
+        "primary_candidate_generation_component": primary_candidate_component,
+        "primary_candidate_generation_component_share": round(primary_candidate_component_share, 4),
+        "primary_no_signal_reason": primary_no_signal_reason,
+        "primary_manager_prefilter_reason": primary_manager_prefilter_reason,
         "low_trade_condition": low_trade_condition,
         "hypothesis": hypothesis,
         "next_focus": next_focus,
@@ -1356,6 +1644,8 @@ def main(argv=None) -> int:
     parser.add_argument("--verification-lock-path", default=r".\build\Release\logs\verification_run.lock")
     parser.add_argument("--verification-lock-timeout-sec", type=int, default=1800)
     parser.add_argument("--verification-lock-stale-sec", type=int, default=14400)
+    parser.add_argument("--enable-experiment-a-signal-supply", action="store_true")
+    parser.add_argument("--enable-experiment-b-manager-soft-queue", action="store_true")
     args = parser.parse_args(argv)
 
     exe_path = resolve_path(args.exe_path, "Executable")
@@ -1428,6 +1718,8 @@ def main(argv=None) -> int:
                 dataset_path=dataset_path,
                 require_higher_tf_companions=bool(args.require_higher_tf_companions),
                 disable_adaptive_state_io=not bool(args.enable_adaptive_state_io),
+                enable_experiment_a_signal_supply=bool(args.enable_experiment_a_signal_supply),
+                enable_experiment_b_manager_soft_queue=bool(args.enable_experiment_b_manager_soft_queue),
             )
             row = {
                 "dataset": dataset_path.name,
@@ -1568,6 +1860,10 @@ def main(argv=None) -> int:
             "config_path": str(config_path),
             "source_config_path": str(source_config_path),
         },
+        "experiments": {
+            "enable_experiment_a_signal_supply": bool(args.enable_experiment_a_signal_supply),
+            "enable_experiment_b_manager_soft_queue": bool(args.enable_experiment_b_manager_soft_queue),
+        },
     }
     report["baseline_comparison"] = build_baseline_comparison(
         current_report=report,
@@ -1581,6 +1877,14 @@ def main(argv=None) -> int:
     print(f"[Verification] dataset_count={len(rows)}")
     print(f"[Verification] data_mode={args.data_mode}")
     print(f"[Verification] validation_profile={args.validation_profile}")
+    print(
+        "[Verification] experiment_a_signal_supply="
+        f"{bool(args.enable_experiment_a_signal_supply)}"
+    )
+    print(
+        "[Verification] experiment_b_manager_soft_queue="
+        f"{bool(args.enable_experiment_b_manager_soft_queue)}"
+    )
     print(f"[Verification] avg_profit_factor={avg_profit_factor}")
     print(f"[Verification] avg_expectancy_krw={avg_expectancy_krw}")
     print(f"[Verification] overall_gate_pass={overall_gate_pass}")
@@ -1592,6 +1896,15 @@ def main(argv=None) -> int:
         "[Verification] primary_non_execution_group="
         f"{failure_attribution.get('primary_non_execution_group', 'unknown')}"
     )
+    primary_candidate_component = str(
+        failure_attribution.get("primary_candidate_generation_component", "")
+    ).strip()
+    if primary_candidate_component:
+        print(
+            "[Verification] primary_candidate_generation_component="
+            f"{primary_candidate_component} "
+            f"share={failure_attribution.get('primary_candidate_generation_component_share', 0.0)}"
+        )
     baseline_comparison = report.get("baseline_comparison", {})
     if isinstance(baseline_comparison, dict) and bool(baseline_comparison.get("available", False)):
         deltas = baseline_comparison.get("deltas", {})

@@ -4,6 +4,7 @@
 #include "network/UpbitHttpClient.h"
 #include "analytics/MarketScanner.h"
 #include "analytics/RegimeDetector.h"
+#include "analytics/ProbabilisticRuntimeModel.h"
 #include "strategy/StrategyManager.h"
 #include "risk/RiskManager.h"
 #include <memory>
@@ -239,6 +240,8 @@ private:
     std::unique_ptr<risk::RiskManager> risk_manager_;
     std::unique_ptr<execution::OrderManager> order_manager_;
     std::unique_ptr<analytics::RegimeDetector> regime_detector_;
+    analytics::ProbabilisticRuntimeModel probabilistic_runtime_model_;
+    bool probabilistic_runtime_model_loaded_ = false;
     std::shared_ptr<core::IPolicyLearningPlane> core_policy_plane_;
     std::shared_ptr<core::IRiskCompliancePlane> core_risk_plane_;
     std::shared_ptr<core::IExecutionPlane> core_execution_plane_;
@@ -343,6 +346,12 @@ private:
         double volatility = 0.0;
         double expected_value = 0.0;
         double reward_risk_ratio = 0.0;
+        std::string entry_archetype = "UNSPECIFIED";
+        bool probabilistic_runtime_applied = false;
+        double probabilistic_h1_calibrated = 0.5;
+        double probabilistic_h5_calibrated = 0.5;
+        double probabilistic_h5_threshold = 0.6;
+        double probabilistic_h5_margin = 0.0;
         // [Phase 4] ?먯젅/?듭젅/?몃젅?쇰쭅 ?곸냽??
         double stop_loss = 0.0;
         double take_profit_1 = 0.0;
@@ -353,6 +362,23 @@ private:
     };
 
     std::vector<PersistedPosition> pending_reconcile_positions_;
+
+    struct PendingSignalMetadata {
+        double signal_filter = 0.5;
+        double signal_strength = 0.0;
+        analytics::MarketRegime market_regime = analytics::MarketRegime::UNKNOWN;
+        double liquidity_score = 0.0;
+        double volatility = 0.0;
+        double expected_value = 0.0;
+        double reward_risk_ratio = 0.0;
+        std::string entry_archetype = "UNSPECIFIED";
+        bool probabilistic_runtime_applied = false;
+        double probabilistic_h1_calibrated = 0.5;
+        double probabilistic_h5_calibrated = 0.5;
+        double probabilistic_h5_threshold = 0.6;
+        double probabilistic_h5_margin = 0.0;
+    };
+    std::map<std::string, PendingSignalMetadata> pending_signal_metadata_by_market_;
     
     // ?듦퀎
     long long start_time_;

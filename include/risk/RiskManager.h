@@ -49,6 +49,11 @@ struct Position {
     double volatility;          // 吏꾩엯 ??蹂?숈꽦
     double expected_value;      // 吏꾩엯 ??湲곕?媛?
     double reward_risk_ratio;   // 吏꾩엯 ??RR
+    bool probabilistic_runtime_applied;
+    double probabilistic_h1_calibrated;
+    double probabilistic_h5_calibrated;
+    double probabilistic_h5_threshold;
+    double probabilistic_h5_margin;
     
         // [NEW] ?쒕뵫 二쇰Ц 異붿쟻 (Limit Order ??Market ?대갚 ?꾪빐)
         std::string pending_order_uuid;     // ?쒕뵫 以묒씤 二쇰Ц UUID
@@ -69,6 +74,11 @@ struct Position {
         , entry_archetype("UNSPECIFIED")
         , liquidity_score(0.0), volatility(0.0)
         , expected_value(0.0), reward_risk_ratio(0.0)
+        , probabilistic_runtime_applied(false)
+        , probabilistic_h1_calibrated(0.5)
+        , probabilistic_h5_calibrated(0.5)
+        , probabilistic_h5_threshold(0.6)
+        , probabilistic_h5_margin(0.0)
     {}
 };
 
@@ -95,6 +105,11 @@ struct TradeHistory {
     double volatility;          // 嫄곕옒 吏꾩엯 ??蹂?숈꽦
     double expected_value;      // 嫄곕옒 吏꾩엯 ??湲곕?媛?
     double reward_risk_ratio;   // 嫄곕옒 吏꾩엯 ??RR
+    bool probabilistic_runtime_applied;
+    double probabilistic_h1_calibrated;
+    double probabilistic_h5_calibrated;
+    double probabilistic_h5_threshold;
+    double probabilistic_h5_margin;
     
     TradeHistory()
         : entry_price(0), exit_price(0), quantity(0)
@@ -105,6 +120,11 @@ struct TradeHistory {
         , entry_archetype("UNSPECIFIED")
         , liquidity_score(0.0), volatility(0.0)
         , expected_value(0.0), reward_risk_ratio(0.0)
+        , probabilistic_runtime_applied(false)
+        , probabilistic_h1_calibrated(0.5)
+        , probabilistic_h5_calibrated(0.5)
+        , probabilistic_h5_threshold(0.6)
+        , probabilistic_h5_margin(0.0)
     {}
 };
 
@@ -313,7 +333,12 @@ public:
         double volatility = 0.0,
         double expected_value = 0.0,
         double reward_risk_ratio = 0.0,
-        const std::string& entry_archetype = ""
+        const std::string& entry_archetype = "",
+        bool probabilistic_runtime_applied = false,
+        double probabilistic_h1_calibrated = 0.5,
+        double probabilistic_h5_calibrated = 0.5,
+        double probabilistic_h5_threshold = 0.6,
+        double probabilistic_h5_margin = 0.0
     );
 
     // ===== 洹몃━???먮낯/泥닿껐 泥섎━ =====

@@ -283,6 +283,111 @@ void Config::load(const std::string& path) {
                     engine_config_.live_mtf_dataset_capture_timeframes = std::move(tf_list);
                 }
             }
+            engine_config_.enable_probabilistic_runtime_model =
+                t.value("enable_probabilistic_runtime_model", true);
+            engine_config_.probabilistic_runtime_bundle_path = trimCopy(
+                t.value("probabilistic_runtime_bundle_path", "config/model/probabilistic_runtime_bundle_v1.json")
+            );
+            if (engine_config_.probabilistic_runtime_bundle_path.empty()) {
+                engine_config_.probabilistic_runtime_bundle_path = "config/model/probabilistic_runtime_bundle_v1.json";
+            }
+            engine_config_.probabilistic_runtime_hard_gate =
+                t.value("probabilistic_runtime_hard_gate", false);
+            engine_config_.probabilistic_runtime_hard_gate_margin = std::clamp(
+                t.value("probabilistic_runtime_hard_gate_margin", -0.08),
+                -0.50,
+                0.20
+            );
+            engine_config_.probabilistic_runtime_score_weight = std::clamp(
+                t.value("probabilistic_runtime_score_weight", 0.12),
+                0.0,
+                1.0
+            );
+            engine_config_.probabilistic_runtime_expected_edge_weight = std::clamp(
+                t.value("probabilistic_runtime_expected_edge_weight", 0.00030),
+                0.0,
+                0.010
+            );
+            engine_config_.probabilistic_runtime_primary_mode =
+                t.value("probabilistic_runtime_primary_mode", true);
+            engine_config_.probabilistic_runtime_scan_prefilter_enabled =
+                t.value("probabilistic_runtime_scan_prefilter_enabled", true);
+            engine_config_.probabilistic_runtime_scan_prefilter_margin = std::clamp(
+                t.value("probabilistic_runtime_scan_prefilter_margin", -0.10),
+                -0.30,
+                0.10
+            );
+            engine_config_.probabilistic_runtime_strength_blend = std::clamp(
+                t.value("probabilistic_runtime_strength_blend", 0.45),
+                0.0,
+                1.0
+            );
+            engine_config_.probabilistic_runtime_position_scale_weight = std::clamp(
+                t.value("probabilistic_runtime_position_scale_weight", 0.35),
+                0.0,
+                1.0
+            );
+            engine_config_.probabilistic_runtime_online_learning_enabled =
+                t.value("probabilistic_runtime_online_learning_enabled", true);
+            engine_config_.probabilistic_runtime_online_learning_window = std::clamp(
+                t.value("probabilistic_runtime_online_learning_window", 80),
+                10,
+                500
+            );
+            engine_config_.probabilistic_runtime_online_learning_min_samples = std::clamp(
+                t.value("probabilistic_runtime_online_learning_min_samples", 12),
+                3,
+                200
+            );
+            engine_config_.probabilistic_runtime_online_learning_max_margin_bias = std::clamp(
+                t.value("probabilistic_runtime_online_learning_max_margin_bias", 0.02),
+                0.0,
+                0.10
+            );
+            engine_config_.probabilistic_runtime_online_learning_strength_gain = std::clamp(
+                t.value("probabilistic_runtime_online_learning_strength_gain", 0.35),
+                0.0,
+                1.0
+            );
+            engine_config_.probabilistic_primary_promotion_min_margin = std::clamp(
+                t.value("probabilistic_primary_promotion_min_margin", -0.02),
+                -0.20,
+                0.10
+            );
+            engine_config_.probabilistic_primary_promotion_min_calibrated = std::clamp(
+                t.value("probabilistic_primary_promotion_min_calibrated", 0.47),
+                0.0,
+                1.0
+            );
+            engine_config_.probabilistic_primary_promotion_max_strength_gap = std::clamp(
+                t.value("probabilistic_primary_promotion_max_strength_gap", 0.12),
+                0.0,
+                0.50
+            );
+            engine_config_.probabilistic_primary_promotion_max_ev_gap = std::clamp(
+                t.value("probabilistic_primary_promotion_max_ev_gap", 0.00045),
+                0.0,
+                0.010
+            );
+            engine_config_.foundation_signal_supply_fallback_enabled =
+                t.value("foundation_signal_supply_fallback_enabled", true);
+            engine_config_.manager_soft_queue_enabled =
+                t.value("manager_soft_queue_enabled", true);
+            engine_config_.manager_soft_queue_position_scale = std::clamp(
+                t.value("manager_soft_queue_position_scale", 0.70),
+                0.30,
+                1.00
+            );
+            engine_config_.manager_soft_queue_max_strength_gap = std::clamp(
+                t.value("manager_soft_queue_max_strength_gap", 0.05),
+                0.0,
+                0.25
+            );
+            engine_config_.manager_soft_queue_max_ev_gap = std::clamp(
+                t.value("manager_soft_queue_max_ev_gap", 0.00015),
+                0.0,
+                0.00200
+            );
             engine_config_.initial_capital = initial_capital_;
 
             engine_config_.scan_interval_seconds = t.value("scan_interval_seconds", 60);

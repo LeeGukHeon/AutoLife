@@ -1,0 +1,51 @@
+{
+  "generated_at_utc": "2026-02-20T02:50:14.267404+00:00",
+  "source_manifest_json": "D:\\MyApps\\AutoLife\\data\\backtest_probabilistic\\probabilistic_bundle_manifest.json",
+  "split_policy": {
+    "mode": "walk_forward_time_ordered",
+    "train_ratio": 0.7,
+    "valid_ratio": 0.15,
+    "test_ratio": 0.15,
+    "walk_forward_folds": 3,
+    "random_split_allowed": false
+  },
+  "dataset_count": 1,
+  "datasets": [
+    {
+      "market": "KRW-BTC",
+      "unit_min": 240,
+      "rows": 18152,
+      "from_utc": "2017-11-08T11:59:58.743000+00:00",
+      "to_utc": "2026-02-20T02:48:22.881000+00:00",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2017-11-08T11:59:58.743000+00:00",
+          "train_end_utc": "2024-01-25T17:06:16.846000+00:00",
+          "valid_start_utc": "2024-01-25T17:06:16.847000+00:00",
+          "valid_end_utc": "2025-02-06T21:57:19.863000+00:00",
+          "test_start_utc": "2025-02-06T21:57:19.864000+00:00",
+          "test_end_utc": "2026-02-20T02:48:22.880000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2017-11-08T11:59:58.743000+00:00",
+          "train_end_utc": "2024-06-24T23:50:42.053000+00:00",
+          "valid_start_utc": "2024-06-24T23:50:42.054000+00:00",
+          "valid_end_utc": "2025-04-23T13:19:32.466000+00:00",
+          "test_start_utc": "2025-04-23T13:19:32.467000+00:00",
+          "test_end_utc": "2026-02-20T02:48:22.879000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2017-11-08T11:59:58.743000+00:00",
+          "train_end_utc": "2024-11-23T06:35:07.260000+00:00",
+          "valid_start_utc": "2024-11-23T06:35:07.261000+00:00",
+          "valid_end_utc": "2025-07-08T04:41:45.070000+00:00",
+          "test_start_utc": "2025-07-08T04:41:45.071000+00:00",
+          "test_end_utc": "2026-02-20T02:48:22.880000+00:00"
+        }
+      ]
+    }
+  ]
+}

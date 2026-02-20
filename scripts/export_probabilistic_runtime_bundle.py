@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+import argparse
+import pathlib
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+import joblib
+import numpy as np
+
+from _script_common import dump_json, load_json_or_none, resolve_repo_path
+
+
+def parse_args(argv=None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Export trained probabilistic model artifacts to runtime-friendly JSON bundle."
+    )
+    parser.add_argument(
+        "--train-summary-json",
+        default=r".\build\Release\logs\probabilistic_model_train_summary_full_20260220.json",
+    )
+    parser.add_argument(
+        "--output-json",
+        default=r".\config\model\probabilistic_runtime_bundle_v1.json",
+    )
+    parser.add_argument(
+        "--fold-policy",
+        choices=("latest", "best_h5_logloss"),
+        default="latest",
+        help="Which fold to export per market.",
+    )
+    return parser.parse_args(argv)
+
+
+def utc_now_iso() -> str:
+    return datetime.now(tz=timezone.utc).isoformat()
+
+
+def extract_linear(payload: Dict[str, Any]) -> Dict[str, Any]:
+    model = payload.get("model")
+    if model is None:
+        raise RuntimeError("model missing in payload")
+    coef = np.asarray(model.coef_, dtype=np.float64).reshape(-1).tolist()
+    intercept = float(np.asarray(model.intercept_, dtype=np.float64).reshape(-1)[0])
+    return {
+        "coef": [float(x) for x in coef],
+        "intercept": float(intercept),
+    }
+
+
+def pick_fold(folds: List[Dict[str, Any]], policy: str) -> Optional[Dict[str, Any]]:
+    if not folds:
+        return None
+    if policy == "latest":
+        return max(folds, key=lambda x: int(x.get("fold_id", 0) or 0))
+    if policy == "best_h5_logloss":
+        cand = []
+        for f in folds:
+            ll = (
+                f.get("metrics", {})
+                .get("h5", {})
+                .get("test_calibrated", {})
+                .get("logloss", None)
+            )
+            if ll is None:
+                continue
+            try:
+                ll_f = float(ll)
+            except Exception:
+                continue
+            cand.append((ll_f, f))
+        if cand:
+            cand.sort(key=lambda x: x[0])
+            return cand[0][1]
+    return max(folds, key=lambda x: int(x.get("fold_id", 0) or 0))
+
+
+def main(argv=None) -> int:
+    args = parse_args(argv)
+    train_summary_path = resolve_repo_path(args.train_summary_json)
+    output_path = resolve_repo_path(args.output_json)
+
+    summary = load_json_or_none(train_summary_path)
+    if not isinstance(summary, dict):
+        raise RuntimeError(f"invalid training summary: {train_summary_path}")
+
+    feature_columns = list(summary.get("feature_columns", []) or [])
+    if not feature_columns:
+        raise RuntimeError("feature_columns missing in training summary")
+
+    markets_out = []
+    for ds in summary.get("datasets", []) or []:
+        if not isinstance(ds, dict):
+            continue
+        market = str(ds.get("market", "")).strip()
+        folds = [f for f in (ds.get("folds", []) or []) if isinstance(f, dict)]
+        if not market or not folds:
+            continue
+        chosen = pick_fold(folds, str(args.fold_policy))
+        if chosen is None:
+            continue
+
+        h1_path = str(chosen.get("model_artifacts", {}).get("h1_model", "")).strip()
+        h5_path = str(chosen.get("model_artifacts", {}).get("h5_model", "")).strip()
+        if not h1_path or not h5_path:
+            continue
+        h1_payload = joblib.load(h1_path)
+        h5_payload = joblib.load(h5_path)
+
+        h1_lin = extract_linear(h1_payload)
+        h5_lin = extract_linear(h5_payload)
+
+        h1_cal = chosen.get("calibration", {}).get("h1", {}) or {}
+        h5_cal = chosen.get("calibration", {}).get("h5", {}) or {}
+        h5_thr = (
+            chosen.get("metrics", {})
+            .get("h5", {})
+            .get("threshold_selection", {})
+            .get("threshold", 0.6)
+        )
+
+        markets_out.append(
+            {
+                "market": market,
+                "selected_fold_id": int(chosen.get("fold_id", 0) or 0),
+                "h1_model": {
+                    "linear": h1_lin,
+                    "calibration": {
+                        "a": float(h1_cal.get("a", 1.0) or 1.0),
+                        "b": float(h1_cal.get("b", 0.0) or 0.0),
+                    },
+                },
+                "h5_model": {
+                    "linear": h5_lin,
+                    "calibration": {
+                        "a": float(h5_cal.get("a", 1.0) or 1.0),
+                        "b": float(h5_cal.get("b", 0.0) or 0.0),
+                    },
+                    "selection_threshold": float(h5_thr),
+                },
+                "selected_fold_metrics": {
+                    "h5_test_calibrated_logloss": float(
+                        chosen.get("metrics", {})
+                        .get("h5", {})
+                        .get("test_calibrated", {})
+                        .get("logloss", float("nan"))
+                    ),
+                    "h5_test_calibrated_brier": float(
+                        chosen.get("metrics", {})
+                        .get("h5", {})
+                        .get("test_calibrated", {})
+                        .get("brier", float("nan"))
+                    ),
+                    "h5_test_trade_selected_coverage": float(
+                        chosen.get("metrics", {})
+                        .get("h5", {})
+                        .get("test_trade_metrics", {})
+                        .get("coverage", float("nan"))
+                    ),
+                    "h5_test_trade_selected_mean_edge_bps": float(
+                        chosen.get("metrics", {})
+                        .get("h5", {})
+                        .get("test_trade_metrics", {})
+                        .get("mean_edge_bps", float("nan"))
+                    ),
+                },
+            }
+        )
+
+    out = {
+        "version": "probabilistic_runtime_bundle_v1",
+        "generated_at_utc": utc_now_iso(),
+        "source_train_summary_json": str(train_summary_path),
+        "selection_policy": str(args.fold_policy),
+        "feature_columns": feature_columns,
+        "feature_transform_contract": {
+            "rsi_center_scale": {"center": 50.0, "scale": 50.0},
+            "age_min_cap": 240.0,
+            "log_transform_columns": ["vol_ratio_20", "notional_ratio_20"],
+            "percent_scale_rules": ["ret_*", "*_ret_*", "*atr_pct*", "*bb_width*", "*gap*"],
+            "clip_abs": 8.0,
+        },
+        "markets": markets_out,
+    }
+    dump_json(output_path, out)
+
+    print("[ExportRuntimeBundle] completed", flush=True)
+    print(f"markets={len(markets_out)}", flush=True)
+    print(f"output={output_path}", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+

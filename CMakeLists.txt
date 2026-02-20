@@ -53,6 +53,8 @@ set(LIB_SOURCES
     src/analytics/MarketScanner.cpp
     src/analytics/TechnicalIndicators.cpp
     src/analytics/OrderbookAnalyzer.cpp
+    src/analytics/ProbabilisticRuntimeModel.cpp
+    src/analytics/ProbabilisticRuntimeFeatures.cpp
     src/strategy/StrategyManager.cpp
     src/strategy/FoundationRiskPipeline.cpp
     src/strategy/FoundationAdaptiveStrategy.cpp

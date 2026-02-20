@@ -1,10 +1,12 @@
 #include "strategy/FoundationAdaptiveStrategy.h"
 
 #include "analytics/TechnicalIndicators.h"
+#include "common/Config.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <string>
 
 namespace autolife {
 namespace strategy {
@@ -29,6 +31,15 @@ double rollingReturn(const std::vector<double>& closes, std::size_t lookback) {
         return 0.0;
     }
     return (now - prev) / prev;
+}
+
+bool isSignalSupplyFallbackEnabled() {
+    const auto& cfg = Config::getInstance().getEngineConfig();
+    if (!cfg.foundation_signal_supply_fallback_enabled) {
+        return false;
+    }
+    // Keep fallback tied to probabilistic-aware runtime path.
+    return cfg.enable_probabilistic_runtime_model && cfg.probabilistic_runtime_primary_mode;
 }
 
 struct MtfConfirmation {
@@ -287,10 +298,10 @@ bool isRangingLowFlowOpportunity(
     double rsi,
     double bb_middle
 ) {
-    if (metrics.liquidity_score < 30.0 || metrics.liquidity_score >= 45.0) {
+    if (metrics.liquidity_score < 28.0 || metrics.liquidity_score >= 50.0) {
         return false;
     }
-    if (metrics.volume_surge_ratio < 0.50 || metrics.volume_surge_ratio > 1.10) {
+    if (metrics.volume_surge_ratio < 0.46 || metrics.volume_surge_ratio > 1.16) {
         return false;
     }
     if (metrics.orderbook_snapshot.valid && metrics.orderbook_snapshot.spread_pct > 0.0035) {
@@ -300,13 +311,104 @@ bool isRangingLowFlowOpportunity(
     const double ret3 = rollingReturn(closes, 3);
     const double ret8 = rollingReturn(closes, 8);
     return (
-        current_price <= bb_middle * 1.0025 &&
+        current_price <= bb_middle * 1.0030 &&
         current_price >= ema_fast * 0.9950 &&
-        rsi >= 30.0 && rsi <= 48.0 &&
+        rsi >= 30.0 && rsi <= 50.0 &&
         ret3 <= 0.0015 &&
-        ret8 >= -0.0030 &&
-        metrics.order_book_imbalance > -0.08 &&
-        metrics.buy_pressure >= (metrics.sell_pressure * 0.88)
+        ret8 >= -0.0034 &&
+        metrics.order_book_imbalance > -0.10 &&
+        metrics.buy_pressure >= (metrics.sell_pressure * 0.86)
+    );
+}
+
+bool isRangingSignalSupplyFallbackOpportunity(
+    const analytics::CoinMetrics& metrics,
+    const std::vector<double>& closes,
+    double current_price,
+    double ema_fast,
+    double rsi,
+    double bb_middle
+) {
+    if (metrics.liquidity_score < 26.0 || metrics.liquidity_score >= 52.0) {
+        return false;
+    }
+    if (metrics.volume_surge_ratio < 0.38 || metrics.volume_surge_ratio > 1.55) {
+        return false;
+    }
+    if (metrics.orderbook_snapshot.valid &&
+        metrics.orderbook_snapshot.spread_pct > 0.0028) {
+        return false;
+    }
+    if (metrics.order_book_imbalance < -0.20) {
+        return false;
+    }
+    if (metrics.buy_pressure < (metrics.sell_pressure * 0.84)) {
+        return false;
+    }
+    const double ret3 = rollingReturn(closes, 3);
+    const double ret8 = rollingReturn(closes, 8);
+    const bool very_thin_liquidity = metrics.liquidity_score < 32.0;
+    if (very_thin_liquidity) {
+        if (metrics.orderbook_snapshot.valid &&
+            metrics.orderbook_snapshot.spread_pct > 0.0022) {
+            return false;
+        }
+        if (metrics.order_book_imbalance < -0.08) {
+            return false;
+        }
+        if (metrics.buy_pressure < (metrics.sell_pressure * 0.95)) {
+            return false;
+        }
+        return (
+            current_price <= bb_middle * 1.0018 &&
+            current_price >= ema_fast * 0.9960 &&
+            rsi >= 32.0 && rsi <= 47.0 &&
+            ret3 <= 0.0012 &&
+            ret8 >= -0.0018
+        );
+    }
+    return (
+        current_price <= bb_middle * 1.0030 &&
+        current_price >= ema_fast * 0.9945 &&
+        rsi >= 30.0 && rsi <= 50.0 &&
+        ret3 <= 0.0018 &&
+        ret8 >= -0.0032
+    );
+}
+
+bool isRangingMinimalProbeOpportunity(
+    const analytics::CoinMetrics& metrics,
+    const std::vector<double>& closes,
+    double current_price,
+    double ema_fast,
+    double rsi,
+    double bb_middle
+) {
+    if (metrics.liquidity_score < 12.0 || metrics.liquidity_score >= 52.0) {
+        return false;
+    }
+    if (metrics.volume_surge_ratio < 0.20 || metrics.volume_surge_ratio > 2.00) {
+        return false;
+    }
+    if (metrics.orderbook_snapshot.valid &&
+        metrics.orderbook_snapshot.spread_pct > 0.0048) {
+        return false;
+    }
+    if (metrics.order_book_imbalance < -0.30) {
+        return false;
+    }
+    if (metrics.buy_pressure < (metrics.sell_pressure * 0.72)) {
+        return false;
+    }
+
+    const double ret3 = rollingReturn(closes, 3);
+    const double ret8 = rollingReturn(closes, 8);
+    return (
+        current_price <= bb_middle * 1.0065 &&
+        current_price >= ema_fast * 0.9890 &&
+        rsi >= 24.0 && rsi <= 57.0 &&
+        ret3 <= 0.0035 &&
+        ret8 >= -0.0060
     );
 }
 
@@ -318,6 +420,7 @@ struct EntryGateDecision {
     bool thin_liquidity_adaptive_path = false;
     bool ultra_thin_liquidity_probe_path = false;
     bool ranging_low_flow_path = false;
+    bool signal_supply_fallback_path = false;
 };
 
 EntryGateDecision evaluateEntryGate(
@@ -328,7 +431,8 @@ EntryGateDecision evaluateEntryGate(
     double ema_slow,
     double rsi,
     double bb_middle,
-    analytics::MarketRegime regime
+    analytics::MarketRegime regime,
+    bool enable_signal_supply_fallback
 ) {
     EntryGateDecision decision;
     const bool base_liquidity_pass = (
@@ -354,7 +458,9 @@ EntryGateDecision evaluateEntryGate(
         metrics.order_book_imbalance > -0.10 &&
         metrics.buy_pressure >= (metrics.sell_pressure * 0.90);
 
-    decision.core_liquidity_pass = base_liquidity_pass || narrow_liquidity_relief_pass;
+    decision.core_liquidity_pass =
+        base_liquidity_pass ||
+        narrow_liquidity_relief_pass;
     decision.low_liquidity_relaxed_path = (
         regime == analytics::MarketRegime::TRENDING_UP &&
         metrics.liquidity_score < 45.0 &&
@@ -392,6 +498,27 @@ EntryGateDecision evaluateEntryGate(
             rsi,
             bb_middle
         );
+    decision.signal_supply_fallback_path =
+        enable_signal_supply_fallback &&
+        regime == analytics::MarketRegime::RANGING &&
+        (
+            isRangingSignalSupplyFallbackOpportunity(
+                metrics,
+                closes,
+                current_price,
+                ema_fast,
+                rsi,
+                bb_middle
+            ) ||
+            isRangingMinimalProbeOpportunity(
+                metrics,
+                closes,
+                current_price,
+                ema_fast,
+                rsi,
+                bb_middle
+            )
+        );
 
     if (!decision.core_liquidity_pass) {
         if (regime == analytics::MarketRegime::TRENDING_UP &&
@@ -407,6 +534,10 @@ EntryGateDecision evaluateEntryGate(
             return decision;
         }
         if (decision.ranging_low_flow_path) {
+            decision.pass = true;
+            return decision;
+        }
+        if (decision.signal_supply_fallback_path) {
             decision.pass = true;
             return decision;
         }
@@ -513,6 +644,63 @@ EntryGateDecision evaluateEntryGate(
     }
 }
 
+struct EntryEvaluationSnapshot {
+    bool pass = false;
+    const char* reject_reason = "foundation_no_signal_entry_gate_unknown";
+    double ema_fast = 0.0;
+    double ema_slow = 0.0;
+    double rsi = 50.0;
+    double bb_middle = 0.0;
+    EntryGateDecision entry_gate;
+    MtfConfirmation mtf_confirmation;
+};
+
+EntryEvaluationSnapshot evaluateEntrySnapshot(
+    const analytics::CoinMetrics& metrics,
+    const std::vector<Candle>& candles,
+    double current_price,
+    analytics::MarketRegime regime,
+    bool signal_supply_experiment_enabled
+) {
+    EntryEvaluationSnapshot snapshot;
+    const std::vector<double> closes = analytics::TechnicalIndicators::extractClosePrices(candles);
+    if (closes.size() < 60) {
+        snapshot.reject_reason = "foundation_no_signal_data_window";
+        return snapshot;
+    }
+
+    snapshot.ema_fast = analytics::TechnicalIndicators::calculateEMA(closes, 12);
+    snapshot.ema_slow = analytics::TechnicalIndicators::calculateEMA(closes, 48);
+    snapshot.rsi = analytics::TechnicalIndicators::calculateRSI(closes, 14);
+    const auto bb = analytics::TechnicalIndicators::calculateBollingerBands(closes, current_price, 20, 2.0);
+    snapshot.bb_middle = bb.middle;
+
+    snapshot.entry_gate = evaluateEntryGate(
+        metrics,
+        closes,
+        current_price,
+        snapshot.ema_fast,
+        snapshot.ema_slow,
+        snapshot.rsi,
+        snapshot.bb_middle,
+        regime,
+        signal_supply_experiment_enabled
+    );
+    if (!snapshot.entry_gate.pass) {
+        snapshot.reject_reason = snapshot.entry_gate.reject_reason;
+        return snapshot;
+    }
+
+    snapshot.mtf_confirmation = evaluateMtfConfirmation(metrics, regime);
+    if (!snapshot.mtf_confirmation.pass) {
+        snapshot.reject_reason = snapshot.mtf_confirmation.reject_reason;
+        return snapshot;
+    }
+
+    snapshot.pass = true;
+    return snapshot;
+}
+
 } // namespace
 
 FoundationAdaptiveStrategy::FoundationAdaptiveStrategy(std::shared_ptr<network::UpbitHttpClient> client)
@@ -557,35 +745,23 @@ Signal FoundationAdaptiveStrategy::generateSignal(
         return signal;
     }
 
-    const std::vector<double> closes = analytics::TechnicalIndicators::extractClosePrices(candles);
-    if (closes.size() < 60) {
-        signal.reason = "foundation_no_signal_data_window";
-        return signal;
-    }
-
-    const double ema_fast = analytics::TechnicalIndicators::calculateEMA(closes, 12);
-    const double ema_slow = analytics::TechnicalIndicators::calculateEMA(closes, 48);
-    const double rsi = analytics::TechnicalIndicators::calculateRSI(closes, 14);
-    const auto bb = analytics::TechnicalIndicators::calculateBollingerBands(closes, current_price, 20, 2.0);
-    const EntryGateDecision entry_gate = evaluateEntryGate(
+    const bool signal_supply_experiment_enabled = isSignalSupplyFallbackEnabled();
+    const EntryEvaluationSnapshot entry_snapshot = evaluateEntrySnapshot(
         metrics,
-        closes,
+        candles,
         current_price,
-        ema_fast,
-        ema_slow,
-        rsi,
-        bb.middle,
-        regime.regime
+        regime.regime,
+        signal_supply_experiment_enabled
     );
-    if (!entry_gate.pass) {
-        signal.reason = entry_gate.reject_reason;
+    if (!entry_snapshot.pass) {
+        signal.reason = entry_snapshot.reject_reason;
         return signal;
     }
-    const MtfConfirmation mtf_confirmation = evaluateMtfConfirmation(metrics, regime.regime);
-    if (!mtf_confirmation.pass) {
-        signal.reason = mtf_confirmation.reject_reason;
-        return signal;
-    }
+    const EntryGateDecision& entry_gate = entry_snapshot.entry_gate;
+    const MtfConfirmation& mtf_confirmation = entry_snapshot.mtf_confirmation;
+    const double ema_fast = entry_snapshot.ema_fast;
+    const double ema_slow = entry_snapshot.ema_slow;
+    const double rsi = entry_snapshot.rsi;
 
     const double atr = safeAtr(candles, current_price);
     const double atr_pct = atr / std::max(1e-9, current_price);
@@ -594,6 +770,7 @@ Signal FoundationAdaptiveStrategy::generateSignal(
     const bool thin_liquidity_adaptive_path = entry_gate.thin_liquidity_adaptive_path;
     const bool ultra_thin_liquidity_probe_path = entry_gate.ultra_thin_liquidity_probe_path;
     const bool ranging_low_flow_path = entry_gate.ranging_low_flow_path;
+    const bool signal_supply_fallback_path = entry_gate.signal_supply_fallback_path;
     const bool thin_low_vol_context =
         (metrics.liquidity_score < 55.0 &&
          metrics.volatility > 0.0 &&
@@ -621,6 +798,10 @@ Signal FoundationAdaptiveStrategy::generateSignal(
     if (ranging_low_flow_path) {
         risk_pct = std::clamp(risk_pct * 0.78, 0.0024, 0.0088);
         reward_risk = std::max(reward_risk, 1.80);
+    }
+    if (signal_supply_fallback_path) {
+        risk_pct = std::clamp(risk_pct * 0.72, 0.0022, 0.0085);
+        reward_risk = std::max(reward_risk, 1.95);
     }
     if (thin_low_vol_context) {
         risk_pct = std::clamp(risk_pct * 0.88, 0.0025, 0.0098);
@@ -689,6 +870,8 @@ Signal FoundationAdaptiveStrategy::generateSignal(
         signal.position_size *= 0.48;
     } else if (ranging_low_flow_path) {
         signal.position_size *= 0.50;
+    } else if (signal_supply_fallback_path) {
+        signal.position_size *= 0.46;
     } else if (thin_low_vol_uptrend_context) {
         signal.position_size *= 0.55;
     } else if (thin_low_vol_context) {
@@ -727,6 +910,8 @@ Signal FoundationAdaptiveStrategy::generateSignal(
         signal.reason = "foundation_adaptive_regime_entry_thin_liq_adaptive";
     } else if (ranging_low_flow_path) {
         signal.reason = "foundation_adaptive_regime_entry_ranging_low_flow";
+    } else if (signal_supply_fallback_path) {
+        signal.reason = "foundation_adaptive_regime_entry_signal_supply_fallback";
     } else if (thin_low_vol_uptrend_context) {
         signal.reason = "foundation_adaptive_regime_entry_thin_lowvol_guarded";
     } else if (low_liquidity_relaxed_path) {
@@ -750,31 +935,15 @@ bool FoundationAdaptiveStrategy::shouldEnter(
     if (!enabled_ || current_price <= 0.0 || candles.size() < 80) {
         return false;
     }
-
-    const std::vector<double> closes = analytics::TechnicalIndicators::extractClosePrices(candles);
-    if (closes.size() < 60) {
-        return false;
-    }
-
-    const double ema_fast = analytics::TechnicalIndicators::calculateEMA(closes, 12);
-    const double ema_slow = analytics::TechnicalIndicators::calculateEMA(closes, 48);
-    const double rsi = analytics::TechnicalIndicators::calculateRSI(closes, 14);
-    const auto bb = analytics::TechnicalIndicators::calculateBollingerBands(closes, current_price, 20, 2.0);
-    const EntryGateDecision entry_gate = evaluateEntryGate(
+    const bool signal_supply_experiment_enabled = isSignalSupplyFallbackEnabled();
+    const EntryEvaluationSnapshot entry_snapshot = evaluateEntrySnapshot(
         metrics,
-        closes,
+        candles,
         current_price,
-        ema_fast,
-        ema_slow,
-        rsi,
-        bb.middle,
-        regime.regime
+        regime.regime,
+        signal_supply_experiment_enabled
     );
-    if (!entry_gate.pass) {
-        return false;
-    }
-    const MtfConfirmation mtf_confirmation = evaluateMtfConfirmation(metrics, regime.regime);
-    return mtf_confirmation.pass;
+    return entry_snapshot.pass;
 }
 
 bool FoundationAdaptiveStrategy::shouldExit(

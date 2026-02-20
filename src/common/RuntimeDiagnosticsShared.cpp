@@ -66,8 +66,16 @@ const char* classifySignalRejectionGroup(std::string_view reason) {
     if (reason.rfind("filtered_out_by_manager_", 0) == 0 || reason == "filtered_out_by_manager") {
         return "manager_prefilter";
     }
+    if (reason == "manager_soft_queue_promoted" ||
+        reason == "manager_probabilistic_primary_promoted" ||
+        reason == "manager_probabilistic_primary_fastpass") {
+        return "manager_prefilter";
+    }
     if (reason.rfind("no_best_signal_", 0) == 0 || reason == "no_best_signal") {
         return "best_signal_selection";
+    }
+    if (reason.rfind("probabilistic_", 0) == 0) {
+        return "signal_generation";
     }
     if (reason.rfind("blocked_", 0) == 0) {
         return "risk_or_execution_gate";

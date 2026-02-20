@@ -1,0 +1,114 @@
+{
+  "version": "v1",
+  "created_at_utc": "2026-02-20T00:00:00Z",
+  "frozen_at_utc": "2026-02-20T00:00:00Z",
+  "description": "Leakage-safe feature/label contract for probabilistic pattern model.",
+  "source_feature_manifest_json": "data/model_input/probabilistic_features_v1_full_20260220_181345/feature_dataset_manifest.json",
+  "source_validation_summary_json": "build/Release/logs/probabilistic_feature_validation_summary_full_20260220.json",
+  "timeframe_anchor": "1m",
+  "multi_tf_context": [
+    "5m",
+    "15m",
+    "60m",
+    "240m"
+  ],
+  "roundtrip_cost_bps_default": 12.0,
+  "row_schema": {
+    "column_count": 43,
+    "column_order": [
+      "timestamp",
+      "timestamp_utc",
+      "market",
+      "close",
+      "ret_1m",
+      "ret_5m",
+      "ret_20m",
+      "ema_gap_12_26",
+      "rsi_14",
+      "atr_pct_14",
+      "bb_width_20",
+      "vol_ratio_20",
+      "notional_ratio_20",
+      "ctx_5m_age_min",
+      "ctx_5m_ret_3",
+      "ctx_5m_ret_12",
+      "ctx_5m_ema_gap_20",
+      "ctx_5m_rsi_14",
+      "ctx_5m_atr_pct_14",
+      "ctx_15m_age_min",
+      "ctx_15m_ret_3",
+      "ctx_15m_ret_12",
+      "ctx_15m_ema_gap_20",
+      "ctx_15m_rsi_14",
+      "ctx_15m_atr_pct_14",
+      "ctx_60m_age_min",
+      "ctx_60m_ret_3",
+      "ctx_60m_ret_12",
+      "ctx_60m_ema_gap_20",
+      "ctx_60m_rsi_14",
+      "ctx_60m_atr_pct_14",
+      "ctx_240m_age_min",
+      "ctx_240m_ret_3",
+      "ctx_240m_ret_12",
+      "ctx_240m_ema_gap_20",
+      "ctx_240m_rsi_14",
+      "ctx_240m_atr_pct_14",
+      "regime_trend_60_sign",
+      "regime_trend_240_sign",
+      "regime_vol_60_atr_pct",
+      "label_up_h1",
+      "label_up_h5",
+      "label_edge_bps_h5"
+    ],
+    "label_columns": [
+      "label_up_h1",
+      "label_up_h5",
+      "label_edge_bps_h5"
+    ]
+  },
+  "feature_groups": [
+    "price_structure",
+    "momentum",
+    "volatility",
+    "volume_flow",
+    "liquidity_microstructure",
+    "regime_context"
+  ],
+  "label_targets": [
+    {
+      "name": "direction_up_prob_h1",
+      "type": "classification_probability",
+      "horizon_bars": 1
+    },
+    {
+      "name": "direction_up_prob_h5",
+      "type": "classification_probability",
+      "horizon_bars": 5
+    },
+    {
+      "name": "cost_aware_edge_bps_h5",
+      "type": "regression",
+      "horizon_bars": 5
+    }
+  ],
+  "leakage_rules": {
+    "feature_timestamp_rule": "Features at t must use only candles <= t.",
+    "label_timestamp_rule": "Labels must use candles in (t, t+h] only.",
+    "forbidden_fields": [
+      "future_high",
+      "future_low",
+      "future_close",
+      "future_volume",
+      "post_trade_pnl"
+    ]
+  },
+  "cost_model": {
+    "fee_side_pct": "read_from_runtime_config",
+    "slippage_pct": "read_from_runtime_execution_guard",
+    "edge_unit": "bps_after_cost"
+  },
+  "split_policy": {
+    "mode": "walk_forward_time_ordered",
+    "random_split_allowed": false
+  }
+}

@@ -581,7 +581,14 @@ bool requiresTypedArchetype(const std::string& strategy_name) {
 }
 
 bool isAlphaHeadFallbackCandidate(const strategy::Signal& signal, bool alpha_head_mode) {
-    return alpha_head_mode && signal.reason == "alpha_head_fallback_candidate";
+    if (alpha_head_mode && signal.reason == "alpha_head_fallback_candidate") {
+        return true;
+    }
+    const auto& cfg = Config::getInstance().getEngineConfig();
+    if (!cfg.enable_probabilistic_runtime_model || !cfg.probabilistic_runtime_primary_mode) {
+        return false;
+    }
+    return signal.reason == "foundation_adaptive_regime_entry_signal_supply_fallback";
 }
 
 void normalizeSignalStopLossByRegime(strategy::Signal& signal, analytics::MarketRegime regime) {

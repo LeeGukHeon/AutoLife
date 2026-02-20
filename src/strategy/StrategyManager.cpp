@@ -1,5 +1,6 @@
 #include "strategy/StrategyManager.h"
 #include "strategy/FoundationRiskPipeline.h"
+#include "analytics/TechnicalIndicators.h"
 #include "common/Logger.h"
 #include "common/Config.h"
 #include "risk/RiskManager.h"
@@ -20,6 +21,214 @@ std::string toLowerCopy(const std::string& s) {
     std::transform(out.begin(), out.end(), out.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return out;
+}
+
+bool managerSoftQueueEnabled() {
+    const auto& cfg = Config::getInstance().getEngineConfig();
+    return (
+        cfg.manager_soft_queue_enabled &&
+        cfg.enable_probabilistic_runtime_model &&
+        cfg.probabilistic_runtime_primary_mode
+    );
+}
+
+bool allowManagerSoftQueuePromotion(
+    const foundation::FilterDecision& decision,
+    const Signal& signal,
+    analytics::MarketRegime regime
+) {
+    if (regime != analytics::MarketRegime::RANGING &&
+        regime != analytics::MarketRegime::TRENDING_UP) {
+        return false;
+    }
+    const std::string reason = toLowerCopy(decision.reject_reason);
+    const bool reason_ok =
+        reason == "filtered_out_by_manager_ev_quality_floor" ||
+        reason == "filtered_out_by_manager_strength" ||
+        reason == "filtered_out_by_manager_rr_guard_ev" ||
+        reason == "filtered_out_by_manager_rr_guard_strength" ||
+        reason == "filtered_out_by_manager_history_guard_ev" ||
+        reason == "filtered_out_by_manager_history_guard_strength" ||
+        reason == "filtered_out_by_manager_trend_off_regime_ev" ||
+        reason == "filtered_out_by_manager_trend_off_regime_strength";
+    if (!reason_ok) {
+        return false;
+    }
+
+    const auto& cfg = Config::getInstance().getEngineConfig();
+    const double strength_gap = std::max(0.0, decision.required_strength - signal.strength);
+    const double ev_gap = std::max(0.0, decision.required_expected_value - signal.expected_value);
+    double allowed_strength_gap = cfg.manager_soft_queue_max_strength_gap;
+    double allowed_ev_gap = cfg.manager_soft_queue_max_ev_gap;
+    double min_liquidity = 36.0;
+    if (signal.probabilistic_runtime_applied) {
+        const double margin = signal.probabilistic_h5_margin;
+        const double margin_weight = std::clamp((margin + 0.03) / 0.10, 0.0, 1.0);
+        allowed_strength_gap += margin_weight * 0.04;
+        allowed_ev_gap += margin_weight * 0.00016;
+        min_liquidity = 36.0 - (margin_weight * 10.0);
+    }
+    if (strength_gap > allowed_strength_gap || ev_gap > allowed_ev_gap) {
+        return false;
+    }
+    if (signal.liquidity_score < min_liquidity) {
+        return false;
+    }
+    if (signal.volatility > 0.0 && signal.volatility > 3.8) {
+        return false;
+    }
+    if (signal.expected_value < -0.00020) {
+        return false;
+    }
+    const double rr = foundation::rewardRiskRatio(signal);
+    if (rr > 0.0 && rr < 1.02) {
+        return false;
+    }
+    return true;
+}
+
+bool probabilisticPrimaryModeEnabledForManager() {
+    const auto& cfg = Config::getInstance().getEngineConfig();
+    return cfg.enable_probabilistic_runtime_model && cfg.probabilistic_runtime_primary_mode;
+}
+
+bool isProbabilisticPromotionEligibleReason(const std::string& reason) {
+    return (
+        reason == "filtered_out_by_manager_strength" ||
+        reason == "filtered_out_by_manager_ev_quality_floor" ||
+        reason == "filtered_out_by_manager_rr_guard_strength" ||
+        reason == "filtered_out_by_manager_rr_guard_ev" ||
+        reason == "filtered_out_by_manager_history_guard_strength" ||
+        reason == "filtered_out_by_manager_history_guard_ev" ||
+        reason == "filtered_out_by_manager_trend_off_regime_strength" ||
+        reason == "filtered_out_by_manager_trend_off_regime_ev"
+    );
+}
+
+bool allowProbabilisticPrimaryPromotion(
+    const foundation::FilterDecision& decision,
+    const Signal& signal,
+    analytics::MarketRegime regime
+) {
+    if (!probabilisticPrimaryModeEnabledForManager()) {
+        return false;
+    }
+    if (!signal.probabilistic_runtime_applied) {
+        return false;
+    }
+    if (!isProbabilisticPromotionEligibleReason(decision.reject_reason)) {
+        return false;
+    }
+
+    const bool hostile_regime =
+        regime == analytics::MarketRegime::HIGH_VOLATILITY ||
+        regime == analytics::MarketRegime::TRENDING_DOWN;
+    const auto& cfg = Config::getInstance().getEngineConfig();
+    const double margin = signal.probabilistic_h5_margin;
+    double required_margin = cfg.probabilistic_primary_promotion_min_margin;
+    if (hostile_regime) {
+        required_margin = std::max(0.010, required_margin + 0.020);
+    }
+    if (margin < required_margin) {
+        return false;
+    }
+    double min_calibrated = cfg.probabilistic_primary_promotion_min_calibrated;
+    if (hostile_regime) {
+        min_calibrated = std::max(0.52, min_calibrated + 0.04);
+    }
+    if (signal.probabilistic_h5_calibrated < min_calibrated) {
+        return false;
+    }
+    if (signal.liquidity_score < (hostile_regime ? 52.0 : 32.0)) {
+        return false;
+    }
+    if (hostile_regime && signal.expected_value < 0.00015) {
+        return false;
+    }
+    if (signal.expected_value < -0.00035) {
+        return false;
+    }
+
+    const double strength_gap = std::max(0.0, decision.required_strength - signal.strength);
+    const double ev_gap = std::max(0.0, decision.required_expected_value - signal.expected_value);
+    double max_strength_gap = cfg.probabilistic_primary_promotion_max_strength_gap;
+    double max_ev_gap = cfg.probabilistic_primary_promotion_max_ev_gap;
+    if (signal.probabilistic_h5_margin > 0.02) {
+        max_strength_gap += 0.04;
+        max_ev_gap += 0.00012;
+    }
+    if (hostile_regime) {
+        max_strength_gap = std::min(max_strength_gap, 0.12);
+        max_ev_gap = std::min(max_ev_gap, 0.00045);
+    }
+    if (strength_gap > max_strength_gap || ev_gap > max_ev_gap) {
+        return false;
+    }
+    const double rr = foundation::rewardRiskRatio(signal);
+    if (rr > 0.0 && rr < 1.00) {
+        return false;
+    }
+    return true;
+}
+
+bool allowProbabilisticPrimaryFastPass(
+    const Signal& signal,
+    analytics::MarketRegime regime
+) {
+    if (!probabilisticPrimaryModeEnabledForManager()) {
+        return false;
+    }
+    if (!signal.probabilistic_runtime_applied) {
+        return false;
+    }
+
+    const bool hostile_regime =
+        regime == analytics::MarketRegime::HIGH_VOLATILITY ||
+        regime == analytics::MarketRegime::TRENDING_DOWN;
+    const auto& cfg = Config::getInstance().getEngineConfig();
+
+    double required_margin = cfg.probabilistic_primary_promotion_min_margin;
+    required_margin += hostile_regime ? 0.018 : 0.010;
+    required_margin = std::max(required_margin, hostile_regime ? 0.015 : -0.005);
+    if (signal.probabilistic_h5_margin < required_margin) {
+        return false;
+    }
+
+    double required_calibrated = cfg.probabilistic_primary_promotion_min_calibrated;
+    required_calibrated += hostile_regime ? 0.05 : 0.03;
+    required_calibrated = std::clamp(required_calibrated, hostile_regime ? 0.55 : 0.50, 0.90);
+    if (signal.probabilistic_h5_calibrated < required_calibrated) {
+        return false;
+    }
+
+    if (signal.liquidity_score < (hostile_regime ? 54.0 : 34.0)) {
+        return false;
+    }
+    if (signal.expected_value < (hostile_regime ? 0.00005 : -0.00020)) {
+        return false;
+    }
+    if (signal.volatility > 0.0 && signal.volatility > (hostile_regime ? 4.8 : 5.5)) {
+        return false;
+    }
+
+    const double rr = foundation::rewardRiskRatio(signal);
+    if (rr > 0.0 && rr < (hostile_regime ? 1.02 : 0.98)) {
+        return false;
+    }
+    return true;
+}
+
+double probabilisticPromotionPositionScale(
+    const Signal& signal,
+    analytics::MarketRegime regime
+) {
+    const double margin = signal.probabilistic_h5_margin;
+    double scale = 0.55 + (std::clamp((margin + 0.02) / 0.14, 0.0, 1.0) * 0.25);
+    if (regime == analytics::MarketRegime::HIGH_VOLATILITY ||
+        regime == analytics::MarketRegime::TRENDING_DOWN) {
+        scale *= 0.85;
+    }
+    return std::clamp(scale, 0.45, 0.85);
 }
 
 int directionFromType(SignalType type) {
@@ -212,6 +421,72 @@ double computeCoreRescueStrength(
     return std::clamp(strength, 0.36, 0.78);
 }
 
+bool isCoreRescueReasonEligible(const std::string& reason) {
+    return (
+        reason == "foundation_no_signal_liquidity_volume_gate" ||
+        reason == "foundation_no_signal_ranging_structure" ||
+        reason == "foundation_no_signal_bear_rebound_guard" ||
+        reason == "foundation_no_signal_uptrend_thin_context" ||
+        reason == "foundation_no_signal_uptrend_exhaustion_guard"
+    );
+}
+
+bool passesCoreRescueSafetyFloor(
+    const analytics::CoinMetrics& metrics,
+    const std::vector<Candle>& candles,
+    double current_price,
+    const analytics::RegimeAnalysis& regime
+) {
+    if (candles.size() < 80 || current_price <= 0.0) {
+        return false;
+    }
+    if (metrics.liquidity_score < 32.0 || metrics.volume_surge_ratio < 0.40) {
+        return false;
+    }
+    if (metrics.volatility > 0.0 && metrics.volatility > 7.8) {
+        return false;
+    }
+    if (metrics.orderbook_snapshot.valid && metrics.orderbook_snapshot.spread_pct > 0.0035) {
+        return false;
+    }
+
+    if (metrics.buy_pressure > 0.0 || metrics.sell_pressure > 0.0) {
+        const double sell_guard = std::max(1e-9, metrics.sell_pressure);
+        const double buy_sell_ratio = metrics.buy_pressure / sell_guard;
+        if (buy_sell_ratio < 0.80) {
+            return false;
+        }
+    }
+
+    if (regime.regime == analytics::MarketRegime::TRENDING_DOWN ||
+        regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
+        if (metrics.order_book_imbalance < -0.16) {
+            return false;
+        }
+        if (metrics.buy_pressure < metrics.sell_pressure * 0.92) {
+            return false;
+        }
+    }
+
+    const auto closes = analytics::TechnicalIndicators::extractClosePrices(candles);
+    if (closes.size() < 24) {
+        return false;
+    }
+    const double close_now = closes.back();
+    const double close_8 = closes[closes.size() - 9];
+    const double close_20 = closes[closes.size() - 21];
+    if (close_now <= 0.0 || close_8 <= 0.0 || close_20 <= 0.0) {
+        return false;
+    }
+    const double ret8 = (close_now - close_8) / close_8;
+    const double ret20 = (close_now - close_20) / close_20;
+    if (ret20 < -0.028 || ret8 < -0.015) {
+        return false;
+    }
+
+    return true;
+}
+
 Signal buildCoreRescueCandidate(
     const std::shared_ptr<IStrategy>& strategy,
     const std::string& market,
@@ -219,14 +494,26 @@ Signal buildCoreRescueCandidate(
     const std::vector<Candle>& candles,
     double current_price,
     double available_capital,
-    const analytics::RegimeAnalysis& regime
+    const analytics::RegimeAnalysis& regime,
+    const std::string& upstream_no_signal_reason
 ) {
     Signal out;
     if (!strategy || candles.size() < 20 || current_price <= 0.0 || available_capital <= 0.0) {
         return out;
     }
 
-    if (!strategy->shouldEnter(market, metrics, candles, current_price, regime)) {
+    const auto info = strategy->getInfo();
+    const bool is_foundation_strategy = (toLowerCopy(info.name).find("foundation") != std::string::npos);
+
+    if (is_foundation_strategy) {
+        // Rescue path should only activate for known bottleneck rejections and still pass a strict safety floor.
+        if (!isCoreRescueReasonEligible(upstream_no_signal_reason)) {
+            return out;
+        }
+        if (!passesCoreRescueSafetyFloor(metrics, candles, current_price, regime)) {
+            return out;
+        }
+    } else if (!strategy->shouldEnter(market, metrics, candles, current_price, regime)) {
         return out;
     }
 
@@ -237,7 +524,6 @@ Signal buildCoreRescueCandidate(
         now_ms = candles.back().timestamp;
     }
 
-    const auto info = strategy->getInfo();
     const double entry_price = current_price;
     double stop_loss = strategy->calculateStopLoss(entry_price, candles);
     if (!(stop_loss > 0.0) || stop_loss >= entry_price) {
@@ -551,7 +837,8 @@ Signal StrategyManager::processStrategySignal(
                 candles,
                 current_price,
                 available_capital,
-                regime
+                regime,
+                no_signal_reason
             );
             if (rescue_signal.type != SignalType::NONE) {
                 signal = std::move(rescue_signal);
@@ -892,6 +1179,8 @@ std::vector<Signal> StrategyManager::filterSignalsWithDiagnostics(
 ) {
     std::vector<Signal> filtered;
     const bool core_signal_ownership = coreSignalOwnershipEnabledForManager();
+    const bool manager_soft_queue_enabled = managerSoftQueueEnabled();
+    const auto& cfg = Config::getInstance().getEngineConfig();
     const LiveSignalBottleneckHint live_hint = getLiveSignalBottleneckHint();
     if (diagnostics != nullptr) {
         diagnostics->input_count = static_cast<int>(signals.size());
@@ -931,6 +1220,53 @@ std::vector<Signal> StrategyManager::filterSignalsWithDiagnostics(
         const foundation::FilterDecision decision = foundation::evaluateFilter(input);
         if (decision.pass) {
             filtered.push_back(signal);
+            continue;
+        }
+
+        if (allowProbabilisticPrimaryFastPass(signal, regime)) {
+            Signal promoted = signal;
+            if (promoted.position_size > 0.0) {
+                promoted.position_size *= std::clamp(
+                    probabilisticPromotionPositionScale(promoted, regime) * 1.10,
+                    0.45,
+                    1.00
+                );
+            }
+            promoted.reason = "manager_probabilistic_primary_fastpass";
+            filtered.push_back(promoted);
+            incrementRejectionReason(
+                diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                "manager_probabilistic_primary_fastpass"
+            );
+            continue;
+        }
+
+        if (manager_soft_queue_enabled &&
+            allowManagerSoftQueuePromotion(decision, signal, regime)) {
+            Signal promoted = signal;
+            if (promoted.position_size > 0.0) {
+                promoted.position_size *= cfg.manager_soft_queue_position_scale;
+            }
+            promoted.reason = "manager_soft_queue_promoted";
+            filtered.push_back(promoted);
+            incrementRejectionReason(
+                diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                "manager_soft_queue_promoted"
+            );
+            continue;
+        }
+
+        if (allowProbabilisticPrimaryPromotion(decision, signal, regime)) {
+            Signal promoted = signal;
+            if (promoted.position_size > 0.0) {
+                promoted.position_size *= probabilisticPromotionPositionScale(promoted, regime);
+            }
+            promoted.reason = "manager_probabilistic_primary_promoted";
+            filtered.push_back(promoted);
+            incrementRejectionReason(
+                diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                "manager_probabilistic_primary_promoted"
+            );
             continue;
         }
 
@@ -1103,11 +1439,29 @@ double StrategyManager::calculateSignalScore(const Signal& signal) const {
         score *= (1.0 + ev_boost);
     }
 
+    if (signal.probabilistic_runtime_applied) {
+        const bool hostile_regime =
+            signal.market_regime == analytics::MarketRegime::HIGH_VOLATILITY ||
+            signal.market_regime == analytics::MarketRegime::TRENDING_DOWN;
+        const double margin_conf =
+            std::clamp((signal.probabilistic_h5_margin + 0.02) / 0.16, 0.0, 1.0);
+        const double calibrated_conf =
+            std::clamp((signal.probabilistic_h5_calibrated - 0.50) / 0.25, 0.0, 1.0);
+        double boost = 1.0 + (margin_conf * 0.30) + (calibrated_conf * 0.10);
+        if (hostile_regime) {
+            boost = 1.0 + ((boost - 1.0) * 0.70);
+        }
+        score *= std::clamp(boost, 0.90, 1.35);
+    }
+
     return score;
 }
 
 StrategyManager::StrategyRole StrategyManager::detectStrategyRole(const std::string& strategy_name) const {
     const std::string n = toLowerCopy(strategy_name);
+    if (n.find("probabilistic primary") != std::string::npos) {
+        return StrategyRole::FOUNDATION;
+    }
     if (n.find("foundation") != std::string::npos) {
         return StrategyRole::FOUNDATION;
     }

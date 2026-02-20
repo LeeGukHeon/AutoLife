@@ -1,123 +1,103 @@
-# Stage 15 Execution TODO (Reset Baseline)
+﻿# Stage 15 Execution TODO (Active)
 
 Last updated: 2026-02-20
-Status: `RESET_BASELINE_ACTIVE`
+Status: `PROBABILISTIC_TRANSITION_ACTIVE`
 
-## Reset Intent
-- End log-heavy operation and rebuild validation reliability first.
-- Prioritize validation integrity over repeated parameter tuning.
-- Scope:
-  - `run_realdata_candidate_loop`
-  - `run_profitability_matrix`
-  - `run_candidate_train_eval_cycle`
-  - `walk_forward_validate`
+## Purpose
+- 장문 로그 중심 운영을 중단하고, 현재 실행 가능한 항목만 유지.
+- 목표: 확률형 학습 기반 + adaptive runtime 결합 구조로 전환.
 
-## Archived History
-- Full execution log moved to:
-  - `docs/archive/TODO_STAGE15_EXECUTION_PLAN_2026-02-13_FULLLOG_2026-02-19.md`
-- One-off large script audit docs moved to:
-  - `docs/archive/SCRIPT_READING_TUNE_CANDIDATE_GATE_2026-02-19.md`
-  - `docs/archive/TUNE_CANDIDATE_GATE_LINE_AUDIT_2026-02-19.md`
-
-## Minimal Active Docs
-- `docs/TODO_STAGE15_EXECUTION_PLAN_2026-02-13.md`
-- `docs/ADAPTIVE_ENGINE_REBUILD_PLAN_2026-02-19.md`
-- `docs/VALIDATION_METHOD_REVIEW_2026-02-19.md`
-- `docs/VERIFICATION_RESET_BASELINE_2026-02-19.md`
-- `docs/FOUNDATION_ENGINE_STRATEGY_REVIEW_2026-02-19.md`
+## Active Docs (Minimal)
 - `docs/CHAPTER_CURRENT.md`
 - `docs/CHAPTER_HISTORY_BRIEF.md`
-- `docs/STRICT_GATE_RUNBOOK_2026-02-13.md`
-- `docs/TARGET_ARCHITECTURE.md`
-- `docs/FILE_USAGE_MAP.md`
-- `docs/DELETE_WAVE_MANIFEST.md`
+- `docs/PROBABILISTIC_HYBRID_TRANSITION_2026-02-20.md`
+- `docs/TODO_STAGE15_EXECUTION_PLAN_2026-02-13.md`
 
-## Documentation Discipline
-- At end of every work batch, update:
-  - `docs/CHAPTER_CURRENT.md` with detailed completed items and remaining tasks.
-  - `docs/CHAPTER_HISTORY_BRIEF.md` with a short chapter-level summary.
-- Keep old details in archive docs only. Do not append long logs to active TODO docs.
-
-## Current Batch Order (Enforced)
-1. Documentation sync first.
-  - update plan/todo/chapter docs before code changes
-2. Runtime legacy-path disconnect hardening.
-  - remove unreachable legacy selection logic from active C++ path
-3. Verification alignment.
-  - adaptive profile default
-  - legacy gate only for compatibility checks
-4. Build and smoke verification.
-  - release build + adaptive smoke (+ optional legacy compatibility smoke)
-5. Chapter close update.
-  - completed items + remaining tasks only
-
-## Non-Negotiable Rules
-- Keep validation sequential: `--max-workers 1`.
-- No coin hardcoding. Use pattern/regime level logic only.
-- Re-run matrix validation after every tuning application.
-- Use adaptive validation profile as primary (`--validation-profile adaptive`).
-- Keep legacy threshold gate only for compatibility checks (`--validation-profile legacy_gate`).
-- Use `--data-mode fixed` as gate baseline; `refresh_if_missing/refresh_force` only for robustness checks.
-- Keep anti-overfitting safeguards:
-  - dedicated latest holdout slice
-  - walk-forward required before promotion
-  - no promotion from single-dataset gain
-
-## P0: Verification Integrity Recovery (Must Pass First)
-1. Add post-tune matrix re-run in `run_realdata_candidate_loop`.
-2. Pass explicit source/build config paths from loop to matrix script.
-3. Separate promotion decision for `core_full` from combined overall gate logic.
-4. Enforce latest-time holdout split in `run_candidate_train_eval_cycle`.
-5. Add explicit adaptive state I/O mode control in `walk_forward_validate`.
-
-Definition of Done (P0):
-- Gate outputs are reproducible on repeated runs.
-- Final gate report reflects tuned config state.
-- Split and walk-forward modes are explicit in artifacts.
-
-## P1: Structure Simplification
-1. Split `tune_candidate_gate_trade_density.py` into clear phases.
-2. Move objective and selector-veto policy into dedicated modules.
-3. Freeze artifact schema contracts for JSON/CSV outputs.
-
-Definition of Done (P1):
-- Start removing 2k+ line single-function blocks.
-- Enable phase-level isolated tests.
-
-## P2: Strategy Improvement (After P0/P1)
-1. Stabilize multi-TF signal combination (1m, 15m, 1h, 4h).
-2. Validate risk-control paths by regime (downtrend, range, high-vol).
-3. Run integrated shadow parity and dry-run before live promotion.
-
-## Local Build Baseline
-- CMake path:
+## Build Path (Fixed)
+- CMake executable:
   - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe`
-- Build command:
-```powershell
-D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release --target AutoLifeTrading
-```
+- vcpkg toolchain:
+  - `D:\MyApps\vcpkg\scripts\buildsystems\vcpkg.cmake`
 
-## Active Progress Board
-- [x] R0.1 Doc-first batch applied + StrategyManager legacy select dead-path prune + README baseline normalization (2026-02-19)
-- [x] R0.2 Runtime strategy registration hard-switched to foundation-only path (legacy pack disconnected) (2026-02-19)
-- [x] R0.3 Legacy v2 strategy files compile-excluded and physically deleted from active tree (2026-02-19)
-- [x] R0.4 `include/v2`, `src/v2` folder flatten 완료 (경로 재배치 + CMake/tests/scripts 반영 + smoke 검증) (2026-02-19)
-- [x] R0.5 Remaining legacy shadow/v2 stack fully removed from runtime + CMake + tests/scripts (2026-02-19)
-- [x] R0.6 V2 naming cleanup + residual legacy preset removal (`run_verification.py`, `legacy_fallback` 삭제, runtime `getPrimaryTakeProfit` 명명 정리) (2026-02-19)
-- [x] R0.7 Candidate-generation attribution fix + backtest synthetic liquidity rebuild (`StrategyManager` no-signal reason propagation, `BacktestRuntime` notional-based liquidity model) (2026-02-20)
-- [x] R0.8 Hostile uptrend RR/EV recalibration (`FoundationAdaptiveStrategy`) + multi adaptive reproducibility pass (2026-02-20)
-- [x] R0.9 Real-data period-shift verification (6-market MTF windows) + strict-parity 15m companion dependency identified (2026-02-20)
-- [x] R0.10 Native 15m companion enforcement + MTF entry integration (scanner/live/strategy/validation-scripts unified) (2026-02-20)
-- [x] R0.11 Entry-quality contextual edge-floor commonization (backtest/live shared) + real-data 6set revalidation (`v5_contextual_edge_floor_only`) (2026-02-20)
-- [x] P0.1 Fix tune-before-final-report mismatch (2026-02-19)
-- [x] P0.2 Fix source config path wiring (2026-02-19)
-- [ ] P0.3 Split promotion gate logic
-- [ ] P0.4 Enforce latest-time holdout split
-- [ ] P0.5 Add explicit walk-forward state I/O mode
-- [ ] P1.1 Split tuner phases
-- [ ] P1.2 Modularize objective and selector
-- [ ] P1.3 Freeze artifact schema contracts
+## Archive Docs
+- `docs/archive/CHAPTER_CURRENT_FULLLOG_2026-02-20.md`
+- `docs/archive/TODO_STAGE15_EXECUTION_PLAN_2026-02-13_FULLLOG_2026-02-19.md`
+- `docs/archive/SCRIPT_READING_TUNE_CANDIDATE_GATE_2026-02-19.md`
+- `docs/archive/TUNE_CANDIDATE_GATE_LINE_AUDIT_2026-02-19.md`
 
-## Exit Criteria
-- Distinguish whether `overall_gate_pass=false` is caused by strategy/data or by validation design.
-- Do not run long tuning batches before P0 completion.
+## Current Progress
+- [x] `60m/240m` long-horizon bundle collected (EOS 404 excluded).
+- [x] `5m/15m` bundle collected.
+- [x] `1m` recent-2y bundle finish (`2024-02-20`~now, 9 markets).
+- [x] Fetch/manifest reliability hardening.
+  - immediate progress flush (`run_state/progress_pct/current_job`)
+  - stagnant pagination break in candle fetch
+- [x] Feature/label base builder added.
+  - `scripts/build_probabilistic_feature_dataset.py`
+- [x] Full feature build (`prob_features_v1`) completion + manifest freeze.
+  - output: `data/model_input/probabilistic_features_v1_full_20260220_181345`
+  - manifest: `feature_dataset_manifest.json`
+  - rows: `9,477,036`
+- [x] Data source contract fixed.
+  - Upbit: raw OHLCV only
+  - Indicators/labels/features: local deterministic generation
+- [x] Full feature dataset quality validation completed.
+  - script: `scripts/validate_probabilistic_feature_dataset.py`
+  - output: `build/Release/logs/probabilistic_feature_validation_summary_full_20260220.json`
+  - result: `pass (9/9, 9,477,036 rows)`
+- [x] Contract freeze completed.
+  - `config/model/probabilistic_feature_contract_v1.json` updated with fixed 43-column schema
+- [x] Split manifest regenerated on final feature dataset.
+  - `data/model_input/probabilistic_features_v1_full_20260220_181345/probabilistic_split_manifest_v1.json`
+- [x] Baseline regenerated on frozen split.
+  - script: `scripts/generate_probabilistic_baseline.py`
+  - output: `build/Release/logs/probabilistic_baseline_summary_full_20260220.json`
+  - weighted test `h5_mean_edge_bps=-12.1554`
+- [x] Initial probabilistic model training/calibration completed.
+  - script: `scripts/train_probabilistic_pattern_model.py`
+  - output: `build/Release/logs/probabilistic_model_train_summary_full_20260220.json`
+  - model dir: `build/Release/models/probabilistic_pattern_v1_full_20260220`
+  - weighted test:
+    - `h5_logloss=0.6606` (vs baseline `0.6743`)
+    - `h5_brier=0.2342` (vs baseline `0.2406`)
+    - `h5_accuracy=0.6025` (same as baseline)
+    - selected-edge (`~11.05%` coverage): `-10.5596 bps`
+- [x] Walk-forward decomposition report completed.
+  - script: `scripts/generate_probabilistic_walkforward_report.py`
+  - output: `build/Release/logs/probabilistic_walkforward_report_full_20260220.json`
+  - key finding: `trend_up_sync` quality bottleneck under low selected coverage
+- [x] Inference parity validation completed.
+  - script: `scripts/validate_probabilistic_inference_parity.py`
+  - output: `build/Release/logs/probabilistic_inference_parity_full_20260220.json`
+  - result: `pass` (`worst_cal_diff=1.721e-15`, tol `1e-9`)
+- [x] Runtime deployment bundle exported.
+  - script: `scripts/export_probabilistic_runtime_bundle.py`
+  - output: `config/model/probabilistic_runtime_bundle_v1.json`
+  - policy: latest fold per market
+- [x] Runtime bundle parity validated.
+  - script: `scripts/validate_runtime_bundle_parity.py`
+  - output: `build/Release/logs/probabilistic_runtime_bundle_parity_full_20260220.json`
+  - result: `pass` (`worst_diff=1.110e-16`, tol `1e-9`)
+- [x] C++ runtime inference/feature path 연결 1차 완료.
+  - `src/analytics/ProbabilisticRuntimeFeatures.cpp` 추가
+  - `src/runtime/LiveTradingRuntime.cpp` / `src/runtime/BacktestRuntime.cpp` 보정 경로 연결
+  - build: `AutoLifeTrading` Release 성공
+- [x] Runtime↔Risk 결합 2차 완료 (확률 메타 직결).
+  - `Signal/Position/TradeHistory`에 확률 메타(`h1/h5 cal, threshold, margin`) 추가
+  - `RiskManager` 후행 제어에 확률 마진 반영
+    - adaptive trailing gap
+    - stagnation/recycle time guard
+    - adaptive partial-exit ratio
+  - 라이브 비동기 체결 경로에 pending metadata 적용(체결 시점 metadata 보존)
+  - 상태 저장/복원 및 저널 리플레이(open/close/reduce) 확률 메타 직렬화 반영
+
+## Next (Strict Order)
+1. Runtime↔Risk 결합 반영 기준 baseline 재생성(현재 로직 스냅샷 고정).
+2. Live/backtest same-slice regression(손익/공급량/후행리스크 telemetry) 검증.
+3. Hard gate 비활성 유지 상태에서 score/expected_value + risk coupling 영향 분석.
+
+## Guardrails
+- Sequential only (`--max-workers 1` policy).
+- No coin hardcoding (pattern/regime only).
+- No lookahead leakage.
+- Live/backtest data and feature parity required.

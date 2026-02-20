@@ -38,8 +38,11 @@ def parse_args(argv=None) -> argparse.Namespace:
 
 
 def to_unix_ms(item):
-    if "timestamp" in item:
-        return int(item["timestamp"])
+    if "timestamp" in item and item.get("timestamp") is not None:
+        try:
+            return int(float(item["timestamp"]))
+        except Exception:
+            pass
     if "candle_date_time_utc" in item:
         dt = datetime.strptime(item["candle_date_time_utc"], "%Y-%m-%dT%H:%M:%S")
         dt = dt.replace(tzinfo=timezone.utc)
@@ -105,7 +108,12 @@ def main(argv=None) -> int:
         cursor_utc = datetime.fromisoformat(args.end_utc.replace("Z", "+00:00")).astimezone(timezone.utc)
 
     endpoint = f"/v1/candles/minutes/{args.unit}"
-    rows = []
+    rows_by_ts = {}
+    prev_oldest_ts = None
+    stagnant_cursor_count = 0
+    stagnant_unique_count = 0
+    broke_on_stagnant_cursor = False
+    broke_on_stagnant_unique = False
     req_count = 0
     ok_count = 0
     err_429_count = 0
@@ -115,8 +123,8 @@ def main(argv=None) -> int:
     throttle_events = []
     recover_events = []
 
-    while len(rows) < args.candles:
-        remaining = args.candles - len(rows)
+    while len(rows_by_ts) < args.candles:
+        remaining = args.candles - len(rows_by_ts)
         count = min(args.chunk_size, remaining)
         query = {"market": args.market, "count": str(count)}
         if cursor_utc is not None:
@@ -210,30 +218,69 @@ def main(argv=None) -> int:
         if not isinstance(batch, list) or len(batch) == 0:
             break
 
+        batch_new_unique = 0
         for item in batch:
             if not isinstance(item, dict):
                 continue
             ts = to_unix_ms(item)
-            rows.append(
-                {
-                    "timestamp": int(ts),
-                    "open": float(item.get("opening_price", 0.0)),
-                    "high": float(item.get("high_price", 0.0)),
-                    "low": float(item.get("low_price", 0.0)),
-                    "close": float(item.get("trade_price", 0.0)),
-                    "volume": float(item.get("candle_acc_trade_volume", 0.0)),
-                }
-            )
+            if int(ts) not in rows_by_ts:
+                batch_new_unique += 1
+            rows_by_ts[int(ts)] = {
+                "timestamp": int(ts),
+                "open": float(item.get("opening_price", 0.0)),
+                "high": float(item.get("high_price", 0.0)),
+                "low": float(item.get("low_price", 0.0)),
+                "close": float(item.get("trade_price", 0.0)),
+                "volume": float(item.get("candle_acc_trade_volume", 0.0)),
+            }
 
         oldest = min(to_unix_ms(item) for item in batch if isinstance(item, dict))
+        if prev_oldest_ts is not None and int(oldest) >= int(prev_oldest_ts):
+            stagnant_cursor_count += 1
+        else:
+            stagnant_cursor_count = 0
+        prev_oldest_ts = int(oldest)
+
+        if int(batch_new_unique) <= 0:
+            stagnant_unique_count += 1
+        else:
+            stagnant_unique_count = 0
+
+        if stagnant_cursor_count >= 3:
+            broke_on_stagnant_cursor = True
+            append_jsonl(
+                compliance_telemetry_jsonl,
+                {
+                    "ts_utc": utc_now_iso(),
+                    "event": "stagnant_cursor_break",
+                    "market": args.market,
+                    "unit": args.unit,
+                    "stagnant_cursor_count": stagnant_cursor_count,
+                    "oldest_ts_ms": int(oldest),
+                },
+            )
+            break
+
+        if stagnant_unique_count >= 3:
+            broke_on_stagnant_unique = True
+            append_jsonl(
+                compliance_telemetry_jsonl,
+                {
+                    "ts_utc": utc_now_iso(),
+                    "event": "stagnant_unique_break",
+                    "market": args.market,
+                    "unit": args.unit,
+                    "stagnant_unique_count": stagnant_unique_count,
+                    "oldest_ts_ms": int(oldest),
+                },
+            )
+            break
+
         cursor_utc = datetime.fromtimestamp((oldest - 1) / 1000.0, tz=timezone.utc)
         if args.sleep_ms > 0:
             time.sleep(args.sleep_ms / 1000.0)
 
-    dedup = {}
-    for row in rows:
-        dedup[int(row["timestamp"])] = row
-    sorted_rows = [dedup[k] for k in sorted(dedup.keys())]
+    sorted_rows = [rows_by_ts[k] for k in sorted(rows_by_ts.keys())]
     if len(sorted_rows) > args.candles:
         sorted_rows = sorted_rows[-args.candles :]
     if not sorted_rows:
@@ -272,6 +319,10 @@ def main(argv=None) -> int:
         "rows": len(sorted_rows),
         "from_utc": first_utc,
         "to_utc": last_utc,
+        "stagnant_cursor_break": bool(broke_on_stagnant_cursor),
+        "stagnant_unique_break": bool(broke_on_stagnant_unique),
+        "stagnant_cursor_count": int(stagnant_cursor_count),
+        "stagnant_unique_count": int(stagnant_unique_count),
     }
     dump_json(compliance_summary_json, compliance_summary)
     print(f"compliance_telemetry={compliance_telemetry_jsonl}")

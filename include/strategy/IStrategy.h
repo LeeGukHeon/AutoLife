@@ -97,6 +97,11 @@ struct Signal {
     double expected_return_pct;
     double expected_risk_pct;
     double expected_value;
+    double probabilistic_h1_calibrated;
+    double probabilistic_h5_calibrated;
+    double probabilistic_h5_threshold;
+    double probabilistic_h5_margin;
+    bool probabilistic_runtime_applied;
     double liquidity_score;
     double volatility;
     double strategy_win_rate;
@@ -130,6 +135,11 @@ struct Signal {
         , expected_return_pct(0.0)
         , expected_risk_pct(0.0)
         , expected_value(0.0)
+        , probabilistic_h1_calibrated(0.5)
+        , probabilistic_h5_calibrated(0.5)
+        , probabilistic_h5_threshold(0.6)
+        , probabilistic_h5_margin(0.0)
+        , probabilistic_runtime_applied(false)
         , liquidity_score(0.0)
         , volatility(0.0)
         , strategy_win_rate(0.0)

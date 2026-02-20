@@ -60,6 +60,36 @@ struct EngineConfig {
     std::vector<std::string> live_mtf_dataset_capture_timeframes = {
         "1m", "5m", "15m", "1h", "4h", "1d"
     };
+    // Probabilistic runtime overlay (shared in live/backtest).
+    bool enable_probabilistic_runtime_model = true;
+    std::string probabilistic_runtime_bundle_path = "config/model/probabilistic_runtime_bundle_v1.json";
+    bool probabilistic_runtime_hard_gate = false;
+    double probabilistic_runtime_hard_gate_margin = -0.08;
+    double probabilistic_runtime_score_weight = 0.12;
+    double probabilistic_runtime_expected_edge_weight = 0.00030;
+    // Probabilistic-primary routing:
+    // make probabilistic inference the first-class decision signal across
+    // scan -> signal gating -> entry sizing.
+    bool probabilistic_runtime_primary_mode = true;
+    bool probabilistic_runtime_scan_prefilter_enabled = true;
+    double probabilistic_runtime_scan_prefilter_margin = -0.10;
+    double probabilistic_runtime_strength_blend = 0.45;
+    double probabilistic_runtime_position_scale_weight = 0.35;
+    bool probabilistic_runtime_online_learning_enabled = true;
+    int probabilistic_runtime_online_learning_window = 80;
+    int probabilistic_runtime_online_learning_min_samples = 12;
+    double probabilistic_runtime_online_learning_max_margin_bias = 0.02;
+    double probabilistic_runtime_online_learning_strength_gain = 0.35;
+    double probabilistic_primary_promotion_min_margin = -0.02;
+    double probabilistic_primary_promotion_min_calibrated = 0.47;
+    double probabilistic_primary_promotion_max_strength_gap = 0.12;
+    double probabilistic_primary_promotion_max_ev_gap = 0.00045;
+    // Candidate supply controls (runtime primary path).
+    bool foundation_signal_supply_fallback_enabled = true;
+    bool manager_soft_queue_enabled = true;
+    double manager_soft_queue_position_scale = 0.70;
+    double manager_soft_queue_max_strength_gap = 0.05;
+    double manager_soft_queue_max_ev_gap = 0.00015;
     double min_expected_edge_pct = 0.0010; // 0.10% after cost
     double min_reward_risk = 1.20;         // TP/SL ratio
     double min_rr_weak_signal = 1.80;      // dynamic RR target for weak signals

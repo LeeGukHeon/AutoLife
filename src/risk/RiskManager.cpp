@@ -20,6 +20,17 @@ double fallbackRiskPct(double stop_loss, double entry_price) {
     return 0.0045;
 }
 
+double normalizedProbabilisticMargin(const Position& pos) {
+    double margin = pos.probabilistic_h5_margin;
+    if (!std::isfinite(margin)) {
+        margin = pos.probabilistic_h5_calibrated - pos.probabilistic_h5_threshold;
+    }
+    if (!std::isfinite(margin) || !pos.probabilistic_runtime_applied) {
+        return 0.0;
+    }
+    return std::clamp(margin, -0.20, 0.20);
+}
+
 } // namespace
 
 RiskManager::RiskManager(double initial_capital)
@@ -550,6 +561,11 @@ bool RiskManager::applyPartialSellFill(
     trade.volatility = pos.volatility;
     trade.expected_value = pos.expected_value;
     trade.reward_risk_ratio = pos.reward_risk_ratio;
+    trade.probabilistic_runtime_applied = pos.probabilistic_runtime_applied;
+    trade.probabilistic_h1_calibrated = pos.probabilistic_h1_calibrated;
+    trade.probabilistic_h5_calibrated = pos.probabilistic_h5_calibrated;
+    trade.probabilistic_h5_threshold = pos.probabilistic_h5_threshold;
+    trade.probabilistic_h5_margin = pos.probabilistic_h5_margin;
 
     const double entry_fee = calculateFee(allocated_entry_notional);
     trade.fee_paid = entry_fee + exit_fee;
@@ -636,6 +652,12 @@ void RiskManager::applyAdaptiveRiskControls(const std::string& market) {
     const double entry = pos.entry_price;
     const double current = pos.current_price;
     const double base_risk_pct = fallbackRiskPct(pos.stop_loss, entry);
+    const bool probabilistic_active = pos.probabilistic_runtime_applied;
+    const double probabilistic_margin = normalizedProbabilisticMargin(pos);
+    const double positive_prob_conf =
+        std::clamp(probabilistic_margin / 0.12, 0.0, 1.0);
+    const double negative_prob_conf =
+        std::clamp((-probabilistic_margin) / 0.12, 0.0, 1.0);
 
     const double breakeven_trigger = (pos.breakeven_trigger > 0.0)
         ? pos.breakeven_trigger
@@ -691,6 +713,11 @@ void RiskManager::applyAdaptiveRiskControls(const std::string& market) {
         } else if (pos.volatility >= 4.5) {
             trailing_gap_pct *= 1.12;
         }
+        if (probabilistic_active) {
+            // Positive probabilistic margin keeps runner latitude; negative margin de-risks faster.
+            trailing_gap_pct *= (1.0 + positive_prob_conf * 0.14);
+            trailing_gap_pct *= (1.0 - negative_prob_conf * 0.22);
+        }
         trailing_gap_pct = std::clamp(trailing_gap_pct, 0.0018, 0.0105);
 
         const double trail_stop = pos.highest_price * (1.0 - trailing_gap_pct);
@@ -703,14 +730,34 @@ void RiskManager::applyAdaptiveRiskControls(const std::string& market) {
     // Step 3: if position is stagnant for long time, cut downside and recycle capital.
     const long long now_ms = getCurrentTimestamp();
     const double holding_seconds = std::max(0.0, static_cast<double>(now_ms - pos.entry_time) / 1000.0);
-    if (holding_seconds >= 4.0 * 3600.0 && pos.highest_price <= entry * 1.0030) {
+    double guard_time_scale = 1.0;
+    if (probabilistic_active) {
+        guard_time_scale += positive_prob_conf * 0.45;
+        guard_time_scale -= negative_prob_conf * 0.40;
+    }
+    guard_time_scale = std::clamp(guard_time_scale, 0.65, 1.35);
+    const double stagnation_guard_seconds = 4.0 * 3600.0 * guard_time_scale;
+    const double recycle_guard_seconds = 8.0 * 3600.0 * guard_time_scale;
+    const double stagnation_progress_pct = std::clamp(
+        0.0030 + (positive_prob_conf * 0.0012) - (negative_prob_conf * 0.0010),
+        0.0015,
+        0.0045
+    );
+    const double recycle_progress_pct = std::clamp(
+        0.0010 + (positive_prob_conf * 0.0006) - (negative_prob_conf * 0.0005),
+        0.0004,
+        0.0016
+    );
+    if (holding_seconds >= stagnation_guard_seconds &&
+        pos.highest_price <= entry * (1.0 + stagnation_progress_pct)) {
         const double time_guard_stop = entry * 0.9990;
         if (time_guard_stop > candidate_stop) {
             candidate_stop = time_guard_stop;
             reason = "time_stagnation_guard";
         }
     }
-    if (holding_seconds >= 8.0 * 3600.0 && pos.highest_price <= entry * 1.0010) {
+    if (holding_seconds >= recycle_guard_seconds &&
+        pos.highest_price <= entry * (1.0 + recycle_progress_pct)) {
         const double recycle_stop = entry * 1.0002;
         if (recycle_stop > candidate_stop) {
             candidate_stop = recycle_stop;
@@ -729,12 +776,13 @@ void RiskManager::applyAdaptiveRiskControls(const std::string& market) {
         (pos.market_regime == analytics::MarketRegime::TRENDING_UP &&
          low_liquidity &&
          low_volatility);
+    const bool defer_tp_tightening = probabilistic_active && probabilistic_margin >= 0.03;
 
     bool tp_updated = false;
     const double tp_min_step = std::max(entry * 0.00005, 1e-8);
     const double tp_headroom_floor = current * 1.0010;
 
-    if (!pos.half_closed && hostile_uptrend_context) {
+    if (!pos.half_closed && hostile_uptrend_context && !defer_tp_tightening) {
         const double tightened_tp1 = std::max(
             tp_headroom_floor,
             entry * (1.0 + std::clamp(base_risk_pct * 0.65, 0.0035, 0.0100))
@@ -746,6 +794,7 @@ void RiskManager::applyAdaptiveRiskControls(const std::string& market) {
     }
 
     if (hostile_uptrend_context &&
+        !defer_tp_tightening &&
         holding_seconds >= 90.0 * 60.0 &&
         pos.highest_price <= entry * (1.0 + base_risk_pct * 0.75)) {
         double tightened_tp2 = entry * (1.0 + std::clamp(base_risk_pct * 1.05, 0.0055, 0.0160));
@@ -763,7 +812,14 @@ void RiskManager::applyAdaptiveRiskControls(const std::string& market) {
         pos.volatility >= 2.2 &&
         pos.highest_price >= entry * 1.0080) {
         double runner_tp2 = std::max(pos.take_profit_2, pos.highest_price * 1.0020);
-        const double runner_cap = entry * (1.0 + std::clamp(base_risk_pct * 3.0, 0.0300, 0.0800));
+        const double runner_cap_multiplier = std::clamp(
+            3.0 + (positive_prob_conf * 1.2) - (negative_prob_conf * 0.8),
+            2.6,
+            4.0
+        );
+        const double runner_cap = entry * (
+            1.0 + std::clamp(base_risk_pct * runner_cap_multiplier, 0.0300, 0.0850)
+        );
         runner_tp2 = std::min(runner_tp2, runner_cap);
         runner_tp2 = std::max(runner_tp2, pos.take_profit_1 * 1.0018);
         if (runner_tp2 > pos.take_profit_2 + tp_min_step) {
@@ -792,14 +848,15 @@ void RiskManager::applyAdaptiveRiskControls(const std::string& market) {
 
     pos.stop_loss = candidate_stop;
     LOG_INFO(
-        "{} adaptive stop update [{}]: {:.0f} (entry {:.0f}, px {:.0f}, high {:.0f}, hold {:.1f}h)",
+        "{} adaptive stop update [{}]: {:.0f} (entry {:.0f}, px {:.0f}, high {:.0f}, hold {:.1f}h, prob_margin={:+.4f})",
         market,
         reason,
         pos.stop_loss,
         pos.entry_price,
         pos.current_price,
         pos.highest_price,
-        holding_seconds / 3600.0
+        holding_seconds / 3600.0,
+        probabilistic_margin
     );
 
     if (tp_updated) {
@@ -852,6 +909,19 @@ double RiskManager::getAdaptivePartialExitRatio(const std::string& market) const
         ratio = 0.45;
     }
 
+    const double probabilistic_margin = normalizedProbabilisticMargin(pos);
+    if (pos.probabilistic_runtime_applied) {
+        if (probabilistic_margin >= 0.08) {
+            ratio = std::min(ratio, 0.40);
+        } else if (probabilistic_margin >= 0.03) {
+            ratio = std::min(ratio, 0.46);
+        } else if (probabilistic_margin <= -0.08) {
+            ratio = std::max(ratio, 0.76);
+        } else if (probabilistic_margin <= -0.03) {
+            ratio = std::max(ratio, 0.68);
+        }
+    }
+
     const long long now_ms = getCurrentTimestamp();
     const double holding_seconds = std::max(
         0.0,
@@ -862,7 +932,13 @@ double RiskManager::getAdaptivePartialExitRatio(const std::string& market) const
         : 0.0;
 
     if (holding_seconds >= 2.0 * 3600.0 && progress_pct < 0.0045) {
-        ratio = std::max(ratio, 0.72);
+        double stagnation_ratio = 0.72;
+        if (probabilistic_margin >= 0.06) {
+            stagnation_ratio = 0.66;
+        } else if (probabilistic_margin <= -0.06) {
+            stagnation_ratio = 0.76;
+        }
+        ratio = std::max(ratio, stagnation_ratio);
     }
 
     return std::clamp(ratio, 0.35, 0.80);
@@ -1208,7 +1284,12 @@ void RiskManager::setPositionSignalInfo(
     double volatility,
     double expected_value,
     double reward_risk_ratio,
-    const std::string& entry_archetype
+    const std::string& entry_archetype,
+    bool probabilistic_runtime_applied,
+    double probabilistic_h1_calibrated,
+    double probabilistic_h5_calibrated,
+    double probabilistic_h5_threshold,
+    double probabilistic_h5_margin
 ) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);;
     
@@ -1226,8 +1307,14 @@ void RiskManager::setPositionSignalInfo(
     it->second.expected_value = expected_value;
     it->second.reward_risk_ratio = reward_risk_ratio;
     it->second.entry_archetype = entry_archetype.empty() ? "UNSPECIFIED" : entry_archetype;
+    it->second.probabilistic_runtime_applied = probabilistic_runtime_applied;
+    it->second.probabilistic_h1_calibrated = std::clamp(probabilistic_h1_calibrated, 0.0, 1.0);
+    it->second.probabilistic_h5_calibrated = std::clamp(probabilistic_h5_calibrated, 0.0, 1.0);
+    it->second.probabilistic_h5_threshold = std::clamp(probabilistic_h5_threshold, 0.0, 1.0);
+    it->second.probabilistic_h5_margin =
+        std::clamp(probabilistic_h5_margin, -1.0, 1.0);
     LOG_INFO(
-        "Signal metadata saved: {} (filter {:.3f}, strength {:.3f}, liq {:.1f}, vol {:.2f}, ev {:.5f}, rr {:.2f}, archetype={})",
+        "Signal metadata saved: {} (filter {:.3f}, strength {:.3f}, liq {:.1f}, vol {:.2f}, ev {:.5f}, rr {:.2f}, archetype={}, prob={} p_h5={:.3f} thr={:.3f} margin={:+.3f})",
         market,
         signal_filter,
         signal_strength,
@@ -1235,7 +1322,11 @@ void RiskManager::setPositionSignalInfo(
         volatility,
         expected_value,
         reward_risk_ratio,
-        it->second.entry_archetype
+        it->second.entry_archetype,
+        it->second.probabilistic_runtime_applied ? "on" : "off",
+        it->second.probabilistic_h5_calibrated,
+        it->second.probabilistic_h5_threshold,
+        it->second.probabilistic_h5_margin
     );
 }
 
@@ -1485,6 +1576,11 @@ void RiskManager::recordTrade(
     trade.volatility = pos.volatility;
     trade.expected_value = pos.expected_value;
     trade.reward_risk_ratio = pos.reward_risk_ratio;
+    trade.probabilistic_runtime_applied = pos.probabilistic_runtime_applied;
+    trade.probabilistic_h1_calibrated = pos.probabilistic_h1_calibrated;
+    trade.probabilistic_h5_calibrated = pos.probabilistic_h5_calibrated;
+    trade.probabilistic_h5_threshold = pos.probabilistic_h5_threshold;
+    trade.probabilistic_h5_margin = pos.probabilistic_h5_margin;
     
     // ???????節뚮쳮雅?
     double exit_value = exit_price * pos.quantity;

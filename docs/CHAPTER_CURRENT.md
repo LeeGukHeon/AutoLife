@@ -1,1416 +1,260 @@
-# Current Chapter
+﻿# Current Chapter
 
 Last updated: 2026-02-20
 Chapter ID: `CH-01`
-Title: `Verification Reset Baseline`
+Title: `Probabilistic Hybrid Foundation`
 
-## Goal
-- Replace large verification entry flow with a minimal, sequential, reproducible baseline.
-- Keep chapter document short and always actionable.
+## Objective
+- Validation/tuning 중심 운영에서 확률형 학습 기반 구조로 전환.
+- 라이브/백테스트 동형성 유지(데이터/피처/결정 규칙 동일).
+- 과적합 방지 원칙 고정: 시계열 분리, 워크포워드, 순차 검증.
+- 원천 데이터(OHLCV)와 파생 피처(보조지표/라벨) 생성 경로를 분리하고 계약 고정.
 
-## Latest Update (2026-02-20)
-1. Fixed structural reason-loss bug in strategy collection:
-   - `src/strategy/StrategyManager.cpp`
-   - `processStrategySignal(...)` now returns `NONE` signal with preserved `reason` instead of dropping to default `Signal()`.
-2. Backtest synthetic liquidity model rebuilt to reduce scale bias:
-   - `src/runtime/BacktestRuntime.cpp`
-   - switched volume surge baseline to notional (`close*volume`) and re-calibrated liquidity synthesis formula.
-3. Regression check completed:
-   - over-relaxed volume-floor experiment was reverted after measurable degradation.
-   - kept only validated changes (reason-preservation + liquidity model rebuild).
-4. Verification snapshot:
-   - `simulation_2000.csv`: adaptive `pass` (`pf=1.1225`, `exp=3.2453`)
-   - `simulation_2000.csv,simulation_large.csv`: adaptive `fail` (large-set uptrend expectancy/risk-adjusted score still bottleneck)
-5. Real-data 6-set structural bottleneck rework (entry-quality edge base floor):
-   - `include/common/SignalPolicyShared.h`
-   - `src/common/SignalPolicyShared.cpp`
-   - added `computeContextualEdgeGateFloor(...)` to derive edge gate floor from regime/liquidity/strength/expected-value context.
-6. Runtime parity wiring (backtest + live):
-   - `src/runtime/BacktestRuntime.cpp`
-   - `src/runtime/LiveTradingRuntime.cpp`
-   - both runtimes now use shared contextual edge floor as base gate before adaptive tighten/relief.
-7. Real-data verification recheck (6 datasets, fixed mode, strict companions):
-   - command:
-     - `python scripts/run_verification.py --dataset-names upbit_KRW_BTC_1m_12000.csv upbit_KRW_ETH_1m_12000.csv upbit_KRW_SOL_1m_12000.csv upbit_KRW_XRP_1m_12000.csv upbit_KRW_DOGE_1m_12000.csv upbit_KRW_ADA_1m_12000.csv --data-dir data/backtest_real --validation-profile adaptive --data-mode fixed --require-higher-tf-companions --output-json build/Release/logs/verification_report_real_6set_refetch_v5_contextual_edge_floor_only.json --output-csv build/Release/logs/verification_matrix_real_6set_refetch_v5_contextual_edge_floor_only.csv`
-   - result:
-     - `avg_profit_factor: 0.319 -> 0.2600`
-     - `avg_expectancy_krw: -23.3726 -> -21.9100` (improved loss efficiency)
-     - `avg_total_trades: 4.5 -> 5.6667` (execution opened on more datasets)
-     - `edge_gap_gt_2p0bp: 2291 -> 1747` (base edge mismatch reduced)
-     - `overall_gate_pass=false` (primary bottleneck remains `candidate_generation`)
-    - rollback note:
-      - over-relaxed ranging-supply experiment in `FoundationAdaptiveStrategy` was reverted due degradation (`v4` worse than `v3/v5`).
-8. Backtest/live microstructure parity fix:
-   - `src/runtime/BacktestRuntime.cpp`
-   - synthetic `orderbook_units` now also populate `metrics.orderbook_snapshot` via `OrderbookAnalyzer`.
-   - purpose: stop treating spread/orderbook-valid branches as dead-path in backtest.
-9. Validation discipline correction:
-   - build and verification are now executed sequentially only (no parallel race), to avoid stale-exe measurements.
-10. Uptrend quality guard (loss-cell reduction pass):
-   - `src/strategy/FoundationAdaptiveStrategy.cpp` (`evaluateEntryGate`, `TRENDING_UP` branch)
-   - added guarded checks:
-     - trend quality floor (`ret5`, `ret20`)
-     - minimum buy-pressure confirmation
-     - overextension reject (`RSI+short-return` combo)
-   - measured on real 6-set fixed mode (`v18` -> `v20`):
-     - `avg_profit_factor: 0.2225 -> 0.2373`
-     - `avg_expectancy_krw: -23.9620 -> -21.2936`
-     - top loss cell (`FOUNDATION_UPTREND_CONTINUATION`, uptrend/low-vol/high-liq) trades: `23 -> 22`
-   - status: adaptive verdict still `fail`, but quality-first direction improved under same dataset.
-11. Uptrend MTF confirmation tightening (quality-first continuation):
-   - `src/strategy/FoundationAdaptiveStrategy.cpp` (`evaluateMtfConfirmation`, `TRENDING_UP` branch)
-   - applied tightened uptrend MTF guard:
-     - `momentum_15m >= -0.0012`
-     - `ema_gap_15m >= -0.0008`
-     - `momentum_1h >= -0.0038`
-     - `rsi_15m <= 68.0`
-     - `score >= 0.47`
-   - measured on real 6-set fixed mode (`v20` -> `v29`):
-     - `avg_profit_factor: 0.2373 -> 0.4891`
-     - `avg_expectancy_krw: -21.2936 -> -14.4776`
-     - `avg_total_trades: 5.0 -> 3.6667` (sample-size tradeoff worsened)
-     - top loss cell (`FOUNDATION_UPTREND_CONTINUATION`, uptrend/low-vol/high-liq):
-       - trades: `22 -> 14`
-       - total_profit_krw: `-508.1684 -> -187.8686`
-   - interpretation:
-     - structural loss concentration in overextended uptrend entries was reduced.
-     - however, `candidate_generation` bottleneck remains and adaptive sample guard still fails.
-12. Verification lock-safety execution path added:
-   - `scripts/verify_baseline.py`
-   - new `--build-first` mode executes build -> verification sequentially in one command.
-   - build step now supports lock-aware retry for `LNK1104` (`AutoLifeTrading.exe` busy) to reduce flaky runs.
-13. Sequential execution UX hardening (lock-avoidance default):
-   - `scripts/verify_baseline.py`
-   - build phase logging is now flush-ordered (`build-first mode` -> `build attempt` -> `build completed`) to prevent mixed output order.
-   - `--build-jobs` default changed to `1` for safer lock-free baseline runs.
-   - smoke:
-     - `python scripts/verify_baseline.py --build-first --datasets simulation_2000.csv --validation-profile adaptive --output-tag locksafe_order_smoke`
-14. Structure experiment A (range-compression entry supply) was rejected and rolled back:
-   - attempted:
-     - `src/strategy/FoundationAdaptiveStrategy.cpp`
-     - added extra ranging low-liquidity compression entry path + uptrend chasing guard.
-   - result (`v31_range_compression`):
-     - `avg_profit_factor: 0.4891 -> 0.3394` (degraded)
-     - `avg_expectancy_krw: -14.4776 -> -15.6239` (degraded)
-   - action:
-     - full rollback (not kept).
-15. Structure experiment B (post-entry risk retune) was rejected and rolled back:
-   - attempted:
-     - `src/risk/RiskManager.cpp`
-     - early uptrend-stall TP/SL tightening for low-vol contexts.
-   - result (`v32_risk_stall_guard`):
-     - `avg_profit_factor: 0.4891 -> 0.4798` (degraded)
-     - `avg_expectancy_krw: -14.4776 -> -17.3454` (degraded)
-   - action:
-     - full rollback (not kept).
-16. Current retained change (quality-only narrow guard):
-   - file:
-     - `src/strategy/FoundationAdaptiveStrategy.cpp`
-   - change:
-     - added `foundation_no_signal_uptrend_exhaustion_guard` only for
-       `TRENDING_UP + low-vol + high-liq` overextension case.
-   - result (`v35_uptrend_exhaustion_only` vs `v30_baseline_check`):
-     - `avg_profit_factor: 0.4891 -> 0.4850` (near-flat)
-     - `avg_expectancy_krw: -14.4776 -> -14.0995` (improved)
-     - `avg_total_trades: 3.6667 -> 3.6667` (unchanged)
-   - status:
-     - adaptive verdict still `fail`
-     - primary bottleneck still `candidate_generation`
-     - this is retained as a small non-regressive step, pending next structural patch.
-17. Structure experiment C (global low-vol uptrend profile retune) was rejected and rolled back:
-   - attempted:
-     - `src/strategy/FoundationAdaptiveStrategy.cpp`
-     - globally tightened low-vol uptrend risk/size profile (not thin-liquidity-only).
-   - result (`v36_lowvol_uptrend_profile`):
-     - `avg_profit_factor: 0.4850 -> 0.3037` (large degradation)
-     - `avg_expectancy_krw: -14.0995 -> -26.1517` (large degradation)
-   - action:
-     - full rollback and baseline restored (`v37_revert_to_v35`).
-18. Backtest no-entry prefilter-relax parity test (manager threshold) showed zero effective impact:
-   - attempted:
-     - `src/runtime/BacktestRuntime.cpp`
-     - broadened no-entry streak relaxation branch (non-hostile regime).
-   - result (`v38_no_entry_relax_parity`):
-     - identical metrics vs `v35` (no measurable behavioral change).
-    - action:
-      - rolled back to reduce code complexity.
-      - current active baseline reconfirmed (`v39_restore_after_noentry_revert`).
-19. Scanner/live/backtest candle parity and volume-scale alignment:
-    - `include/analytics/MarketScanner.h`
-      - `CoinMetrics::volume_surge_ratio` default changed `0 -> 1.0` (neutral ratio baseline).
-    - `src/analytics/MarketScanner.cpp`
-      - `analyzeVolumeSurge(...)` now uses backtest-equivalent formula:
-        - current notional / previous-19 average notional (`1.0 = baseline`).
-      - `detectVolumeSurge(...)` now reads recent `1m` candles and returns ratio-scale surge (fallback neutral `1.0`).
-      - `calculateCompositeScore(...)` volume score converted to ratio-scale mapping (`ratio/1.5`).
-    - build + verification:
-      - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading` PASS
-      - `python scripts/verify_baseline.py --build-first --cmake-path D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build-jobs 1 --data-dir data/backtest_real --datasets upbit_KRW_BTC_1m_12000.csv,upbit_KRW_ETH_1m_12000.csv,upbit_KRW_SOL_1m_12000.csv,upbit_KRW_XRP_1m_12000.csv,upbit_KRW_DOGE_1m_12000.csv,upbit_KRW_ADA_1m_12000.csv --output-tag v41_volume_ratio_unify`
-      - result: `avg_profit_factor=0.485`, `avg_expectancy_krw=-14.0995`, `overall_gate_pass=false` (primary bottleneck unchanged).
-    - candle ordering/companion integrity check (real 30 files):
-      - `ordering_issues=0`, `companion_issues=0`
-      - artifact: `build/Release/logs/candle_integrity_check_v41.json`
-    - backtest parity probe:
-      - `build/Release/AutoLifeTrading.exe --backtest data/backtest_real/upbit_KRW_BTC_1m_12000.csv --json --require-higher-tf-companions`
-      - logs confirm companion load (`5m/15m/1h/4h`) and `Backtest live-equivalent data parity mode: enabled`.
-20. `verify_baseline --realdata-only` default dataset mismatch fix + fetch-order inspection:
-    - `scripts/verify_baseline.py`
-      - when `--realdata-only` is set and `--datasets` is default/empty, datasets are auto-discovered from `data/backtest_real` using only primary `*_1m_*.csv` files that also have `5m/15m/60m/240m` companions.
-      - smoke:
-        - `python scripts/verify_baseline.py --realdata-only --output-tag realdata_auto_discovery_smoke` PASS
-        - auto-discovery count: `6`
-    - candle fetch ordering inspection:
-      - raw Upbit minute candle API response is descending (newest -> oldest).
-      - probe artifact: `build/Release/logs/upbit_fetch_order_probe_v42.txt`
-      - runtime parse/sort path:
-        - `src/network/UpbitHttpClient.cpp`: fetch raw JSON (`getCandles` / `getCandlesDays`)
-        - `src/analytics/TechnicalIndicators.cpp`:
-          - parse `timestamp` with fallback `candle_date_time_utc`
-          - `std::stable_sort(... timestamp asc)` in `jsonToCandles(...)`
-      - `src/analytics/MarketScanner.cpp`:
-        - rolling cache merge keeps timestamp-ascending order (`mergeCandles` + `stable_sort` fallback)
-21. Verification CLI realdata-only hard lock (`backtest_real` only):
-    - `scripts/verify_baseline.py`
-      - fixed dataset directory to `data/backtest_real` (other data-dir rejected).
-      - only `upbit_*_1m_*.csv` datasets are accepted.
-      - each selected primary dataset must have companions: `5m/15m/60m/240m`.
-      - `--datasets` empty by default; auto-discovery used as primary flow.
-      - `--require-higher-tf-companions` is now always passed to `run_verification.py`.
-    - `scripts/run_verification.py`
-      - default `--data-dir` changed to `data/backtest_real`.
-      - default `--dataset-names` changed to empty list.
-      - when `--require-higher-tf-companions` is enabled, non-`upbit_*_1m_*` dataset is hard-fail.
-      - when companion tf set is missing, hard-fail before backtest run.
-    - smoke:
-      - `python scripts/verify_baseline.py --output-tag strict_realdata_default_smoke` PASS
-      - `python scripts/verify_baseline.py --datasets simulation_2000.csv` FAIL (expected guard)
-      - `python scripts/verify_baseline.py --data-dir data/backtest` FAIL (expected guard)
-      - `python scripts/run_verification.py --require-higher-tf-companions --data-dir data/backtest --dataset-names simulation_2000.csv` FAIL (expected guard)
+## New Direction (Fixed)
+- 거래 스타일: 초단타 스캘핑이 아니라 품질형 진입/관리.
+  - 익절 목표는 고정 퍼센트가 아니라 `먹을 수 있을 때까지 보유`를 기본으로 함.
+  - 구현 원칙: 부분익절 + 트레일링 + 레짐 악화 시 축소/종료.
+- 의사결정 구조:
+  - 상위 TF(15/60/240m)로 장세/레짐 판별
+  - 하위 TF(1/5m)로 진입 타이밍 정밀화
+- 모델 구조:
+  - 확률형 패턴 모델(`P(up/down | context)`) + 기존 adaptive 리스크 엔진 결합
 
-## Completed (Detailed)
-1. Added minimal verification entrypoint:
-   - `scripts/run_verification.py`
-2. Switched user-facing verification commands to baseline:
-   - `README.md`
-   - `docs/STRICT_GATE_RUNBOOK_2026-02-13.md`
-3. Added reset governance docs:
-   - `docs/VERIFICATION_RESET_BASELINE_2026-02-19.md`
-   - `docs/CHAPTER_CURRENT.md`
-   - `docs/CHAPTER_HISTORY_BRIEF.md`
-4. Fixed operational principles for reset:
-   - sequential-only validation
-   - fixed threshold gate as baseline
-   - one report + one matrix output
-5. Reset execution TODO and archived oversized logs:
-   - `docs/TODO_STAGE15_EXECUTION_PLAN_2026-02-13.md`
-   - `docs/archive/TODO_STAGE15_EXECUTION_PLAN_2026-02-13_FULLLOG_2026-02-19.md`
-6. Ran baseline smoke verification:
-   - command:
-     - `python scripts/run_verification.py --dataset-names simulation_2000.csv --output-json build/Release/logs/verification_report_smoke.json --output-csv build/Release/logs/verification_matrix_smoke.csv`
-   - result:
-     - `overall_gate_pass=True`
-     - `avg_profit_factor=1.1331`
-     - `avg_expectancy_krw=2.4473`
-   - artifacts:
-     - `build/Release/logs/verification_report_smoke.json`
-     - `build/Release/logs/verification_matrix_smoke.csv`
-7. Added minimal user-facing verification CLI:
-   - `scripts/verify_baseline.py`
-   - default command now uses the baseline wrapper.
-8. Started `main.cpp` decomposition:
-   - extracted repeated backtest console reporting into:
-     - `include/app/BacktestReportFormatter.h`
-     - `src/app/BacktestReportFormatter.cpp`
-   - `main.cpp` now calls shared formatter for CLI/interactive backtest output.
-9. Added foundation-level structural review:
-   - `docs/FOUNDATION_ENGINE_STRATEGY_REVIEW_2026-02-19.md`
-10. Verified build/runtime integrity after `main.cpp` split:
-   - build:
-     - `cmake --build build --config Release --target AutoLifeTrading` PASS
-   - JSON backtest smoke:
-     - `build/Release/AutoLifeTrading.exe --backtest data/backtest/simulation_2000.csv --json` PASS
-   - wrapper smoke:
-     - `python scripts/verify_baseline.py --datasets simulation_2000.csv --output-tag wrapper_smoke` PASS
-     - artifact: `build/Release/logs/verification_report_wrapper_smoke.json`
-11. Split CLI backtest handler out of `main.cpp`:
-   - added:
-     - `include/app/BacktestCliHandler.h`
-     - `src/app/BacktestCliHandler.cpp`
-   - `main.cpp` now delegates `--backtest` path to `app::tryRunCliBacktest(...)`.
-   - follow-up smoke:
-     - `build/Release/AutoLifeTrading.exe --backtest data/backtest/simulation_2000.csv --json` PASS
-     - `python scripts/verify_baseline.py --datasets simulation_2000.csv --output-tag wrapper_smoke_after_split` PASS
-     - artifact: `build/Release/logs/verification_report_wrapper_smoke_after_split.json`
-12. Split live interactive setup/bootstrapping out of `main.cpp`:
-   - added:
-     - `src/app/LiveModeHandler.cpp`
-   - integrated existing interface:
-     - `include/app/LiveModeHandler.h`
-   - `main.cpp` now delegates live path to `app::runInteractiveLiveMode(...)`.
-   - build/smoke:
-     - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading` PASS
-     - `build/Release/AutoLifeTrading.exe --backtest data/backtest/simulation_2000.csv --json` PASS
-     - `python scripts/verify_baseline.py --datasets simulation_2000.csv --output-tag wrapper_smoke_after_live_split` PASS
-     - artifact: `build/Release/logs/verification_report_wrapper_smoke_after_live_split.json`
-   - size reduction:
-     - `src/main.cpp`: 579 -> 367 lines
-13. Split interactive backtest setup/execution out of `main.cpp`:
-   - added:
-     - `include/app/BacktestInteractiveHandler.h`
-     - `src/app/BacktestInteractiveHandler.cpp`
-   - `main.cpp` now delegates interactive backtest path to `app::runInteractiveBacktest(...)`.
-   - build/smoke:
-     - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading` PASS
-     - `build/Release/AutoLifeTrading.exe --backtest data/backtest/simulation_2000.csv --json` PASS
-     - `python scripts/verify_baseline.py --datasets simulation_2000.csv --output-tag wrapper_smoke_after_main_slim` PASS
-     - artifact: `build/Release/logs/verification_report_wrapper_smoke_after_main_slim.json`
-   - size reduction:
-     - `src/main.cpp`: 367 -> 81 lines
-14. Added root-cause data-window parity policy (live/backtest shared):
-   - added:
-     - `include/common/MarketDataWindowPolicy.h`
-   - unified TF window caps:
-     - `src/analytics/MarketScanner.cpp`
-     - `src/runtime/BacktestRuntime.cpp`
-     - `src/runtime/LiveTradingRuntime.cpp`
-   - live runtime now skips signal generation on insufficient parity windows:
-     - rejection reason: `data_parity_window_insufficient`
-   - backtest strict parity mode auto-enabled when companion set(5m/1h/4h) exists:
-     - `strict_live_equivalent_data_parity_` in `include/runtime/BacktestRuntime.h`
-     - enabled log: `Backtest live-equivalent data parity mode: enabled`
-   - verification:
-      - `python scripts/verify_baseline.py --datasets simulation_2000.csv --output-tag wrapper_smoke_after_data_window_policy` PASS
-      - `python scripts/verify_baseline.py --datasets simulation_2000.csv --output-tag wrapper_smoke_after_data_window_policy_recheck` PASS
-      - artifact: `build/Release/logs/verification_report_wrapper_smoke_after_data_window_policy_recheck.json`
-15. Added verification data-mode separation (`fixed` vs `refresh_*`) and report traceability:
-   - `scripts/run_verification.py`:
-     - accepts `--data-mode fixed|refresh_if_missing|refresh_force`
-     - writes `data_mode` into report JSON
-   - `scripts/verify_baseline.py`:
-     - refresh controls (`--refresh-chunk-size`, `--refresh-sleep-ms`, `--refresh-end-utc`)
-     - refresh naming contract guard (`--allow-unsupported-refresh-datasets`)
-   - docs update:
-     - `README.md`
-     - `docs/STRICT_GATE_RUNBOOK_2026-02-13.md`
-     - `docs/VERIFICATION_RESET_BASELINE_2026-02-19.md`
-   - smoke:
-     - `python scripts/verify_baseline.py --datasets simulation_2000.csv --data-mode fixed --output-tag data_mode_fixed_smoke` PASS
-     - `python scripts/verify_baseline.py --realdata-only --datasets upbit_KRW_BTC_1m_12000.csv --data-mode refresh_if_missing --output-tag data_mode_refresh_if_missing_smoke` PASS (script execution), gate false on dataset
-   - artifacts:
-     - `build/Release/logs/verification_report_data_mode_fixed_smoke.json`
-     - `build/Release/logs/verification_report_data_mode_refresh_if_missing_smoke.json`
-16. Added engine/strategy bottleneck diagnostics inside verification report:
-   - `scripts/run_verification.py` now aggregates `entry_funnel` into 3 structural groups:
-     - `candidate_generation`
-     - `quality_and_risk_gate`
-     - `execution_constraints`
-   - report additions:
-     - `diagnostics.aggregate`
-     - `diagnostics.per_dataset`
-     - `diagnostics.failure_attribution`
-   - strategy-level conversion diagnostics added:
-     - `generated_signals -> selected_best -> entries_executed`
-     - `weak_execution_under_load` shortlist
-   - strategy collection-stage diagnostics added (C++ runtime -> JSON):
-     - `strategy_collection_summaries` in backtest JSON
-     - `strategy_collection.top_no_signal` / `top_skipped_disabled` in verification report
-     - `strategy_collect_exception_count` for runtime stability visibility
-   - smoke:
-     - `python scripts/verify_baseline.py --datasets simulation_2000.csv --data-mode fixed --output-tag engine_diag_smoke3` PASS
-   - artifact:
-     - `build/Release/logs/verification_report_engine_diag_smoke3.json`
-17. Rebuilt strategy/risk manager prefilter from baseline (decomposed rule pipeline):
-   - added:
-     - `include/strategy/FoundationRiskPipeline.h`
-     - `src/strategy/FoundationRiskPipeline.cpp`
-   - integrated:
-     - `src/strategy/StrategyManager.cpp` now routes manager prefilter through `foundation::evaluateFilter(...)`
-     - `CMakeLists.txt` updated to compile the new pipeline source
-   - intent:
-     - replace monolithic threshold tweaking with deterministic rule composition (`policy`, `regime`, `history`, `RR`, `no-trade-bias`)
-   - build/smoke:
-     - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading` PASS
-     - `python scripts/verify_baseline.py --datasets simulation_2000.csv --data-mode fixed --output-tag foundation_rebuild_smoke` PASS
-   - artifact:
-     - `build/Release/logs/verification_report_foundation_rebuild_smoke.json`
-18. Disconnected legacy selection/prefilter execution path and switched validation default to adaptive profile:
-   - selection path:
-     - `src/strategy/StrategyManager.cpp`
-     - `selectRobustSignalWithDiagnostics(...)` now returns via new foundation-first rule path.
-   - prefilter path:
-     - `src/strategy/StrategyManager.cpp`
-     - dead legacy branch in `filterSignalsWithDiagnostics(...)` removed from active flow.
-   - verification v3 adaptive default:
-     - `scripts/run_verification.py`:
-       - `validation_profile=adaptive` default
-       - new adaptive metrics:
-         - downtrend loss per trade
-         - downtrend trade share
-         - uptrend expectancy
-         - risk-adjusted score
-       - legacy gate retained only under `validation_profile=legacy_gate`
-     - `scripts/verify_baseline.py`:
-       - adaptive validation arguments wired through
-   - smoke:
-     - `python scripts/verify_baseline.py --datasets simulation_2000.csv --data-mode fixed --output-tag adaptive_rebuild_smoke` PASS
-     - `python scripts/verify_baseline.py --datasets simulation_2000.csv --data-mode fixed --validation-profile legacy_gate --output-tag legacy_compat_smoke` PASS
-   - artifacts:
-     - `build/Release/logs/verification_report_adaptive_rebuild_smoke.json`
-     - `build/Release/logs/verification_report_legacy_compat_smoke.json`
-19. Established strict execution order for the rebuild batch:
-   - documentation sync first:
-     - `docs/ADAPTIVE_ENGINE_REBUILD_PLAN_2026-02-19.md`
-     - `docs/TODO_STAGE15_EXECUTION_PLAN_2026-02-13.md`
-     - `docs/CHAPTER_CURRENT.md`
-   - then runtime legacy path hardening + verification script alignment.
-20. Completed legacy selection dead-path pruning and command canonicalization:
-   - C++ runtime path hardening:
-     - `src/strategy/StrategyManager.cpp`
-     - physically removed unreachable legacy block from `selectRobustSignalWithDiagnostics(...)`
-   - README baseline normalization:
-     - `README.md`
-     - fixed verification section encoding/content and made adaptive baseline command canonical
-   - verification recheck:
-     - build:
-       - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading` PASS
-     - adaptive smoke:
-       - `python scripts/verify_baseline.py --datasets simulation_2000.csv --data-mode fixed --validation-profile adaptive --output-tag adaptive_rebuild_smoke3` PASS
-       - artifact: `build/Release/logs/verification_report_adaptive_rebuild_smoke3.json`
-     - legacy compatibility smoke:
-     - `python scripts/verify_baseline.py --datasets simulation_2000.csv --data-mode fixed --validation-profile legacy_gate --output-tag legacy_compat_smoke3` PASS
-      - artifact: `build/Release/logs/verification_report_legacy_compat_smoke3.json`
-21. Cleaned residual legacy strategy tree folders:
-   - removed empty directories:
-     - `include/strategy`
-     - `src/strategy`
-   - note:
-     - active strategy implementation remains only in `include/strategy/*` and `src/strategy/*`.
-22. Switched runtime execution to foundation-only strategy path:
-   - added:
-     - `include/strategy/FoundationAdaptiveStrategy.h`
-     - `src/strategy/FoundationAdaptiveStrategy.cpp`
-   - runtime registration switch:
-      - `src/runtime/BacktestRuntime.cpp`
-      - `src/runtime/LiveTradingRuntime.cpp`
-     - runtime registration is hard-switched to foundation-only:
-       - only `Foundation Adaptive Strategy` is registered
-       - legacy strategy pack registration code path is disconnected
-     - removed residual scalping-specific runtime downcast handling blocks from live/backtest monitoring path.
-   - config normalization:
-     - `src/common/Config.cpp` (`foundation` alias -> `foundation_adaptive`)
-   - active config changed:
-     - `config/config.json` `enabled_strategies=["foundation_adaptive"]`
-   - verification:
-     - `python scripts/verify_baseline.py --datasets simulation_2000.csv --data-mode fixed --validation-profile adaptive --output-tag foundation_only_smoke` PASS
-     - artifact: `build/Release/logs/verification_report_foundation_only_smoke.json`
-     - hard-switch recheck:
-       - `python scripts/verify_baseline.py --datasets simulation_2000.csv --data-mode fixed --validation-profile adaptive --output-tag foundation_only_hardswitch_smoke` PASS
-       - artifact: `build/Release/logs/verification_report_foundation_only_hardswitch_smoke.json`
-     - hard-switch cleanup recheck:
-       - `python scripts/verify_baseline.py --datasets simulation_2000.csv --data-mode fixed --validation-profile adaptive --output-tag foundation_only_hardswitch2_smoke` PASS
-       - artifact: `build/Release/logs/verification_report_foundation_only_hardswitch2_smoke.json`
-     - strategy funnel confirms single registered strategy:
-       - `Foundation Adaptive Strategy`
-     - `python scripts/verify_baseline.py --datasets simulation_2000.csv --data-mode fixed --validation-profile legacy_gate --output-tag foundation_only_legacy_smoke` PASS (script), legacy gate result `overall_gate_pass=False`
-     - artifact: `build/Release/logs/verification_report_foundation_only_legacy_smoke.json`
-     - hard-switch legacy compatibility recheck:
-       - `python scripts/verify_baseline.py --datasets simulation_2000.csv --data-mode fixed --validation-profile legacy_gate --output-tag foundation_only_hardswitch_legacy_smoke` PASS (script), legacy gate result `overall_gate_pass=False`
-       - artifact: `build/Release/logs/verification_report_foundation_only_hardswitch_legacy_smoke.json`
-23. Removed unused legacy strategy units from compile and active tree:
-   - compile exclusion:
-     - `CMakeLists.txt`
-     - removed legacy strategy units from `LIB_SOURCES` and `AutoLifeV2CompileObjects`
-   - deleted legacy strategy files:
-     - `include/strategy/ScalpingStrategy.h`
-     - `include/strategy/MomentumStrategy.h`
-     - `include/strategy/BreakoutStrategy.h`
-     - `include/strategy/MeanReversionStrategy.h`
-     - `include/strategy/GridTradingStrategy.h`
-     - `src/strategy/ScalpingStrategy.cpp`
-     - `src/strategy/MomentumStrategy.cpp`
-     - `src/strategy/BreakoutStrategy.cpp`
-     - `src/strategy/MeanReversionStrategy.cpp`
-     - `src/strategy/GridTradingStrategy.cpp`
-     - `src/strategy/StrategyConfig.cpp`
-   - active strategy tree now:
-     - `include/strategy/{IStrategy.h,StrategyManager.h,FoundationRiskPipeline.h,FoundationAdaptiveStrategy.h,StrategyConfig.h}`
-     - `src/strategy/{StrategyManager.cpp,FoundationRiskPipeline.cpp,FoundationAdaptiveStrategy.cpp}`
-   - verification:
-     - build:
-       - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading` PASS
-    - adaptive smoke:
-      - `python scripts/verify_baseline.py --datasets simulation_2000.csv --data-mode fixed --validation-profile adaptive --output-tag foundation_only_tree_cleanup_smoke` PASS
-      - artifact: `build/Release/logs/verification_report_foundation_only_tree_cleanup_smoke.json`
-    - legacy compatibility smoke:
-      - `python scripts/verify_baseline.py --datasets simulation_2000.csv --data-mode fixed --validation-profile legacy_gate --output-tag foundation_only_tree_cleanup_legacy_smoke` PASS (script), legacy gate result `overall_gate_pass=False`
-      - artifact: `build/Release/logs/verification_report_foundation_only_tree_cleanup_legacy_smoke.json`
-24. Flattened `v2` folders into canonical project layout and removed `include/v2`, `src/v2`:
-   - strategy layer moved:
-     - `include/strategy/{IStrategy.h,StrategyConfig.h,StrategyManager.h,FoundationRiskPipeline.h,FoundationAdaptiveStrategy.h}`
-     - `src/strategy/{StrategyManager.cpp,FoundationRiskPipeline.cpp,FoundationAdaptiveStrategy.cpp}`
-   - kernel/bridge/runtime scaffolds moved:
-     - `include/core/orchestration/DecisionKernel.h`
-     - `src/core/orchestration/DecisionKernel.cpp`
-     - `include/core/contracts/{IExecutionPlaneV2.h,IPolicyPlaneV2.h,IRiskPlaneV2.h,ILearningStateStoreV2.h}`
-     - `include/core/adapters/{LegacyExecutionPlaneAdapter.h,LegacyPolicyPlaneAdapter.h,LegacyRiskPlaneAdapter.h}`
-     - `src/core/adapters/{LegacyExecutionPlaneAdapter.cpp,LegacyPolicyPlaneAdapter.cpp,LegacyRiskPlaneAdapter.cpp}`
-     - `include/engine/TradingEngineV2.h` / `src/engine/TradingEngineV2.cpp`
-     - `include/backtest/BacktestEngineV2.h` / `src/backtest/BacktestEngineV2.cpp`
-   - build/script wiring updated:
-     - `CMakeLists.txt`
-     - `tests/TestV2*.cpp`
-     - `scripts/assess_wave_b_readiness.py`
-   - verification:
-     - build PASS:
-       - `AutoLifeTrading`
-       - `AutoLifeV2CompileObjects`
-       - `AutoLifeV2KernelSmokeTest`
-       - `AutoLifeV2EngineBacktestSmokeTest`
-       - `AutoLifeV2ShadowParityTest`
-     - run PASS:
-       - `build/Release/AutoLifeV2KernelSmokeTest.exe`
-       - `build/Release/AutoLifeV2EngineBacktestSmokeTest.exe`
-       - `build/Release/AutoLifeV2ShadowParityTest.exe`
-      - readiness script PASS:
-        - `python scripts/assess_wave_b_readiness.py`
-25. Purged remaining legacy shadow/v2 codepaths from runtime/build:
-   - runtime removal:
-     - `src/runtime/BacktestRuntime.cpp`
-     - `src/runtime/LiveTradingRuntime.cpp`
-     - removed v2 shadow parity artifact generation/probe calls
-   - config removal:
-     - `include/engine/EngineConfig.h` (`enable_v2_shadow_policy_probe` removed)
-     - `src/common/Config.cpp` (same key load removed)
-     - `config/config.json` (same key removed)
-   - build removal:
-     - `CMakeLists.txt` from `LIB_SOURCES`: `DecisionKernel.cpp`, `LegacyPolicyPlaneAdapter.cpp`
-     - removed targets: `AutoLifeV2KernelSmokeTest`, `AutoLifeV2EngineBacktestSmokeTest`, `AutoLifeV2CompileObjects`, `AutoLifeV2ShadowParityTest`
-   - deleted files:
-     - `include/core/contracts/*V2.h`
-     - `include/core/model/KernelTypes.h`
-     - `include/core/orchestration/DecisionKernel.h`
-     - `src/core/orchestration/DecisionKernel.cpp`
-     - `include/core/adapters/Legacy*PlaneAdapter.h`
-     - `src/core/adapters/Legacy*PlaneAdapter.cpp`
-     - `include/engine/TradingEngineV2.h`
-     - `src/engine/TradingEngineV2.cpp`
-     - `include/backtest/BacktestEngineV2.h`
-     - `src/backtest/BacktestEngineV2.cpp`
-     - `tests/TestV2*.cpp`
-     - `scripts/validate_v2_shadow_parity.py`
-     - `scripts/assess_wave_b_readiness.py`
-   - verification:
-     - build PASS:
-       - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading`
-     - scripts PASS:
-       - `python scripts/verify_script_suite.py --skip-help`
-     - baseline smoke PASS:
-       - `python scripts/verify_baseline.py --datasets simulation_2000.csv --data-mode fixed --validation-profile adaptive --output-tag legacy_v2_purge_smoke`
-       - artifact: `build/Release/logs/verification_report_legacy_v2_purge_smoke.json`
-26. Removed remaining v2/legacy naming artifacts from active path and deleted residual v2 strategy files:
-   - deleted residual tracked files:
-     - `include/v2/strategy/*.h`
-     - `src/v2/strategy/*.cpp`
-   - renamed verification entrypoint:
-     - `scripts/run_verification.py` (replaces `run_verification_v2.py`)
-     - `scripts/verify_baseline.py` now calls `run_verification.py`
-   - normalized verification artifact naming:
-     - `verification_report*.json`
-     - `verification_matrix*.csv`
-   - removed legacy rollback preset:
-     - deleted `config/presets/legacy_fallback.json`
-     - updated `scripts/apply_trading_preset.py` preset choices to `safe|active`
-     - updated `README.md` preset section accordingly
-   - runtime naming cleanup:
-     - `include/strategy/IStrategy.h`: `getPrimaryTakeProfit()`
-     - updated call sites:
-       - `src/strategy/StrategyManager.cpp`
-       - `src/strategy/FoundationRiskPipeline.cpp`
-   - verification:
-     - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading` PASS
-    - `python scripts/verify_script_suite.py --skip-help` PASS
-    - `python scripts/verify_baseline.py --datasets simulation_2000.csv --data-mode fixed --validation-profile adaptive --output-tag naming_cleanup_smoke` PASS
-    - artifact: `build/Release/logs/verification_report_naming_cleanup_smoke.json`
-27. Audited `core` vs non-core execution ownership:
-   - usage audit result:
-     - active runtime bridge path is now canonical domain folders:
-       - `execution/*`, `engine/*`, `risk/*`, `state/*`
-     - `include/core/*`, `src/core/*` are removed from active source/include path.
-     - namespace `autolife::core` is retained for API compatibility only.
-   - backtest data loader ownership validation:
-     - `include/backtest/DataHistory.h`
-     - `src/backtest/DataHistory.cpp`
-     - `BacktestRuntime`에서 `DataHistory::loadCSV/loadJSON`를 직접 사용하므로 유지.
-     - `CMakeLists.txt`에서 active build source로 유지.
-    - intent:
-      - keep only files with verified runtime/build ownership and reduce tree ambiguity.
-28. Runtime gate overfit-risk hardening (phase-1):
-   - identified root issue:
-     - `requiresTypedArchetype(...)` was effectively `true` for almost all non-empty strategy names.
-     - this could over-reject valid signals when `entry_archetype` is unavailable in non-archetype-driven strategies.
-   - code change:
-     - `include/common/SignalPolicyShared.h`
-     - `src/common/SignalPolicyShared.cpp`
-   - updated policy:
-     - typed-archetype enforcement now applies to archetype-sensitive strategy families only
-       (`foundation_adaptive`, momentum/breakout/scalp/trend token families).
-   - baseline config hardening:
-     - `config/config.json`: `trading.use_strategy_alpha_head_mode` switched to `false`
-     - intent: avoid fallback-heuristic over-reliance in default runtime profile.
-   - started runtime gate commonization:
-     - moved canonical implementations into shared policy module:
-       - `isAlphaHeadFallbackCandidate(...)`
-       - `normalizeSignalStopLossByRegime(...)`
-   - verification:
-     - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release` PASS
-     - `build/Release/AutoLifeTest.exe` PASS
-     - `build/Release/AutoLifeStateTest.exe` PASS
-     - `build/Release/AutoLifeExecutionStateTest.exe` PASS
-     - `build/Release/AutoLifeEventJournalTest.exe` PASS
-29. CMake default build surface minimization + clean build revalidation:
-   - CMake default options hardened:
-     - `AUTOLIFE_BUILD_GATE_TESTS=OFF` (default)
-     - `AUTOLIFE_BUILD_TOOL_BINARIES=OFF` (default)
-     - `AUTOLIFE_BUILD_EXTRA_TESTS=OFF` (default)
-   - startup target fixed for VS:
-     - `AutoLifeTrading`
-   - clean configure/build verification (fresh build dir):
-     - configure:
-       - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe -S . -B build_fresh` PASS
-     - build:
-       - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build_fresh --config Release --target AutoLifeTrading` PASS
-   - artifact check:
-     - `build_fresh/Release/AutoLifeTrading.exe` only runtime executable generated by default.
-30. Runtime commonization phase-2A + source encoding normalization:
-   - UTF-8 normalization (invalid-byte warning reduction + safe patch prerequisite):
-     - `src/runtime/BacktestRuntime.cpp`
-     - `src/runtime/LiveTradingRuntime.cpp`
-     - `include/risk/RiskManager.h`
-     - `include/common/Config.h`
-     - `include/runtime/LiveTradingRuntime.h`
-   - edge-stats commonization:
-     - added shared module:
-       - `include/common/StrategyEdgeStatsShared.h`
-       - `src/common/StrategyEdgeStatsShared.cpp`
-     - moved duplicated helpers from runtime files into shared module:
-       - `StrategyEdgeStats`
-       - `makeStrategyRegimeKey(...)`
-       - `makeMarketStrategyRegimeKey(...)`
-       - `buildStrategyEdgeStats(...)`
-       - `buildStrategyRegimeEdgeStats(...)`
-       - `buildMarketStrategyRegimeEdgeStats(...)`
-     - runtime integration:
-       - `src/runtime/BacktestRuntime.cpp`
-       - `src/runtime/LiveTradingRuntime.cpp`
-   - gate helper de-dup completion (phase-1 follow-through):
-     - runtime wrappers now delegate to shared policy module:
-       - `isAlphaHeadFallbackCandidate(...)`
-       - `normalizeSignalStopLossByRegime(...)`
-   - verification:
-     - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build_fresh --config Release --target AutoLifeTrading` PASS
-     - `build_fresh/Release/AutoLifeTrading.exe --backtest data/backtest/simulation_2000.csv --json` PASS (process exit 0)
-     - UTF-8 integrity scan (`include/`, `src/`): `invalid_count=0`
-31. Runtime commonization phase-2B + fixed-mode reproducibility check:
-   - added shared runtime diagnostics helper:
-     - `include/common/RuntimeDiagnosticsShared.h`
-     - `src/common/RuntimeDiagnosticsShared.cpp`
-   - moved duplicated runtime helper logic into shared module:
-     - `marketRegimeLabel(...)`
-     - `strengthBucket(...)`
-     - `expectedValueBucket(...)`
-     - `rewardRiskBucket(...)`
-     - `classifySignalRejectionGroup(...)`
-   - runtime integration:
-     - `src/runtime/BacktestRuntime.cpp`
-       - bucket/regime labeling now uses `common::runtime_diag`
-     - `src/runtime/LiveTradingRuntime.cpp`
-       - rejection taxonomy now uses `common::runtime_diag`
-       - regime string helper delegates to `marketRegimeLabel(...)`
-   - build/runtime verification:
-     - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build_fresh --config Release --target AutoLifeTrading` PASS
-     - `build_fresh/Release/AutoLifeTrading.exe --backtest data/backtest/simulation_2000.csv --json` PASS (process exit 0)
-   - deterministic reproducibility check (`fixed`, identical command x2):
-     - run1:
-       - `python scripts/verify_baseline.py --datasets simulation_2000.csv --data-mode fixed --validation-profile adaptive --output-tag repro_check_run1`
-     - run2:
-       - `python scripts/verify_baseline.py --datasets simulation_2000.csv --data-mode fixed --validation-profile adaptive --output-tag repro_check_run2`
-     - compared gate-critical fields (`build/Release/logs/verification_report_repro_check_run1.json` vs `...run2.json`):
-     - `overall_gate_pass`: MATCH (`True`)
-     - `aggregates.avg_profit_factor`: MATCH (`1.0568`)
-     - `aggregates.avg_expectancy_krw`: MATCH (`1.0681`)
-     - `adaptive_validation.verdict`: MATCH (`monitor`)
-32. Candidate-generation root-cause deep-dive instrumentation (pattern-signature extraction):
-   - backtest runtime now records no-signal market pattern signatures:
-     - key format: `regime=<...>|vol=<...>|liq=<...>`
-     - added result field:
-       - `no_signal_pattern_counts`
-     - files:
-       - `include/runtime/BacktestRuntime.h`
-       - `src/runtime/BacktestRuntime.cpp`
-       - `src/app/BacktestCliHandler.cpp`
-   - shared diagnostics buckets extended:
-     - `volatilityBucket(...)`
-     - `liquidityBucket(...)`
-     - files:
-       - `include/common/RuntimeDiagnosticsShared.h`
-       - `src/common/RuntimeDiagnosticsShared.cpp`
-   - verification pipeline integration:
-     - `scripts/run_verification.py` now emits:
-       - per-dataset `top_no_signal_patterns`
-       - aggregate `top_no_signal_patterns`
-       - `failure_attribution.primary_no_signal_pattern`
-   - smoke + evidence:
-     - `python scripts/verify_baseline.py --datasets simulation_2000.csv --data-mode fixed --validation-profile adaptive --output-tag pattern_signature_smoke2` PASS
-     - top pattern signatures (same report):
-       - `regime=TRENDING_UP|vol=vol_low|liq=liq_low` (`764`)
-       - `regime=RANGING|vol=vol_low|liq=liq_low` (`698`)
-       - `regime=TRENDING_DOWN|vol=vol_low|liq=liq_low` (`428`)
-     - fixed reproducibility recheck with new fields:
-       - run1: `repro_after_pattern_run1`
-       - run2: `repro_after_pattern_run2`
-      - matched fields:
-        - `overall_gate_pass`
-        - `aggregates.avg_profit_factor`
-        - `aggregates.avg_expectancy_krw`
-        - `adaptive_validation.verdict`
-        - `diagnostics.failure_attribution.primary_no_signal_pattern`
-33. Entry-quality edge-gap instrumentation + low-liquidity uptrend experiment loop:
-   - added edge-gap bucket diagnostics for entry-quality failures:
-     - new backtest JSON field:
-       - `entry_quality_edge_gap_buckets`
-     - files:
-       - `include/runtime/BacktestRuntime.h`
-       - `src/runtime/BacktestRuntime.cpp`
-       - `src/app/BacktestCliHandler.cpp`
-       - `scripts/run_verification.py`
-   - added aggregate attribution:
-     - `diagnostics.aggregate.top_entry_quality_edge_gap_buckets`
-     - `diagnostics.failure_attribution.primary_entry_quality_edge_gap_bucket`
-   - result evidence:
-     - `lowliq_structural_v5`:
-       - `blocked_risk_gate_entry_quality_edge_base=27`
-       - edge-gap bucket dominated by `edge_gap_gt_2p0bp` (near-miss 아님)
-     - `lowliq_structural_v6` (current stable):
-       - `simulation_2000.csv`: PF `1.0568`, expectancy `1.0681`, trades `3`
-       - generated signals `33` (vs baseline `25`), but executed entries remain `2`
-     - `lowliq_structural_multi_v6`:
-       - avg PF `0.4952`, avg expectancy `-16.5663`
-       - dominant bottleneck still `candidate_generation`
-       - `simulation_large.csv` loss concentration:
-         - trades `5`, PF `0.1583`, expectancy `-27.1469`
-         - all pattern trades in `TRENDING_UP`
-         - exit reasons: `StopLoss` dominated
-   - regression handling:
-     - experimental uptrend overextension filter (`large_only_v7`) caused regression
-       (trades `1`, PF `0.0`, expectancy `-56.5525`)
-     - reverted to stable checkpoint (`large_only_v8` == `large_only_v6`)
-34. Loss-cell decomposition instrumentation (quality-first root-cause):
-   - pattern diagnostics granularity expanded:
-     - `pattern_summaries` now includes:
-       - `volatility_bucket`
-       - `liquidity_bucket`
-     - files:
-       - `include/runtime/BacktestRuntime.h`
-       - `src/runtime/BacktestRuntime.cpp`
-       - `src/app/BacktestCliHandler.cpp`
-   - verification diagnostics expanded:
-     - per-dataset:
-       - `top_loss_pattern_cells`
-       - `pattern_cell_profit_map`
-     - aggregate:
-       - `top_loss_pattern_cells`
-       - failure attribution:
-         - `primary_loss_pattern_cell`
-     - file:
-       - `scripts/run_verification.py`
-   - key evidence:
-     - `large_only_v9`:
-       - primary loss cell:
-         - `regime=TRENDING_UP|vol=vol_low|liq=liq_low|strength=strength_mid|arch=FOUNDATION_UPTREND_CONTINUATION`
-       - secondary loss cell:
-         - `...|strength=strength_high|...`
-     - `lowliq_structural_multi_v9`:
-       - aggregate primary loss cell:
-         - `regime=TRENDING_UP|vol=vol_low|liq=liq_low|strength=strength_high|arch=FOUNDATION_UPTREND_CONTINUATION`
-   - quality quarantine experiments:
-     - hard gating on `uptrend+low_vol+low_liq` was tested (`quality_quarantine_*`) and caused over-suppression / unstable trade coverage.
-     - all quarantine experiments rolled back.
-     - current stable sanity:
-       - `sanity_restore_2000_v1`: PF `1.0568`, expectancy `1.0681`
-       - `sanity_restore_large_v1`: PF `0.1583`, expectancy `-27.1469`
-35. Quality-first guarded experiment + low-sample false-positive lock:
-   - strategy-side guarded profile experiment (non-hard-relax):
-     - target context:
-       - `TRENDING_UP` + low-liquidity/low-vol tendency
-     - approach:
-       - keep candidate-generation bottleneck focus
-       - avoid blanket relaxation, apply guarded sizing/risk shaping only
-     - file:
-       - `src/strategy/FoundationAdaptiveStrategy.cpp`
-   - observed behavior:
-     - `thin_guard_multi_v2` showed strong synthetic uplift (PF/expectancy positive),
-       but average trade count remained too low (2~4 level).
-   - validation integrity hardening:
-     - adaptive verdict now includes explicit sample-size guard:
-       - `sample_size_guard_pass` (`avg_total_trades >= min_avg_trades`)
-     - low-sample case should not be promoted to pass and is treated as `inconclusive` unless hard-risk guard fails.
-     - file:
-       - `scripts/run_verification.py`
-   - evidence:
-     - `thin_guard_multi_v3`:
-       - adaptive checks:
-         - `sample_size_guard_pass=false`
-       - adaptive verdict:
-         - `fail`
-       - `overall_gate_pass=false`
-     - this prevents low-sample overfit-like “good numbers” from being promoted.
-36. Post-entry adaptive risk-control structure (shared runtime path):
-   - added shared post-entry stop tightening in `RiskManager`:
-     - new API:
-       - `applyAdaptiveRiskControls(market)`
-     - behavior:
-       - break-even guard after directional confirmation
-       - adaptive trailing from highest price (`regime/liquidity/volatility` aware)
-       - stagnation-based capital-recycle stop tightening (time guard)
-       - one-way stop updates only (never widens risk)
-     - files:
-       - `include/risk/RiskManager.h`
-       - `src/risk/RiskManager.cpp`
-   - runtime integration:
-     - live:
-       - adaptive stop update applied during position monitor loop
-     - backtest:
-       - applied after current candle exit checks to avoid same-candle lookahead tightening
-     - files:
-       - `src/runtime/LiveTradingRuntime.cpp`
-       - `src/runtime/BacktestRuntime.cpp`
-   - verification:
-     - build:
-       - `cmake.exe --build build --config Release --target AutoLifeTrading`
-     - smoke:
-       - `AutoLifeTrading --backtest data/backtest/sample_trend_pullback_1m.csv --json`
-     - status:
-       - compile pass / backtest cli path pass
-37. Account-size agnostic minimum-order survivability hardening:
-   - objective:
-     - make execution consistent across account sizes without separate "small-account mode"
-   - changes:
-     - entry validation hardened:
-       - block entry when estimated stop-loss exit notional can violate exchange minimum
-       - file:
-         - `src/risk/RiskManager.cpp`
-     - live entry sizing hardened:
-       - safe minimum entry KRW now derived from (`risk_pct`, slippage guard, fee) instead of static min-order only
-       - if risk-budget clamp drops below safe minimum, candidate is skipped (no forced unsafe size)
-       - file:
-         - `src/runtime/LiveTradingRuntime.cpp`
-     - backtest sizing parity:
-       - same safe minimum executable order notion applied in order sizing path
-       - file:
-         - `src/runtime/BacktestRuntime.cpp`
-     - partial-exit dust handling fixed:
-       - removed fake half-close behavior when partial notional < min order
-       - fallback:
-         - if full notional >= min: full take-profit exit
-         - else: keep position and only arm protective state (half-closed + breakeven)
-       - file:
-         - `src/runtime/LiveTradingRuntime.cpp`
-   - verification:
-     - compile pass:
-       - `cmake --build build --config Release --target AutoLifeTrading`
-     - smoke pass:
-       - `AutoLifeTrading --backtest data/backtest/sample_trend_pullback_1m.csv --json`
-38. Daily loss KRW guard made account-size aware:
-   - issue:
-     - static `max_daily_loss_krw` can be effectively dead on small accounts.
-   - fix:
-     - effective KRW daily-loss limit is now:
-       - `min(configured_daily_loss_krw, daily_start_capital * max_daily_loss_pct)`
-       - if KRW limit is unset (`<=0`), pct-derived KRW is used.
-     - file:
-       - `src/risk/RiskManager.cpp`
-   - effect:
-     - KRW guard remains meaningful for both small and large accounts.
-     - still preserves stricter user KRW limits when configured lower than pct-derived value.
-39. Dynamic entry weight + effective max-position adaptation:
-   - objective:
-     - auto-adjust entry sizing and position-capacity by account state (no fixed static-only behavior).
-   - changes:
-     - effective max positions:
-       - computed per scan from deployable capital and safe minimum executable order size
-       - `effective_max_positions = clamp(floor(deployable_capital / min_capacity_order_krw), 1, configured_max_positions)`
-       - order admission checks now use effective max (not only static config max).
-     - auto entry sizing:
-       - per-candidate `position_size` now includes automatic scale from:
-         - position occupancy pressure (`total_potential / effective_max_positions`)
-         - capital buffer ratio (`available_capital / total_capital`)
-       - keeps size aggressive when slots/capital are open, and shrinks size as book gets crowded.
-     - files:
-       - `src/runtime/LiveTradingRuntime.cpp`
-    - verification:
-      - compile pass:
-        - `cmake --build build --config Release --target AutoLifeTrading`
-      - smoke pass:
-        - `AutoLifeTrading --backtest data/backtest/sample_trend_pullback_1m.csv --json`
-40. Post-entry adaptive TP/cadence alignment (live/backtest shared):
-   - objective:
-     - continue phase-2 lifecycle rewrite without entry-gate over-tuning.
-     - control loss concentration in `uptrend+low_liq+low_vol` via post-entry management.
-   - changes:
-     - added shared adaptive partial-exit ratio API in risk layer:
-       - `include/risk/RiskManager.h`
-       - `src/risk/RiskManager.cpp`
-       - `getAdaptivePartialExitRatio(market)`
-     - live runtime partial take-profit now uses shared adaptive ratio (35%~80%), not fixed 50%:
-       - `src/runtime/LiveTradingRuntime.cpp`
-     - backtest runtime TP1 partial fill now uses the same shared adaptive ratio:
-       - `src/runtime/BacktestRuntime.cpp`
-     - `applyAdaptiveRiskControls()` extended with dynamic TP recalibration:
-       - hostile uptrend (`TRENDING_UP + low_liq + low_vol`) TP tightening path
-       - stalled-position TP2 tightening path
-       - strong-trend runner TP2 extension path after partial exit
-       - invariant: `take_profit_2 >= take_profit_1 * 1.0015`
-       - file:
-         - `src/risk/RiskManager.cpp`
-    - verification:
-      - compile pass:
-        - `cmake --build build --config Release --target AutoLifeTrading`
-      - smoke pass:
-        - `AutoLifeTrading --backtest data/backtest/sample_trend_pullback_1m.csv --json`
-41. Verification verdict semantics aligned to `pass|fail|inconclusive`:
-   - objective:
-     - replace ambiguous `monitor` state with explicit promotion-safe `inconclusive`.
-   - changes:
-     - `scripts/run_verification.py`:
-       - adaptive verdict now:
-         - `fail`: hard-risk guards fail (`drawdown/downtrend_loss/uptrend_expectancy/risk_adjusted_score`)
-         - `inconclusive`: hard-risk pass but sample/opportunity confidence insufficient
-         - `pass`: hard-risk pass + sufficient sample/opportunity confidence
-       - dynamic sample threshold:
-         - `effective_min_avg_trades` derived from hostile-regime intensity (`avg_downtrend_trade_share`)
-       - opportunity conversion diagnostics:
-         - `generated_signals`
-         - `entries_executed`
-         - `avg_opportunity_conversion`
-         - `opportunity_conversion_guard_pass`
-       - adaptive gate pass condition tightened:
-         - `overall_gate_pass=true` only when adaptive verdict is exactly `pass`.
-   - verification:
-     - `python scripts/verify_baseline.py --datasets simulation_2000.csv,simulation_large.csv --data-mode fixed --validation-profile adaptive --output-tag verdict_inconclusive_align_smoke` PASS (script execution)
-     - artifact:
-       - `build/Release/logs/verification_report_verdict_inconclusive_align_smoke.json`
-42. Post-entry risk telemetry export connected to verification report:
-   - objective:
-     - expose post-entry lifecycle behavior as first-class verification evidence (not log-only).
-   - changes:
-     - backtest runtime now records:
-       - adaptive stop update trigger count
-       - adaptive TP recalibration trigger count
-       - adaptive partial-exit ratio histogram (`0.35~0.80` bins)
-     - serialized into backtest JSON:
-       - `post_entry_risk_telemetry`
-       - files:
-         - `include/runtime/BacktestRuntime.h`
-         - `src/runtime/BacktestRuntime.cpp`
-         - `src/app/BacktestCliHandler.cpp`
-     - verification aggregation wired:
-       - per-dataset profile includes `post_entry_risk_telemetry`
-       - adaptive aggregate includes:
-         - `avg_adaptive_stop_updates`
-         - `avg_adaptive_tp_recalibration_updates`
-         - `avg_adaptive_partial_ratio_samples`
-         - `avg_adaptive_partial_ratio`
-         - `adaptive_partial_ratio_histogram`
-       - files:
-         - `scripts/run_verification.py`
-   - verification:
-     - `python scripts/verify_baseline.py --datasets simulation_2000.csv --data-mode fixed --validation-profile adaptive --output-tag post_entry_telemetry_smoke2` PASS
-     - artifact:
-       - `build/Release/logs/verification_report_post_entry_telemetry_smoke2.json`
-43. Candidate-generation bottleneck decomposition and synthetic-liquidity rebuild (2026-02-20):
-   - root-cause:
-     - `no_signal_reason` was being dropped in manager fallback path, masking true reject reasons.
-     - backtest synthetic `liquidity_score` was structurally under-scaled on part of datasets.
-   - changes:
-     - `src/strategy/StrategyManager.cpp`:
-       - preserve and return no-signal reasons end-to-end.
-     - `src/runtime/BacktestRuntime.cpp`:
-       - notional-based surge baseline
-       - recalibrated synthetic liquidity score (regime-adjusted).
-   - verification:
-     - `python scripts/verify_baseline.py --datasets simulation_2000.csv --validation-profile adaptive --output-tag restore_after_regression_s2000` PASS
-     - `python scripts/verify_baseline.py --datasets simulation_2000.csv,simulation_large.csv --validation-profile adaptive --output-tag restore_after_regression_multi` FAIL
-   - artifact:
-     - `build/Release/logs/verification_report_restore_after_regression_s2000.json`
-     - `build/Release/logs/verification_report_restore_after_regression_multi.json`
-44. Hostile uptrend RR/EV recalibration (pattern-level, non-coin-specific):
-   - root-cause evidence:
-     - `simulation_large.csv` losses concentrated in
-       - `TRENDING_UP + vol_low + liq_low + FOUNDATION_UPTREND_CONTINUATION + rr_high`.
-   - changes:
-     - `src/strategy/FoundationAdaptiveStrategy.cpp`
-       - in `thin_low_vol` context, reward-risk target switched from hard `max(...)` style expansion to bounded `clamp(...)`.
-       - added hostile-uptrend context penalty (`TRENDING_UP + low_liq + low_vol`) for:
-         - reward-risk range
-         - implied win probability
-         - signal strength/signal_filter calibration
-   - regression handling:
-     - attempted post-entry hostile guard update in risk/backtest runtime was reverted due clear regression.
-   - verification:
-     - `python scripts/verify_baseline.py --datasets simulation_2000.csv --validation-profile adaptive --output-tag hostile_rr_ev_recalib_v1_s2000` PASS
-     - `python scripts/verify_baseline.py --datasets simulation_2000.csv,simulation_large.csv --validation-profile adaptive --output-tag hostile_rr_ev_recalib_v1_multi` PASS
-     - reproducibility recheck:
-       - `... --output-tag hostile_rr_ev_recalib_v1_multi_repro1` PASS
-       - `... --output-tag hostile_rr_ev_recalib_v1_multi_repro2` PASS
-   - key metrics:
-     - multi-set:
-       - `avg_profit_factor=1.2337`
-       - `avg_expectancy_krw=4.4895`
-       - `overall_gate_pass=True`
-       - `adaptive_verdict=pass`
-45. Real-data period-shift verification (window comparison, 6 markets):
-   - objective:
-     - validate whether period change (current vs historical windows) changes adaptive verdict on real data.
-   - dataset set:
-     - markets: `KRW-BTC, KRW-ETH, KRW-SOL, KRW-XRP, KRW-DOGE, KRW-ADA`
-     - timeframes: `1m/5m/15m/60m/240m` companion set
-   - key finding:
-     - when `--require-higher-tf-companions` is enabled, missing `15m` companion causes `entry_rounds=0` (strict parity skip path).
-     - added `15m` companions for all compared windows before final run.
-   - verification artifacts:
-     - current window:
-       - `build/Release/logs/verification_report_real_current_6set_with15m.json`
-     - historical window A (2024-03 end):
-       - `build/Release/logs/verification_report_real_windowA_2024q1_6set_with15m.json`
-     - historical window B (2024-11 end):
-       - `build/Release/logs/verification_report_real_windowB_2024q4_6set.json`
-   - result summary:
-     - all three windows remained `adaptive_verdict=fail` / `overall_gate_pass=false`
-     - common bottleneck remained `candidate_generation` with dominant
-       `foundation_no_signal_liquidity_volume_gate`.
+## Data Policy (Fixed)
+- 업비트 API에서 수집하는 것은 `OHLCV 원천 캔들`만 사용.
+- 보조지표/레이블/피처는 로컬에서 결정론적으로 생성(같은 입력이면 같은 출력).
+- 멀티 TF 기준은 `1/5/15/60/240m`를 공통 사용.
+- 라이브/백테스트 모두 동일한 피처 계산 규칙을 사용해야 함(정합성 우선).
 
-46. Multi-timeframe entry integration + native 15m companion enforcement (2026-02-20):
-   - changes:
-     - src/analytics/MarketScanner.cpp
-       - added native 15m fetch path in both scanAllMarkets() and analyzeMarket().
-       - uses existing rolling cache path (getCandlesWithRollingCache) so first load can be heavy, then incremental merge update.
-     - src/runtime/LiveTradingRuntime.cpp
-       - disabled in-runtime 15m resampling fallback (1m/5m -> 15m) to keep data integrity.
-     - src/strategy/FoundationAdaptiveStrategy.cpp
-       - added 5m/15m/1h multi-timeframe confirmation head for entry acceptance.
-       - new explicit no-signal reasons:
-         - foundation_no_signal_mtf_window
-         - foundation_no_signal_mtf_uptrend_mismatch
-         - foundation_no_signal_mtf_ranging_mismatch
-         - foundation_no_signal_mtf_hostile_mismatch
-         - foundation_no_signal_mtf_unknown_mismatch
-     - strict companion policy upgraded to include 15m:
-       - include/common/MarketDataWindowPolicy.h
-       - src/app/BacktestCliHandler.cpp
-       - src/app/BacktestInteractiveHandler.cpp
-       - scripts/run_realdata_candidate_loop.py
-       - scripts/run_candidate_train_eval_cycle.py
-       - scripts/tune_candidate_gate_trade_density.py
-   - verification:
-     - release build success (AutoLifeTrading).
-     - CLI backtest success on real dataset with companion set:
-       - build/Release/AutoLifeTrading.exe --backtest data/backtest_real/upbit_KRW_BTC_1m_12000.csv --json --require-higher-tf-companions
-     - companion-missing guard confirmed:
-       - non-upbit sample with --require-higher-tf-companions now fails fast with updated 5m/15m/60m/240m message.
-47. Live entry quality guard start (confirmed-candle signal + realtime pre-buy veto) (2026-02-20):
-   - objective:
-     - reduce live/backtest mismatch from in-progress candle usage.
-     - block immediate falling-knife entries at order submit boundary.
-   - changes:
-     - `include/engine/EngineConfig.h`
-       - added runtime knobs:
-         - `use_confirmed_candle_only_for_signals`
-         - `enable_realtime_entry_veto`
-         - `realtime_entry_veto_tracking_window_seconds`
-         - `realtime_entry_veto_max_drop_pct`
-         - `realtime_entry_veto_max_spread_pct`
-         - `realtime_entry_veto_min_orderbook_imbalance`
-     - `src/common/Config.cpp`
-       - wired all above trading config fields with defaults and clamp bounds.
-     - `src/runtime/LiveTradingRuntime.cpp`
-       - `generateSignals()`:
-         - when enabled, drop trailing unconfirmed bars per timeframe (`1m/5m/15m/1h/4h/1d`) before signal generation.
-       - `scanMarkets()`:
-         - spread prefilter normalized to ratio scale (shared with runtime veto threshold band).
-         - store recent best-ask snapshot per market for short-window drop veto.
-       - `executeBuyOrder()`:
-         - pre-submit realtime veto now blocks buy when:
-           - spread exceeds threshold
-           - orderbook imbalance indicates severe ask-pressure
-           - rapid drop vs signal entry price
-           - rapid drop vs recent best-ask within tracking window
-   - status:
-     - build/verification smoke:
-       - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading` PASS
-       - `build/Release/AutoLifeTrading.exe --backtest data/backtest/simulation_2000.csv --json` PASS
-     - `python scripts/verify_baseline.py --datasets upbit_KRW_BTC_1m_12000.csv --output-tag live_guard_smoke` PASS (script), verdict `fail` on dataset
-48. Live warm-up cache gate (rate-limit-safe pre-entry hold) (2026-02-20):
-   - objective:
-     - avoid startup burst entries and improve first-entry data quality.
-     - keep API call profile unchanged (scan loop reuse only).
-   - changes:
-     - `include/engine/EngineConfig.h`
-       - added:
-         - `enable_live_cache_warmup`
-         - `live_cache_warmup_min_scans`
-         - `live_cache_warmup_min_ready_ratio`
-     - `src/common/Config.cpp`
-       - wired warm-up config with clamp/default.
-     - `src/runtime/LiveTradingRuntime.cpp`
-       - `run()` scan loop:
-         - during warm-up, only `scanMarkets + captureLiveMtfDatasetSnapshotIfDue`.
-         - block `generateSignals/executeSignals` until both:
-           - min scan count reached
-           - parity-ready ratio reached (`checkLiveEquivalentWindow`-based)
-         - emit journal `NO_TRADE` reason: `live_cache_warmup_active`.
-     - `config/config.json`
-       - default warm-up and live guard keys explicitly documented.
-   - status:
-     - build/verification smoke:
-       - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading` PASS
-       - `build/Release/AutoLifeTrading.exe --backtest data/backtest/simulation_2000.csv --json` PASS
-     - `python scripts/verify_baseline.py --datasets upbit_KRW_BTC_1m_12000.csv --output-tag live_warmup_guard_smoke` PASS (script), verdict `fail` on dataset
-49. Dynamic realtime entry-veto thresholds (hostility/quality aware) (2026-02-20):
-   - objective:
-     - avoid fixed-threshold over/under-blocking across regime shifts.
-   - changes:
-     - `src/runtime/LiveTradingRuntime.cpp`
-       - added `computeRealtimeEntryVetoThresholds(...)`:
-         - inputs: hostility EWMA, signal strength, liquidity, regime
-         - outputs: dynamic `max_drop_pct`, `max_spread_pct`, `min_orderbook_imbalance`
-       - `executeBuyOrder()` now uses dynamic veto thresholds instead of fixed config values.
-   - status:
-     - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading` PASS
-     - `build/Release/AutoLifeTrading.exe --backtest data/backtest/simulation_2000.csv --json` PASS
-50. Dynamic scanner/liquidity/slippage thresholds (hostility/quality aware) (2026-02-20):
-   - objective:
-     - reduce fixed-threshold brittleness in market prefilter and execution cost guards.
-   - changes:
-     - `src/runtime/LiveTradingRuntime.cpp`
-       - added `computeLiveScanPrefilterThresholds(...)`:
-         - dynamic `min_volume_krw`, `max_spread_pct`, `min_ask_notional_krw`
-         - uses hostility EWMA + scanned universe volume distribution.
-       - added `computeDynamicSlippageThresholds(...)`:
-         - buy: tighter in hostile/low-liquidity, partial relief on high-quality setup
-         - sell: allows wider cap on urgent exits to avoid risk-lock
-       - applied dynamic thresholds at:
-         - `scanMarkets()` prefilter
-         - `executeSignals()` entry-size guard
-         - `executeBuyOrder()` slippage reject
-         - `executeSellOrder()` / `executePartialSell()` slippage reject
-   - status:
-     - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading` PASS
-     - `build/Release/AutoLifeTrading.exe --backtest data/backtest/simulation_2000.csv --json` PASS
-51. Backtest parity wiring for dynamic entry-veto/slippage guards (2026-02-20):
-   - objective:
-     - align backtest entry/exit execution guards with live dynamic logic to reduce policy drift.
-   - changes:
-     - `src/runtime/BacktestRuntime.cpp`
-       - added hostility-aware dynamic guard calculators for:
-         - realtime entry-veto thresholds (`spread/drop/imbalance`)
-         - buy/sell slippage caps and guard band
-       - entry path now applies:
-         - `enable_realtime_entry_veto` checks against synthetic orderbook snapshot
-         - dynamic buy slippage cap (`blocked_dynamic_slippage_cap` on overflow)
-         - dynamic slippage guard in minimum executable order calculation
-       - exit path (`max_drawdown/stop/tp/strategy_exit`) now caps modeled slippage with dynamic sell threshold.
-     - `include/runtime/BacktestRuntime.h`
-       - added recent best-ask state for short-window drop veto parity.
-   - note:
-     - scanner universe prefilter (`min_volume_krw` over multi-market list) remains live-specific because backtest runtime currently replays a single selected market file.
-   - status:
-     - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading` PASS
-     - `build/Release/AutoLifeTrading.exe --backtest data/backtest/simulation_2000.csv --json` PASS
-     - `python scripts/verify_baseline.py --datasets upbit_KRW_BTC_1m_12000.csv --output-tag backtest_dynamic_guard_parity_smoke` PASS
-52. Execution-guard commonization (live/backtest duplicate removal) (2026-02-20):
-   - objective:
-     - remove duplicated dynamic guard logic and enforce single-source behavior for runtime parity.
-   - changes:
-     - `include/common/ExecutionGuardPolicyShared.h` (new)
-       - shared contracts:
-         - `LiveScanPrefilterThresholds`
-         - `RealtimeEntryVetoThresholds`
-         - `DynamicSlippageThresholds`
-       - shared APIs:
-         - `computeHostilityTightenPressure(...)`
-         - `computeLiveScanPrefilterThresholds(...)`
-         - `computeRealtimeEntryVetoThresholds(...)`
-         - `computeDynamicSlippageThresholds(...)`
-     - `src/common/ExecutionGuardPolicyShared.cpp` (new)
-       - centralized implementations moved from runtime files.
-     - `src/runtime/LiveTradingRuntime.cpp`
-       - runtime now references shared execution-guard functions via `using` import.
-       - no local duplicate execution-guard calculators remain.
-     - `src/runtime/BacktestRuntime.cpp`
-       - removed local duplicate execution-guard structs/functions.
-       - switched to shared execution-guard functions via `using` import.
-     - `CMakeLists.txt`
-       - added `src/common/ExecutionGuardPolicyShared.cpp` to `LIB_SOURCES`.
-   - status:
-     - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading` PASS
-     - `build/Release/AutoLifeTrading.exe --backtest data/backtest/simulation_2000.csv --json` PASS
-53. Candidate-generation bottleneck decomposition and validity check (no-threshold-change decision) (2026-02-20):
-   - objective:
-     - verify whether current pre-entry blocks are logically valid before applying any threshold tuning.
-   - evidence:
-     - `build/Release/logs/verification_report_execution_guard_commonization_smoke.json`
-       - `primary_non_execution_group=candidate_generation`
-       - top reasons:
-         - `no_signal_generated=10722`
-         - `foundation_no_signal_liquidity_volume_gate=7792`
-         - `filtered_out_by_manager_ev_quality_floor=720`
-       - top no-signal pattern:
-         - `regime=RANGING|vol=vol_low|liq=liq_low`
-     - `build/Release/logs/verification_report_v41_volume_ratio_unify.json` (6-set)
-       - same dominant bottleneck across all datasets:
-         - `candidate_generation=68259`
-         - `no_signal_generated=66700`
-         - `foundation_no_signal_liquidity_volume_gate=43705`
-   - code trace:
-     - `src/strategy/FoundationAdaptiveStrategy.cpp`
-       - entry liquidity/volume gate:
-         - `metrics.liquidity_score >= 45.0 && metrics.volume_surge_ratio >= 0.75`
-       - low-liquidity relief paths exist but require additional structure confirmations.
-     - `src/strategy/FoundationRiskPipeline.cpp`
-       - manager EV-floor rejection reason:
-         - `filtered_out_by_manager_ev_quality_floor`
-   - decision:
-     - no immediate threshold edits in this step.
-     - current block reasons are internally consistent with strategy intent (low-flow/ranging suppression), and no call-stack/dispatch failure signature was observed.
-   - implication:
-     - if trade-supply target must increase, treat it as a strategy-policy redesign task (new candidate archetype/path), not ad-hoc gate loosening.
-54. Shadow-only candidate supply probe (no execution side-effect) (2026-02-20):
-   - objective:
-     - increase observability of candidate-supply headroom without touching live/backtest execution decisions.
-   - changes:
-     - `include/runtime/BacktestRuntime.h`
-       - added `ShadowFunnelSummary` in result contract.
-     - `src/runtime/BacktestRuntime.cpp`
-       - added per-round shadow probe:
-         - same input signals, relaxed manager filter only for shadow path
-         - optional policy selection on shadow candidates
-         - no order placement from shadow path (telemetry only)
-       - captured primary vs shadow counts:
-         - manager/policy filtered candidate supply
-         - best-signal availability
-         - supply-improved rounds and normalized lift.
-     - `src/app/BacktestCliHandler.cpp`
-       - emits `shadow_funnel` JSON block in `--backtest --json` output.
-     - `scripts/run_verification.py`
-       - consumes `shadow_funnel` and reports:
-         - per-dataset `shadow_contract`
-         - aggregate `diagnostics.aggregate.shadow_funnel`
-         - adaptive aggregate reference fields:
-           - `avg_primary_candidate_conversion`
-           - `avg_shadow_candidate_conversion`
-           - `avg_shadow_candidate_supply_lift`
-   - status:
-     - build:
-       - `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeTrading` PASS
-     - runtime smoke:
-       - `build/Release/AutoLifeTrading.exe --backtest data/backtest/simulation_2000.csv --json` PASS
-       - `shadow_funnel` key present (schema check PASS)
-     - verification smoke:
-       - `python scripts/verify_baseline.py --datasets upbit_KRW_BTC_1m_12000.csv --output-tag shadow_candidate_probe_smoke` PASS (script)
-       - artifact: `build/Release/logs/verification_report_shadow_candidate_probe_smoke.json`
-       - observed:
-         - `diagnostics.aggregate.shadow_funnel.shadow_after_policy_filter=379` vs `primary_after_policy_filter=318`
-       - `adaptive_validation.aggregates.avg_shadow_candidate_supply_lift=0.0555`
-       - adaptive verdict remains `fail` (no execution-path mutation expected)
-55. Baseline reset snapshot re-anchored to current runtime/verification logic (2026-02-20):
-   - objective:
-     - discard old comparison anchor and set a new single baseline after runtime + verification updates.
-   - command:
-     - `python scripts/verify_baseline.py --build-first --cmake-path D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build-jobs 1 --output-tag baseline_reset_20260220_v1`
-   - canonical baseline artifacts:
-     - `build/Release/logs/verification_report_baseline_reset_20260220_v1.json`
-     - `build/Release/logs/verification_matrix_baseline_reset_20260220_v1.csv`
-   - stable alias (current baseline pointer):
-     - `build/Release/logs/verification_report_baseline_current.json`
-     - `build/Release/logs/verification_matrix_baseline_current.csv`
-   - baseline summary:
-     - `dataset_count=6`
-     - `validation_profile=adaptive`
-     - `overall_gate_pass=false`
-     - `adaptive_verdict=fail`
-     - `avg_profit_factor=0.4392`
-     - `avg_expectancy_krw=-25.0062`
-     - `avg_total_trades=3.0`
-     - `primary_non_execution_group=candidate_generation`
-     - shadow supply reference:
-     - `primary_after_policy_filter=2639`
-     - `shadow_after_policy_filter=2812`
-     - `avg_shadow_candidate_supply_lift=0.0341`
-56. Baseline delta and non-degradation contract block added to verification report (2026-02-20):
-   - objective:
-     - make every run self-compare against `verification_report_baseline_current.json` without extra manual diff.
-   - changes:
-     - `scripts/run_verification.py`
-       - added new option:
-         - `--baseline-report-path` (default: `build/Release/logs/verification_report_baseline_current.json`)
-       - added report section:
-         - `baseline_comparison`
-         - includes:
-           - baseline/current core metrics snapshot
-           - metric deltas (`avg_profit_factor`, `avg_expectancy_krw`, `avg_total_trades`, `peak_max_drawdown_pct`, candidate conversion/supply lift)
-           - status changes (`overall_gate_pass`, `adaptive_verdict`, `primary_non_execution_group`)
-           - non-degradation contract checks (applied only when dataset set is identical)
-       - added CLI summary line:
-         - `baseline_delta_pf`, `baseline_delta_exp`, `baseline_contract(pass/fail/skip)`
-   - smoke:
-     - `python scripts/verify_baseline.py --datasets upbit_KRW_BTC_1m_12000.csv --output-tag baseline_compare_smoke` PASS
-     - artifact:
-       - `build/Release/logs/verification_report_baseline_compare_smoke.json`
-     - note:
-       - contract marked `skip` because smoke dataset set (`1`) differs from current baseline dataset set (`6`).
-   - full baseline-set check:
-     - `python scripts/verify_baseline.py --output-tag baseline_compare_full6` PASS
-     - artifact:
-       - `build/Release/logs/verification_report_baseline_compare_full6.json`
-     - result:
-       - `baseline_delta_pf=0.0`
-       - `baseline_delta_exp=0.0`
-       - `baseline_contract=pass`
-57. Verification integrity hardening patch applied (2026-02-20):
-   - objective:
-     - remove false-pass/false-compare paths in verification pipeline.
-   - changes:
-     - `scripts/run_verification.py`
-       - backtest JSON parser now:
-         - ignores malformed trailing JSON lines
-         - hard-fails on non-zero backtest exit code (with tail diagnostics)
-       - adaptive verdict hard-fail now includes:
-         - `downtrend_trade_share_guard_pass`
-       - baseline comparability now uses multiset equality (`Counter`) instead of plain set equality.
-     - `scripts/verify_baseline.py`
-       - legacy synthetic default tokens (`simulation_2000.csv,simulation_large.csv`) are now hard-fail.
-       - realdata auto-discovery is triggered only when `--datasets` is omitted.
-   - validation:
-     - parser failure-path test:
-       - non-zero exit + JSON payload -> `RuntimeError` (expected)
-     - parser malformed-tail recovery:
-       - valid JSON + malformed trailing line -> valid JSON parsed (expected)
-     - adaptive verdict guard test:
-       - excessive downtrend trade share -> `verdict=fail` (expected)
-     - baseline comparability test:
-       - duplicate-mismatch dataset list -> contract `applied=false` (expected)
-     - realdata command smoke:
-       - `python scripts/verify_baseline.py --output-tag integrity_after_patch` PASS
-58. Baseline re-anchored after verification-logic hardening (2026-02-20):
-   - objective:
-     - reset canonical baseline because verification contract/parser/adaptive-fail rules changed.
-   - commands:
-     - `python scripts/verify_baseline.py --build-first --cmake-path D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build-jobs 1 --output-tag baseline_reset_20260220_v2`
-     - `python scripts/verify_baseline.py --output-tag baseline_reset_20260220_v2_r2`
-   - canonical artifacts:
-     - `build/Release/logs/verification_report_baseline_reset_20260220_v2.json`
-     - `build/Release/logs/verification_matrix_baseline_reset_20260220_v2.csv`
-   - baseline pointer updated:
-     - `build/Release/logs/verification_report_baseline_current.json`
-     - `build/Release/logs/verification_matrix_baseline_current.csv`
-   - summary:
-     - `dataset_count=6`
-     - `avg_profit_factor=0.4392`
-     - `avg_expectancy_krw=-25.0062`
-     - `overall_gate_pass=false`
-     - `adaptive_verdict=fail`
-   - reproducibility:
-     - `v2` and `v2_r2` outputs matched on key aggregates.
-59. Strict baseline-contract enforcement mode added (2026-02-20):
-   - objective:
-     - allow CI/ops command to hard-fail when baseline comparison is unavailable/mismatched/degraded.
-   - changes:
-     - `scripts/verify_baseline.py`
-       - added options:
-         - `--baseline-report-path`
-         - `--require-baseline-contract-pass`
-       - wrapper now validates `baseline_comparison.non_degradation_contract` after successful verification run.
-       - fail conditions:
-         - baseline comparison unavailable
-         - contract not applied (dataset mismatch)
-         - contract checks failed
-   - validation:
-     - pass case:
-       - `python scripts/verify_baseline.py --require-baseline-contract-pass --output-tag strict_contract_pass_case` PASS
-     - fail case (expected):
-       - `python scripts/verify_baseline.py --datasets upbit_KRW_BTC_1m_12000.csv --require-baseline-contract-pass --output-tag strict_contract_fail_case`
-       - reason: `baseline contract not applied: dataset_set_mismatch`
-60. Dataset dedupe guard added for verification input integrity (2026-02-20):
-   - objective:
-     - prevent accidental duplicate dataset weighting in verification aggregates.
-   - changes:
-     - `scripts/verify_baseline.py`
-       - hard-fail when duplicate dataset tokens or duplicate resolved dataset paths are provided.
-     - `scripts/run_verification.py`
-       - hard-fail when duplicate dataset paths are configured in `--dataset-names`.
-   - validation:
-     - pass:
-       - `python scripts/verify_baseline.py --output-tag dedupe_guard_pass_smoke` PASS
-     - fail (expected):
-       - `python scripts/verify_baseline.py --datasets upbit_KRW_BTC_1m_12000.csv,upbit_KRW_BTC_1m_12000.csv --output-tag dedupe_guard_fail_smoke`
-       - reason: `Duplicate dataset tokens are not allowed`
+## Build Toolchain (Fixed)
+- CMake binary path (vcpkg 하위 고정):
+  - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe`
+- CMake toolchain path:
+  - `D:\MyApps\vcpkg\scripts\buildsystems\vcpkg.cmake`
+- `cmake`가 PATH에 없을 수 있으므로 빌드/검증은 절대경로 사용을 기본으로 함.
 
-## Remaining In This Chapter
-1. Continue engine/strategy root-cause deep dive based on diagnostics:
-   - if `candidate_generation` dominates: inspect manager prefilter + per-strategy conversion.
-   - prioritize low-liquidity dominant no-signal signatures from `top_no_signal_patterns`.
-   - if `quality_and_risk_gate` dominates: use `top_entry_quality_edge_gap_buckets` first to separate near-miss vs structural mismatch.
-   - use `top_loss_pattern_cells` as primary evidence for strategy redesign (not threshold-only tuning).
-   - immediate next split:
-     - branch A: `BTC/ADA no-trade` path (`filtered_out_by_manager_ev_quality_floor` concentration).
-     - branch B: `XRP/DOGE uptrend loss-cell` path (`FOUNDATION_UPTREND_CONTINUATION` in low-vol context).
-2. Continue adaptive lifecycle risk rewrite (phase-1 done):
-   - phase-1 done:
-     - shared adaptive stop tightening path connected to backtest/live
-   - next:
-     - include stop-loss-dominant uptrend loss case decomposition (`simulation_large.csv`) before threshold edits.
-     - tune adaptive TP/cadence thresholds against multi-dataset evidence (`simulation_2000.csv`, `simulation_large.csv`) with overfit guard.
-     - enforce rollback-first policy for any experiment that worsens both PF and expectancy on real 6-set.
-3. Decide which legacy verification scripts are archive targets for CH-02.
+## Data Foundation Progress
+1. `60m,240m` 장기 번들 수집 완료(9마켓 기준, EOS 404 제외).
+2. `5m,15m` 번들 수집 완료.
+3. `1m` 최근 2년 번들 수집 완료(9마켓).
+4. 현재 상태는 manifest 기준(`data/backtest_probabilistic/probabilistic_bundle_manifest.json`)을 단일 진실원으로 사용.
+5. 진행 가시성 개선 완료:
+   - `scripts/fetch_probabilistic_training_bundle.py` job 단위 manifest 즉시 갱신
+   - `current_job`, `progress_pct`, `run_state` 실시간 기록
+6. 정체 루프 방지 완료:
+   - `scripts/fetch_upbit_historical_candles.py`에 stagnant cursor/unique break 추가
+7. Phase-2 진행/완료:
+   - `scripts/build_probabilistic_feature_dataset.py` 추가
+   - 1m anchor + 5/15/60/240 context + leakage-safe labels 생성 파이프라인 구축
+   - full build 완료(9 markets, `9,477,036` rows, `~3.48 GB`)
+   - 메이저+알트 혼합 데이터로 일반화 케이스 확보(코인별 과적합 방지 목적)
 
-## Exit Criteria
-- Team can run one command and get reproducible verification output.
-- Current chapter doc contains:
-  - exact completed items
-  - exact remaining items
-  - artifact file paths
+## Current Snapshot (at document update)
+- Active batch: `none`
+- Status: `phase-4 probabilistic-primary strict/fastpass hardening applied (manager bottleneck + model-first routing 재정렬)`
+- Artifacts:
+  - `data/backtest_probabilistic/probabilistic_bundle_manifest.json`
+  - `build/Release/logs/probabilistic_bundle_summary.json`
+  - `data/model_input/probabilistic_features_v1_full_20260220_181345/feature_dataset_manifest.json`
+  - `build/Release/logs/probabilistic_feature_build_summary_full_20260220_181345.json`
+  - `build/Release/logs/probabilistic_feature_validation_summary_full_20260220.json`
+  - `data/model_input/probabilistic_features_v1_full_20260220_181345/probabilistic_split_manifest_v1.json`
+  - `build/Release/logs/probabilistic_baseline_summary_full_20260220.json`
+  - `build/Release/logs/probabilistic_model_train_summary_full_20260220.json`
+  - `build/Release/models/probabilistic_pattern_v1_full_20260220`
+  - `build/Release/logs/probabilistic_walkforward_report_full_20260220.json`
+  - `build/Release/logs/probabilistic_inference_parity_full_20260220.json`
+  - `config/model/probabilistic_runtime_bundle_v1.json`
+  - `build/Release/logs/probabilistic_runtime_bundle_parity_full_20260220.json`
+  - `build/Release/logs/verification_report_runtime_risk_rescuefix_20260220.json`
+  - `build/Release/logs/verification_report_runtime_risk_rescuefix_expA_20260220.json`
+  - `build/Release/logs/verification_report_runtime_risk_rescuefix_expB_20260220.json`
 
-## Change Safety Protocol (Mandatory)
-1. Pre-change impact map first:
-   - identify affected layers before editing:
-     - entry gate
-     - post-entry risk/exit
-     - accounting/capital reservation
-     - verification report attribution fields
-2. Runtime invariants must hold:
-   - min-order compliance on entry/partial/full exit
-   - no lookahead bias in backtest
-   - live/backtest parity for shared risk logic
-   - capital accounting conservation (`available + reserved + pending` consistency)
-3. Verification script integrity checks:
-   - fixed-mode reproducibility recheck (same command >=2 runs)
-   - adaptive verdict + sample-size guard 확인
-   - failure attribution field drift check (`primary_*` reason changes explained)
-4. Merge gate for gate/PnL tuning:
-   - no promotion if gains are from low sample size
-   - if trade count drops materially, treat as regression unless explicitly intended
-   - any side-effect found in runtime/backtest parity path is hot-fixed before next tuning
+## Validation Snapshot
+- 전수 대상: 9 markets, `9,477,036` rows
+- 결과: `pass (9/9)`
+- 핵심 무결성:
+  - 스키마 누락 0
+  - 타임스탬프 정렬 위반 0
+  - 라벨 도메인 위반 0
+  - h1/h5/edge 누수 정합성 mismatch 0
 
-## Validation Judgement Policy (Adaptive)
-1. Verdict states:
-   - `pass`: quality/risk checks satisfied with sufficient sample context.
-   - `fail`: hard-risk guard failed (drawdown/risk-adjusted degradation/uptrend expectancy collapse).
-   - `inconclusive`: sample is too sparse for promotion-level confidence.
-2. Sample logic:
-   - use regime-aware minimum sample threshold (hostile regime allows lower trade count than favorable regime).
-   - evaluate trade count together with opportunity conversion:
-     - `entries_executed / generated_signals`
-3. Promotion rule:
-   - `inconclusive` is non-promotable by default.
-   - only `pass` can be candidate for promotion.
+## Baseline Snapshot
+- baseline 종류: `train label-prior` (fold별)
+- 전체 결과: `pass (9/9 datasets)`
+- weighted test:
+  - `h5_logloss=0.6743`
+  - `h5_brier=0.2406`
+  - `h5_accuracy=0.6025`
+  - `h5_mean_edge_bps=-12.1554`
 
+## Initial Model Snapshot
+- 실행: `py -3.10 scripts/train_probabilistic_pattern_model.py`
+- 모델: streaming `SGDClassifier(log_loss)` + fold별 `Platt calibration`
+- 결과(9/9 datasets pass):
+  - `h5_test_calibrated_logloss=0.6606` (baseline 0.6743 대비 개선)
+  - `h5_test_calibrated_brier=0.2342` (baseline 0.2406 대비 개선)
+  - `h5_test_calibrated_accuracy=0.6025` (baseline와 동일)
+  - 선택 트레이드(`~11.05%` coverage) `mean_edge_bps=-10.5596`
+    (baseline unconditional `-12.1554` 대비 개선)
+
+## Walk-Forward Decomposition Snapshot
+- 리포트: `build/Release/logs/probabilistic_walkforward_report_full_20260220.json`
+- overall test:
+  - `logloss=0.6606`
+  - `brier=0.2342`
+  - `accuracy=0.6025`
+  - selected coverage `~11.03%`
+  - selected mean edge `-10.5565 bps`
+- regime 관찰:
+  - `trend_down_sync`: coverage 높음(`~23.37%`), edge `-10.76 bps`
+  - `trend_up_sync`: coverage 낮음(`~2.77%`), edge `-12.52 bps`
+  - 현재는 up-sync 품질 개선이 핵심 병목
+
+## Inference Parity Snapshot
+- 리포트: `build/Release/logs/probabilistic_inference_parity_full_20260220.json`
+- 검증 범위: 9 markets x 3 folds = 27 비교
+- 결과: `pass`
+  - worst raw diff: `2.220e-16`
+  - worst calibrated diff: `1.721e-15`
+  - tolerance: `1e-9`
+- 의미: sklearn 추론과 수동 로짓 계산이 사실상 동일(추후 C++ 이식 기준 충족)
+
+## Runtime Bundle Snapshot
+- 번들 생성: `scripts/export_probabilistic_runtime_bundle.py`
+  - 산출물: `config/model/probabilistic_runtime_bundle_v1.json`
+  - 정책: 마켓별 latest fold(3) 선택
+- 번들 parity:
+  - script: `scripts/validate_runtime_bundle_parity.py`
+  - output: `build/Release/logs/probabilistic_runtime_bundle_parity_full_20260220.json`
+  - 결과: `pass (9 markets)`, worst diff `1.110e-16` (tol `1e-9`)
+- C++ 연동 진행:
+  - `src/analytics/ProbabilisticRuntimeFeatures.cpp` 추가 (학습 스크립트와 동일 변환식)
+  - `src/runtime/LiveTradingRuntime.cpp`, `src/runtime/BacktestRuntime.cpp`에 런타임 확률 보정 연결
+  - `signal -> runtime -> risk manager -> trade/state persistence` 경로에 확률 메타(`h1/h5 cal, threshold, margin`) 직결
+  - 라이브 실주문 비동기 체결 경로에 메타 지연 적용(`pending metadata`) 추가
+  - 리스크 후행 제어에서 확률 마진 기반 동적 조정 적용:
+    - 트레일링 갭
+    - stagnation/recycle 시간 가드
+    - 부분익절 비율
+  - 빌드 확인: `AutoLifeTrading` Release 성공
+
+## Runtime/Manager Regression Snapshot (2026-02-20)
+- 변경점:
+  - `StrategyManager` core-rescue 경로에서 Foundation 전략의 이중게이트 재검증을 제거.
+  - 대신 `실패 사유 기반 rescue 허용` + `safety floor`(스프레드/유동성/압력/단기수익률 하한) 적용.
+  - `FoundationAdaptiveStrategy` 내부 엔트리 판정을 공통 snapshot 함수로 통합(`generateSignal`/`shouldEnter` 드리프트 제거).
+- 검증 결과(6 datasets):
+  - 이전(`verification_report_runtime_risk_20260220.json`):
+    - `avg_profit_factor=0.4392`, `avg_expectancy_krw=-25.0062`, `avg_total_trades=3.0`
+    - candidate_generation 중 `no_signal_generated_share=0.977`
+  - 이후(`verification_report_runtime_risk_rescuefix_20260220.json`):
+    - `avg_profit_factor=0.4182`, `avg_expectancy_krw=-22.0043`, `avg_total_trades=3.3333`
+    - candidate_generation 중 `no_signal_generated_share=0.5687`
+    - `filtered_out_by_manager_share=0.4313`로 병목 이동
+- 해석:
+  - 후보 공급 부족(no-signal) 병목은 크게 완화됨.
+  - 대신 매니저 prefilter(`strength`, `ev_quality_floor`)가 주 병목으로 전환됨.
+  - 즉, 다음 단계는 게이트 완화가 아니라 `manager prefilter staging` 정밀 분해가 우선.
+
+## Probabilistic-Primary Flow Refactor (2026-02-20)
+- 목표 반영:
+  - 기존 전략 필터 보조가 아니라, 확률모델이 스캔/신호/진입/리스크 전 구간에서 주도권을 갖도록 파이프라인 재배치.
+- 코드 반영:
+  - `src/runtime/LiveTradingRuntime.cpp`
+  - `src/runtime/BacktestRuntime.cpp`
+  - `include/engine/EngineConfig.h`
+  - `src/common/Config.cpp`
+- 핵심 변경:
+  - 스캔 단계: `probabilistic_market_prefilter` 추가(마켓 단위 확률 마진 prefilter).
+  - 신호 단계: 확률 snapshot을 시그널 score/strength/filter에 우선 반영(기존 전략값은 보조).
+  - 매수 단계: 확률 마진 기반 `position_size` 동적 스케일(양수 여지 확대, 음수 여지 축소).
+  - 리스크 단계: 기존 확률 메타 연동(`prob_h5_margin`) 경로 유지/강화.
+- 신규 설정 키(기본값):
+  - `probabilistic_runtime_primary_mode=true`
+  - `probabilistic_runtime_scan_prefilter_enabled=true`
+  - `probabilistic_runtime_scan_prefilter_margin=-0.10`
+  - `probabilistic_runtime_strength_blend=0.45`
+  - `probabilistic_runtime_position_scale_weight=0.35`
+- 회귀 결과(6 datasets):
+  - 리포트: `build/Release/logs/verification_report_prob_primary_refactor_final_20260220.json`
+  - `avg_profit_factor=0.3941`
+  - `avg_expectancy_krw=-29.7897`
+  - `avg_total_trades=2.6667`
+  - `overall_gate_pass=false`
+  - 해석: 확률 주도 경로는 반영되었고, 현재는 `candidate_generation(no_signal) + manager strength prefilter` 동시 병목.
+
+## Probabilistic-Primary Structural Follow-up (2026-02-20, v1)
+- 변경 요약:
+  - 실험용 env 토글 경로를 정식 config 기반으로 전환:
+    - `foundation_signal_supply_fallback_enabled`
+    - `manager_soft_queue_enabled`
+    - `manager_soft_queue_position_scale`
+    - `manager_soft_queue_max_strength_gap`
+    - `manager_soft_queue_max_ev_gap`
+  - `FoundationAdaptiveStrategy`의 `RANGING + 저유동` 신호 공급 경로 확장:
+    - `signal_supply_fallback` 활성 조건 확장
+    - `ranging minimal probe` 경로 추가(소형 포지션 경로)
+  - `SignalPolicyShared::isAlphaHeadFallbackCandidate`에
+    `foundation_adaptive_regime_entry_signal_supply_fallback` 연동 추가
+    (probabilistic primary mode에서 fallback 완화 경로와 연결).
+  - 백테스트/라이브 entry-quality에 확률 기반 near-miss(edge) 완화 추가
+    (비우호 레짐 제외, 확률 마진/보정 확률 조건부).
+- 주요 리포트:
+  - `build/Release/logs/verification_report_prob_primary_structural_refactor_v1_20260220.json`
+  - 2-dataset probe:
+    - `build/Release/logs/verification_report_softqueue_supply_edge_relief_probe_v4_20260220.json`
+- 관측 결과(6 datasets):
+  - `avg_generated_signals: 5654.8333 -> 5810.8333`
+  - `avg_primary_candidate_conversion: 0.2187 -> 0.2504`
+  - `no_signal_generated_share: 0.5843 -> 0.5797`
+  - `avg_profit_factor: 0.3941 (동일)`
+  - `avg_expectancy_krw: -29.7897 (동일)`
+- 해석:
+  - 후보 공급/매니저 통과율은 개선됐지만, 실거래 진입으로 이어지는 구간에서
+    `blocked_risk_gate_entry_quality_edge_base` 비중이 증가.
+  - 다음 병목은 `entry-quality edge gate` 구조(현재 base floor 설계)로 확정.
+
+## Probabilistic-Primary Hardening (2026-02-20, v2)
+- 적용 파일:
+  - `src/strategy/StrategyManager.cpp`
+  - `src/strategy/FoundationRiskPipeline.cpp`
+  - `src/runtime/LiveTradingRuntime.cpp`
+  - `src/runtime/BacktestRuntime.cpp`
+- 핵심 변경:
+  - `StrategyManager`:
+    - 확률 고신뢰 신호 `manager_probabilistic_primary_fastpass` 추가
+      (안전조건: 유동성/변동성/RR/EV 하한 유지).
+    - 신호 점수 계산에 `probabilistic_margin + calibrated_prob` 가중 반영 강화.
+  - `FoundationRiskPipeline`:
+    - 확률 신호에 대해 history/RR/no-trade-bias 패널티를 고정값 대신 confidence 기반 스케일로 완화.
+    - hostile 레짐 안전장치는 유지.
+  - `Live/Backtest inferProbabilisticRuntimeSnapshot`:
+    - `probabilistic_runtime_primary_mode=true`에서 fail-open 제거(모델 우선 강제).
+    - 실패 사유를 명시적으로 taxonomy에 기록:
+      - `probabilistic_runtime_bundle_unavailable`
+      - `probabilistic_market_not_supported`
+      - `probabilistic_feature_build_failed`
+      - `probabilistic_feature_dimension_mismatch`
+      - `probabilistic_inference_failed`
+- 검증:
+  - Release build: `AutoLifeTrading` 성공.
+  - 스모크 실행: `data/backtest/sample_trend_pullback_1m.csv` 기준 실행 정상(종료코드 0).
+  - 주의: 샘플 데이터는 MTF context 부족으로 확률 피처 빌드 실패 로그가 발생하며,
+    이는 v2 strict-primary 정책에서 의도된 차단 동작.
+
+## What Was Trimmed
+- 기존 장문 작업내역은 아래로 보관:
+  - `docs/archive/CHAPTER_CURRENT_FULLLOG_2026-02-20.md`
+- 본 문서는 "현재 방향 + 지금 해야 할 일"만 유지.
+
+## Next Required Steps
+1. `entry-quality edge base floor`를 확률 마진 연동형 floor로 재설계(레짐별 상/하한, 비우호 레짐 분리).
+2. `filtered_out_by_manager_strength / ev_quality_floor` hard/soft 분해를 정식화(현재 soft queue는 보조 단계).
+3. `후보 증가 -> 진입 증가 -> 수익성` 연결 계측 추가(전이 구간별 conversion contract).
+4. 재설계 후 동일 6-dataset 회귀 + baseline delta 계약 재평가.
+
+## Non-Negotiables
+- 순차 실행 유지(병렬 검증/병렬 튜닝 금지).
+- 코인 하드코딩 금지, 패턴/레짐 단위 일반화.
+- 라이브/백테스트 데이터량 및 피처 계산 규칙 동일 유지.

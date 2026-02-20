@@ -21,6 +21,7 @@ constexpr int kIncrementalFetchCount = 3;
 constexpr auto kMinCandleApiInterval = std::chrono::milliseconds(120);
 constexpr auto kMinFullSyncInterval = std::chrono::milliseconds(30LL * 60LL * 1000LL);
 constexpr auto kMaxFullSyncInterval = std::chrono::milliseconds(72LL * 60LL * 60LL * 1000LL);
+constexpr double kLiquidityScoreReferenceNotionalKrw = 100000000000.0; // 1000억 KRW
 }
 
 namespace autolife {
@@ -277,7 +278,10 @@ if (ticker_map.find(market) != ticker_map.end()) {
 
         // [수정] 유동성 점수 기준 현실화 (예: 1,000억 기준 100점)
         double trade_price_24h = ticker_map[market]["acc_trade_price_24h"].get<double>();
-        metrics.liquidity_score = std::min(100.0, (trade_price_24h / 100000000000.0) * 100.0);
+        metrics.liquidity_score = std::min(
+            100.0,
+            (trade_price_24h / kLiquidityScoreReferenceNotionalKrw) * 100.0
+        );
         metrics.volume_24h = trade_price_24h;
         
         metrics.composite_score = calculateCompositeScore(metrics);
@@ -563,8 +567,10 @@ double MarketScanner::calculateLiquidityScore(const std::string& market) {
         
         double volume_24h = ticker[0]["acc_trade_price_24h"].get<double>(); // 거래대금
         
-        // 거래대금 기준 점수 (10억원 이상 = 100점)
-        double score = std::min(100.0, (volume_24h / 1000000000.0) * 100.0);
+        double score = std::min(
+            100.0,
+            (volume_24h / kLiquidityScoreReferenceNotionalKrw) * 100.0
+        );
         
         return score;
         
