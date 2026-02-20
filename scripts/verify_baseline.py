@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import json
 import os
 import pathlib
 import re
@@ -226,6 +227,39 @@ def run_build_with_retry(
     raise RuntimeError("Build failed after retries.")
 
 
+def load_json_report(path_value: pathlib.Path):
+    if not path_value.exists():
+        raise FileNotFoundError(f"Verification report not found: {path_value}")
+    try:
+        payload = json.loads(path_value.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"Failed to parse verification report JSON: {path_value}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"Verification report JSON is not an object: {path_value}")
+    return payload
+
+
+def enforce_baseline_contract(report_path: pathlib.Path) -> None:
+    report = load_json_report(report_path)
+    comparison = report.get("baseline_comparison", {})
+    if not isinstance(comparison, dict):
+        raise RuntimeError("baseline_comparison block missing in verification report")
+    if not bool(comparison.get("available", False)):
+        reason = str(comparison.get("reason", "")).strip() or "baseline_report_missing_or_invalid"
+        raise RuntimeError(f"baseline comparison unavailable: {reason}")
+
+    contract = comparison.get("non_degradation_contract", {})
+    if not isinstance(contract, dict):
+        raise RuntimeError("non_degradation_contract block missing in baseline comparison")
+    if not bool(contract.get("applied", False)):
+        reason = str(contract.get("reason", "")).strip() or "dataset_set_mismatch"
+        raise RuntimeError(f"baseline contract not applied: {reason}")
+    if not bool(contract.get("all_pass", False)):
+        failed = contract.get("failed_checks", [])
+        failed_text = ",".join(str(x) for x in failed) if isinstance(failed, list) else str(failed)
+        raise RuntimeError(f"baseline contract failed: {failed_text}")
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description="Realdata-only verification entrypoint (adaptive validation baseline)."
@@ -354,6 +388,19 @@ def main(argv=None) -> int:
         default=2.0,
         help="Wait seconds between build retries.",
     )
+    parser.add_argument(
+        "--baseline-report-path",
+        default=r".\build\Release\logs\verification_report_baseline_current.json",
+        help="Baseline report path used by run_verification baseline comparison.",
+    )
+    parser.add_argument(
+        "--require-baseline-contract-pass",
+        action="store_true",
+        help=(
+            "Fail command when baseline comparison is unavailable/mismatched or "
+            "non_degradation_contract does not pass."
+        ),
+    )
     args = parser.parse_args(argv)
 
     repo_root = pathlib.Path(__file__).resolve().parents[1]
@@ -418,6 +465,9 @@ def main(argv=None) -> int:
         output_tag = f"_{output_tag}"
     output_json = pathlib.Path(rf".\build\Release\logs\verification_report{output_tag}.json")
     output_csv = pathlib.Path(rf".\build\Release\logs\verification_matrix{output_tag}.csv")
+    baseline_report_path = pathlib.Path(str(args.baseline_report_path))
+    if not baseline_report_path.is_absolute():
+        baseline_report_path = (repo_root / baseline_report_path).resolve()
     resolved_build_dir = (repo_root / str(args.build_dir)).resolve()
     resolved_exe = resolved_build_dir / str(args.build_config) / "AutoLifeTrading.exe"
     resolved_cfg = resolved_build_dir / str(args.build_config) / "config" / "config.json"
@@ -467,11 +517,22 @@ def main(argv=None) -> int:
         str(output_json),
         "--output-csv",
         str(output_csv),
+        "--baseline-report-path",
+        str(baseline_report_path),
     ]
     cmd.append("--require-higher-tf-companions")
 
     proc = subprocess.run(cmd)
-    return int(proc.returncode)
+    if int(proc.returncode) != 0:
+        return int(proc.returncode)
+    if bool(args.require_baseline_contract_pass):
+        try:
+            enforce_baseline_contract(output_json.resolve())
+        except Exception as exc:
+            print(f"[verify_baseline] baseline contract enforcement failed: {exc}", file=sys.stderr)
+            return 2
+        print("[verify_baseline] baseline contract enforcement: PASS")
+    return 0
 
 
 if __name__ == "__main__":

@@ -1321,6 +1321,25 @@ Title: `Verification Reset Baseline`
      - `adaptive_verdict=fail`
    - reproducibility:
      - `v2` and `v2_r2` outputs matched on key aggregates.
+59. Strict baseline-contract enforcement mode added (2026-02-20):
+   - objective:
+     - allow CI/ops command to hard-fail when baseline comparison is unavailable/mismatched/degraded.
+   - changes:
+     - `scripts/verify_baseline.py`
+       - added options:
+         - `--baseline-report-path`
+         - `--require-baseline-contract-pass`
+       - wrapper now validates `baseline_comparison.non_degradation_contract` after successful verification run.
+       - fail conditions:
+         - baseline comparison unavailable
+         - contract not applied (dataset mismatch)
+         - contract checks failed
+   - validation:
+     - pass case:
+       - `python scripts/verify_baseline.py --require-baseline-contract-pass --output-tag strict_contract_pass_case` PASS
+     - fail case (expected):
+       - `python scripts/verify_baseline.py --datasets upbit_KRW_BTC_1m_12000.csv --require-baseline-contract-pass --output-tag strict_contract_fail_case`
+       - reason: `baseline contract not applied: dataset_set_mismatch`
 
 ## Remaining In This Chapter
 1. Continue engine/strategy root-cause deep dive based on diagnostics:
