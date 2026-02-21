@@ -1,147 +1,71 @@
 # File Usage Map
 
-Last updated: 2026-02-19
+Last updated: 2026-02-21
 
 ## Purpose
-This document classifies repository files by operational criticality so cleanup can be done without breaking runtime or CI flows.
+Keep only files that are directly tied to current runtime, CI gate, and probabilistic model workflow.
 
-## Categories
+## runtime-critical
+- `CMakeLists.txt`
+- `src/**/*.cpp` used by `AutoLifeTrading` target
+- `include/**/*.h` used by runtime compile contracts
+- `config/config.json`, `config/model/*`, `config/presets/active.json`, `config/presets/safe.json`
+- `tests/*.cpp` (gate/unit test binaries)
 
-### runtime-critical
-- Definition: files directly used in build/runtime paths (`CMakeLists.txt`, `src/*`, `include/*`, `tests/*` link targets).
-- Rule: do not delete until replacement path is implemented and validated.
-- Current scope:
-  - `src/**/*.cpp` (all 36 are currently linked by `CMakeLists.txt`)
-  - `include/**/*.h` (runtime and compile contracts)
-  - `tests/*.cpp` (verification binaries)
-  - runtime replacement paths (Wave B2 stage-1):
-    - `include/runtime/LiveTradingRuntime.h`
-    - `src/runtime/LiveTradingRuntime.cpp`
-    - `include/runtime/BacktestRuntime.h`
-    - `src/runtime/BacktestRuntime.cpp`
-  - active runtime adapter/orchestration path (core folder flattened):
-    - `include/execution/ExecutionPlaneAdapter.h`
-    - `include/engine/PolicyLearningPlaneAdapter.h`
-    - `include/risk/UpbitComplianceAdapter.h`
-    - `include/engine/TradingCycleCoordinator.h`
-    - `include/state/EventJournalJsonl.h`
-    - `include/state/LearningStateStoreJson.h`
-    - `src/execution/ExecutionPlaneAdapter.cpp`
-    - `src/engine/PolicyLearningPlaneAdapter.cpp`
-    - `src/risk/UpbitComplianceAdapter.cpp`
-    - `src/engine/TradingCycleCoordinator.cpp`
-    - `src/state/EventJournalJsonl.cpp`
-    - `src/state/LearningStateStoreJson.cpp`
-  - active strategy runtime units (foundation-only):
-    - `include/strategy/FoundationAdaptiveStrategy.h`
-    - `src/strategy/FoundationAdaptiveStrategy.cpp`
-    - `include/strategy/FoundationRiskPipeline.h`
-    - `src/strategy/FoundationRiskPipeline.cpp`
-    - `include/strategy/IStrategy.h`
-    - `include/strategy/StrategyManager.h`
-    - `src/strategy/StrategyManager.cpp`
-  - runtime ownership after flattening:
-    - `execution/*`: order transport/state mapping + execution plane port/adapter.
-    - `engine/*`: policy plane port/adapter + cycle coordinator + policy/performance primitives.
-    - `risk/*`: compliance plane port/adapter + risk engine.
-    - `state/*`: event journal + learning state store port/implementation.
-    - `core` directory is removed from active include/src tree (namespace `autolife::core` is retained for API compatibility).
-  - retained helper unit (validated as active):
-    - `include/backtest/DataHistory.h`
-    - `src/backtest/DataHistory.cpp`
-    - reason: `src/runtime/BacktestRuntime.cpp`에서 `DataHistory::loadCSV/loadJSON` 직접 호출.
-  - shared runtime analytics helper (live/backtest common):
-    - `include/common/StrategyEdgeStatsShared.h`
-    - `src/common/StrategyEdgeStatsShared.cpp`
-    - reason: strategy-level/regime-level edge stats aggregation + key builders are now single source of truth.
-  - shared runtime diagnostics helper (live/backtest common):
-    - `include/common/RuntimeDiagnosticsShared.h`
-    - `src/common/RuntimeDiagnosticsShared.cpp`
-    - reason: regime label + rejection taxonomy + quality bucket functions are centralized for runtime/report consistency.
-  - runtime strategy registration mode:
-    - runtime is hard-switched to foundation-only registration:
-      - registered: `Foundation Adaptive Strategy`
-      - skipped: legacy strategy pack registration
-    - enforced in:
-      - `src/runtime/LiveTradingRuntime.cpp`
-      - `src/runtime/BacktestRuntime.cpp`
-  - legacy strategy tree state after B3 stage-1:
-    - `include/strategy/` stage-1 unit headers moved to `legacy_archive/include/strategy/`
-    - `src/strategy/` active sources removed (moved to `legacy_archive/src/strategy/`)
-    - empty legacy directories (`include/strategy`, `src/strategy`) physically removed
-    - legacy v2 strategy units physically deleted from active tree:
-      - `include/strategy/ScalpingStrategy.h`
-      - `include/strategy/MomentumStrategy.h`
-      - `include/strategy/BreakoutStrategy.h`
-      - `include/strategy/MeanReversionStrategy.h`
-      - `include/strategy/GridTradingStrategy.h`
-      - `src/strategy/ScalpingStrategy.cpp`
-      - `src/strategy/MomentumStrategy.cpp`
-      - `src/strategy/BreakoutStrategy.cpp`
-      - `src/strategy/MeanReversionStrategy.cpp`
-      - `src/strategy/GridTradingStrategy.cpp`
-      - `src/strategy/StrategyConfig.cpp`
-    - active strategy runtime path is `include/strategy/*` + `src/strategy/*`
+Rule:
+- Delete only after replacement path is implemented and verified.
 
-### migration-bootstrap (retired)
-- Status: retired on 2026-02-19.
-- Removed from active tree/build:
-  - `include/v2/`, `src/v2/` (already removed)
-  - v2-only scaffold units under legacy core tree:
-    - `DecisionKernel`, `Legacy*PlaneAdapter`, `*V2` contracts/tests
-    - old `include/core/*`, `src/core/*` paths (removed)
-  - note:
-    - `include/engine/*`, `src/engine/*`, `include/backtest/*`, `src/backtest/*`
-      are active canonical runtime paths after flattening (non-v2).
-  - legacy shadow adapter/test stack (`Legacy*PlaneAdapter`, `DecisionKernel`, `TestV2*`, `AutoLifeV2*` targets)
-- Current policy:
-  - no runtime/compile dependency on v2 shadow-parity path
-  - no `*V2` header/cpp files remain in `include/` or `src/`
+## ops-critical
+- `.github/workflows/ci-pr-gate.yml`
+- `.github/workflows/ci-strict-live-gate.yml`
+- `scripts/run_ci_operational_gate.py`
+- `scripts/validate_operational_readiness.py`
+- `scripts/validate_execution_parity.py`
+- `scripts/validate_readiness.py`
+- `scripts/validate_recovery_e2e.py`
+- `scripts/validate_recovery_state.py`
+- `scripts/validate_replay_reconcile_diff.py`
+- `scripts/generate_live_execution_probe.py`
+- `scripts/generate_strict_live_gate_trend_alert.py`
+- `scripts/run_verification.py`
+- `scripts/generate_probabilistic_baseline.py`
+- `scripts/build_probabilistic_feature_dataset.py`
+- `scripts/train_probabilistic_pattern_model.py`
+- `scripts/export_probabilistic_runtime_bundle.py`
+- `scripts/validate_probabilistic_feature_dataset.py`
+- `scripts/validate_probabilistic_inference_parity.py`
+- `scripts/validate_runtime_bundle_parity.py`
+- `scripts/fetch_probabilistic_training_bundle.py`
+- `scripts/fetch_upbit_historical_candles.py`
+- `scripts/run_profitability_exploratory.py`
 
-### ops-critical
-- Definition: files invoked by CI gates, runbooks, or day-to-day operations.
-- Rule: delete only after replacement command and runbook update are complete.
-- Current scope:
-  - `.github/workflows/*`
-  - `scripts/run_ci_operational_gate.py`
-  - `scripts/run_realdata_candidate_loop.py`
+Rule:
+- If removed, CI/workflow command and docs must be updated in same change.
+
+## removed-as-legacy (2026-02-21)
+- Legacy candidate tuning / patch override chain:
+  - `scripts/run_candidate_auto_improvement_loop.py`
   - `scripts/run_candidate_train_eval_cycle.py`
-  - `scripts/validate_operational_readiness.py`
-  - `scripts/validate_execution_parity.py`
-  - `scripts/validate_recovery_state.py`
-  - `scripts/validate_recovery_e2e.py`
-  - `scripts/validate_replay_reconcile_diff.py`
-  - `scripts/capture_baseline.py`
-  - `scripts/validate_small_seed.py`
-  - `README.md`
-  - `docs/STRICT_GATE_RUNBOOK_2026-02-13.md`
-  - `docs/TODO_STAGE15_EXECUTION_PLAN_2026-02-13.md`
+  - `scripts/run_realdata_candidate_loop.py`
+  - `scripts/tune_candidate_gate_trade_density.py`
+  - `scripts/run_patch_action_override_ab.py`
+  - `scripts/run_patch_action_override_feedback_promotion_check.py`
+  - `scripts/analyze_loss_contributors.py`
+  - `scripts/analyze_entry_rejections.py`
+  - `scripts/validate_context_stability_guard.py`
+  - `scripts/verify_cleanup_wave_a.py`
+- Obsolete large archive docs:
+  - `docs/archive/CHAPTER_CURRENT_FULLLOG_2026-02-20.md`
+  - `docs/archive/TODO_STAGE15_EXECUTION_PLAN_2026-02-13_FULLLOG_2026-02-19.md`
+  - `docs/archive/SCRIPT_READING_TUNE_CANDIDATE_GATE_2026-02-19.md`
+  - `docs/archive/TUNE_CANDIDATE_GATE_LINE_AUDIT_2026-02-19.md`
+  - `docs/archive/V2_INCLUDE_README_LEGACY.md`
+  - `docs/archive/V2_SRC_README_LEGACY.md`
+- Obsolete review docs tied to removed chain:
+  - `docs/FOUNDATION_ENGINE_STRATEGY_REVIEW_2026-02-19.md`
   - `docs/VALIDATION_METHOD_REVIEW_2026-02-19.md`
   - `docs/VERIFICATION_RESET_BASELINE_2026-02-19.md`
-  - `docs/FOUNDATION_ENGINE_STRATEGY_REVIEW_2026-02-19.md`
-  - `docs/CHAPTER_CURRENT.md`
-  - `docs/CHAPTER_HISTORY_BRIEF.md`
-  - `docs/TARGET_ARCHITECTURE.md`
-  - `scripts/verify_baseline.py`
-  - `scripts/run_verification.py`
 
-### research-aux
-- Definition: experimental assets not required for normal build/runtime/CI gate path.
-- Rule: move to `legacy_archive/` first; finalize hard delete after verification.
-- Wave A moved examples:
-  - candidate preset snapshots
-  - auxiliary analysis scripts
-  - archived stage worklog document
-- Current state (2026-02-16):
-  - retention override applied (`0 days`)
-  - archived payload files were hard-deleted
-  - `legacy_archive/manifest.json` is retained as audit metadata only
-- Docs archive state (2026-02-19):
-  - long-form execution logs and one-off script audits moved to `docs/archive/`
-  - active execution references are maintained only in root `docs/`
-
-## Safety Policy
-- Default retention for moved files: 7 days (overridden to 0 days for current execution).
-- Deletion process: move -> verify -> final delete.
-- No immediate deletion of `runtime-critical` files.
-
+## safety policy
+- Deletion rule: verify no runtime/CI reference -> delete -> build/smoke validate.
+- Keep sequential verification; no parallel verification/tuning flow reintroduction.

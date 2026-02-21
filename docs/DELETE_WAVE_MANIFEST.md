@@ -24,11 +24,12 @@ Last updated: 2026-02-16
 
 ### Verification Command
 ```powershell
-python scripts/verify_cleanup_wave_a.py --run-tests --run-help-checks
+python scripts/verify_script_suite.py
+python scripts/run_ci_operational_gate.py --include-backtest
 ```
 
 Expected report artifact:
-- `build/Release/logs/wave_a_cleanup_verification.json`
+- `build/Release/logs/operational_readiness_report.json`
 
 ## Wave B (Final Delete Executed)
 - Stage-1 move and replacement completed batch-by-batch after v2 replacement and shadow parity gates.

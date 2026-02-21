@@ -1,6 +1,6 @@
 ﻿# Current Chapter
 
-Last updated: 2026-02-20
+Last updated: 2026-02-21
 Chapter ID: `CH-01`
 Title: `Probabilistic Hybrid Foundation`
 
@@ -70,6 +70,64 @@ Title: `Probabilistic Hybrid Foundation`
   - `build/Release/logs/verification_report_runtime_risk_rescuefix_expA_20260220.json`
   - `build/Release/logs/verification_report_runtime_risk_rescuefix_expB_20260220.json`
 
+## Runtime Structural Update (2026-02-21, v3)
+- 적용 파일:
+  - `src/strategy/StrategyManager.cpp`
+  - `src/runtime/BacktestRuntime.cpp`
+  - `src/runtime/LiveTradingRuntime.cpp`
+- 변경 요약:
+  - manager soft-queue/promotion/fastpass를 `확률 우선 + 안전 조건 유지` 형태로 재조정.
+    - 비적대 구간 margin/calibrated/liquidity 조건 완화
+    - RR/EV/변동성 하한은 유지
+  - `passesProbabilisticPrimaryMinimums`를 hard-cut 위주에서
+    `hard safety + soft composite` 구조로 재구성(백테스트/라이브 동형 반영).
+    - 극단 저신뢰/저유동만 즉시 차단
+    - 일반 구간은 composite/확률-지원 컨텍스트 경로로 통과 허용
+- 검증:
+  - `build/Release/logs/verification_report_global_full_5set_probfirst4_20260221.json` (패치 전)
+    - `avg_profit_factor=0.0`, `avg_expectancy_krw=0.0`, `avg_total_trades=0.0`
+  - `build/Release/logs/verification_report_global_full_5set_probfirst5_20260221.json` (패치 후)
+    - `avg_profit_factor=0.2679`
+    - `avg_expectancy_krw=-19.1211`
+    - `avg_total_trades=262.2`
+    - `avg_entries_executed=230.0`
+    - `avg_opportunity_conversion=0.0525`
+- 병목 이동:
+  - 무거래(0 trades) 병목은 해소.
+  - 현재 1차 병목은 `candidate_generation > no_signal_generated (share=0.6503)`.
+  - manager 세부 병목은 `rr_guard_strength`, `history_guard_ev` 중심.
+  - `blocked_probabilistic_primary_calibrated`는 대량(기존 23,398)에서 4,852로 감소.
+
+## Runtime Structural Update (2026-02-21, v4)
+- 적용 파일:
+  - `src/strategy/FoundationAdaptiveStrategy.cpp`
+  - `src/strategy/FoundationRiskPipeline.cpp`
+  - `src/runtime/BacktestRuntime.cpp`
+  - `src/runtime/LiveTradingRuntime.cpp`
+- 변경 요약:
+  - `foundation_no_signal_liquidity_volume_gate` 완화:
+    - 스프레드/오더북/압력 동반 조건에서만 저유동 통과 범위 확장
+    - RANGING/UPTREND 저유동 탐지 경로 확장
+  - manager guard 완화:
+    - `history_guard` 활성 표본 조건 상향(과도한 early-history 차단 완화)
+    - `rr_guard` 발동 임계/가중치 완화(확률 신호 고신뢰 구간 우선)
+  - no-signal fallback 완화:
+    - 확률 fallback의 비적대 구간 margin/prob/liquidity/volume 하한 완화(안전조건 유지)
+- 검증:
+  - 이전(v3): `build/Release/logs/verification_report_global_full_5set_probfirst5_20260221.json`
+    - `avg_profit_factor=0.2679`
+    - `avg_expectancy_krw=-19.1211`
+    - `avg_total_trades=262.2`
+  - 현재(v4): `build/Release/logs/verification_report_global_full_5set_probfirst6_20260221.json`
+    - `avg_profit_factor=0.4557`
+    - `avg_expectancy_krw=-14.3720`
+    - `avg_total_trades=15.2`
+    - `peak_max_drawdown_pct=4.42`
+    - `profitable_ratio=0.2`
+- 현재 판정:
+  - adaptive fail 원인은 `risk_adjusted_score_guard_pass` 단일 실패.
+  - 나머지 guard(`sample_size`, `drawdown`, `downtrend`, `opportunity_conversion`)는 통과.
+
 ## Validation Snapshot
 - 전수 대상: 9 markets, `9,477,036` rows
 - 결과: `pass (9/9)`
@@ -131,6 +189,10 @@ Title: `Probabilistic Hybrid Foundation`
 - C++ 연동 진행:
   - `src/analytics/ProbabilisticRuntimeFeatures.cpp` 추가 (학습 스크립트와 동일 변환식)
   - `src/runtime/LiveTradingRuntime.cpp`, `src/runtime/BacktestRuntime.cpp`에 런타임 확률 보정 연결
+  - 확률 피처 캐시 추가(2026-02-21):
+    - key: `market + anchor_ts + TF candle sizes(1m/5m/15m/1h/4h)`
+    - 동일 캔들 구간 재스캔 시 보조지표/피처 재계산 없이 cache hit
+    - 새 캔들 유입 시 자동 재계산 후 cache 갱신(학습 변환식 동일 유지)
   - `signal -> runtime -> risk manager -> trade/state persistence` 경로에 확률 메타(`h1/h5 cal, threshold, margin`) 직결
   - 라이브 실주문 비동기 체결 경로에 메타 지연 적용(`pending metadata`) 추가
   - 리스크 후행 제어에서 확률 마진 기반 동적 조정 적용:
@@ -138,6 +200,43 @@ Title: `Probabilistic Hybrid Foundation`
     - stagnation/recycle 시간 가드
     - 부분익절 비율
   - 빌드 확인: `AutoLifeTrading` Release 성공
+
+## Global Cross-Market Retrain Path (2026-02-21)
+- 목적: 코인별 특화가 아닌 전 코인 공통 패턴/보조지표/멀티프레임 확률학습으로 전환.
+- 신규 학습 스크립트:
+  - `scripts/train_probabilistic_pattern_model_global.py`
+  - 동작: 모든 market dataset을 fold 단위로 합쳐 `GLOBAL` 모델 학습/보정/threshold 선택.
+- 번들 export 확장:
+  - `scripts/export_probabilistic_runtime_bundle.py --export-mode {global_only|hybrid|per_market}`
+  - `global_only`/`hybrid`에서 `default_model` + `global_fallback_enabled=true` 생성.
+- 런타임 추론 확장:
+  - `include/analytics/ProbabilisticRuntimeModel.h`
+  - `src/analytics/ProbabilisticRuntimeModel.cpp`
+  - `default_model`(global fallback) 로드 및 추론 지원.
+  - `prefer_default_model=true`면 마켓별 엔트리가 있어도 전역 모델 우선 적용.
+- Live/Backtest 추론 경로 반영:
+  - `src/runtime/LiveTradingRuntime.cpp`
+  - `src/runtime/BacktestRuntime.cpp`
+  - `hasMarket` 대신 `supportsMarket`으로 판정(전역 fallback 고려).
+- 검증 커버리지 규칙 보강:
+  - `scripts/run_verification.py`
+  - 번들에 `global_fallback_enabled/default_model`이 있으면 market coverage fail을 강제하지 않음.
+- 스모크 검증 산출물:
+  - `build/Release/logs/probabilistic_model_train_summary_global_smoke.json`
+  - `build/Release/config/model/probabilistic_runtime_bundle_global_smoke.json`
+  - `build/Release/logs/probabilistic_runtime_bundle_parity_global_smoke.json`
+- full retrain/배포 산출물:
+  - `build/Release/logs/probabilistic_model_train_summary_global_full_20260221.json`
+  - `build/Release/models/probabilistic_pattern_global_v1_full_20260221`
+  - `config/model/probabilistic_runtime_bundle_v1.json` (`export_mode=global_only`)
+  - `build/Release/config/model/probabilistic_runtime_bundle_v1.json` (`export_mode=global_only`)
+  - `build/Release/logs/probabilistic_runtime_bundle_parity_global_full_20260221.json`
+    - status=`pass`, `comparison_count=9`, `worst=1.110e-16`
+  - `build/Release/logs/verification_report_global_full_gatecheck_20260221.json`
+    - 미지원 market(`KRW-ADA`) 포함 실행에서도 coverage precheck fail 없이 진행 확인
+  - `build/Release/logs/verification_report_global_full_5set_20260221.json`
+    - 5-set 검증 결과: `avg_total_trades=0`, `avg_expectancy_krw=0`, `overall_gate_pass=false`
+    - non-exec 1차 그룹: `candidate_generation (share=1.0)`
 
 ## Runtime/Manager Regression Snapshot (2026-02-20)
 - 변경점:
@@ -258,9 +357,36 @@ Title: `Probabilistic Hybrid Foundation`
   - Release build: `AutoLifeTrading` 성공.
   - 스모크: `AutoLifeTrading --backtest data/backtest/sample_trend_pullback_1m.csv --json` 정상 종료(코드 0).
 
+## Verification Baseline Refresh (2026-02-21)
+- 실행:
+  - `python scripts/run_verification.py --data-dir .\\data\\backtest_real --dataset-names upbit_*_1m_12000.csv(6개) --data-mode fixed --validation-profile adaptive --require-higher-tf-companions ...`
+- 코드 정합성 보강:
+  - `scripts/run_verification.py`에서 삭제된 dead telemetry(`blocked_second_stage_confirmation`, `two_head_aggregation_blocked`) 집계 제거.
+  - `scripts/run_verification.py`에 `probabilistic bundle ↔ dataset market coverage` 선검증 추가(기본 엄격 모드).
+    - 미지원 마켓 포함 시 즉시 실패:
+      `Probabilistic market coverage check failed ... upbit_KRW_ADA_1m_12000.csv:KRW-ADA`
+- 결과:
+  - baseline은 번들 지원 마켓 5개(`BTC/DOGE/ETH/SOL/XRP`)로 재생성:
+    - `build/Release/logs/verification_report_baseline_current.json`
+  - `dataset_count=5`
+  - `avg_profit_factor=0.0`
+  - `avg_expectancy_krw=-36.2498`
+  - `overall_gate_pass=false`, `adaptive_verdict=fail`
+  - `primary_non_execution_group=candidate_generation`
+  - `primary_candidate_generation_component=no_signal_generated (share=0.5775)`
+  - no-signal 상위 원인:
+    - `foundation_no_signal_liquidity_volume_gate: 13483`
+    - `probabilistic_market_prefilter: 1900`
+    - `foundation_no_signal_uptrend_structure: 1774`
+  - manager prefilter 상위 원인:
+    - `filtered_out_by_manager: 15828`
+    - `filtered_out_by_manager_ev_quality_floor: 5635`
+    - `filtered_out_by_manager_strength: 5245`
+  - 공급 개선 A/B 실험(`A`, `B`, `A+B`)은 baseline 대비 변화 없음(동일 지표).
+
 ## What Was Trimmed
-- 기존 장문 작업내역은 아래로 보관:
-  - `docs/archive/CHAPTER_CURRENT_FULLLOG_2026-02-20.md`
+- 레거시 후보튜닝/패치오버라이드 체인 스크립트 삭제.
+- 대용량 archive full-log 문서 삭제.
 - 본 문서는 "현재 방향 + 지금 해야 할 일"만 유지.
 
 ## Next Required Steps

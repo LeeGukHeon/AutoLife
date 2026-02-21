@@ -140,17 +140,17 @@ Current config remains:
 
 `enabled_strategies` is retained for compatibility, but runtime registration is fixed to foundation-only in this rebuild phase.
 
-## Core Migration Mode (Optional)
-Use this when you want to evaluate core profile quality without blocking on legacy delta comparison.
+## Verification Flow (Current)
+Use the streamlined probabilistic verification path:
 
-Realdata loop (strict/adaptive pair):
 ```powershell
-python scripts\run_realdata_candidate_loop.py --skip-fetch --skip-tune --real-data-only --require-higher-tf-companions --run-both-hostility-modes --gate-min-avg-trades 8 --skip-core-vs-legacy-gate
+python scripts\run_verification.py --exe-path .\build\Release\AutoLifeTrading.exe --data-dir .\data\backtest_real --dataset-names upbit_KRW_BTC_1m_12000.csv upbit_KRW_ETH_1m_12000.csv --require-higher-tf-companions
 ```
 
-Auto improvement loop:
+Baseline snapshot generation:
+
 ```powershell
-python scripts\run_candidate_auto_improvement_loop.py --max-iterations 3 --real-data-only --require-higher-tf-companions --skip-core-vs-legacy-gate
+python scripts\generate_probabilistic_baseline.py
 ```
 
 ## Personal Use Notice

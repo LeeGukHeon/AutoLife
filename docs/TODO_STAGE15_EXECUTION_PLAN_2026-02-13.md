@@ -1,6 +1,6 @@
 ﻿# Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-20
+Last updated: 2026-02-21
 Status: `PROBABILISTIC_TRANSITION_ACTIVE`
 
 ## Purpose
@@ -20,10 +20,7 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
   - `D:\MyApps\vcpkg\scripts\buildsystems\vcpkg.cmake`
 
 ## Archive Docs
-- `docs/archive/CHAPTER_CURRENT_FULLLOG_2026-02-20.md`
-- `docs/archive/TODO_STAGE15_EXECUTION_PLAN_2026-02-13_FULLLOG_2026-02-19.md`
-- `docs/archive/SCRIPT_READING_TUNE_CANDIDATE_GATE_2026-02-19.md`
-- `docs/archive/TUNE_CANDIDATE_GATE_LINE_AUDIT_2026-02-19.md`
+- archive payload cleaned (legacy full-log/audit docs removed)
 
 ## Current Progress
 - [x] `60m/240m` long-horizon bundle collected (EOS 404 excluded).
@@ -82,6 +79,10 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
   - `src/analytics/ProbabilisticRuntimeFeatures.cpp` 추가
   - `src/runtime/LiveTradingRuntime.cpp` / `src/runtime/BacktestRuntime.cpp` 보정 경로 연결
   - build: `AutoLifeTrading` Release 성공
+- [x] 런타임 확률 피처 캐시/증분 갱신 반영(학습 변환식 동일 유지).
+  - `src/analytics/ProbabilisticRuntimeFeatures.cpp`
+  - 캐시 키: `market + anchor timestamp + TF(1m/5m/15m/1h/4h) candle size`
+  - 동일 구간 재스캔은 cache hit(보조지표 재계산 생략), 새 캔들 유입 시 자동 재계산 후 캐시 갱신
 - [x] Runtime↔Risk 결합 2차 완료 (확률 메타 직결).
   - `Signal/Position/TradeHistory`에 확률 메타(`h1/h5 cal, threshold, margin`) 추가
   - `RiskManager` 후행 제어에 확률 마진 반영
@@ -116,12 +117,107 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
   - `src/runtime/LiveTradingRuntime.cpp`: SecondStage/TwoHead helper dead path 제거
   - `include/engine/EngineConfig.h` / `src/common/Config.cpp`: helper 전용 dead config 키 제거
   - 엔트리 블록 구문오류(else/brace mismatch) 복구 후 Release 빌드/스모크 재통과
+- [x] dead telemetry JSON/리포트 출력 축소.
+  - `include/runtime/BacktestRuntime.h`: 미사용 `entry_quality(세부)/second_stage/two_head` 카운터 제거
+  - `src/app/BacktestCliHandler.cpp`: 위 카운터 JSON 키 제거
+  - `src/app/BacktestReportFormatter.cpp`: 관련 콘솔 지표 제거(`invalid_levels`만 유지)
+- [x] baseline 재생성(실데이터 후보 6종 입력, 순차/MTF companion 강제).
+  - 엄격 커버리지 검사로 `KRW-ADA` 미지원을 사전 차단.
+  - 지원 마켓 5종(`BTC/DOGE/ETH/SOL/XRP`) 기준 baseline 재생성:
+    - report: `build/Release/logs/verification_report_baseline_current.json`
+    - 결과: `avg_pf=0.0`, `avg_expectancy_krw=-36.2498`, `overall_gate_pass=false`
+    - 1차 병목: `candidate_generation > no_signal_generated(share=0.5775)`
+  - 상위 원인:
+    - `foundation_no_signal_liquidity_volume_gate`
+    - `probabilistic_market_prefilter`
+- [x] 검증 스크립트 dead 집계 정리.
+  - `scripts/run_verification.py`:
+    - 삭제된 `blocked_second_stage_confirmation`, `two_head_aggregation_blocked` 집계 제거
+    - `top_reason_rows/top_pattern_rows` empty placeholder 제거
+    - no-signal 원인 분해에 `probabilistic_*` 사유 포함
+    - 번들-데이터셋 마켓 커버리지 선검증 추가(`--skip-probabilistic-coverage-check`로만 우회)
+- [x] 전역(글로벌) 재학습 경로 추가.
+  - 신규: `scripts/train_probabilistic_pattern_model_global.py`
+  - 목적: market별 모델이 아닌 `cross-market 공통 패턴` 모델 학습.
+  - 스모크 결과:
+    - `build/Release/logs/probabilistic_model_train_summary_global_smoke.json`
+    - status=`pass`, folds=`3`
+- [x] 런타임 번들 global fallback 지원.
+  - `scripts/export_probabilistic_runtime_bundle.py`에 `--export-mode` 추가
+    - `global_only` / `hybrid` / `per_market`
+  - global 모드 산출물: `default_model`, `global_fallback_enabled`, `prefer_default_model`.
+- [x] C++ 런타임 전역 fallback 추론 지원.
+  - `ProbabilisticRuntimeModel`:
+    - `default_model` 로드/추론
+    - `supportsMarket()` 추가
+  - Live/Backtest snapshot 추론에서 `supportsMarket()` 반영.
+- [x] verification coverage check 전역 fallback 호환.
+  - 번들에 `global_fallback_enabled/default_model` 존재 시
+    market 미일치로 즉시 실패시키지 않음.
+- [x] 전역 모델 full retrain(9 markets) 완료.
+  - `py -3.10 scripts/train_probabilistic_pattern_model_global.py`
+  - 산출물:
+    - `build/Release/logs/probabilistic_model_train_summary_global_full_20260221.json`
+    - `build/Release/models/probabilistic_pattern_global_v1_full_20260221`
+  - 결과: `status=pass`, `datasets=9`, `folds=3`
+- [x] 전역 번들 배포(global_only) 완료.
+  - `py -3.10 scripts/export_probabilistic_runtime_bundle.py --export-mode global_only --train-summary-json ...global_full_20260221.json`
+  - 배포 경로:
+    - `config/model/probabilistic_runtime_bundle_v1.json`
+    - `build/Release/config/model/probabilistic_runtime_bundle_v1.json`
+  - parity:
+    - `build/Release/logs/probabilistic_runtime_bundle_parity_global_full_20260221.json`
+    - `status=pass`, `comparison_count=9`, `worst=1.110e-16`
+  - gatecheck:
+    - `build/Release/logs/verification_report_global_full_gatecheck_20260221.json`
+    - 글로벌 fallback로 미지원 마켓 데이터셋도 coverage precheck fail 없이 검증 실행 확인.
+- [x] 전역 번들 5-set 재검증 실행.
+  - `build/Release/logs/verification_report_global_full_5set_20260221.json`
+  - 결과: `avg_total_trades=0`, `avg_expectancy_krw=0`, `overall_gate_pass=false`
+  - 현재 병목: `candidate_generation(share=1.0)` 구간에서 신호 공급 부족.
+- [x] manager/minimums 구조 완화 2차(v3) 적용 및 재검증.
+  - 코드:
+    - `src/strategy/StrategyManager.cpp`
+    - `src/runtime/BacktestRuntime.cpp`
+    - `src/runtime/LiveTradingRuntime.cpp`
+  - 핵심:
+    - manager soft-queue/promotion/fastpass를 확률 우선 경로에 맞게 완화
+    - `passesProbabilisticPrimaryMinimums`를 hard-cut 위주에서 `hard safety + soft composite`로 재구성
+  - 리포트:
+    - 전: `build/Release/logs/verification_report_global_full_5set_probfirst4_20260221.json`
+      - `avg_pf=0.0`, `avg_expectancy_krw=0.0`, `avg_total_trades=0.0`
+    - 후: `build/Release/logs/verification_report_global_full_5set_probfirst5_20260221.json`
+      - `avg_pf=0.2679`, `avg_expectancy_krw=-19.1211`, `avg_total_trades=262.2`
+      - `avg_entries_executed=230.0`, `avg_opportunity_conversion=0.0525`
+  - 해석:
+    - 무거래 병목은 해소.
+    - 현재 핵심 병목은 `no_signal_generated(share=0.6503)` + `risk/manager quality` 구간.
+- [x] liquidity-volume + rr/history guard 구조완화 3차(v4) 적용 및 재검증.
+  - 코드:
+    - `src/strategy/FoundationAdaptiveStrategy.cpp`
+    - `src/strategy/FoundationRiskPipeline.cpp`
+    - `src/runtime/BacktestRuntime.cpp`
+    - `src/runtime/LiveTradingRuntime.cpp`
+  - 리포트:
+    - `build/Release/logs/verification_report_global_full_5set_probfirst6_20260221.json`
+  - 결과(v3 -> v4):
+    - `avg_pf: 0.2679 -> 0.4557`
+    - `avg_expectancy_krw: -19.1211 -> -14.3720`
+    - `peak_max_drawdown_pct: 10.171 -> 4.42`
+    - `profitable_ratio: 0.0 -> 0.2`
+    - `avg_total_trades: 262.2 -> 15.2` (표본 축소)
+  - 판정:
+    - adaptive fail 원인은 `risk_adjusted_score_guard_pass` 단일 잔여.
 
 ## Next (Strict Order)
-1. Runtime↔Risk 결합 반영 기준 baseline 재생성(현재 로직 스냅샷 고정).
-2. Live/backtest same-slice regression(손익/공급량/후행리스크 telemetry) 검증.
-3. 잔여 dead telemetry/config 정리:
-   현재 항상 0으로 남는 legacy funnel counter/설정 키를 단계적으로 축소.
+1. `risk_adjusted_score` 잔여 실패 원인 분해:
+   - 고손실 패턴 셀/레짐 분해(코인 하드코딩 금지)
+   - 손실 꼬리(heavy-loss tail) 중심 리스크 후행 제어 강화
+2. 진입 품질 재균형:
+   - 현재 저표본(`avg_total_trades=15.2`) 상태에서 품질 유지하며 표본을 점진 복구
+   - 확률 우선 유지 + 안전게이트 고정
+3. 동일 5-set 재검증:
+   - 목표: `risk_adjusted_score_guard_pass` 통과 + expectancy 추가 개선.
 
 ## Guardrails
 - Sequential only (`--max-workers 1` policy).

@@ -73,5 +73,4 @@ Detailed logs are archived.
   - Added explicit reject taxonomy for bundle/market/feature/inference failures.
 
 ## Archive Pointer
-- `docs/archive/CHAPTER_CURRENT_FULLLOG_2026-02-20.md`
-- `docs/archive/TODO_STAGE15_EXECUTION_PLAN_2026-02-13_FULLLOG_2026-02-19.md`
+- archive payload cleaned (legacy full-log docs removed)
