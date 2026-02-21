@@ -97,13 +97,7 @@ void printEntryFunnelSummary(const EntryFunnel& f, std::ostream& out) {
         << "}"
         << "}"
         << ", regime=" << f.blocked_risk_gate_regime
-        << ", quality=" << f.blocked_risk_gate_entry_quality
-        << ", second_stage=" << f.blocked_second_stage_confirmation
-        << ", near_miss_obs=" << f.second_stage_rr_margin_near_miss_observed
-        << ", near_miss_soft_score=" << f.second_stage_rr_margin_soft_score_applied
-        << ", near_miss_relief=" << f.second_stage_rr_margin_near_miss_relief_applied
-        << ", two_head_override=" << f.two_head_aggregation_override_accept
-        << ", two_head_blocked=" << f.two_head_aggregation_blocked
+        << ", invalid_levels=" << f.blocked_risk_gate_entry_quality_invalid_levels
         << ", risk_manager_drop=" << f.blocked_risk_manager
         << ", capital_drop=" << f.blocked_min_order_or_capital
         << ", sizing_drop=" << f.blocked_order_sizing

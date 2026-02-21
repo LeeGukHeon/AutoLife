@@ -191,7 +191,7 @@ bool inferProbabilisticRuntimeSnapshot(
         }
         return true;
     }
-    if (!model.hasMarket(market)) {
+    if (!model.supportsMarket(market)) {
         if (strict_primary_mode) {
             if (reject_reason != nullptr) {
                 *reject_reason = "probabilistic_market_not_supported";
@@ -281,6 +281,20 @@ bool inferProbabilisticRuntimeSnapshot(
     return true;
 }
 
+void applyProbabilisticPrimaryDecisionProfile(
+    const autolife::engine::EngineConfig& cfg,
+    const ProbabilisticRuntimeSnapshot& snapshot,
+    autolife::strategy::Signal& signal
+);
+
+void applyProbabilisticManagerFloors(
+    const autolife::engine::EngineConfig& cfg,
+    const ProbabilisticRuntimeSnapshot& snapshot,
+    autolife::analytics::MarketRegime regime,
+    double* min_strength,
+    double* min_expected_value
+);
+
 bool applyProbabilisticRuntimeAdjustment(
     const autolife::engine::EngineConfig& cfg,
     const ProbabilisticRuntimeSnapshot& snapshot,
@@ -333,6 +347,7 @@ bool applyProbabilisticRuntimeAdjustment(
             1.0
         );
     }
+    applyProbabilisticPrimaryDecisionProfile(cfg, snapshot, signal);
 
     if (cfg.probabilistic_runtime_hard_gate &&
         effective_margin < cfg.probabilistic_runtime_hard_gate_margin) {
@@ -373,6 +388,176 @@ double probabilisticPositionScaleForEntry(
     return std::clamp(scale, 0.45, 1.45);
 }
 
+void applyProbabilisticPrimaryDecisionProfile(
+    const autolife::engine::EngineConfig& cfg,
+    const ProbabilisticRuntimeSnapshot& snapshot,
+    autolife::strategy::Signal& signal
+) {
+    (void)snapshot;
+    if (!cfg.probabilistic_runtime_primary_mode || !signal.probabilistic_runtime_applied) {
+        return;
+    }
+
+    const bool hostile_regime =
+        signal.market_regime == autolife::analytics::MarketRegime::HIGH_VOLATILITY ||
+        signal.market_regime == autolife::analytics::MarketRegime::TRENDING_DOWN;
+    const bool rescue_archetype =
+        signal.entry_archetype.find("CORE_RESCUE") != std::string::npos;
+    const bool range_pullback_archetype =
+        signal.entry_archetype.find("FOUNDATION_RANGE_PULLBACK") != std::string::npos;
+    const bool fragility_archetype = rescue_archetype || range_pullback_archetype;
+    const double prob = std::clamp(signal.probabilistic_h5_calibrated, 0.0, 1.0);
+    const double threshold = std::clamp(signal.probabilistic_h5_threshold, 0.0, 1.0);
+    const double margin = std::clamp(signal.probabilistic_h5_margin, -1.0, 1.0);
+    const double confidence = std::clamp(
+        (std::clamp((prob - 0.50) / 0.20, 0.0, 1.0) * 0.65) +
+        (std::clamp((margin + 0.01) / 0.08, 0.0, 1.0) * 0.35),
+        0.0,
+        1.0
+    );
+
+    const double target_strength = std::clamp(
+        0.22 + (prob * 0.60) + (margin * 1.80),
+        hostile_regime ? 0.26 : 0.18,
+        0.98
+    );
+    signal.strength = std::clamp((signal.strength * 0.25) + (target_strength * 0.75), 0.0, 1.0);
+
+    const double target_filter = std::clamp(
+        0.42 + (prob * 0.40) + (margin * 0.70),
+        0.20,
+        0.95
+    );
+    signal.signal_filter = std::clamp((signal.signal_filter * 0.30) + (target_filter * 0.70), 0.0, 1.0);
+
+    const double implied_win = std::clamp(
+        prob + (margin * 0.45) + ((prob - threshold) * 0.35),
+        hostile_regime ? 0.44 : 0.40,
+        0.86
+    );
+
+    if (signal.entry_price > 0.0 &&
+        signal.stop_loss > 0.0 &&
+        signal.take_profit_2 > signal.entry_price &&
+        signal.stop_loss < signal.entry_price) {
+        const double expected_return = (signal.take_profit_2 - signal.entry_price) / signal.entry_price;
+        const double expected_risk = (signal.entry_price - signal.stop_loss) / signal.entry_price;
+        if (expected_return > 0.0 && expected_risk > 0.0) {
+            const double model_ev =
+                (implied_win * expected_return) -
+                ((1.0 - implied_win) * expected_risk);
+            signal.expected_value = (signal.expected_value * 0.20) + (model_ev * 0.80);
+        }
+    }
+    const double probabilistic_edge_floor =
+        (margin * 0.0012) +
+        ((prob - 0.50) * 0.0010) -
+        (hostile_regime ? 0.00045 : 0.00030);
+    signal.expected_value = std::max(signal.expected_value, probabilistic_edge_floor);
+
+    if (signal.entry_price > 0.0 && signal.stop_loss > 0.0 && signal.stop_loss < signal.entry_price) {
+        const double current_risk_pct = std::clamp(
+            (signal.entry_price - signal.stop_loss) / signal.entry_price,
+            0.0010,
+            0.0500
+        );
+        double target_risk_pct = hostile_regime
+            ? (0.0026 + ((1.0 - confidence) * 0.0036))
+            : (0.0028 + ((1.0 - confidence) * 0.0048));
+        if (!hostile_regime && fragility_archetype) {
+            target_risk_pct *= 0.78;
+        }
+        target_risk_pct = std::clamp(
+            target_risk_pct,
+            hostile_regime ? 0.0022 : 0.0024,
+            hostile_regime ? 0.0075 : 0.0105
+        );
+        const double blended_risk_pct = std::clamp(
+            (current_risk_pct * 0.35) + (target_risk_pct * 0.65),
+            hostile_regime ? 0.0022 : 0.0024,
+            hostile_regime ? 0.0080 : 0.0120
+        );
+
+        double rr_target = hostile_regime
+            ? (1.10 + (confidence * 1.00) + (std::max(0.0, margin) * 2.0))
+            : (1.20 + (confidence * 1.30) + (std::max(0.0, margin) * 2.8));
+        if (!hostile_regime && fragility_archetype) {
+            rr_target += 0.18;
+        }
+        rr_target = std::clamp(rr_target, hostile_regime ? 1.05 : 1.10, hostile_regime ? 2.40 : 3.20);
+
+        signal.stop_loss = signal.entry_price * (1.0 - blended_risk_pct);
+        signal.take_profit_2 = signal.entry_price * (1.0 + (blended_risk_pct * rr_target));
+        signal.take_profit_1 = signal.entry_price * (1.0 + (blended_risk_pct * std::max(1.0, rr_target * 0.55)));
+        const double breakeven_mult = (!hostile_regime && fragility_archetype) ? 0.48 : 0.70;
+        const double trailing_mult = (!hostile_regime && fragility_archetype) ? 0.82 : 1.10;
+        signal.breakeven_trigger = signal.entry_price * (1.0 + (blended_risk_pct * breakeven_mult));
+        signal.trailing_start = signal.entry_price * (1.0 + (blended_risk_pct * trailing_mult));
+        signal.expected_return_pct = (signal.take_profit_2 - signal.entry_price) / signal.entry_price;
+        signal.expected_risk_pct = (signal.entry_price - signal.stop_loss) / signal.entry_price;
+        signal.expected_value =
+            (implied_win * signal.expected_return_pct) -
+            ((1.0 - implied_win) * signal.expected_risk_pct);
+        signal.expected_value = std::max(signal.expected_value, probabilistic_edge_floor);
+    }
+
+    if (signal.position_size > 0.0) {
+        double size_scale = 0.42 + (confidence * 0.80) + (std::max(0.0, margin) * 1.20);
+        if (margin < 0.0) {
+            size_scale *= 0.86;
+        }
+        if (hostile_regime) {
+            size_scale *= 0.88;
+        }
+        signal.position_size *= std::clamp(size_scale, 0.30, 1.35);
+    }
+}
+
+void applyProbabilisticManagerFloors(
+    const autolife::engine::EngineConfig& cfg,
+    const ProbabilisticRuntimeSnapshot& snapshot,
+    autolife::analytics::MarketRegime regime,
+    double* min_strength,
+    double* min_expected_value
+) {
+    if (!cfg.probabilistic_runtime_primary_mode || min_strength == nullptr || min_expected_value == nullptr) {
+        return;
+    }
+    const bool hostile_regime =
+        regime == autolife::analytics::MarketRegime::HIGH_VOLATILITY ||
+        regime == autolife::analytics::MarketRegime::TRENDING_DOWN;
+    if (!snapshot.applied) {
+        *min_strength = std::min(*min_strength, hostile_regime ? 0.36 : 0.28);
+        *min_expected_value = std::min(*min_expected_value, hostile_regime ? 0.00002 : -0.00030);
+        return;
+    }
+
+    const double prob = std::clamp(snapshot.prob_h5_calibrated, 0.0, 1.0);
+    const double margin = std::clamp(snapshot.margin_h5, -1.0, 1.0);
+    const double confidence = std::clamp(
+        (std::clamp((prob - 0.50) / 0.20, 0.0, 1.0) * 0.65) +
+        (std::clamp((margin + 0.01) / 0.08, 0.0, 1.0) * 0.35),
+        0.0,
+        1.0
+    );
+
+    double target_strength = hostile_regime
+        ? (0.34 - (confidence * 0.08))
+        : (0.24 - (confidence * 0.14));
+    double target_edge = hostile_regime
+        ? (0.00002 - (confidence * 0.00008))
+        : (-0.00035 - (confidence * 0.00035));
+    if (margin < 0.0) {
+        target_strength += hostile_regime ? 0.03 : 0.02;
+        target_edge += hostile_regime ? 0.00005 : 0.00010;
+    }
+
+    target_strength = std::clamp(target_strength, hostile_regime ? 0.26 : 0.12, hostile_regime ? 0.38 : 0.24);
+    target_edge = std::clamp(target_edge, hostile_regime ? -0.00010 : -0.00080, hostile_regime ? 0.00008 : -0.00020);
+    *min_strength = std::min(*min_strength, target_strength);
+    *min_expected_value = std::min(*min_expected_value, target_edge);
+}
+
 bool shouldUseProbabilisticPrimaryFallback(
     const autolife::engine::EngineConfig& cfg,
     const ProbabilisticRuntimeSnapshot& snapshot,
@@ -387,11 +572,11 @@ bool shouldUseProbabilisticPrimaryFallback(
     const bool hostile_regime =
         regime == autolife::analytics::MarketRegime::HIGH_VOLATILITY ||
         regime == autolife::analytics::MarketRegime::TRENDING_DOWN;
-    const double min_margin = hostile_regime ? 0.022 : -0.030;
-    const double min_prob = hostile_regime ? 0.58 : 0.45;
-    const double min_liquidity = hostile_regime ? 52.0 : 18.0;
-    const double min_volume_surge = hostile_regime ? 0.80 : 0.20;
-    const double max_spread = hostile_regime ? 0.0025 : 0.0060;
+    const double min_margin = hostile_regime ? 0.020 : -0.040;
+    const double min_prob = hostile_regime ? 0.56 : 0.42;
+    const double min_liquidity = hostile_regime ? 50.0 : 14.0;
+    const double min_volume_surge = hostile_regime ? 0.72 : 0.14;
+    const double max_spread = hostile_regime ? 0.0025 : 0.0065;
 
     if (snapshot.margin_h5 < min_margin || snapshot.prob_h5_calibrated < min_prob) {
         return false;
@@ -548,6 +733,12 @@ double probabilisticPrimaryPriorityScore(
     const double margin = signal.probabilistic_runtime_applied
         ? std::clamp(signal.probabilistic_h5_margin, -1.0, 1.0)
         : 0.0;
+    const double confidence = std::clamp(
+        (std::clamp((prob - 0.50) / 0.25, 0.0, 1.0) * 0.65) +
+        (std::clamp((margin + 0.02) / 0.12, 0.0, 1.0) * 0.35),
+        0.0,
+        1.0
+    );
     const double margin_score = std::clamp((margin + 0.10) / 0.20, 0.0, 1.0);
     const double liquidity_score = std::clamp(signal.liquidity_score / 100.0, 0.0, 1.0);
     const double strength_score = std::clamp(signal.strength, 0.0, 1.0);
@@ -581,6 +772,26 @@ double probabilisticPrimaryPriorityScore(
     if (cfg.probabilistic_runtime_primary_mode && signal.probabilistic_runtime_applied) {
         score += std::clamp(signal.probabilistic_h5_margin * 0.08, -0.03, 0.03);
     }
+
+    const std::string& archetype = signal.entry_archetype;
+    if (archetype.find("CORE_RESCUE") != std::string::npos) {
+        if (confidence < 0.72 || signal.strength < 0.46 || margin < 0.002) {
+            score -= 0.16;
+        } else {
+            score += 0.02;
+        }
+    } else if (archetype.find("FOUNDATION_RANGE_PULLBACK") != std::string::npos) {
+        if (signal.strength < 0.50 && (margin < 0.008 || prob < 0.54)) {
+            score -= 0.11;
+        } else if (margin >= 0.012 && prob >= 0.57) {
+            score += 0.03;
+        }
+    } else if (archetype.find("FOUNDATION_UPTREND_CONTINUATION") != std::string::npos) {
+        if (margin >= 0.0 && prob >= 0.52) {
+            score += 0.03;
+        }
+    }
+
     return score;
 }
 
@@ -600,8 +811,192 @@ bool passesProbabilisticPrimaryMinimums(
         return false;
     }
 
-    const ProbabilisticPrimaryMinimums mins =
+    ProbabilisticPrimaryMinimums mins =
         effectiveProbabilisticPrimaryMinimums(cfg, regime);
+    const bool hostile_regime =
+        regime == autolife::analytics::MarketRegime::HIGH_VOLATILITY ||
+        regime == autolife::analytics::MarketRegime::TRENDING_DOWN;
+    const bool supply_probe_reason =
+        signal.reason.find("signal_supply_fallback") != std::string::npos ||
+        signal.reason.find("ranging_low_flow") != std::string::npos ||
+        signal.reason.find("uptrend_low_flow_probe") != std::string::npos ||
+        signal.reason.find("manager_soft_queue_promoted") != std::string::npos ||
+        signal.reason.find("manager_probabilistic_primary_promoted") != std::string::npos ||
+        signal.reason.find("manager_probabilistic_primary_fastpass") != std::string::npos;
+    const bool calm_context =
+        !hostile_regime &&
+        signal.volatility > 0.0 &&
+        signal.volatility <= 3.0 &&
+        signal.liquidity_score >= 20.0 &&
+        signal.reason.find("foundation_adaptive_regime_entry") != std::string::npos;
+    const bool strong_prob_context =
+        !hostile_regime &&
+        signal.probabilistic_h5_calibrated >= 0.54 &&
+        signal.probabilistic_h5_margin >= -0.010;
+    const bool probabilistic_supportive_context =
+        !hostile_regime &&
+        signal.probabilistic_h5_calibrated >= 0.46 &&
+        signal.probabilistic_h5_margin >= -0.015 &&
+        signal.liquidity_score >= 16.0;
+    const bool rescue_archetype =
+        signal.entry_archetype.find("CORE_RESCUE") != std::string::npos;
+    const bool range_pullback_archetype =
+        signal.entry_archetype.find("FOUNDATION_RANGE_PULLBACK") != std::string::npos;
+    if (!hostile_regime && rescue_archetype) {
+        if (signal.probabilistic_h5_calibrated < 0.55 ||
+            signal.probabilistic_h5_margin < 0.002 ||
+            signal.liquidity_score < 18.0 ||
+            signal.strength < 0.24) {
+            if (reject_reason != nullptr) {
+                *reject_reason = "blocked_probabilistic_primary_rescue_quality";
+            }
+            return false;
+        }
+    }
+    if (!hostile_regime && range_pullback_archetype) {
+        if (signal.strength < 0.24 &&
+            (signal.probabilistic_h5_margin < 0.008 ||
+             signal.probabilistic_h5_calibrated < 0.54)) {
+            if (reject_reason != nullptr) {
+                *reject_reason = "blocked_probabilistic_primary_rangepullback_quality";
+            }
+            return false;
+        }
+    }
+    if (hostile_regime) {
+        if (signal.probabilistic_h5_margin < -0.010) {
+            if (reject_reason != nullptr) {
+                *reject_reason = "blocked_probabilistic_primary_margin";
+            }
+            return false;
+        }
+        if (signal.probabilistic_h5_calibrated < 0.49 &&
+            signal.probabilistic_h5_margin < 0.0) {
+            if (reject_reason != nullptr) {
+                *reject_reason = "blocked_probabilistic_primary_calibrated";
+            }
+            return false;
+        }
+    } else {
+        if (signal.probabilistic_h5_margin < -0.035 &&
+            signal.probabilistic_h5_calibrated < 0.42) {
+            if (reject_reason != nullptr) {
+                *reject_reason = "blocked_probabilistic_primary_margin";
+            }
+            return false;
+        }
+        if (signal.probabilistic_h5_calibrated < 0.38 &&
+            signal.probabilistic_h5_margin < -0.025) {
+            if (reject_reason != nullptr) {
+                *reject_reason = "blocked_probabilistic_primary_calibrated";
+            }
+            return false;
+        }
+    }
+    if (supply_probe_reason && !hostile_regime) {
+        mins.min_h5_calibrated = std::max(0.0, mins.min_h5_calibrated - 0.03);
+        mins.min_h5_margin = std::max(-0.50, mins.min_h5_margin - 0.015);
+        mins.min_liquidity_score = std::max(0.0, mins.min_liquidity_score - 12.0);
+        mins.min_signal_strength = std::max(0.0, mins.min_signal_strength - 0.08);
+    }
+    if (calm_context) {
+        mins.min_h5_calibrated = std::max(0.0, mins.min_h5_calibrated - 0.03);
+        mins.min_h5_margin = std::max(-0.50, mins.min_h5_margin - 0.015);
+        mins.min_liquidity_score = std::max(0.0, mins.min_liquidity_score - 10.0);
+        mins.min_signal_strength = std::max(0.0, mins.min_signal_strength - 0.08);
+    }
+    if (strong_prob_context) {
+        mins.min_h5_calibrated = std::max(0.0, mins.min_h5_calibrated - 0.02);
+        mins.min_h5_margin = std::max(-0.50, mins.min_h5_margin - 0.010);
+        mins.min_signal_strength = std::max(0.0, mins.min_signal_strength - 0.04);
+    }
+    if (probabilistic_supportive_context) {
+        mins.min_h5_calibrated = std::max(0.0, mins.min_h5_calibrated - 0.02);
+        mins.min_h5_margin = std::max(-0.50, mins.min_h5_margin - 0.010);
+        mins.min_liquidity_score = std::max(0.0, mins.min_liquidity_score - 10.0);
+        mins.min_signal_strength = std::max(0.0, mins.min_signal_strength - 0.04);
+    }
+    const bool calibrated_fail = signal.probabilistic_h5_calibrated < mins.min_h5_calibrated;
+    const bool margin_fail = signal.probabilistic_h5_margin < mins.min_h5_margin;
+    const bool liquidity_fail = signal.liquidity_score < mins.min_liquidity_score;
+    const bool strength_fail = signal.strength < mins.min_signal_strength;
+    if (!(calibrated_fail || margin_fail || liquidity_fail || strength_fail)) {
+        if (rescue_archetype &&
+            !hostile_regime &&
+            (signal.probabilistic_h5_calibrated < 0.56 ||
+             signal.probabilistic_h5_margin < 0.004 ||
+             signal.strength < 0.26)) {
+            if (reject_reason != nullptr) {
+                *reject_reason = "blocked_probabilistic_primary_rescue_quality";
+            }
+            return false;
+        }
+        if (range_pullback_archetype &&
+            !hostile_regime &&
+            signal.strength < 0.22 &&
+            (signal.probabilistic_h5_margin < 0.010 ||
+             signal.probabilistic_h5_calibrated < 0.53)) {
+            if (reject_reason != nullptr) {
+                *reject_reason = "blocked_probabilistic_primary_rangepullback_quality";
+            }
+            return false;
+        }
+        return true;
+    }
+    if (!hostile_regime) {
+        const double calibrated_score = std::clamp(
+            (signal.probabilistic_h5_calibrated - (mins.min_h5_calibrated - 0.14)) / 0.24,
+            0.0,
+            1.0
+        );
+        const double margin_score = std::clamp(
+            (signal.probabilistic_h5_margin - (mins.min_h5_margin - 0.06)) / 0.14,
+            0.0,
+            1.0
+        );
+        const double liquidity_score = std::clamp(
+            signal.liquidity_score / std::max(1.0, mins.min_liquidity_score + 20.0),
+            0.0,
+            1.0
+        );
+        const double strength_score = std::clamp(
+            signal.strength / std::max(0.30, mins.min_signal_strength + 0.20),
+            0.0,
+            1.0
+        );
+        const double expected_edge_score = std::clamp(
+            (signal.expected_value + 0.00055) / 0.00160,
+            0.0,
+            1.0
+        );
+        const double composite_score =
+            (calibrated_score * 0.34) +
+            (margin_score * 0.28) +
+            (liquidity_score * 0.14) +
+            (strength_score * 0.14) +
+            (expected_edge_score * 0.10);
+        if (composite_score >= 0.48 &&
+            signal.probabilistic_h5_margin >= (mins.min_h5_margin - 0.028)) {
+            return true;
+        }
+        if (signal.probabilistic_h5_calibrated >= 0.44 &&
+            signal.probabilistic_h5_margin >= -0.018 &&
+            signal.liquidity_score >= 16.0 &&
+            signal.strength >= 0.10) {
+            return true;
+        }
+    } else {
+        const double hostile_score =
+            (std::clamp((signal.probabilistic_h5_calibrated - 0.46) / 0.20, 0.0, 1.0) * 0.45) +
+            (std::clamp((signal.probabilistic_h5_margin + 0.02) / 0.08, 0.0, 1.0) * 0.35) +
+            (std::clamp(signal.liquidity_score / 70.0, 0.0, 1.0) * 0.10) +
+            (std::clamp(signal.strength / 0.75, 0.0, 1.0) * 0.10);
+        if (hostile_score >= 0.58 &&
+            signal.probabilistic_h5_margin >= (mins.min_h5_margin - 0.012) &&
+            signal.liquidity_score >= std::max(20.0, mins.min_liquidity_score - 6.0)) {
+            return true;
+        }
+    }
     if (signal.probabilistic_h5_calibrated < mins.min_h5_calibrated) {
         if (reject_reason != nullptr) {
             *reject_reason = "blocked_probabilistic_primary_calibrated";
@@ -733,10 +1128,6 @@ void ensureParityCompanionTimeframes(autolife::analytics::CoinMetrics& metrics) 
 
 bool requiresTypedArchetype(const std::string& strategy_name) {
     return autolife::common::signal_policy::requiresTypedArchetype(strategy_name);
-}
-
-bool isAlphaHeadFallbackCandidate(const autolife::strategy::Signal& signal, bool alpha_head_mode) {
-    return autolife::common::signal_policy::isAlphaHeadFallbackCandidate(signal, alpha_head_mode);
 }
 
 std::string normalizeCaptureTimeframeKey(const std::string& raw_tf) {
@@ -1846,256 +2237,109 @@ void TradingEngine::generateSignals() {
 
             strategy::Signal best_signal;
             int candidate_count = static_cast<int>(signals.size());
-            if (config_.use_strategy_alpha_head_mode) {
-                // Alpha-head mode keeps multi-candidate flow, but applies a permissive
-                // manager prefilter so extremely weak/negative-edge signals are dropped early.
-                double alpha_min_strength = 0.34;
-                double alpha_min_expected_value = -0.00015;
-                if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
-                    alpha_min_strength = 0.42;
-                    alpha_min_expected_value = 0.00005;
-                } else if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
-                    alpha_min_strength = 0.45;
-                    alpha_min_expected_value = 0.00008;
-                } else if (regime.regime == analytics::MarketRegime::RANGING) {
-                    alpha_min_strength = 0.36;
-                    alpha_min_expected_value = -0.00008;
-                }
-                if (live_no_trade_bias_active) {
-                    alpha_min_strength = std::max(alpha_min_strength, 0.40);
-                    alpha_min_expected_value = std::max(alpha_min_expected_value, 0.00005);
-                }
-                if (config_.probabilistic_runtime_primary_mode && probabilistic_snapshot.applied) {
-                    const bool hostile_regime =
-                        regime.regime == analytics::MarketRegime::HIGH_VOLATILITY ||
-                        regime.regime == analytics::MarketRegime::TRENDING_DOWN;
-                    const double margin = probabilistic_snapshot.margin_h5;
-                    const double relax_strength = hostile_regime
-                        ? std::clamp((margin + 0.02) / 0.20, 0.0, 1.0) * 0.04
-                        : std::clamp((margin + 0.06) / 0.20, 0.0, 1.0) * 0.10;
-                    const double relax_edge = hostile_regime
-                        ? std::clamp((margin + 0.03) / 0.22, 0.0, 1.0) * 0.00008
-                        : std::clamp((margin + 0.06) / 0.20, 0.0, 1.0) * 0.00028;
-                    alpha_min_strength = std::max(
-                        hostile_regime ? 0.38 : 0.24,
-                        alpha_min_strength - relax_strength
-                    );
-                    alpha_min_expected_value = std::max(
-                        hostile_regime ? 0.0 : -0.00035,
-                        alpha_min_expected_value - relax_edge
-                    );
-                }
-                strategy::StrategyManager::FilterDiagnostics manager_filter_diag;
-                auto alpha_filtered = strategy_manager_->filterSignalsWithDiagnostics(
-                    signals,
-                    alpha_min_strength,
-                    alpha_min_expected_value,
-                    regime.regime,
-                    &manager_filter_diag
-                );
-                if (config_.probabilistic_runtime_primary_mode) {
-                    std::vector<strategy::Signal> ranked_alpha;
-                    ranked_alpha.reserve(alpha_filtered.size());
-                    for (auto& signal : alpha_filtered) {
-                        std::string primary_reject_reason;
-                        if (!passesProbabilisticPrimaryMinimums(
-                                config_,
-                                signal,
-                                regime.regime,
-                                &primary_reject_reason)) {
-                            markScanReject(
-                                primary_reject_reason.empty()
-                                    ? std::string("filtered_out_by_probabilistic_primary_minimum")
-                                    : primary_reject_reason
-                            );
-                            continue;
-                        }
-                        ranked_alpha.push_back(std::move(signal));
-                    }
-                    std::stable_sort(
-                        ranked_alpha.begin(),
-                        ranked_alpha.end(),
-                        [&](const strategy::Signal& lhs, const strategy::Signal& rhs) {
-                            return probabilisticPrimaryPriorityScore(config_, lhs, regime.regime) >
-                                   probabilisticPrimaryPriorityScore(config_, rhs, regime.regime);
-                        }
-                    );
-                    alpha_filtered = std::move(ranked_alpha);
-                }
-                if (alpha_filtered.empty()) {
-                    live_signal_funnel_.filtered_out_by_manager++;
-                    markScanReject("filtered_out_by_manager");
-                    for (const auto& kv : manager_filter_diag.rejection_reason_counts) {
-                        markScanReject(kv.first, kv.second);
-                    }
-                    continue;
-                }
-
-                int added = 0;
-                for (auto& signal : alpha_filtered) {
-                    if (signal.type == strategy::SignalType::NONE) {
-                        continue;
-                    }
-                    signal.market_regime = regime.regime;
-                    pending_signals_.push_back(std::move(signal));
-                    added++;
-                }
-                total_signals_ += added;
-                live_signal_funnel_.selected_signal_candidates += added;
-                if (added > 0) {
-                    live_signal_funnel_.markets_with_selected_candidate++;
-                } else {
-                    markScanReject("alpha_head_no_effective_candidates");
-                }
-                LOG_INFO(
-                    "Alpha-head candidates collected: market={}, added={}, from_signals={}, after_prefilter={}",
-                    coin.market,
-                    added,
-                    candidate_count,
-                    static_cast<int>(alpha_filtered.size())
-                );
-                continue;
-            } else {
-                double min_strength = 0.40;
-                double min_expected_value = 0.0;
-                if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
-                    min_strength = 0.48;
-                } else if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
-                    min_strength = 0.52;
-                } else if (regime.regime == analytics::MarketRegime::RANGING) {
-                    min_strength = 0.43;
-                }
-                const bool allow_entry_frequency_relaxation =
-                    scans_without_new_entry_ >= 6 &&
-                    regime.regime != analytics::MarketRegime::TRENDING_DOWN &&
-                    regime.regime != analytics::MarketRegime::HIGH_VOLATILITY;
-                if (allow_entry_frequency_relaxation) {
-                    min_strength = std::max(0.35, min_strength - 0.04);
-                    min_expected_value = std::max(-0.0001, min_expected_value - 0.0001);
-                }
-                if (live_no_trade_bias_active &&
-                    regime.regime != analytics::MarketRegime::TRENDING_DOWN &&
-                    regime.regime != analytics::MarketRegime::HIGH_VOLATILITY) {
-                    // Runtime hint parity with tuning loop:
-                    // if signal-generation/prefilter bottleneck dominates, prefer modest
-                    // additional relaxation before manager prefiltering.
-                    min_strength = std::max(0.33, min_strength - 0.03);
-                    min_expected_value = std::max(-0.0002, min_expected_value - 0.0001);
-                }
-                if (config_.probabilistic_runtime_primary_mode && probabilistic_snapshot.applied) {
-                    const bool hostile_regime =
-                        regime.regime == analytics::MarketRegime::HIGH_VOLATILITY ||
-                        regime.regime == analytics::MarketRegime::TRENDING_DOWN;
-                    const double margin = probabilistic_snapshot.margin_h5;
-                    const double relax_strength = hostile_regime
-                        ? std::clamp((margin + 0.02) / 0.20, 0.0, 1.0) * 0.05
-                        : std::clamp((margin + 0.06) / 0.20, 0.0, 1.0) * 0.14;
-                    const double relax_edge = hostile_regime
-                        ? std::clamp((margin + 0.03) / 0.22, 0.0, 1.0) * 0.00010
-                        : std::clamp((margin + 0.06) / 0.20, 0.0, 1.0) * 0.00045;
-                    min_strength = std::max(
-                        hostile_regime ? 0.38 : 0.22,
-                        min_strength - relax_strength
-                    );
-                    min_expected_value = std::max(
-                        hostile_regime ? 0.0 : -0.00045,
-                        min_expected_value - relax_edge
-                    );
-                }
-
-                strategy::StrategyManager::FilterDiagnostics manager_filter_diag;
-                auto filtered = strategy_manager_->filterSignalsWithDiagnostics(
-                    signals,
-                    min_strength,
-                    min_expected_value,
-                    regime.regime,
-                    &manager_filter_diag
-                );
-                if (filtered.empty()) {
-                    live_signal_funnel_.filtered_out_by_manager++;
-                    markScanReject("filtered_out_by_manager");
-                    for (const auto& kv : manager_filter_diag.rejection_reason_counts) {
-                        markScanReject(kv.first, kv.second);
-                    }
-                    continue;
-                }
-                if (config_.probabilistic_runtime_primary_mode) {
-                    std::vector<strategy::Signal> ranked;
-                    ranked.reserve(filtered.size());
-                    for (auto& signal : filtered) {
-                        std::string primary_reject_reason;
-                        if (!passesProbabilisticPrimaryMinimums(
-                                config_,
-                                signal,
-                                regime.regime,
-                                &primary_reject_reason)) {
-                            markScanReject(
-                                primary_reject_reason.empty()
-                                    ? std::string("filtered_out_by_probabilistic_primary_minimum")
-                                    : primary_reject_reason
-                            );
-                            continue;
-                        }
-                        ranked.push_back(std::move(signal));
-                    }
-                    if (ranked.empty()) {
-                        live_signal_funnel_.filtered_out_by_manager++;
-                        markScanReject("filtered_out_by_probabilistic_primary_minimum");
-                        continue;
-                    }
-                    std::stable_sort(
-                        ranked.begin(),
-                        ranked.end(),
-                        [&](const strategy::Signal& lhs, const strategy::Signal& rhs) {
-                            return probabilisticPrimaryPriorityScore(config_, lhs, regime.regime) >
-                                   probabilisticPrimaryPriorityScore(config_, rhs, regime.regime);
-                        }
-                    );
-                    candidate_count = static_cast<int>(ranked.size());
-                    best_signal = ranked.front();
-                    live_signal_funnel_.selection_call_count++;
-                    live_signal_funnel_.selection_scored_candidate_count +=
-                        static_cast<long long>(candidate_count);
-                    LOG_INFO(
-                        "{} probabilistic-primary best selected: p_h5={:.4f}, margin={:+.4f}, liq={:.1f}, strength={:.3f}, ranked_candidates={}",
-                        coin.market,
-                        best_signal.probabilistic_h5_calibrated,
-                        best_signal.probabilistic_h5_margin,
-                        best_signal.liquidity_score,
-                        best_signal.strength,
-                        candidate_count
-                    );
-                } else {
-                    candidate_count = static_cast<int>(filtered.size());
-                    strategy::StrategyManager::SelectionDiagnostics manager_select_diag;
-                    best_signal = strategy_manager_->selectRobustSignalWithDiagnostics(
-                        filtered,
-                        regime.regime,
-                        &manager_select_diag
-                    );
-                    live_signal_funnel_.selection_call_count++;
-                    live_signal_funnel_.selection_scored_candidate_count +=
-                        static_cast<long long>(manager_select_diag.scored_candidate_count);
-                    live_signal_funnel_.selection_hint_adjusted_candidate_count +=
-                        static_cast<long long>(manager_select_diag.live_hint_adjusted_candidate_count);
-                    for (const auto& kv : manager_select_diag.live_hint_adjustment_counts) {
-                        if (kv.second <= 0) {
-                            continue;
-                        }
-                        live_signal_funnel_.selection_hint_adjustment_counts[kv.first] +=
-                            static_cast<long long>(kv.second);
-                        last_scan_hint_adjustment_counts[kv.first] += kv.second;
-                    }
-                    if (best_signal.type == strategy::SignalType::NONE) {
-                        live_signal_funnel_.no_best_signal++;
-                        markScanReject("no_best_signal");
-                        for (const auto& kv : manager_select_diag.rejection_reason_counts) {
-                            markScanReject(kv.first, kv.second);
-                        }
-                        continue;
-                    }
-                }
+            double min_strength = 0.40;
+            double min_expected_value = 0.0;
+            if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
+                min_strength = 0.48;
+            } else if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
+                min_strength = 0.52;
+            } else if (regime.regime == analytics::MarketRegime::RANGING) {
+                min_strength = 0.43;
             }
+            const bool allow_entry_frequency_relaxation =
+                scans_without_new_entry_ >= 6 &&
+                regime.regime != analytics::MarketRegime::TRENDING_DOWN &&
+                regime.regime != analytics::MarketRegime::HIGH_VOLATILITY;
+            if (allow_entry_frequency_relaxation) {
+                min_strength = std::max(0.35, min_strength - 0.04);
+                min_expected_value = std::max(-0.0001, min_expected_value - 0.0001);
+            }
+            if (live_no_trade_bias_active &&
+                regime.regime != analytics::MarketRegime::TRENDING_DOWN &&
+                regime.regime != analytics::MarketRegime::HIGH_VOLATILITY) {
+                // Runtime hint parity with tuning loop:
+                // if signal-generation/prefilter bottleneck dominates, prefer modest
+                // additional relaxation before manager prefiltering.
+                min_strength = std::max(0.33, min_strength - 0.03);
+                min_expected_value = std::max(-0.0002, min_expected_value - 0.0001);
+            }
+            applyProbabilisticManagerFloors(
+                config_,
+                probabilistic_snapshot,
+                regime.regime,
+                &min_strength,
+                &min_expected_value
+            );
+
+            strategy::StrategyManager::FilterDiagnostics manager_filter_diag;
+            auto filtered = strategy_manager_->filterSignalsWithDiagnostics(
+                signals,
+                min_strength,
+                min_expected_value,
+                regime.regime,
+                &manager_filter_diag
+            );
+            if (filtered.empty()) {
+                live_signal_funnel_.filtered_out_by_manager++;
+                markScanReject("filtered_out_by_manager");
+                for (const auto& kv : manager_filter_diag.rejection_reason_counts) {
+                    markScanReject(kv.first, kv.second);
+                }
+                continue;
+            }
+
+            std::vector<strategy::Signal> ranked;
+            ranked.reserve(filtered.size());
+            for (auto& signal : filtered) {
+                std::string primary_reject_reason;
+                if (!passesProbabilisticPrimaryMinimums(
+                        config_,
+                        signal,
+                        regime.regime,
+                        &primary_reject_reason)) {
+                    markScanReject(
+                        primary_reject_reason.empty()
+                            ? std::string("filtered_out_by_probabilistic_primary_minimum")
+                            : primary_reject_reason
+                    );
+                    continue;
+                }
+                ranked.push_back(std::move(signal));
+            }
+            if (ranked.empty()) {
+                live_signal_funnel_.filtered_out_by_manager++;
+                markScanReject("filtered_out_by_probabilistic_primary_minimum");
+                continue;
+            }
+            std::stable_sort(
+                ranked.begin(),
+                ranked.end(),
+                [&](const strategy::Signal& lhs, const strategy::Signal& rhs) {
+                    return probabilisticPrimaryPriorityScore(config_, lhs, regime.regime) >
+                           probabilisticPrimaryPriorityScore(config_, rhs, regime.regime);
+                }
+            );
+            candidate_count = static_cast<int>(ranked.size());
+            best_signal = ranked.front();
+            live_signal_funnel_.selection_call_count++;
+            live_signal_funnel_.selection_scored_candidate_count +=
+                static_cast<long long>(candidate_count);
+            LOG_INFO(
+                "{} probabilistic-primary best selected: p_h5={:.4f}, margin={:+.4f}, liq={:.1f}, strength={:.3f}, ranked_candidates={}",
+                coin.market,
+                best_signal.probabilistic_h5_calibrated,
+                best_signal.probabilistic_h5_margin,
+                best_signal.liquidity_score,
+                best_signal.strength,
+                candidate_count
+            );
+
+            if (best_signal.type == strategy::SignalType::NONE) {
+                live_signal_funnel_.no_best_signal++;
+                markScanReject("no_best_signal");
+                continue;
+            }
+
             if (best_signal.type != strategy::SignalType::NONE) {
                 best_signal.market_regime = regime.regime;
                 pending_signals_.push_back(best_signal);
@@ -2103,12 +2347,11 @@ void TradingEngine::generateSignals() {
                 live_signal_funnel_.selected_signal_candidates++;
                 live_signal_funnel_.markets_with_selected_candidate++;
 
-                LOG_INFO("Signal selected: {} - {} (strength: {:.2f}, candidates={}, alpha_head={}, tf5m_preloaded={}, tf1h_preloaded={}, fallback={})",
+                LOG_INFO("Signal selected: {} - {} (strength: {:.2f}, candidates={}, tf5m_preloaded={}, tf1h_preloaded={}, fallback={})",
                          coin.market,
                          best_signal.type == strategy::SignalType::STRONG_BUY ? "STRONG_BUY" : "BUY",
                          best_signal.strength,
                          candidate_count,
-                         config_.use_strategy_alpha_head_mode ? "Y" : "N",
                          best_signal.used_preloaded_tf_5m ? "Y" : "N",
                          best_signal.used_preloaded_tf_1h ? "Y" : "N",
                          best_signal.used_resampled_tf_fallback ? "Y" : "N");
@@ -2634,27 +2877,13 @@ void TradingEngine::executeSignals() {
     }
 
     if (strategy_manager_) {
-        if (config_.use_strategy_alpha_head_mode) {
-            // Alpha-head mode keeps strategy modules as feature/signal generators.
-            // Do not disable strategies here by historical EV/performance gate.
-            auto strategies = strategy_manager_->getStrategies();
-            for (auto& strategy_ptr : strategies) {
-                if (strategy_ptr && !strategy_ptr->isEnabled()) {
-                    strategy_ptr->setEnabled(true);
-                    LOG_INFO("Alpha-head mode: strategy re-enabled: {}",
-                             strategy_ptr->getInfo().name);
-                }
+        auto strategies = strategy_manager_->getStrategies();
+        for (auto& strategy_ptr : strategies) {
+            if (strategy_ptr && !strategy_ptr->isEnabled()) {
+                strategy_ptr->setEnabled(true);
+                LOG_INFO("Strategy re-enabled for probabilistic-primary runtime: {}",
+                         strategy_ptr->getInfo().name);
             }
-        } else {
-            strategy_manager_->refreshStrategyStatesFromHistory(
-                risk_manager_->getTradeHistory(),
-                dominant_regime,
-                config_.avoid_high_volatility,
-                config_.avoid_trending_down,
-                config_.min_strategy_trades_for_ev,
-                config_.min_strategy_expectancy_krw,
-                config_.min_strategy_profit_factor
-            );
         }
     }
 
@@ -2771,47 +3000,43 @@ void TradingEngine::executeSignals() {
     if (total_potential >= static_cast<size_t>(effective_max_positions)) {
         LOG_WARN("Position limit reached: {} / effective_max {} (configured {})", total_potential, effective_max_positions, configured_max_positions);
     }
-    if (config_.probabilistic_runtime_primary_mode) {
-        std::stable_sort(
-            execution_candidates.begin(),
-            execution_candidates.end(),
-            [&](const strategy::Signal& lhs, const strategy::Signal& rhs) {
-                const auto lhs_regime =
-                    lhs.market_regime == analytics::MarketRegime::UNKNOWN ? dominant_regime : lhs.market_regime;
-                const auto rhs_regime =
-                    rhs.market_regime == analytics::MarketRegime::UNKNOWN ? dominant_regime : rhs.market_regime;
-                return probabilisticPrimaryPriorityScore(config_, lhs, lhs_regime) >
-                       probabilisticPrimaryPriorityScore(config_, rhs, rhs_regime);
-            }
-        );
-    }
+    std::stable_sort(
+        execution_candidates.begin(),
+        execution_candidates.end(),
+        [&](const strategy::Signal& lhs, const strategy::Signal& rhs) {
+            const auto lhs_regime =
+                lhs.market_regime == analytics::MarketRegime::UNKNOWN ? dominant_regime : lhs.market_regime;
+            const auto rhs_regime =
+                rhs.market_regime == analytics::MarketRegime::UNKNOWN ? dominant_regime : rhs.market_regime;
+            return probabilisticPrimaryPriorityScore(config_, lhs, lhs_regime) >
+                   probabilisticPrimaryPriorityScore(config_, rhs, rhs_regime);
+        }
+    );
 
     for (auto& signal : execution_candidates) {
         if (signal.type != strategy::SignalType::BUY &&
             signal.type != strategy::SignalType::STRONG_BUY) {
             continue;
         }
-        if (config_.probabilistic_runtime_primary_mode) {
-            const auto signal_regime =
-                signal.market_regime == analytics::MarketRegime::UNKNOWN ? dominant_regime : signal.market_regime;
-            std::string primary_reject_reason;
-            if (!passesProbabilisticPrimaryMinimums(
-                    config_,
-                    signal,
-                    signal_regime,
-                    &primary_reject_reason)) {
-                LOG_INFO(
-                    "{} skipped by probabilistic-primary minimum: {} (p_h5={:.4f}, margin={:+.4f}, liq={:.1f}, strength={:.3f})",
-                    signal.market,
-                    primary_reject_reason.empty() ? "blocked_probabilistic_primary_minimum" : primary_reject_reason,
-                    signal.probabilistic_h5_calibrated,
-                    signal.probabilistic_h5_margin,
-                    signal.liquidity_score,
-                    signal.strength
-                );
-                filtered_out++;
-                continue;
-            }
+        const auto signal_regime =
+            signal.market_regime == analytics::MarketRegime::UNKNOWN ? dominant_regime : signal.market_regime;
+        std::string primary_reject_reason;
+        if (!passesProbabilisticPrimaryMinimums(
+                config_,
+                signal,
+                signal_regime,
+                &primary_reject_reason)) {
+            LOG_INFO(
+                "{} skipped by probabilistic-primary minimum: {} (p_h5={:.4f}, margin={:+.4f}, liq={:.1f}, strength={:.3f})",
+                signal.market,
+                primary_reject_reason.empty() ? "blocked_probabilistic_primary_minimum" : primary_reject_reason,
+                signal.probabilistic_h5_calibrated,
+                signal.probabilistic_h5_margin,
+                signal.liquidity_score,
+                signal.strength
+            );
+            filtered_out++;
+            continue;
         }
 
         if (executed_buys_this_scan >= per_scan_buy_limit) {

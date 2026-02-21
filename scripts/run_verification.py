@@ -5,6 +5,7 @@ import csv
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 from typing import Any, Dict, List
@@ -38,6 +39,58 @@ def has_higher_tf_companions(data_dir: pathlib.Path, primary_1m_dataset: pathlib
         if not any(data_dir.glob(f"{prefix}_{tf}_*.csv")):
             return False
     return True
+
+
+def extract_upbit_market_from_dataset_name(dataset_name: str) -> str:
+    stem = pathlib.Path(dataset_name).stem
+    match = re.match(r"^upbit_([A-Za-z0-9]+_[A-Za-z0-9]+)_1m_", stem)
+    if not match:
+        return ""
+    token = str(match.group(1)).strip().upper()
+    if "_" not in token:
+        return ""
+    return token.replace("_", "-")
+
+
+def load_supported_markets_from_runtime_bundle(bundle_path: pathlib.Path) -> Dict[str, Any]:
+    with bundle_path.open("r", encoding="utf-8") as fp:
+        payload = json.load(fp)
+    markets_field = payload.get("markets", [])
+    supported_markets: set[str] = set()
+    if isinstance(markets_field, list):
+        for item in markets_field:
+            if not isinstance(item, dict):
+                continue
+            market = str(item.get("market", "")).strip().upper()
+            if market:
+                supported_markets.add(market)
+    default_model = payload.get("default_model", None)
+    global_fallback_enabled = bool(payload.get("global_fallback_enabled", False))
+    if isinstance(default_model, dict) and default_model:
+        global_fallback_enabled = True
+    return {
+        "bundle_path": str(bundle_path),
+        "supported_markets": sorted(list(supported_markets)),
+        "global_fallback_enabled": bool(global_fallback_enabled),
+        "export_mode": str(payload.get("export_mode", "")).strip(),
+    }
+
+
+def resolve_probabilistic_bundle_path(exe_path: pathlib.Path, config_payload: Dict[str, Any]) -> pathlib.Path:
+    trading_cfg = config_payload.get("trading", {})
+    if not isinstance(trading_cfg, dict):
+        return pathlib.Path("")
+    if not bool(trading_cfg.get("enable_probabilistic_runtime_model", True)):
+        return pathlib.Path("")
+    if not bool(trading_cfg.get("probabilistic_runtime_primary_mode", True)):
+        return pathlib.Path("")
+    raw_path = str(trading_cfg.get("probabilistic_runtime_bundle_path", "")).strip()
+    if not raw_path:
+        return pathlib.Path("")
+    bundle_path = pathlib.Path(raw_path)
+    if not bundle_path.is_absolute():
+        bundle_path = (exe_path.parent / bundle_path).resolve()
+    return bundle_path
 
 
 def parse_backtest_json(proc: subprocess.CompletedProcess) -> Dict[str, Any]:
@@ -358,6 +411,8 @@ def normalized_reason_counts(value: Any) -> Dict[str, int]:
 
 
 def top_reason_rows(reason_counts: Dict[str, int], limit: int = 5) -> List[Dict[str, Any]]:
+    if not reason_counts:
+        return []
     ordered = sorted(reason_counts.items(), key=lambda item: (-int(item[1]), item[0]))
     return [{"reason": key, "count": int(count)} for key, count in ordered[: max(1, int(limit))]]
 
@@ -444,6 +499,8 @@ def build_candidate_generation_ab_playbook(
 
 
 def top_pattern_rows(pattern_counts: Dict[str, int], limit: int = 5) -> List[Dict[str, Any]]:
+    if not pattern_counts:
+        return []
     ordered = sorted(pattern_counts.items(), key=lambda item: (-int(item[1]), item[0]))
     return [{"pattern": key, "count": int(count)} for key, count in ordered[: max(1, int(limit))]]
 
@@ -591,8 +648,6 @@ def build_dataset_diagnostics(dataset_name: str, backtest_result: Dict[str, Any]
     blocked_pattern_gate = max(0, to_int(entry_funnel.get("blocked_pattern_gate", 0)))
     blocked_rr_rebalance = max(0, to_int(entry_funnel.get("blocked_rr_rebalance", 0)))
     blocked_risk_gate = max(0, to_int(entry_funnel.get("blocked_risk_gate", 0)))
-    blocked_second_stage_confirmation = max(0, to_int(entry_funnel.get("blocked_second_stage_confirmation", 0)))
-    two_head_aggregation_blocked = max(0, to_int(entry_funnel.get("two_head_aggregation_blocked", 0)))
     blocked_risk_manager = max(0, to_int(entry_funnel.get("blocked_risk_manager", 0)))
     blocked_min_order_or_capital = max(0, to_int(entry_funnel.get("blocked_min_order_or_capital", 0)))
     blocked_order_sizing = max(0, to_int(entry_funnel.get("blocked_order_sizing", 0)))
@@ -654,8 +709,6 @@ def build_dataset_diagnostics(dataset_name: str, backtest_result: Dict[str, Any]
         blocked_pattern_gate
         + blocked_rr_rebalance
         + blocked_risk_gate
-        + blocked_second_stage_confirmation
-        + two_head_aggregation_blocked
     )
     execution_constraints = (
         skipped_due_to_open_position
@@ -698,7 +751,7 @@ def build_dataset_diagnostics(dataset_name: str, backtest_result: Dict[str, Any]
     )
     no_signal_reason_counts = filter_reason_counts_by_prefix(
         reason_counts,
-        ["foundation_no_signal_", "no_signal_"],
+        ["foundation_no_signal_", "no_signal_", "probabilistic_"],
         exclude_exact=["no_signal_generated"],
     )
     manager_prefilter_reason_counts = filter_reason_counts_by_prefix(
@@ -1211,7 +1264,7 @@ def build_failure_attribution(
     elif primary_group_name == "quality_and_risk_gate":
         hypothesis = "risk_gate_overconstraint_or_quality_mismatch"
         next_focus = [
-            "Inspect blocked_risk_gate and blocked_second_stage_confirmation composition.",
+            "Inspect blocked_risk_gate composition and risk-gate reason mix.",
             "Check if risk-gate thresholds are overly strict for current regimes.",
             "Prefer regime-specific gate design over blanket threshold relaxation.",
         ]
@@ -1646,6 +1699,7 @@ def main(argv=None) -> int:
     parser.add_argument("--verification-lock-stale-sec", type=int, default=14400)
     parser.add_argument("--enable-experiment-a-signal-supply", action="store_true")
     parser.add_argument("--enable-experiment-b-manager-soft-queue", action="store_true")
+    parser.add_argument("--skip-probabilistic-coverage-check", action="store_true")
     args = parser.parse_args(argv)
 
     exe_path = resolve_path(args.exe_path, "Executable")
@@ -1689,6 +1743,45 @@ def main(argv=None) -> int:
             "Duplicate datasets configured (remove duplicates to keep verification weighting stable): "
             + ",".join(duplicate_names)
         )
+
+    if not bool(args.skip_probabilistic_coverage_check):
+        config_payload: Dict[str, Any] = {}
+        try:
+            with config_path.open("r", encoding="utf-8") as fp:
+                loaded = json.load(fp)
+                if isinstance(loaded, dict):
+                    config_payload = loaded
+        except Exception:
+            config_payload = {}
+
+        bundle_path = resolve_probabilistic_bundle_path(exe_path, config_payload)
+        if str(bundle_path):
+            if not bundle_path.exists():
+                raise FileNotFoundError(
+                    "Probabilistic runtime bundle configured but missing: "
+                    f"{bundle_path}"
+                )
+            bundle_meta = load_supported_markets_from_runtime_bundle(bundle_path)
+            supported_markets = {
+                str(x).strip().upper()
+                for x in bundle_meta.get("supported_markets", [])
+                if str(x).strip()
+            }
+            if not bool(bundle_meta.get("global_fallback_enabled", False)):
+                unsupported_pairs: List[str] = []
+                for dataset_path in dataset_paths:
+                    market = extract_upbit_market_from_dataset_name(dataset_path.name)
+                    if not market:
+                        continue
+                    if market not in supported_markets:
+                        unsupported_pairs.append(f"{dataset_path.name}:{market}")
+                if unsupported_pairs:
+                    raise RuntimeError(
+                        "Probabilistic market coverage check failed. "
+                        "Dataset markets are missing in runtime bundle: "
+                        + ", ".join(sorted(unsupported_pairs))
+                        + f" | bundle={bundle_meta.get('bundle_path', '')}"
+                    )
 
     if bool(args.require_higher_tf_companions):
         for dataset_path in dataset_paths:

@@ -98,7 +98,10 @@ def main(argv=None) -> int:
 
     results = []
     worst = 0.0
-    for item in bundle.get("markets", []) or []:
+    bundle_markets = [x for x in (bundle.get("markets", []) or []) if isinstance(x, dict)]
+    mode = "market_entries"
+
+    for item in bundle_markets:
         if not isinstance(item, dict):
             continue
         market = str(item.get("market", "")).strip()
@@ -186,10 +189,99 @@ def main(argv=None) -> int:
             }
         )
 
+    if not results:
+        default_model = bundle.get("default_model", {})
+        global_folds = summary.get("global_model", {}).get("folds", [])
+        if isinstance(default_model, dict) and isinstance(global_folds, list) and global_folds:
+            mode = "global_default"
+            fold_id = int(default_model.get("selected_fold_id", 0) or 0)
+            fold_match = None
+            for f in global_folds:
+                if isinstance(f, dict) and int(f.get("fold_id", 0) or 0) == fold_id:
+                    fold_match = f
+                    break
+            if not isinstance(fold_match, dict):
+                fold_match = global_folds[-1] if isinstance(global_folds[-1], dict) else None
+                fold_id = int(fold_match.get("fold_id", 0) or 0) if isinstance(fold_match, dict) else 0
+
+            if isinstance(fold_match, dict) and fold_id > 0:
+                h5_model_path = str(fold_match.get("model_artifacts", {}).get("h5_model", "")).strip()
+                if str(h5_model_path):
+                    model_payload = joblib.load(h5_model_path)
+                    model = model_payload["model"]
+                    lin = default_model.get("h5_model", {}).get("linear", {}) or {}
+                    coef = np.asarray(lin.get("coef", []), dtype=np.float64)
+                    intercept = float(lin.get("intercept", 0.0) or 0.0)
+                    cal2 = default_model.get("h5_model", {}).get("calibration", {}) or {}
+                    cal_fold = fold_match.get("calibration", {}).get("h5", {}) or {}
+
+                    for market, ds in sorted(by_market_summary.items()):
+                        csv_path = pathlib.Path(str(ds.get("csv_path", "")).strip())
+                        if not csv_path.exists():
+                            continue
+                        win = get_test_window(split_manifest, market, fold_id)
+                        if int(win["test_start"]) <= 0 or int(win["test_end"]) <= 0:
+                            continue
+
+                        x_rows: List[List[float]] = []
+                        with csv_path.open("r", encoding="utf-8", errors="ignore", newline="") as fh:
+                            reader = csv.DictReader(fh)
+                            for row in reader:
+                                ts = safe_float(row.get("timestamp"))
+                                if ts is None:
+                                    continue
+                                ts_i = int(ts)
+                                if not (int(win["test_start"]) <= ts_i <= int(win["test_end"])):
+                                    continue
+                                x = build_feature_vector(row, float(args.clip_abs))
+                                if x is None:
+                                    continue
+                                x_rows.append(x)
+                                if len(x_rows) >= int(args.samples_per_market):
+                                    break
+                        if not x_rows:
+                            continue
+
+                        x_np = np.asarray(x_rows, dtype=np.float64)
+                        prob_job = clip_prob(model.predict_proba(x_np)[:, 1], float(args.prob_eps))
+                        prob_job_cal = apply_platt(
+                            prob_job,
+                            float(cal_fold.get("a", 1.0) or 1.0),
+                            float(cal_fold.get("b", 0.0) or 0.0),
+                            float(args.prob_eps),
+                        )
+
+                        if coef.size != x_np.shape[1]:
+                            raise RuntimeError(
+                                f"coef size mismatch for global default {market}: {coef.size} vs {x_np.shape[1]}"
+                            )
+                        prob_bundle = clip_prob(sigmoid((x_np @ coef) + intercept), float(args.prob_eps))
+                        prob_bundle_cal = apply_platt(
+                            prob_bundle,
+                            float(cal2.get("a", 1.0) or 1.0),
+                            float(cal2.get("b", 0.0) or 0.0),
+                            float(args.prob_eps),
+                        )
+
+                        diff = np.abs(prob_job_cal - prob_bundle_cal)
+                        max_diff = float(np.max(diff))
+                        mean_diff = float(np.mean(diff))
+                        worst = max(worst, max_diff)
+                        results.append(
+                            {
+                                "market": market,
+                                "fold_id": fold_id,
+                                "n": int(x_np.shape[0]),
+                                "max_abs_diff": max_diff,
+                                "mean_abs_diff": mean_diff,
+                            }
+                        )
+
     status = "pass" if (len(results) > 0 and worst <= float(args.abs_tol)) else "fail"
     out = {
         "generated_at_utc": utc_now_iso(),
         "status": status,
+        "mode": mode,
         "runtime_bundle_json": str(bundle_path),
         "train_summary_json": str(summary_path),
         "split_manifest_json": str(split_path),
@@ -210,4 +302,3 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

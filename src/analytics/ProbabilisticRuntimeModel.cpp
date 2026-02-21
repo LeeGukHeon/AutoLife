@@ -74,6 +74,9 @@ bool parseHead(const nlohmann::json& node, ProbabilisticRuntimeModel::LinearHead
 bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::string* error_message) {
     loaded_ = false;
     markets_.clear();
+    default_entry_ = MarketEntry{};
+    has_default_entry_ = false;
+    prefer_default_entry_ = false;
     feature_columns_.clear();
 
     std::ifstream in(path, std::ios::binary);
@@ -119,41 +122,51 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         return false;
     }
 
-    const auto markets = root.value("markets", nlohmann::json::array());
-    if (!markets.is_array() || markets.empty()) {
-        if (error_message != nullptr) {
-            *error_message = "markets_empty";
-        }
-        return false;
-    }
+    prefer_default_entry_ = root.value("prefer_default_model", false);
 
-    for (const auto& m : markets) {
-        if (!m.is_object()) {
-            continue;
-        }
-        const std::string market = m.value("market", "");
-        if (market.empty()) {
-            continue;
-        }
-
+    const auto default_model = root.value("default_model", nlohmann::json{});
+    if (default_model.is_object()) {
         MarketEntry entry;
-        entry.selected_fold_id = m.value("selected_fold_id", 0);
-        if (!parseHead(m.value("h1_model", nlohmann::json::object()), entry.h1, false)) {
-            continue;
+        entry.selected_fold_id = default_model.value("selected_fold_id", 0);
+        if (parseHead(default_model.value("h1_model", nlohmann::json::object()), entry.h1, false) &&
+            parseHead(default_model.value("h5_model", nlohmann::json::object()), entry.h5, true) &&
+            entry.h1.coef.size() == feature_columns_.size() &&
+            entry.h5.coef.size() == feature_columns_.size()) {
+            default_entry_ = std::move(entry);
+            has_default_entry_ = true;
         }
-        if (!parseHead(m.value("h5_model", nlohmann::json::object()), entry.h5, true)) {
-            continue;
-        }
-        if (entry.h1.coef.size() != feature_columns_.size() ||
-            entry.h5.coef.size() != feature_columns_.size()) {
-            continue;
-        }
-        markets_.insert_or_assign(market, std::move(entry));
     }
 
-    loaded_ = !markets_.empty();
+    const auto markets = root.value("markets", nlohmann::json::array());
+    if (markets.is_array()) {
+        for (const auto& m : markets) {
+            if (!m.is_object()) {
+                continue;
+            }
+            const std::string market = m.value("market", "");
+            if (market.empty()) {
+                continue;
+            }
+
+            MarketEntry entry;
+            entry.selected_fold_id = m.value("selected_fold_id", 0);
+            if (!parseHead(m.value("h1_model", nlohmann::json::object()), entry.h1, false)) {
+                continue;
+            }
+            if (!parseHead(m.value("h5_model", nlohmann::json::object()), entry.h5, true)) {
+                continue;
+            }
+            if (entry.h1.coef.size() != feature_columns_.size() ||
+                entry.h5.coef.size() != feature_columns_.size()) {
+                continue;
+            }
+            markets_.insert_or_assign(market, std::move(entry));
+        }
+    }
+
+    loaded_ = has_default_entry_ || !markets_.empty();
     if (!loaded_ && error_message != nullptr) {
-        *error_message = "no_valid_market_entries";
+        *error_message = "no_valid_model_entries";
     }
     return loaded_;
 }
@@ -162,34 +175,47 @@ bool ProbabilisticRuntimeModel::hasMarket(const std::string& market) const {
     return markets_.find(market) != markets_.end();
 }
 
+bool ProbabilisticRuntimeModel::supportsMarket(const std::string& market) const {
+    return has_default_entry_ || hasMarket(market);
+}
+
 bool ProbabilisticRuntimeModel::infer(
     const std::string& market,
     const std::vector<double>& transformed_features,
     ProbabilisticInference& out
 ) const {
-    const auto it = markets_.find(market);
-    if (it == markets_.end()) {
-        return false;
-    }
-    const auto& entry = it->second;
     if (transformed_features.size() != feature_columns_.size()) {
         return false;
     }
 
-    const double h1_raw = clipProb(sigmoid(linearScore(entry.h1.coef, entry.h1.intercept, transformed_features)));
-    const double h5_raw = clipProb(sigmoid(linearScore(entry.h5.coef, entry.h5.intercept, transformed_features)));
-    const double h1_cal = calibrateProb(h1_raw, entry.h1.calib_a, entry.h1.calib_b);
-    const double h5_cal = calibrateProb(h5_raw, entry.h5.calib_a, entry.h5.calib_b);
+    const MarketEntry* entry = nullptr;
+    if (prefer_default_entry_ && has_default_entry_) {
+        entry = &default_entry_;
+    } else {
+        const auto it = markets_.find(market);
+        if (it != markets_.end()) {
+            entry = &it->second;
+        } else if (has_default_entry_) {
+            entry = &default_entry_;
+        }
+    }
+    if (entry == nullptr) {
+        return false;
+    }
+
+    const double h1_raw = clipProb(sigmoid(linearScore(entry->h1.coef, entry->h1.intercept, transformed_features)));
+    const double h5_raw = clipProb(sigmoid(linearScore(entry->h5.coef, entry->h5.intercept, transformed_features)));
+    const double h1_cal = calibrateProb(h1_raw, entry->h1.calib_a, entry->h1.calib_b);
+    const double h5_cal = calibrateProb(h5_raw, entry->h5.calib_a, entry->h5.calib_b);
 
     out.prob_h1_raw = h1_raw;
     out.prob_h1_calibrated = h1_cal;
     out.prob_h5_raw = h5_raw;
     out.prob_h5_calibrated = h5_cal;
-    out.selection_threshold_h5 = entry.h5.threshold;
-    out.select_h5 = (h5_cal >= entry.h5.threshold);
+    out.selection_threshold_h5 = entry->h5.threshold;
+    out.select_h5 = (h5_cal >= entry->h5.threshold);
     return true;
 }
 
 } // namespace analytics
 } // namespace autolife
-

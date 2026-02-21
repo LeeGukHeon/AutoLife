@@ -21,6 +21,8 @@ public:
     bool loadFromFile(const std::string& path, std::string* error_message = nullptr);
     bool isLoaded() const { return loaded_; }
     bool hasMarket(const std::string& market) const;
+    bool supportsMarket(const std::string& market) const;
+    bool hasDefaultModel() const { return has_default_entry_; }
     const std::vector<std::string>& featureColumns() const { return feature_columns_; }
 
     // `transformed_features` must already match the runtime bundle transform contract.
@@ -46,6 +48,9 @@ public:
 
 private:
     std::unordered_map<std::string, MarketEntry> markets_;
+    MarketEntry default_entry_;
+    bool has_default_entry_ = false;
+    bool prefer_default_entry_ = false;
     std::vector<std::string> feature_columns_;
     bool loaded_ = false;
 };

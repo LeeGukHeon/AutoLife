@@ -60,13 +60,21 @@ bool allowManagerSoftQueuePromotion(
     const double ev_gap = std::max(0.0, decision.required_expected_value - signal.expected_value);
     double allowed_strength_gap = cfg.manager_soft_queue_max_strength_gap;
     double allowed_ev_gap = cfg.manager_soft_queue_max_ev_gap;
-    double min_liquidity = 36.0;
+    double min_liquidity = 28.0;
     if (signal.probabilistic_runtime_applied) {
         const double margin = signal.probabilistic_h5_margin;
-        const double margin_weight = std::clamp((margin + 0.03) / 0.10, 0.0, 1.0);
-        allowed_strength_gap += margin_weight * 0.04;
-        allowed_ev_gap += margin_weight * 0.00016;
-        min_liquidity = 36.0 - (margin_weight * 10.0);
+        const double confidence = std::clamp(
+            (std::clamp((signal.probabilistic_h5_calibrated - 0.50) / 0.25, 0.0, 1.0) * 0.65) +
+            (std::clamp((margin + 0.02) / 0.12, 0.0, 1.0) * 0.35),
+            0.0,
+            1.0
+        );
+        allowed_strength_gap += confidence * 0.06;
+        allowed_ev_gap += confidence * 0.00020;
+        min_liquidity = std::max(12.0, 26.0 - (confidence * 14.0));
+        if (margin < -0.015) {
+            min_liquidity += 4.0;
+        }
     }
     if (strength_gap > allowed_strength_gap || ev_gap > allowed_ev_gap) {
         return false;
@@ -77,11 +85,11 @@ bool allowManagerSoftQueuePromotion(
     if (signal.volatility > 0.0 && signal.volatility > 3.8) {
         return false;
     }
-    if (signal.expected_value < -0.00020) {
+    if (signal.expected_value < -0.00035) {
         return false;
     }
     const double rr = foundation::rewardRiskRatio(signal);
-    if (rr > 0.0 && rr < 1.02) {
+    if (rr > 0.0 && rr < 0.92) {
         return false;
     }
     return true;
@@ -127,7 +135,9 @@ bool allowProbabilisticPrimaryPromotion(
     const double margin = signal.probabilistic_h5_margin;
     double required_margin = cfg.probabilistic_primary_promotion_min_margin;
     if (hostile_regime) {
-        required_margin = std::max(0.010, required_margin + 0.020);
+        required_margin = std::max(0.004, required_margin + 0.012);
+    } else {
+        required_margin = std::max(-0.028, required_margin - 0.012);
     }
     if (margin < required_margin) {
         return false;
@@ -135,17 +145,19 @@ bool allowProbabilisticPrimaryPromotion(
     double min_calibrated = cfg.probabilistic_primary_promotion_min_calibrated;
     if (hostile_regime) {
         min_calibrated = std::max(0.52, min_calibrated + 0.04);
+    } else {
+        min_calibrated = std::clamp(min_calibrated - 0.03, 0.42, 0.90);
     }
     if (signal.probabilistic_h5_calibrated < min_calibrated) {
         return false;
     }
-    if (signal.liquidity_score < (hostile_regime ? 52.0 : 32.0)) {
+    if (signal.liquidity_score < (hostile_regime ? 48.0 : 20.0)) {
         return false;
     }
-    if (hostile_regime && signal.expected_value < 0.00015) {
+    if (hostile_regime && signal.expected_value < 0.0) {
         return false;
     }
-    if (signal.expected_value < -0.00035) {
+    if (signal.expected_value < -0.00045) {
         return false;
     }
 
@@ -158,14 +170,20 @@ bool allowProbabilisticPrimaryPromotion(
         max_ev_gap += 0.00012;
     }
     if (hostile_regime) {
-        max_strength_gap = std::min(max_strength_gap, 0.12);
-        max_ev_gap = std::min(max_ev_gap, 0.00045);
+        max_strength_gap = std::min(max_strength_gap, 0.16);
+        max_ev_gap = std::min(max_ev_gap, 0.00060);
+    } else if (signal.probabilistic_h5_margin >= -0.010) {
+        max_strength_gap = std::max(max_strength_gap + 0.06, 0.20);
+        max_ev_gap = std::max(max_ev_gap + 0.00020, 0.00080);
     }
     if (strength_gap > max_strength_gap || ev_gap > max_ev_gap) {
         return false;
     }
+    if (signal.volatility > 0.0 && signal.volatility > (hostile_regime ? 5.6 : 7.0)) {
+        return false;
+    }
     const double rr = foundation::rewardRiskRatio(signal);
-    if (rr > 0.0 && rr < 1.00) {
+    if (rr > 0.0 && rr < (hostile_regime ? 0.98 : 0.88)) {
         return false;
     }
     return true;
@@ -188,31 +206,36 @@ bool allowProbabilisticPrimaryFastPass(
     const auto& cfg = Config::getInstance().getEngineConfig();
 
     double required_margin = cfg.probabilistic_primary_promotion_min_margin;
-    required_margin += hostile_regime ? 0.018 : 0.010;
-    required_margin = std::max(required_margin, hostile_regime ? 0.015 : -0.005);
+    required_margin += hostile_regime ? 0.014 : -0.002;
+    required_margin = std::max(required_margin, hostile_regime ? 0.010 : -0.020);
     if (signal.probabilistic_h5_margin < required_margin) {
         return false;
     }
 
     double required_calibrated = cfg.probabilistic_primary_promotion_min_calibrated;
-    required_calibrated += hostile_regime ? 0.05 : 0.03;
-    required_calibrated = std::clamp(required_calibrated, hostile_regime ? 0.55 : 0.50, 0.90);
+    required_calibrated += hostile_regime ? 0.05 : -0.03;
+    required_calibrated = std::clamp(required_calibrated, hostile_regime ? 0.53 : 0.43, 0.90);
     if (signal.probabilistic_h5_calibrated < required_calibrated) {
         return false;
     }
 
-    if (signal.liquidity_score < (hostile_regime ? 54.0 : 34.0)) {
+    if (signal.liquidity_score < (hostile_regime ? 48.0 : 16.0)) {
         return false;
     }
-    if (signal.expected_value < (hostile_regime ? 0.00005 : -0.00020)) {
+    if (signal.expected_value < (hostile_regime ? 0.0 : -0.00045)) {
         return false;
     }
-    if (signal.volatility > 0.0 && signal.volatility > (hostile_regime ? 4.8 : 5.5)) {
+    if (signal.volatility > 0.0 && signal.volatility > (hostile_regime ? 5.4 : 7.0)) {
+        return false;
+    }
+    if (!hostile_regime &&
+        signal.probabilistic_h5_calibrated < 0.40 &&
+        signal.probabilistic_h5_margin < -0.030) {
         return false;
     }
 
     const double rr = foundation::rewardRiskRatio(signal);
-    if (rr > 0.0 && rr < (hostile_regime ? 1.02 : 0.98)) {
+    if (rr > 0.0 && rr < (hostile_regime ? 0.95 : 0.88)) {
         return false;
     }
     return true;
@@ -549,6 +572,10 @@ Signal buildCoreRescueCandidate(
         const double min_lot = 5000.0 / std::max(1.0, available_capital);
         position_size = std::clamp(min_lot, 0.01, 0.06);
     }
+    // Rescue path is uncertainty-heavy by design; keep size conservative
+    // and let probabilistic confidence promote higher sizing later.
+    position_size *= 0.65;
+    position_size = std::min(position_size, 0.04);
     position_size = std::clamp(position_size, 0.0, 1.0);
 
     out.type = SignalType::BUY;

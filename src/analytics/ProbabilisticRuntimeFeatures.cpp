@@ -5,8 +5,10 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace autolife {
 namespace analytics {
@@ -51,6 +53,20 @@ constexpr std::array<const char*, 36> kFeatureColumns = {
     "regime_trend_240_sign",
     "regime_vol_60_atr_pct"
 };
+
+struct FeatureCacheEntry {
+    long long anchor_ts_ms = 0;
+    std::size_t size_1m = 0;
+    std::size_t size_5m = 0;
+    std::size_t size_15m = 0;
+    std::size_t size_60m = 0;
+    std::size_t size_240m = 0;
+    std::vector<double> transformed_features;
+};
+
+std::unordered_map<std::string, FeatureCacheEntry> g_feature_cache;
+std::mutex g_feature_cache_mutex;
+constexpr std::size_t kMaxFeatureCacheEntries = 512;
 
 long long normalizeTimestampMs(long long ts) {
     if (ts > 0 && ts < 1000000000000LL) {
@@ -272,6 +288,40 @@ bool buildProbabilisticTransformedFeatures(
     const std::size_t i = anchor_candles.size() - 1;
     const Candle& anchor = anchor_candles[i];
     const long long anchor_ts_ms = normalizeTimestampMs(anchor.timestamp);
+    const std::string market_key = signal.market.empty() ? std::string("__default__") : signal.market;
+    std::size_t size_5m = 0;
+    std::size_t size_15m = 0;
+    std::size_t size_60m = 0;
+    std::size_t size_240m = 0;
+    if (const auto it = metrics.candles_by_tf.find("5m"); it != metrics.candles_by_tf.end()) {
+        size_5m = it->second.size();
+    }
+    if (const auto it = metrics.candles_by_tf.find("15m"); it != metrics.candles_by_tf.end()) {
+        size_15m = it->second.size();
+    }
+    if (const auto it = metrics.candles_by_tf.find("1h"); it != metrics.candles_by_tf.end()) {
+        size_60m = it->second.size();
+    }
+    if (const auto it = metrics.candles_by_tf.find("4h"); it != metrics.candles_by_tf.end()) {
+        size_240m = it->second.size();
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_feature_cache_mutex);
+        const auto it = g_feature_cache.find(market_key);
+        if (it != g_feature_cache.end()) {
+            const FeatureCacheEntry& cached = it->second;
+            if (cached.anchor_ts_ms == anchor_ts_ms &&
+                cached.size_1m == anchor_candles.size() &&
+                cached.size_5m == size_5m &&
+                cached.size_15m == size_15m &&
+                cached.size_60m == size_60m &&
+                cached.size_240m == size_240m &&
+                cached.transformed_features.size() == kFeatureColumns.size()) {
+                out_transformed_features = cached.transformed_features;
+                return true;
+            }
+        }
+    }
     const double close_now = anchor.close;
     const double vol_now = anchor.volume;
     if (!(std::isfinite(close_now) && close_now > 0.0 && std::isfinite(vol_now) && vol_now >= 0.0)) {
@@ -465,10 +515,25 @@ bool buildProbabilisticTransformedFeatures(
         out_transformed_features.push_back(x);
     }
 
+    {
+        std::lock_guard<std::mutex> lock(g_feature_cache_mutex);
+        FeatureCacheEntry cache_entry;
+        cache_entry.anchor_ts_ms = anchor_ts_ms;
+        cache_entry.size_1m = anchor_candles.size();
+        cache_entry.size_5m = size_5m;
+        cache_entry.size_15m = size_15m;
+        cache_entry.size_60m = size_60m;
+        cache_entry.size_240m = size_240m;
+        cache_entry.transformed_features = out_transformed_features;
+        g_feature_cache[market_key] = std::move(cache_entry);
+        if (g_feature_cache.size() > kMaxFeatureCacheEntries) {
+            g_feature_cache.erase(g_feature_cache.begin());
+        }
+    }
+
     (void)signal;
     return true;
 }
 
 } // namespace analytics
 } // namespace autolife
-
