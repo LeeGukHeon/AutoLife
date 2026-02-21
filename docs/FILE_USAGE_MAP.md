@@ -57,10 +57,10 @@ Rule:
   - `scripts/analyze_entry_rejections.py`
   - `scripts/validate_context_stability_guard.py`
   - `scripts/verify_cleanup_wave_a.py`
-- Unreferenced parity/taxonomy helper scripts (archived):
+- Unreferenced parity/taxonomy helper scripts (final deleted):
   - `scripts/generate_parity_invariant_report.py`
   - `scripts/generate_strategy_rejection_taxonomy_report.py`
-- Unreferenced utility scripts (archived):
+- Unreferenced utility scripts (final deleted):
   - `scripts/check_upbit_auth_status.py`
   - `scripts/cleanup_generated_artifacts.py`
 - Obsolete large archive docs:

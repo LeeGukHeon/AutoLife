@@ -1,6 +1,6 @@
 {
   "manifest_version": 1,
-  "generated_at_utc": "2026-02-21T00:00:00Z",
+  "generated_at_utc": "2026-02-21T00:30:00Z",
   "cleanup_policy": {
     "mode": "aggressive_two_stage_delete",
     "retention_days": 0,
@@ -174,11 +174,12 @@
     ]
   },
   "wave_c": {
-    "status": "stage1_archived_pending_final_delete",
-    "description": "Unreferenced parity/taxonomy helper scripts were moved to archive as research-aux assets.",
+    "status": "final_deleted",
+    "description": "Unreferenced parity/taxonomy helper scripts were hard-deleted after stage-1 archive verification.",
     "stage1_move_executed": true,
     "stage1_moved_at_utc": "2026-02-21T00:00:00Z",
-    "final_delete_executed": false,
+    "final_delete_executed": true,
+    "final_deleted_at_utc": "2026-02-21T00:30:00Z",
     "moved_files": [
       {
         "source_path": "scripts/generate_parity_invariant_report.py",
@@ -197,11 +198,12 @@
     ]
   },
   "wave_d": {
-    "status": "stage1_archived_pending_final_delete",
-    "description": "Unreferenced utility scripts were moved to archive as research-aux assets.",
+    "status": "final_deleted",
+    "description": "Unreferenced utility scripts were hard-deleted after stage-1 archive verification.",
     "stage1_move_executed": true,
     "stage1_moved_at_utc": "2026-02-21T00:00:00Z",
-    "final_delete_executed": false,
+    "final_delete_executed": true,
+    "final_deleted_at_utc": "2026-02-21T00:30:00Z",
     "moved_files": [
       {
         "source_path": "scripts/check_upbit_auth_status.py",
