@@ -172,7 +172,6 @@ using autolife::common::signal_policy::computeCostAwareRewardRiskFloor;
 using autolife::common::signal_policy::rebalanceSignalRiskReward;
 using autolife::common::signal_policy::computeStrategyHistoryWinProbPrior;
 using autolife::common::signal_policy::computeCalibratedExpectedEdgePct;
-using autolife::common::signal_policy::computeContextualEdgeGateFloor;
 using autolife::common::execution_guard::computeRealtimeEntryVetoThresholds;
 using autolife::common::execution_guard::computeDynamicSlippageThresholds;
 using autolife::common::strategy_edge::StrategyEdgeStats;

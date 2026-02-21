@@ -583,7 +583,6 @@ void Config::load(const std::string& path) {
             engine_config_.enable_core_policy_plane = t.value("enable_core_policy_plane", true);
             engine_config_.enable_core_risk_plane = t.value("enable_core_risk_plane", true);
             engine_config_.enable_core_execution_plane = t.value("enable_core_execution_plane", true);
-            engine_config_.use_strategy_alpha_head_mode = t.value("use_strategy_alpha_head_mode", false);
             engine_config_.hostility_ewma_alpha = t.value("hostility_ewma_alpha", 0.14);
             engine_config_.hostility_hostile_threshold = t.value("hostility_hostile_threshold", 0.62);
             engine_config_.hostility_severe_threshold = t.value("hostility_severe_threshold", 0.82);

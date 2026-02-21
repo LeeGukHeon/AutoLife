@@ -32,21 +32,7 @@ double computeCostAwareRewardRiskFloor(
 bool rebalanceSignalRiskReward(strategy::Signal& signal, const engine::EngineConfig& cfg);
 double computeStrategyHistoryWinProbPrior(const strategy::Signal& signal, const engine::EngineConfig& cfg);
 double computeCalibratedExpectedEdgePct(const strategy::Signal& signal, const engine::EngineConfig& cfg);
-double computeContextualEdgeGateFloor(
-    const strategy::Signal& signal,
-    const engine::EngineConfig& cfg,
-    double nominal_edge_gate
-);
-bool isAlphaHeadFallbackCandidate(const strategy::Signal& signal, bool alpha_head_mode);
 void normalizeSignalStopLossByRegime(strategy::Signal& signal, analytics::MarketRegime regime);
-
-void applyArchetypeRiskAdjustments(
-    const strategy::Signal& signal,
-    double& required_signal_strength,
-    double& regime_rr_add,
-    double& regime_edge_add,
-    bool& regime_pattern_block
-);
 
 bool requiresTypedArchetype(const std::string& strategy_name);
 

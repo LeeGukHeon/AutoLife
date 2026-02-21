@@ -197,31 +197,10 @@ python scripts/assess_wave_b_readiness.py --run-refresh-checks
   - run: `.\build\Release\AutoLifeV2EngineBacktestSmokeTest.exe`
   - result: PASS (`[TEST] V2DecisionKernel PASSED`)
 
-## v2 Shadow Parity Harness (2026-02-16)
-- Dedicated shadow parity target added:
-  - `AutoLifeV2ShadowParityTest`
-- Verification script added:
-  - `scripts/validate_v2_shadow_parity.py`
-- Optional gate integration added:
-  - `scripts/validate_operational_readiness.py --include-v2-shadow-parity --strict-v2-shadow-parity`
-  - `scripts/run_ci_operational_gate.py --include-v2-shadow-parity --strict-v2-shadow-parity`
-  - runtime-aware strict option:
-    - `--check-runtime-v2-shadow-parity` (backtest runtime shadow)
-    - `--check-runtime-live-v2-shadow-parity` (live runtime shadow)
-- Current parity scope:
-  - policy selected set parity
-  - rejection taxonomy parity
-  - execution update schema compatibility
-  - backtest runtime policy-input shadow parity (`v2_shadow_policy_parity_backtest.jsonl`)
-  - live runtime policy-input shadow parity (`v2_shadow_policy_parity_live.jsonl`)
-- Verification:
-  - build: `D:/MyApps/vcpkg/downloads/tools/cmake-3.31.10-windows/cmake-3.31.10-windows-x86_64/bin/cmake.exe --build build --config Release --target AutoLifeV2ShadowParityTest`
-  - run: `python scripts/validate_v2_shadow_parity.py -Strict`
-  - runtime strict: `python scripts/validate_v2_shadow_parity.py -CheckRuntimeShadow -Strict`
-  - runtime strict (live ?ы븿): `python scripts/validate_v2_shadow_parity.py -CheckRuntimeShadow -CheckRuntimeLiveShadow -Strict`
-  - note: live strict requires at least one `LiveTradingRuntime::executeSignals` cycle to populate `v2_shadow_policy_parity_live.jsonl`.
-  - artifact: `build/Release/logs/v2_shadow_parity_report.json`
-  - result: PASS
+## v2 Shadow Parity Harness (2026-02-16, retired)
+- Historical note only.
+- `scripts/validate_v2_shadow_parity.py` and related v2 shadow parity targets are no longer present in current tree.
+- Current verification source of truth is `scripts/run_verification.py` + `scripts/verify_baseline.py`.
 
 ## Rollback
 - Because final delete is executed, file-level rollback by archive move reversal is no longer available.

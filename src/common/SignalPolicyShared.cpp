@@ -216,9 +216,6 @@ bool rebalanceSignalRiskReward(strategy::Signal& signal, const engine::EngineCon
         if (signal.strength < 0.60) {
             rr_role_add += 0.05;
         }
-        if (signal.reason == "alpha_head_fallback_candidate") {
-            rr_role_add += 0.05;
-        }
         target_rr += rr_role_add;
     }
     if (asymmetry_pressure > 1e-9) {
@@ -371,25 +368,6 @@ double computeCalibratedExpectedEdgePct(const strategy::Signal& signal, const en
             win_prob -= 0.01;
         }
     }
-    if (signal.reason == "alpha_head_fallback_candidate") {
-        if (signal.market_regime == analytics::MarketRegime::TRENDING_UP) {
-            win_prob += 0.08;
-        } else if (signal.market_regime == analytics::MarketRegime::RANGING ||
-                   signal.market_regime == analytics::MarketRegime::UNKNOWN) {
-            win_prob += 0.05;
-        } else {
-            win_prob += 0.01;
-        }
-        if (signal.liquidity_score >= 60.0) {
-            win_prob += 0.03;
-        } else if (signal.liquidity_score > 0.0 && signal.liquidity_score < 50.0) {
-            win_prob -= 0.02;
-        }
-        if (signal.volatility > 0.0 && signal.volatility <= 3.0) {
-            win_prob += 0.02;
-        }
-    }
-
     const bool is_breakout_cont = isBreakoutContinuationArchetype(signal.entry_archetype);
     const bool is_trend_reacc = isTrendReaccelerationArchetype(signal.entry_archetype);
     const bool is_consolidation_break = isConsolidationBreakArchetype(signal.entry_archetype);
@@ -425,145 +403,8 @@ double computeCalibratedExpectedEdgePct(const strategy::Signal& signal, const en
         signal.liquidity_score >= 42.0) {
         round_trip_cost_pct *= 0.95;
     }
-    if (signal.reason == "alpha_head_fallback_candidate" && signal.liquidity_score >= 58.0) {
-        round_trip_cost_pct *= 0.88;
-    }
     const double expected_gross_pct = (win_prob * gross_reward_pct) - ((1.0 - win_prob) * gross_risk_pct);
     return expected_gross_pct - round_trip_cost_pct;
-}
-
-double computeContextualEdgeGateFloor(
-    const strategy::Signal& signal,
-    const engine::EngineConfig& cfg,
-    double nominal_edge_gate
-) {
-    const double nominal_floor = std::max(0.00025, nominal_edge_gate);
-    const bool hostile_regime =
-        signal.market_regime == analytics::MarketRegime::HIGH_VOLATILITY ||
-        signal.market_regime == analytics::MarketRegime::TRENDING_DOWN;
-    const bool favorable_regime =
-        signal.market_regime == analytics::MarketRegime::TRENDING_UP ||
-        signal.market_regime == analytics::MarketRegime::RANGING;
-
-    const double round_trip_cost_pct = computeEffectiveRoundTripCostPct(signal, cfg);
-    double cost_anchor = round_trip_cost_pct * (hostile_regime ? 0.14 : 0.11);
-    cost_anchor += hostile_regime ? 0.00016 : 0.00010;
-
-    if (signal.market_regime == analytics::MarketRegime::RANGING) {
-        cost_anchor += 0.00002;
-    }
-    if (signal.liquidity_score > 0.0 && signal.liquidity_score < 52.0) {
-        cost_anchor += 0.00006;
-    }
-    if (signal.volatility > 3.8) {
-        cost_anchor += 0.00003;
-    }
-    if (favorable_regime &&
-        signal.strength >= 0.70 &&
-        signal.liquidity_score >= 58.0) {
-        cost_anchor -= 0.00004;
-    }
-    if (signal.expected_value >= 0.00085) {
-        cost_anchor -= 0.00003;
-    }
-    if (signal.reason == "foundation_adaptive_regime_entry_ranging_low_flow") {
-        cost_anchor -= 0.00002;
-    }
-    cost_anchor = std::clamp(cost_anchor, 0.00025, 0.00090);
-
-    double quality_conf = 0.0;
-    quality_conf += std::clamp((signal.strength - 0.58) / 0.26, 0.0, 1.0) * 0.40;
-    quality_conf += std::clamp((signal.liquidity_score - 52.0) / 18.0, 0.0, 1.0) * 0.30;
-    quality_conf += std::clamp((signal.expected_value - 0.00045) / 0.00110, 0.0, 1.0) * 0.30;
-    quality_conf = std::clamp(quality_conf, 0.0, 1.0);
-
-    double relax_blend = std::clamp(0.32 + (0.58 * quality_conf), 0.18, 0.92);
-    if (hostile_regime) {
-        relax_blend *= 0.55;
-    }
-    if (signal.liquidity_score > 0.0 && signal.liquidity_score < 50.0) {
-        relax_blend *= 0.72;
-    }
-    if (signal.expected_value < 0.00045) {
-        relax_blend *= 0.75;
-    }
-    relax_blend = std::clamp(relax_blend, 0.10, 0.92);
-
-    const double downward_room = std::max(0.0, nominal_floor - cost_anchor);
-    double adjusted_floor = nominal_floor - (downward_room * relax_blend);
-
-    const double min_nominal_ratio = hostile_regime ? 0.70 : 0.48;
-    adjusted_floor = std::max(adjusted_floor, nominal_floor * min_nominal_ratio);
-    adjusted_floor = std::max(adjusted_floor, cost_anchor);
-
-    return std::clamp(adjusted_floor, 0.00025, nominal_floor + 0.00030);
-}
-
-void applyArchetypeRiskAdjustments(
-    const strategy::Signal& signal,
-    double& required_signal_strength,
-    double& regime_rr_add,
-    double& regime_edge_add,
-    bool& regime_pattern_block
-) {
-    if (regime_pattern_block) {
-        return;
-    }
-
-    const bool is_breakout_cont = isBreakoutContinuationArchetype(signal.entry_archetype);
-    const bool is_trend_reacc = isTrendReaccelerationArchetype(signal.entry_archetype);
-    const bool is_consolidation_break = isConsolidationBreakArchetype(signal.entry_archetype);
-    const bool is_range_pullback = isRangePullbackArchetype(signal.entry_archetype);
-    const bool is_defensive_foundation = isDefensiveFoundationArchetype(signal.entry_archetype);
-
-    if (is_breakout_cont && signal.market_regime == analytics::MarketRegime::TRENDING_DOWN) {
-        regime_pattern_block = true;
-        return;
-    }
-
-    if (is_breakout_cont && signal.market_regime == analytics::MarketRegime::RANGING) {
-        required_signal_strength = std::max(required_signal_strength, 0.70);
-        regime_rr_add += 0.12;
-        regime_edge_add += 0.00020;
-        const bool high_quality =
-            signal.strength >= 0.72 &&
-            signal.liquidity_score >= 58.0 &&
-            signal.expected_value >= 0.00045;
-        if (!high_quality) {
-            regime_pattern_block = true;
-            return;
-        }
-    }
-
-    if (is_trend_reacc && signal.market_regime != analytics::MarketRegime::TRENDING_UP) {
-        required_signal_strength = std::max(required_signal_strength, 0.68);
-        regime_rr_add += 0.10;
-        regime_edge_add += 0.00016;
-    }
-
-    if (is_consolidation_break && signal.market_regime == analytics::MarketRegime::HIGH_VOLATILITY) {
-        required_signal_strength = std::max(required_signal_strength, 0.72);
-        regime_rr_add += 0.12;
-        regime_edge_add += 0.00020;
-        if (signal.strength < 0.74) {
-            regime_pattern_block = true;
-            return;
-        }
-    }
-
-    if (is_range_pullback && signal.market_regime == analytics::MarketRegime::RANGING) {
-        required_signal_strength = std::max(required_signal_strength, 0.55);
-        regime_rr_add += 0.04;
-        regime_edge_add += 0.00006;
-    }
-
-    if (is_defensive_foundation &&
-        (signal.market_regime == analytics::MarketRegime::TRENDING_DOWN ||
-         signal.market_regime == analytics::MarketRegime::HIGH_VOLATILITY)) {
-        required_signal_strength = std::max(required_signal_strength, 0.64);
-        regime_rr_add += 0.10;
-        regime_edge_add += 0.00014;
-    }
 }
 
 bool requiresTypedArchetype(const std::string& strategy_name) {
@@ -578,17 +419,6 @@ bool requiresTypedArchetype(const std::string& strategy_name) {
            normalized.find("breakout") != std::string::npos ||
            normalized.find("scalp") != std::string::npos ||
            normalized.find("trend") != std::string::npos;
-}
-
-bool isAlphaHeadFallbackCandidate(const strategy::Signal& signal, bool alpha_head_mode) {
-    if (alpha_head_mode && signal.reason == "alpha_head_fallback_candidate") {
-        return true;
-    }
-    const auto& cfg = Config::getInstance().getEngineConfig();
-    if (!cfg.enable_probabilistic_runtime_model || !cfg.probabilistic_runtime_primary_mode) {
-        return false;
-    }
-    return signal.reason == "foundation_adaptive_regime_entry_signal_supply_fallback";
 }
 
 void normalizeSignalStopLossByRegime(strategy::Signal& signal, analytics::MarketRegime regime) {

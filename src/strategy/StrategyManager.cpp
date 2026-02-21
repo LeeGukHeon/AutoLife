@@ -387,11 +387,6 @@ double computeExpectedValueTighteningForManager(
         tighten += 0.00012;
     }
 
-    if (signal.reason == "alpha_head_fallback_candidate") {
-        // Keep fallback path usable, but still quality-bound by the rest of this function.
-        tighten = std::max(0.0, tighten - 0.00003);
-    }
-
     return std::clamp(tighten, 0.0, 0.00040);
 }
 
@@ -404,10 +399,6 @@ double estimateLossToWinRatioFromWinRateAndPf(double win_rate, double profit_fac
         return 0.0;
     }
     return win_rate / (loss_rate * profit_factor);
-}
-
-bool alphaHeadModeEnabledForManager() {
-    return Config::getInstance().getEngineConfig().use_strategy_alpha_head_mode;
 }
 
 bool coreSignalOwnershipEnabledForManager() {
@@ -614,193 +605,6 @@ void incrementRejectionReason(std::map<std::string, int>* bucket, const char* re
     (*bucket)[reason]++;
 }
 
-Signal buildAlphaHeadFallbackSignal(
-    const std::string& strategy_name,
-    const std::string& market,
-    const analytics::CoinMetrics& metrics,
-    const std::vector<Candle>& candles,
-    double current_price,
-    const analytics::RegimeAnalysis& regime
-) {
-    Signal out;
-    if (candles.size() < 30 || current_price <= 0.0) {
-        return out;
-    }
-
-    const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()
-    ).count();
-
-    auto safe_close_from_end = [&](size_t idx_from_end) -> double {
-        if (candles.size() <= idx_from_end) {
-            return 0.0;
-        }
-        return candles[candles.size() - 1 - idx_from_end].close;
-    };
-
-    const double c0 = safe_close_from_end(0);
-    const double c5 = safe_close_from_end(5);
-    const double c20 = safe_close_from_end(20);
-    if (c0 <= 0.0 || c5 <= 0.0 || c20 <= 0.0) {
-        return out;
-    }
-
-    const double ret5 = (c0 - c5) / c5;
-    const double ret20 = (c0 - c20) / c20;
-    const double pressure_total = std::max(1e-6, std::abs(metrics.buy_pressure) + std::abs(metrics.sell_pressure));
-    const double buy_bias = std::clamp((metrics.buy_pressure - metrics.sell_pressure) / pressure_total, -1.0, 1.0);
-    const bool liquid_ok = metrics.liquidity_score >= 45.0;
-    double hostility = 0.0;
-    switch (regime.regime) {
-        case analytics::MarketRegime::HIGH_VOLATILITY:
-            hostility += 0.72;
-            break;
-        case analytics::MarketRegime::TRENDING_DOWN:
-            hostility += 0.62;
-            break;
-        case analytics::MarketRegime::RANGING:
-            hostility += 0.34;
-            break;
-        case analytics::MarketRegime::TRENDING_UP:
-            hostility += 0.12;
-            break;
-        default:
-            hostility += 0.28;
-            break;
-    }
-    if (metrics.volatility > 0.0) {
-        hostility += std::clamp((metrics.volatility - 1.8) / 6.0, 0.0, 0.28);
-    }
-    if (metrics.liquidity_score > 0.0) {
-        hostility += std::clamp((55.0 - metrics.liquidity_score) / 90.0, 0.0, 0.20);
-    }
-    if (metrics.orderbook_snapshot.valid) {
-        const double spread_pct = metrics.orderbook_snapshot.spread_pct * 100.0;
-        hostility += std::clamp((spread_pct - 0.18) / 0.40, 0.0, 0.18);
-    }
-    hostility = std::clamp(hostility, 0.0, 1.0);
-    const bool hostile_band = hostility >= 0.62;
-    const bool severe_hostile_band = hostility >= 0.78;
-    if (severe_hostile_band) {
-        return out;
-    }
-
-    const std::string lower = toLowerCopy(strategy_name);
-    const bool is_foundation = (lower.find("foundation") != std::string::npos);
-
-    bool candidate_ok = false;
-    double base_strength = 0.0;
-    std::string archetype = "FALLBACK_GENERIC";
-
-    if (is_foundation) {
-        if (regime.regime == analytics::MarketRegime::TRENDING_UP ||
-            regime.regime == analytics::MarketRegime::RANGING ||
-            regime.regime == analytics::MarketRegime::UNKNOWN) {
-            candidate_ok = liquid_ok && ret5 >= -0.0025 && ret20 >= -0.012 && buy_bias >= -0.08;
-            base_strength = 0.46
-                + std::clamp(ret5 * 36.0, -0.08, 0.13)
-                + std::clamp(ret20 * 16.0, -0.06, 0.10)
-                + std::clamp((metrics.liquidity_score - 55.0) / 240.0, -0.05, 0.08)
-                + std::clamp(buy_bias * 0.10, -0.05, 0.08);
-
-            if (regime.regime == analytics::MarketRegime::TRENDING_UP) {
-                base_strength += 0.05;
-                archetype = "FOUNDATION_UPTREND_CONTINUATION";
-            } else if (regime.regime == analytics::MarketRegime::RANGING) {
-                base_strength += 0.02;
-                archetype = "FOUNDATION_RANGE_PULLBACK";
-            } else {
-                archetype = "FOUNDATION_UNKNOWN_GUARDED";
-            }
-        } else {
-            candidate_ok = liquid_ok && ret5 >= -0.0035 && buy_bias >= -0.02;
-            base_strength = 0.44
-                + std::clamp((-ret5) * 22.0, -0.04, 0.10)
-                + std::clamp((metrics.liquidity_score - 58.0) / 220.0, -0.06, 0.10)
-                + std::clamp(buy_bias * 0.08, -0.05, 0.06);
-
-            if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
-                archetype = "FOUNDATION_DOWNTREND_BOUNCE";
-                base_strength += 0.01;
-            } else {
-                archetype = "FOUNDATION_HIGH_VOL_GUARDED";
-            }
-        }
-
-        if (metrics.volume_surge_ratio >= 1.35) {
-            base_strength += 0.02;
-        }
-        if (hostile_band) {
-            candidate_ok = candidate_ok &&
-                metrics.liquidity_score >= 58.0 &&
-                buy_bias >= 0.0;
-            base_strength -= 0.03;
-        } else if (hostility <= 0.35) {
-            base_strength += 0.02;
-        }
-    } else {
-        // Keep fallback for externally-registered custom strategies without role hard-coding.
-        candidate_ok = liquid_ok && ret5 >= -0.002 && ret20 >= -0.012 && buy_bias >= -0.10;
-        base_strength = 0.44
-            + std::clamp(ret5 * 24.0, -0.06, 0.10)
-            + std::clamp(ret20 * 12.0, -0.05, 0.08)
-            + std::clamp((metrics.liquidity_score - 55.0) / 250.0, -0.05, 0.08)
-            + std::clamp(buy_bias * 0.08, -0.05, 0.06);
-    }
-
-    if (!candidate_ok) {
-        return out;
-    }
-    if (regime.regime == analytics::MarketRegime::TRENDING_DOWN && buy_bias < 0.08) {
-        return out;
-    }
-
-    const double strength = std::clamp(base_strength, 0.38, 0.80);
-    const double vol_pct = std::max(0.2, metrics.volatility) / 100.0;
-    const double risk_pct = std::clamp((vol_pct * 0.85) + 0.0042, 0.0045, 0.0180);
-    double rr_target = 1.45;
-    if (archetype == "FOUNDATION_UPTREND_CONTINUATION") {
-        rr_target = 1.78;
-    } else if (archetype == "FOUNDATION_RANGE_PULLBACK") {
-        rr_target = 1.48;
-    } else if (archetype == "FOUNDATION_DOWNTREND_BOUNCE" ||
-               archetype == "FOUNDATION_HIGH_VOL_GUARDED" ||
-               archetype == "FOUNDATION_UNKNOWN_GUARDED") {
-        rr_target = 1.28;
-    }
-    const double tp2_pct = std::clamp(risk_pct * rr_target, 0.0085, 0.0320);
-    const double tp1_pct = std::clamp(tp2_pct * 0.62, 0.0045, 0.0200);
-
-    out.type = (strength >= 0.62) ? SignalType::STRONG_BUY : SignalType::BUY;
-    out.market = market;
-    out.strategy_name = strategy_name;
-    out.strength = strength;
-    out.entry_price = current_price;
-    out.stop_loss = current_price * (1.0 - risk_pct);
-    out.take_profit_1 = current_price * (1.0 + tp1_pct);
-    out.take_profit_2 = current_price * (1.0 + tp2_pct);
-    out.position_size = std::clamp(0.022 + (strength - 0.40) * 0.060, 0.010, 0.045);
-    out.buy_order_type = OrderTypePolicy::LIMIT_WITH_FALLBACK;
-    out.sell_order_type = OrderTypePolicy::LIMIT_WITH_FALLBACK;
-    out.max_retries = 2;
-    out.retry_wait_ms = 700;
-    out.signal_filter = strength;
-    out.market_regime = regime.regime;
-    out.entry_archetype = archetype;
-    out.used_preloaded_tf_5m =
-        (metrics.candles_by_tf.find("5m") != metrics.candles_by_tf.end() &&
-         metrics.candles_by_tf.at("5m").size() >= 20);
-    out.used_preloaded_tf_1h =
-        (metrics.candles_by_tf.find("1h") != metrics.candles_by_tf.end() &&
-         metrics.candles_by_tf.at("1h").size() >= 10);
-    out.used_resampled_tf_fallback = !out.used_preloaded_tf_5m;
-    out.expected_return_pct = tp2_pct;
-    out.expected_risk_pct = risk_pct;
-    out.expected_value = (tp2_pct * std::clamp(0.42 + (strength * 0.28), 0.38, 0.68)) - (risk_pct * 0.58);
-    out.reason = "alpha_head_fallback_candidate";
-    out.timestamp = now_ms;
-    return out;
-}
 }
 
 StrategyManager::StrategyManager(std::shared_ptr<network::UpbitHttpClient> client)
@@ -873,21 +677,6 @@ Signal StrategyManager::processStrategySignal(
                 no_signal_reason = rescue_signal.reason;
             }
         }
-        if (signal.type == SignalType::NONE && alphaHeadModeEnabledForManager()) {
-            Signal fallback_signal = buildAlphaHeadFallbackSignal(
-                strategy->getInfo().name,
-                market,
-                metrics,
-                candles,
-                current_price,
-                regime
-            );
-            if (fallback_signal.type != SignalType::NONE) {
-                signal = std::move(fallback_signal);
-            } else if (no_signal_reason.empty() && !fallback_signal.reason.empty()) {
-                no_signal_reason = fallback_signal.reason;
-            }
-        }
         if (signal.type == SignalType::NONE && !no_signal_reason.empty()) {
             signal.reason = no_signal_reason;
         }
@@ -922,10 +711,7 @@ Signal StrategyManager::processStrategySignal(
             }
 
             signal.score = calculateSignalScore(signal);
-            if (signal.reason == "alpha_head_fallback_candidate") {
-                LOG_INFO("{} - {} fallback candidate generated (strength {:.2f}, archetype {})",
-                         market, signal.strategy_name, signal.strength, signal.entry_archetype);
-            } else if (signal.reason == "core_rescue_candidate") {
+            if (signal.reason == "core_rescue_candidate") {
                 LOG_INFO("{} - {} core rescue candidate generated (strength {:.2f}, archetype {})",
                          market, signal.strategy_name, signal.strength, signal.entry_archetype);
             }

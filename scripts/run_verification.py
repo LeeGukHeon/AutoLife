@@ -130,8 +130,6 @@ def run_backtest(
     dataset_path: pathlib.Path,
     require_higher_tf_companions: bool,
     disable_adaptive_state_io: bool,
-    enable_experiment_a_signal_supply: bool,
-    enable_experiment_b_manager_soft_queue: bool,
 ) -> Dict[str, Any]:
     cmd = [str(exe_path), "--backtest", str(dataset_path), "--json"]
     if require_higher_tf_companions and is_upbit_primary_1m_dataset(dataset_path):
@@ -141,14 +139,6 @@ def run_backtest(
         env["AUTOLIFE_DISABLE_ADAPTIVE_STATE_IO"] = "1"
     else:
         env.pop("AUTOLIFE_DISABLE_ADAPTIVE_STATE_IO", None)
-    if enable_experiment_a_signal_supply:
-        env["AUTOLIFE_ENABLE_EXPERIMENT_A_SIGNAL_SUPPLY"] = "1"
-    else:
-        env.pop("AUTOLIFE_ENABLE_EXPERIMENT_A_SIGNAL_SUPPLY", None)
-    if enable_experiment_b_manager_soft_queue:
-        env["AUTOLIFE_ENABLE_EXPERIMENT_B_MANAGER_SOFT_QUEUE"] = "1"
-    else:
-        env.pop("AUTOLIFE_ENABLE_EXPERIMENT_B_MANAGER_SOFT_QUEUE", None)
     proc = subprocess.run(
         cmd,
         capture_output=True,
@@ -1697,8 +1687,6 @@ def main(argv=None) -> int:
     parser.add_argument("--verification-lock-path", default=r".\build\Release\logs\verification_run.lock")
     parser.add_argument("--verification-lock-timeout-sec", type=int, default=1800)
     parser.add_argument("--verification-lock-stale-sec", type=int, default=14400)
-    parser.add_argument("--enable-experiment-a-signal-supply", action="store_true")
-    parser.add_argument("--enable-experiment-b-manager-soft-queue", action="store_true")
     parser.add_argument("--skip-probabilistic-coverage-check", action="store_true")
     args = parser.parse_args(argv)
 
@@ -1811,8 +1799,6 @@ def main(argv=None) -> int:
                 dataset_path=dataset_path,
                 require_higher_tf_companions=bool(args.require_higher_tf_companions),
                 disable_adaptive_state_io=not bool(args.enable_adaptive_state_io),
-                enable_experiment_a_signal_supply=bool(args.enable_experiment_a_signal_supply),
-                enable_experiment_b_manager_soft_queue=bool(args.enable_experiment_b_manager_soft_queue),
             )
             row = {
                 "dataset": dataset_path.name,
@@ -1953,10 +1939,6 @@ def main(argv=None) -> int:
             "config_path": str(config_path),
             "source_config_path": str(source_config_path),
         },
-        "experiments": {
-            "enable_experiment_a_signal_supply": bool(args.enable_experiment_a_signal_supply),
-            "enable_experiment_b_manager_soft_queue": bool(args.enable_experiment_b_manager_soft_queue),
-        },
     }
     report["baseline_comparison"] = build_baseline_comparison(
         current_report=report,
@@ -1970,14 +1952,6 @@ def main(argv=None) -> int:
     print(f"[Verification] dataset_count={len(rows)}")
     print(f"[Verification] data_mode={args.data_mode}")
     print(f"[Verification] validation_profile={args.validation_profile}")
-    print(
-        "[Verification] experiment_a_signal_supply="
-        f"{bool(args.enable_experiment_a_signal_supply)}"
-    )
-    print(
-        "[Verification] experiment_b_manager_soft_queue="
-        f"{bool(args.enable_experiment_b_manager_soft_queue)}"
-    )
     print(f"[Verification] avg_profit_factor={avg_profit_factor}")
     print(f"[Verification] avg_expectancy_krw={avg_expectancy_krw}")
     print(f"[Verification] overall_gate_pass={overall_gate_pass}")
