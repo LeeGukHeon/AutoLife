@@ -60,6 +60,9 @@ Rule:
 - Unreferenced parity/taxonomy helper scripts (archived):
   - `scripts/generate_parity_invariant_report.py`
   - `scripts/generate_strategy_rejection_taxonomy_report.py`
+- Unreferenced utility scripts (archived):
+  - `scripts/check_upbit_auth_status.py`
+  - `scripts/cleanup_generated_artifacts.py`
 - Obsolete large archive docs:
   - `docs/archive/CHAPTER_CURRENT_FULLLOG_2026-02-20.md`
   - `docs/archive/TODO_STAGE15_EXECUTION_PLAN_2026-02-13_FULLLOG_2026-02-19.md`

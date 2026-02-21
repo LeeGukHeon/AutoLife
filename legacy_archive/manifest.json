@@ -195,5 +195,28 @@
       "no_active_reference_in_docs_scripts_ci",
       "operational_script_compile_checks_pass"
     ]
+  },
+  "wave_d": {
+    "status": "stage1_archived_pending_final_delete",
+    "description": "Unreferenced utility scripts were moved to archive as research-aux assets.",
+    "stage1_move_executed": true,
+    "stage1_moved_at_utc": "2026-02-21T00:00:00Z",
+    "final_delete_executed": false,
+    "moved_files": [
+      {
+        "source_path": "scripts/check_upbit_auth_status.py",
+        "archive_path": "legacy_archive/scripts/check_upbit_auth_status.py",
+        "class": "research-aux"
+      },
+      {
+        "source_path": "scripts/cleanup_generated_artifacts.py",
+        "archive_path": "legacy_archive/scripts/cleanup_generated_artifacts.py",
+        "class": "research-aux"
+      }
+    ],
+    "final_delete_condition": [
+      "no_active_reference_in_docs_scripts_ci",
+      "operational_script_compile_checks_pass"
+    ]
   }
 }

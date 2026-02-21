@@ -221,6 +221,25 @@ rg -n "generate_parity_invariant_report.py|generate_strategy_rejection_taxonomy_
 python -m py_compile scripts/run_verification.py scripts/verify_baseline.py scripts/run_profitability_matrix.py
 ```
 
+## Wave D (Stage-1 Archived, Pending Final Delete)
+- Stage-1 move executed for unreferenced utility scripts:
+  - `scripts/check_upbit_auth_status.py`
+  - `scripts/cleanup_generated_artifacts.py`
+- Archive destination:
+  - `legacy_archive/scripts/check_upbit_auth_status.py`
+  - `legacy_archive/scripts/cleanup_generated_artifacts.py`
+- Class:
+  - `research-aux`
+- Final-delete gate:
+  - zero active references in docs/scripts/CI
+  - operational script compile checks pass
+
+### Wave D Verification Command
+```powershell
+rg -n "check_upbit_auth_status.py|cleanup_generated_artifacts.py" docs scripts .github
+python -m py_compile scripts/run_verification.py scripts/verify_baseline.py scripts/run_profitability_matrix.py
+```
+
 ## Rollback
 - Because final delete is executed, file-level rollback by archive move reversal is no longer available.
 - Recovery path is git history-based restore for explicitly selected files.
