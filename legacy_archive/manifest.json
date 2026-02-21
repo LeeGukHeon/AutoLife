@@ -1,6 +1,6 @@
 {
   "manifest_version": 1,
-  "generated_at_utc": "2026-02-16T00:00:00Z",
+  "generated_at_utc": "2026-02-21T00:00:00Z",
   "cleanup_policy": {
     "mode": "aggressive_two_stage_delete",
     "retention_days": 0,
@@ -171,6 +171,29 @@
         "archive_path": "legacy_archive/include/strategy/StrategyConfig.h",
         "class": "runtime-critical"
       }
+    ]
+  },
+  "wave_c": {
+    "status": "stage1_archived_pending_final_delete",
+    "description": "Unreferenced parity/taxonomy helper scripts were moved to archive as research-aux assets.",
+    "stage1_move_executed": true,
+    "stage1_moved_at_utc": "2026-02-21T00:00:00Z",
+    "final_delete_executed": false,
+    "moved_files": [
+      {
+        "source_path": "scripts/generate_parity_invariant_report.py",
+        "archive_path": "legacy_archive/scripts/generate_parity_invariant_report.py",
+        "class": "research-aux"
+      },
+      {
+        "source_path": "scripts/generate_strategy_rejection_taxonomy_report.py",
+        "archive_path": "legacy_archive/scripts/generate_strategy_rejection_taxonomy_report.py",
+        "class": "research-aux"
+      }
+    ],
+    "final_delete_condition": [
+      "no_active_reference_in_docs_scripts_ci",
+      "operational_script_compile_checks_pass"
     ]
   }
 }

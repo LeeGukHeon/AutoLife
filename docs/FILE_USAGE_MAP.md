@@ -28,6 +28,8 @@ Rule:
 - `scripts/generate_live_execution_probe.py`
 - `scripts/generate_strict_live_gate_trend_alert.py`
 - `scripts/run_verification.py`
+- `scripts/verify_baseline.py`
+- `scripts/run_profitability_matrix.py`
 - `scripts/generate_probabilistic_baseline.py`
 - `scripts/build_probabilistic_feature_dataset.py`
 - `scripts/train_probabilistic_pattern_model.py`
@@ -38,6 +40,7 @@ Rule:
 - `scripts/fetch_probabilistic_training_bundle.py`
 - `scripts/fetch_upbit_historical_candles.py`
 - `scripts/run_profitability_exploratory.py`
+- `scripts/walk_forward_validate.py`
 
 Rule:
 - If removed, CI/workflow command and docs must be updated in same change.
@@ -54,6 +57,9 @@ Rule:
   - `scripts/analyze_entry_rejections.py`
   - `scripts/validate_context_stability_guard.py`
   - `scripts/verify_cleanup_wave_a.py`
+- Unreferenced parity/taxonomy helper scripts (archived):
+  - `scripts/generate_parity_invariant_report.py`
+  - `scripts/generate_strategy_rejection_taxonomy_report.py`
 - Obsolete large archive docs:
   - `docs/archive/CHAPTER_CURRENT_FULLLOG_2026-02-20.md`
   - `docs/archive/TODO_STAGE15_EXECUTION_PLAN_2026-02-13_FULLLOG_2026-02-19.md`

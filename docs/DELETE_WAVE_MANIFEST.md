@@ -1,6 +1,6 @@
 # Delete Wave Manifest
 
-Last updated: 2026-02-16
+Last updated: 2026-02-21
 
 ## Cleanup Policy
 - Strategy: aggressive cleanup with two-stage deletion.
@@ -201,6 +201,25 @@ python scripts/assess_wave_b_readiness.py --run-refresh-checks
 - Historical note only.
 - `scripts/validate_v2_shadow_parity.py` and related v2 shadow parity targets are no longer present in current tree.
 - Current verification source of truth is `scripts/run_verification.py` + `scripts/verify_baseline.py`.
+
+## Wave C (Stage-1 Archived, Pending Final Delete)
+- Stage-1 move executed for unreferenced helper scripts:
+  - `scripts/generate_parity_invariant_report.py`
+  - `scripts/generate_strategy_rejection_taxonomy_report.py`
+- Archive destination:
+  - `legacy_archive/scripts/generate_parity_invariant_report.py`
+  - `legacy_archive/scripts/generate_strategy_rejection_taxonomy_report.py`
+- Class:
+  - `research-aux`
+- Final-delete gate:
+  - zero active references in docs/scripts/CI
+  - operational script compile checks pass
+
+### Wave C Verification Command
+```powershell
+rg -n "generate_parity_invariant_report.py|generate_strategy_rejection_taxonomy_report.py" docs scripts .github
+python -m py_compile scripts/run_verification.py scripts/verify_baseline.py scripts/run_profitability_matrix.py
+```
 
 ## Rollback
 - Because final delete is executed, file-level rollback by archive move reversal is no longer available.
