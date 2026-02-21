@@ -28,7 +28,7 @@ namespace autolife {
 namespace backtest {
 
 namespace {
-// Core execution plane should not be penalized versus legacy in backtest cost modeling.
+// Keep core execution plane slippage constants explicit in backtest cost modeling.
 constexpr double CORE_ENTRY_SLIPPAGE_PCT = 0.00018;  // 0.018%
 constexpr double CORE_EXIT_SLIPPAGE_PCT = 0.00026;   // 0.026%
 constexpr double CORE_STOP_SLIPPAGE_PCT = 0.00095;   // 0.095%

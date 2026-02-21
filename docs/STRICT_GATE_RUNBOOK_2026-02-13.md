@@ -1,4 +1,4 @@
-# Strict Gate Runbook (2026-02-13)
+﻿# Strict Gate Runbook (2026-02-13)
 
 ## Purpose
 - Separate CI gates by risk level while keeping `validate_operational_readiness.py` as the single operational entrypoint.
@@ -258,13 +258,13 @@ python scripts/run_ci_operational_gate.py -IncludeBacktest -RunLiveProbe -Strict
 python scripts/generate_strict_live_gate_trend_alert.py -GateProfile strict_live -ApplyTunedThresholds -ActionExecutionPolicy safe-auto-execute -EnableActionFeedbackLoop
 python scripts/verify_baseline.py --data-mode fixed --validation-profile adaptive
 python scripts/verify_baseline.py --realdata-only --datasets upbit_KRW_BTC_1m_12000.csv --data-mode refresh_if_missing --validation-profile adaptive
-python scripts/verify_baseline.py --data-mode fixed --validation-profile legacy_gate
 python scripts/run_profitability_exploratory.py
 python scripts/apply_trading_preset.py -Preset safe
 ```
 
 ## Verification Data Mode Policy
-- gate baseline은 `python scripts/verify_baseline.py --data-mode fixed --validation-profile adaptive`를 사용한다.
-- `refresh_if_missing` / `refresh_force`는 강건성 점검용이며, 프로모션 gate의 기준값으로 직접 사용하지 않는다.
-- `refresh_*`는 dataset 이름이 `upbit_<QUOTE>_<BASE>_<UNIT>m_<CANDLES>.csv` 패턴일 때만 자동 fetch 매핑된다.
-- `legacy_gate` 프로파일은 호환성 검증용이며 기본 운영 판정은 `adaptive` 프로파일 기준으로 한다.
+- Gate baseline uses `python scripts/verify_baseline.py --data-mode fixed --validation-profile adaptive`.
+- `refresh_if_missing` / `refresh_force` are robustness checks and should not directly replace promotion gate baselines.
+- `refresh_*` mode auto-fetch mapping is supported only for dataset naming pattern:
+  - `upbit_<QUOTE>_<BASE>_<UNIT>m_<CANDLES>.csv`
+- `legacy_gate` profile is retired; use `adaptive` profile only.

@@ -5312,7 +5312,7 @@ void TradingEngine::saveState() {
         state["open_positions"] = open_positions;
 
         auto snapshot_path = utils::PathUtils::resolveRelativePath("state/snapshot_state.json");
-        auto legacy_path = utils::PathUtils::resolveRelativePath("state/state.json");
+        auto fallback_state_path = utils::PathUtils::resolveRelativePath("state/state.json");
 
         std::filesystem::create_directories(snapshot_path.parent_path());
 
@@ -5327,12 +5327,12 @@ void TradingEngine::saveState() {
         // Stage 3 deepening: primary snapshot path.
         write_json(snapshot_path);
         // Backward compatibility with existing tooling/loaders.
-        write_json(legacy_path);
+        write_json(fallback_state_path);
 
         LOG_INFO(
-            "State snapshot saved: snapshot={}, legacy={}, last_event_seq={}",
+            "State snapshot saved: snapshot={}, fallback={}, last_event_seq={}",
             snapshot_path.string(),
-            legacy_path.string(),
+            fallback_state_path.string(),
             state.value("snapshot_last_event_seq", 0)
         );
 
@@ -5346,13 +5346,13 @@ void TradingEngine::loadState() {
     try {
         pending_signal_metadata_by_market_.clear();
         auto snapshot_path = utils::PathUtils::resolveRelativePath("state/snapshot_state.json");
-        auto legacy_path = utils::PathUtils::resolveRelativePath("state/state.json");
+        auto fallback_state_path = utils::PathUtils::resolveRelativePath("state/state.json");
         std::filesystem::path state_path;
 
         if (std::filesystem::exists(snapshot_path)) {
             state_path = snapshot_path;
-        } else if (std::filesystem::exists(legacy_path)) {
-            state_path = legacy_path;
+        } else if (std::filesystem::exists(fallback_state_path)) {
+            state_path = fallback_state_path;
         } else {
             return;
         }

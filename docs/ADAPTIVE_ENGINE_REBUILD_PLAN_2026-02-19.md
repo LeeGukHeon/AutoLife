@@ -14,7 +14,7 @@
   - Physical removal is required after shadow parity checks.
 - No coin hardcoding. Use regime/pattern level logic only.
 - Validation default must be adaptive (`--validation-profile adaptive`).
-- Legacy threshold gate is compatibility-only (`--validation-profile legacy_gate`).
+- Legacy threshold gate profile is retired. Use adaptive profile only.
 - Gate baseline must use `--data-mode fixed`; refresh modes are robustness checks only.
 - Validation execution remains sequential (`--max-workers 1`).
 
@@ -26,12 +26,10 @@
   - Remove unreachable legacy selection branch in `StrategyManager`.
   - Keep only foundation-first selection/prefilter path as active runtime.
 3. Validation script alignment.
-  - Keep adaptive as default.
-  - Keep legacy mode only for compatibility checks and explicit calls.
+  - Keep adaptive as the only profile.
 4. Rebuild verification and smoke checks.
   - Release build
   - adaptive baseline smoke
-  - optional legacy compatibility smoke
 5. Chapter close update.
   - Record completed changes and exact remaining tasks in `docs/CHAPTER_CURRENT.md`.
 

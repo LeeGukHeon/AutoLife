@@ -327,9 +327,9 @@ def main(argv=None) -> int:
     )
     parser.add_argument(
         "--validation-profile",
-        choices=["adaptive", "legacy_gate"],
+        choices=["adaptive"],
         default="adaptive",
-        help="adaptive (recommended) or legacy_gate compatibility mode.",
+        help="adaptive validation profile.",
     )
     parser.add_argument(
         "--max-downtrend-loss-per-trade-krw",
@@ -429,8 +429,8 @@ def main(argv=None) -> int:
     data_dir = fixed_data_dir
 
     datasets = _split_dataset_tokens(str(args.datasets))
-    using_legacy_default_tokens = tuple(datasets) == _DEFAULT_DATASET_TOKENS
-    if using_legacy_default_tokens:
+    using_disallowed_default_tokens = tuple(datasets) == _DEFAULT_DATASET_TOKENS
+    if using_disallowed_default_tokens:
         raise RuntimeError(
             "Legacy synthetic default dataset tokens are no longer accepted. "
             "Use --datasets with upbit_*_1m_*.csv or omit --datasets for realdata auto-discovery."

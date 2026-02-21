@@ -1668,9 +1668,9 @@ def main(argv=None) -> int:
     )
     parser.add_argument(
         "--validation-profile",
-        choices=["adaptive", "legacy_gate"],
+        choices=["adaptive"],
         default="adaptive",
-        help="adaptive: regime-aware dynamic validation (recommended), legacy_gate: threshold gate mode",
+        help="adaptive: regime-aware dynamic validation (primary mode)",
     )
     parser.add_argument("--min-profit-factor", type=float, default=1.00)
     parser.add_argument("--min-expectancy-krw", type=float, default=0.0)
@@ -1858,7 +1858,7 @@ def main(argv=None) -> int:
         "gate_avg_win_rate_pass": avg_win_rate_pct >= float(args.min_avg_win_rate_pct),
         "gate_avg_trades_pass": avg_total_trades >= float(args.min_avg_trades),
     }
-    legacy_overall_gate_pass = all(bool(x) for x in gate.values())
+    threshold_gate_pass = all(bool(x) for x in gate.values())
     aggregate_diagnostics = aggregate_dataset_diagnostics(dataset_diagnostics)
     failure_attribution = build_failure_attribution(
         gate=gate,
@@ -1878,10 +1878,7 @@ def main(argv=None) -> int:
         peak_max_drawdown_pct=peak_max_drawdown_pct,
         max_drawdown_pct_limit=float(args.max_drawdown_pct),
     )
-    if str(args.validation_profile) == "legacy_gate":
-        overall_gate_pass = legacy_overall_gate_pass
-    else:
-        overall_gate_pass = str(adaptive_verdict.get("verdict", "fail")) == "pass"
+    overall_gate_pass = str(adaptive_verdict.get("verdict", "fail")) == "pass"
 
     report = {
         "mode": "verification_adaptive",
@@ -1908,9 +1905,9 @@ def main(argv=None) -> int:
             "profitable_ratio": round(profitable_ratio, 4),
             "total_profit_sum_krw": total_profit_sum_krw,
         },
-        "legacy_gate": {
+        "threshold_gate": {
             "gate": gate,
-            "overall_gate_pass": legacy_overall_gate_pass,
+            "overall_gate_pass": threshold_gate_pass,
         },
         "adaptive_validation": {
             "thresholds": {

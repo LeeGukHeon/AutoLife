@@ -78,7 +78,7 @@ void printEntryFunnelSummary(const EntryFunnel& f, std::ostream& out) {
         << ", cand_ns=" << f.strategy_ev_pre_cat_soften_candidate_non_severe
         << ", cand_nh=" << f.strategy_ev_pre_cat_soften_candidate_non_hostile
         << ", cand_rr=" << f.strategy_ev_pre_cat_soften_candidate_rr_ok
-        << ", severe_legacy=" << f.strategy_ev_pre_cat_severe_legacy_hits
+        << ", severe_baseline=" << f.strategy_ev_pre_cat_severe_baseline_hits
         << ", severe_composite=" << f.strategy_ev_pre_cat_severe_composite_hits
         << ", severe_cmp_cat=" << f.strategy_ev_pre_cat_severe_composite_catastrophic_hits
         << ", severe_cmp_axis=" << f.strategy_ev_pre_cat_severe_composite_pressure_axis_hits

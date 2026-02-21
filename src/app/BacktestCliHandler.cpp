@@ -214,7 +214,7 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
         {"strategy_ev_pre_cat_soften_candidate_non_severe", result.entry_funnel.strategy_ev_pre_cat_soften_candidate_non_severe},
         {"strategy_ev_pre_cat_soften_candidate_non_hostile", result.entry_funnel.strategy_ev_pre_cat_soften_candidate_non_hostile},
         {"strategy_ev_pre_cat_soften_candidate_rr_ok", result.entry_funnel.strategy_ev_pre_cat_soften_candidate_rr_ok},
-        {"strategy_ev_pre_cat_severe_legacy_hits", result.entry_funnel.strategy_ev_pre_cat_severe_legacy_hits},
+        {"strategy_ev_pre_cat_severe_baseline_hits", result.entry_funnel.strategy_ev_pre_cat_severe_baseline_hits},
         {"strategy_ev_pre_cat_severe_composite_hits", result.entry_funnel.strategy_ev_pre_cat_severe_composite_hits},
         {"strategy_ev_pre_cat_severe_composite_catastrophic_hits", result.entry_funnel.strategy_ev_pre_cat_severe_composite_catastrophic_hits},
         {"strategy_ev_pre_cat_severe_composite_pressure_axis_hits", result.entry_funnel.strategy_ev_pre_cat_severe_composite_pressure_axis_hits},

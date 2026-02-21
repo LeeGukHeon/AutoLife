@@ -99,7 +99,7 @@ public:
             int strategy_ev_pre_cat_soften_candidate_non_severe = 0;
             int strategy_ev_pre_cat_soften_candidate_non_hostile = 0;
             int strategy_ev_pre_cat_soften_candidate_rr_ok = 0;
-            int strategy_ev_pre_cat_severe_legacy_hits = 0;
+            int strategy_ev_pre_cat_severe_baseline_hits = 0;
             int strategy_ev_pre_cat_severe_composite_hits = 0;
             int strategy_ev_pre_cat_severe_composite_catastrophic_hits = 0;
             int strategy_ev_pre_cat_severe_composite_pressure_axis_hits = 0;

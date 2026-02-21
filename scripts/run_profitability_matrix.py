@@ -240,8 +240,12 @@ def run_profile_backtests(
             "strategy_ev_pre_cat_soften_candidate_rr_ok": int(
                 entry_funnel.get("strategy_ev_pre_cat_soften_candidate_rr_ok", 0) or 0
             ),
-            "strategy_ev_pre_cat_severe_legacy_hits": int(
-                entry_funnel.get("strategy_ev_pre_cat_severe_legacy_hits", 0) or 0
+            "strategy_ev_pre_cat_severe_baseline_hits": int(
+                entry_funnel.get(
+                    "strategy_ev_pre_cat_severe_baseline_hits",
+                    entry_funnel.get("strategy_ev_pre_cat_severe_legacy_hits", 0),
+                )
+                or 0
             ),
             "strategy_ev_pre_cat_severe_composite_hits": int(
                 entry_funnel.get("strategy_ev_pre_cat_severe_composite_hits", 0) or 0
@@ -1394,7 +1398,7 @@ def main() -> int:
             "strategy_ev_pre_cat_soften_candidate_non_severe",
             "strategy_ev_pre_cat_soften_candidate_non_hostile",
             "strategy_ev_pre_cat_soften_candidate_rr_ok",
-            "strategy_ev_pre_cat_severe_legacy_hits",
+            "strategy_ev_pre_cat_severe_baseline_hits",
             "strategy_ev_pre_cat_severe_composite_hits",
             "strategy_ev_pre_cat_severe_composite_catastrophic_hits",
             "strategy_ev_pre_cat_severe_composite_pressure_axis_hits",
