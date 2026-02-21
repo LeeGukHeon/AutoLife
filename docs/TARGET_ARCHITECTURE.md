@@ -419,7 +419,7 @@
 - profitability validation matrix is now automated for architecture-path comparison:
   - `scripts/run_profitability_matrix.py`
   - profile set:
-    - `legacy_default`
+    - `baseline_default`
     - `core_bridge_only`
     - `core_policy_risk`
     - `core_full`
@@ -431,7 +431,7 @@
   - profile-level KPI gates:
     - profit factor / expectancy / drawdown / profitable ratio / average trade count
   - structural regression guard:
-    - `core_full` deltas vs `legacy_default` for PF/Expectancy/Total Profit
+    - `core_full` deltas vs `baseline_default` for PF/Expectancy/Total Profit
   - optional hard-fail mode:
     - `-FailOnGate`
   - optional OOS context merge:

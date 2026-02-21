@@ -112,7 +112,7 @@ Stage 13 profitability validation matrix:
 - Script:
   - `scripts/run_profitability_matrix.py`
 - Baseline vs candidate structure profiles:
-  - `legacy_default`
+  - `baseline_default`
   - `core_bridge_only`
   - `core_policy_risk`
   - `core_full`
@@ -124,7 +124,7 @@ Stage 13 profitability validation matrix:
     - `min_profitable_ratio` (default `0.55`)
     - `min_avg_trades` (default `10`)
   - structure regression guard:
-    - `core_full` delta vs `legacy_default` for PF/Expectancy/TotalProfit
+    - `core_full` delta vs `baseline_default` for PF/Expectancy/TotalProfit
 - Behavior:
   - default run generates reports only.
   - `-FailOnGate` enables hard fail when `overall_gate_pass == false`.
@@ -242,7 +242,7 @@ Recommended policy:
 - Check:
   - `overall_gate_pass`
   - `profile_gate_pass`
-  - `core_vs_legacy.gate_pass`
+  - `core_vs_baseline.gate_pass`
 - Inspect `build/Release/logs/profitability_profile_summary.csv` for failing gate columns:
   - `gate_profit_factor_pass`
   - `gate_expectancy_pass`

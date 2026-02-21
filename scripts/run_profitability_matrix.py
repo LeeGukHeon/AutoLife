@@ -1004,7 +1004,7 @@ def main() -> int:
     parser.add_argument(
         "--profile-ids",
         nargs="*",
-        default=["legacy_default", "core_bridge_only", "core_policy_risk", "core_full"],
+        default=["baseline_default", "core_bridge_only", "core_policy_risk", "core_full"],
     )
     parser.add_argument("--include-walk-forward", action="store_true")
     parser.add_argument("--walk-forward-script", default=r".\scripts\walk_forward_validate.py")
@@ -1053,14 +1053,19 @@ def main() -> int:
     parser.add_argument("--exclude-low-trade-runs-for-gate", action="store_true")
     parser.add_argument("--min-trades-per-run-for-gate", type=int, default=5)
     parser.add_argument("--require-higher-tf-companions", action="store_true")
-    parser.add_argument("--core-vs-legacy-min-profit-factor-delta", type=float, default=-0.05)
-    parser.add_argument("--core-vs-legacy-min-expectancy-delta-krw", type=float, default=-5.0)
-    parser.add_argument("--core-vs-legacy-min-total-profit-delta-krw", type=float, default=-10000.0)
+    parser.add_argument("--core-vs-baseline-min-profit-factor-delta", type=float, default=-0.05)
+    parser.add_argument("--core-vs-baseline-min-expectancy-delta-krw", type=float, default=-5.0)
+    parser.add_argument("--core-vs-baseline-min-total-profit-delta-krw", type=float, default=-10000.0)
     parser.add_argument(
-        "--skip-core-vs-legacy-gate",
+        "--skip-core-vs-baseline-gate",
         action="store_true",
-        help="Skip legacy comparison gate and evaluate only profile-level gates (migration mode).",
+        help="Skip baseline comparison gate and evaluate only profile-level gates.",
     )
+    # Deprecated aliases (kept for backward compatibility)
+    parser.add_argument("--core-vs-legacy-min-profit-factor-delta", type=float, default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--core-vs-legacy-min-expectancy-delta-krw", type=float, default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--core-vs-legacy-min-total-profit-delta-krw", type=float, default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--skip-core-vs-legacy-gate", action="store_true", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--max-workers", type=int, default=1)
     parser.add_argument("--backtest-retry-count", type=int, default=2)
     parser.add_argument(
@@ -1143,28 +1148,34 @@ def main() -> int:
         },
     )
     effective_thresholds = dict(threshold_bundle["effective"])
-    effective_core_vs_legacy_min_pf_delta = float(args.core_vs_legacy_min_profit_factor_delta)
-    effective_core_vs_legacy_min_expectancy_delta_krw = float(args.core_vs_legacy_min_expectancy_delta_krw)
-    effective_core_vs_legacy_min_total_profit_delta_krw = float(args.core_vs_legacy_min_total_profit_delta_krw)
+    core_vs_baseline_min_pf_delta = float(args.core_vs_baseline_min_profit_factor_delta)
+    core_vs_baseline_min_expectancy_delta_krw = float(args.core_vs_baseline_min_expectancy_delta_krw)
+    core_vs_baseline_min_total_profit_delta_krw = float(args.core_vs_baseline_min_total_profit_delta_krw)
+    if args.core_vs_legacy_min_profit_factor_delta is not None:
+        core_vs_baseline_min_pf_delta = float(args.core_vs_legacy_min_profit_factor_delta)
+    if args.core_vs_legacy_min_expectancy_delta_krw is not None:
+        core_vs_baseline_min_expectancy_delta_krw = float(args.core_vs_legacy_min_expectancy_delta_krw)
+    if args.core_vs_legacy_min_total_profit_delta_krw is not None:
+        core_vs_baseline_min_total_profit_delta_krw = float(args.core_vs_legacy_min_total_profit_delta_krw)
     if bool(threshold_bundle.get("adaptive_applied", False)) and str(threshold_bundle.get("adaptive_mode", "none")) == "full":
         relief = float(threshold_bundle.get("relief_ratio", 0.0))
         hostility_level = str((threshold_bundle.get("blended_context") or {}).get("blended_hostility_level", "unknown")).lower()
         pf_delta_relax = (0.24 * relief) + (0.08 if hostility_level == "high" else 0.0)
         exp_delta_relax = (1.6 * relief) + (0.8 if hostility_level == "high" else 0.0)
         total_delta_relax = (2500.0 * relief) + (1200.0 if hostility_level == "high" else 0.0)
-        effective_core_vs_legacy_min_pf_delta -= pf_delta_relax
-        effective_core_vs_legacy_min_expectancy_delta_krw -= exp_delta_relax
-        effective_core_vs_legacy_min_total_profit_delta_krw -= total_delta_relax
-        threshold_bundle["effective_core_vs_legacy"] = {
-            "min_delta_avg_profit_factor": round(effective_core_vs_legacy_min_pf_delta, 4),
-            "min_delta_avg_expectancy_krw": round(effective_core_vs_legacy_min_expectancy_delta_krw, 4),
-            "min_delta_total_profit_sum_krw": round(effective_core_vs_legacy_min_total_profit_delta_krw, 4),
+        core_vs_baseline_min_pf_delta -= pf_delta_relax
+        core_vs_baseline_min_expectancy_delta_krw -= exp_delta_relax
+        core_vs_baseline_min_total_profit_delta_krw -= total_delta_relax
+        threshold_bundle["effective_core_vs_baseline"] = {
+            "min_delta_avg_profit_factor": round(core_vs_baseline_min_pf_delta, 4),
+            "min_delta_avg_expectancy_krw": round(core_vs_baseline_min_expectancy_delta_krw, 4),
+            "min_delta_total_profit_sum_krw": round(core_vs_baseline_min_total_profit_delta_krw, 4),
         }
     else:
-        threshold_bundle["effective_core_vs_legacy"] = {
-            "min_delta_avg_profit_factor": round(effective_core_vs_legacy_min_pf_delta, 4),
-            "min_delta_avg_expectancy_krw": round(effective_core_vs_legacy_min_expectancy_delta_krw, 4),
-            "min_delta_total_profit_sum_krw": round(effective_core_vs_legacy_min_total_profit_delta_krw, 4),
+        threshold_bundle["effective_core_vs_baseline"] = {
+            "min_delta_avg_profit_factor": round(core_vs_baseline_min_pf_delta, 4),
+            "min_delta_avg_expectancy_krw": round(core_vs_baseline_min_expectancy_delta_krw, 4),
+            "min_delta_total_profit_sum_krw": round(core_vs_baseline_min_total_profit_delta_krw, 4),
         }
     if threshold_bundle.get("adaptive_applied", False):
         blended = threshold_bundle.get("blended_context") or {}
@@ -1183,8 +1194,8 @@ def main() -> int:
 
     all_profile_specs = [
         {
-            "profile_id": "legacy_default",
-            "description": "All core plane flags disabled.",
+            "profile_id": "baseline_default",
+            "description": "Baseline profile with all core plane flags disabled.",
             "bridge": False,
             "policy": False,
             "risk": False,
@@ -1215,7 +1226,14 @@ def main() -> int:
             "execution": True,
         },
     ]
-    requested_profile_ids = {str(x).strip() for x in args.profile_ids if str(x).strip()}
+    profile_aliases = {
+        "legacy_default": "baseline_default",
+    }
+    requested_profile_ids = {
+        profile_aliases.get(str(x).strip(), str(x).strip())
+        for x in args.profile_ids
+        if str(x).strip()
+    }
     profile_specs = [p for p in all_profile_specs if p["profile_id"] in requested_profile_ids]
     if not profile_specs:
         raise RuntimeError("No valid profiles selected. Check --profile-ids.")
@@ -1533,53 +1551,54 @@ def main() -> int:
         writer.writeheader()
         writer.writerows(profile_summaries)
 
-    legacy_summary = next((x for x in profile_summaries if x["profile_id"] == "legacy_default"), None)
+    baseline_summary = next((x for x in profile_summaries if x["profile_id"] == "baseline_default"), None)
     core_full_summary = next((x for x in profile_summaries if x["profile_id"] == "core_full"), None)
-    core_vs_legacy_required_profiles = {"legacy_default", "core_full"}
-    core_vs_legacy_required_profiles_present = core_vs_legacy_required_profiles.issubset(requested_profile_ids)
-    core_vs_legacy: Dict[str, Any] = {
-        "comparison_available": legacy_summary is not None and core_full_summary is not None,
-        "baseline_profile": "legacy_default",
+    core_vs_baseline_required_profiles = {"baseline_default", "core_full"}
+    core_vs_baseline_required_profiles_present = core_vs_baseline_required_profiles.issubset(requested_profile_ids)
+    skip_core_vs_baseline_gate = bool(args.skip_core_vs_baseline_gate) or bool(args.skip_core_vs_legacy_gate)
+    core_vs_baseline: Dict[str, Any] = {
+        "comparison_available": baseline_summary is not None and core_full_summary is not None,
+        "baseline_profile": "baseline_default",
         "candidate_profile": "core_full",
-        "gate_skipped": bool(args.skip_core_vs_legacy_gate),
+        "gate_skipped": skip_core_vs_baseline_gate,
         "requested_profile_ids": sorted(requested_profile_ids),
-        "required_profile_ids": sorted(core_vs_legacy_required_profiles),
-        "required_profiles_present": bool(core_vs_legacy_required_profiles_present),
+        "required_profile_ids": sorted(core_vs_baseline_required_profiles),
+        "required_profiles_present": bool(core_vs_baseline_required_profiles_present),
     }
-    if core_vs_legacy["comparison_available"]:
-        delta_pf = round(float(core_full_summary["avg_profit_factor"]) - float(legacy_summary["avg_profit_factor"]), 4)
-        delta_exp = round(float(core_full_summary["avg_expectancy_krw"]) - float(legacy_summary["avg_expectancy_krw"]), 4)
-        delta_total = round(float(core_full_summary["total_profit_sum_krw"]) - float(legacy_summary["total_profit_sum_krw"]), 4)
+    if core_vs_baseline["comparison_available"]:
+        delta_pf = round(float(core_full_summary["avg_profit_factor"]) - float(baseline_summary["avg_profit_factor"]), 4)
+        delta_exp = round(float(core_full_summary["avg_expectancy_krw"]) - float(baseline_summary["avg_expectancy_krw"]), 4)
+        delta_total = round(float(core_full_summary["total_profit_sum_krw"]) - float(baseline_summary["total_profit_sum_krw"]), 4)
 
-        core_vs_legacy.update(
+        core_vs_baseline.update(
             {
                 "delta_avg_profit_factor": delta_pf,
                 "delta_avg_expectancy_krw": delta_exp,
                 "delta_total_profit_sum_krw": delta_total,
-                "min_delta_avg_profit_factor": round(effective_core_vs_legacy_min_pf_delta, 4),
-                "min_delta_avg_expectancy_krw": round(effective_core_vs_legacy_min_expectancy_delta_krw, 4),
-                "min_delta_total_profit_sum_krw": round(effective_core_vs_legacy_min_total_profit_delta_krw, 4),
-                "gate_profit_factor_delta_pass": delta_pf >= effective_core_vs_legacy_min_pf_delta,
-                "gate_expectancy_delta_pass": delta_exp >= effective_core_vs_legacy_min_expectancy_delta_krw,
-                "gate_total_profit_delta_pass": delta_total >= effective_core_vs_legacy_min_total_profit_delta_krw,
+                "min_delta_avg_profit_factor": round(core_vs_baseline_min_pf_delta, 4),
+                "min_delta_avg_expectancy_krw": round(core_vs_baseline_min_expectancy_delta_krw, 4),
+                "min_delta_total_profit_sum_krw": round(core_vs_baseline_min_total_profit_delta_krw, 4),
+                "gate_profit_factor_delta_pass": delta_pf >= core_vs_baseline_min_pf_delta,
+                "gate_expectancy_delta_pass": delta_exp >= core_vs_baseline_min_expectancy_delta_krw,
+                "gate_total_profit_delta_pass": delta_total >= core_vs_baseline_min_total_profit_delta_krw,
             }
         )
-        core_vs_legacy["gate_pass"] = (
-            core_vs_legacy["gate_profit_factor_delta_pass"]
-            and core_vs_legacy["gate_expectancy_delta_pass"]
-            and core_vs_legacy["gate_total_profit_delta_pass"]
+        core_vs_baseline["gate_pass"] = (
+            core_vs_baseline["gate_profit_factor_delta_pass"]
+            and core_vs_baseline["gate_expectancy_delta_pass"]
+            and core_vs_baseline["gate_total_profit_delta_pass"]
         )
     else:
-        core_vs_legacy["gate_pass"] = False
+        core_vs_baseline["gate_pass"] = False
 
-    if args.skip_core_vs_legacy_gate:
-        core_vs_legacy["gate_skip_reason"] = "disabled_by_flag"
-        core_vs_legacy["gate_pass"] = True
-    elif not core_vs_legacy["comparison_available"] and not core_vs_legacy_required_profiles_present:
-        # Auto-skip legacy comparison when required profiles were not requested.
-        core_vs_legacy["gate_skip_reason"] = "comparison_unavailable_missing_profiles"
-        core_vs_legacy["gate_auto_skipped"] = True
-        core_vs_legacy["gate_pass"] = True
+    if skip_core_vs_baseline_gate:
+        core_vs_baseline["gate_skip_reason"] = "disabled_by_flag"
+        core_vs_baseline["gate_pass"] = True
+    elif not core_vs_baseline["comparison_available"] and not core_vs_baseline_required_profiles_present:
+        # Auto-skip comparison when required profiles were not requested.
+        core_vs_baseline["gate_skip_reason"] = "comparison_unavailable_missing_profiles"
+        core_vs_baseline["gate_auto_skipped"] = True
+        core_vs_baseline["gate_pass"] = True
 
     walk_forward = None
     if args.include_walk_forward:
@@ -1628,7 +1647,7 @@ def main() -> int:
                 walk_forward = None
 
     profile_gate_pass = all(bool(x["gate_pass"]) for x in profile_summaries)
-    overall_gate_pass = profile_gate_pass and bool(core_vs_legacy.get("gate_pass", False))
+    overall_gate_pass = profile_gate_pass and bool(core_vs_baseline.get("gate_pass", False))
 
     report = {
         "generated_at": __import__("datetime").datetime.now().astimezone().isoformat(),
@@ -1650,14 +1669,21 @@ def main() -> int:
             "exclude_low_trade_runs_for_gate": bool(args.exclude_low_trade_runs_for_gate),
             "min_trades_per_run_for_gate": args.min_trades_per_run_for_gate,
             "require_higher_tf_companions": bool(args.require_higher_tf_companions),
-            "core_vs_legacy_min_profit_factor_delta": args.core_vs_legacy_min_profit_factor_delta,
-            "core_vs_legacy_min_expectancy_delta_krw": args.core_vs_legacy_min_expectancy_delta_krw,
-            "core_vs_legacy_min_total_profit_delta_krw": args.core_vs_legacy_min_total_profit_delta_krw,
-            "skip_core_vs_legacy_gate": bool(args.skip_core_vs_legacy_gate),
+            "core_vs_baseline_min_profit_factor_delta": core_vs_baseline_min_pf_delta,
+            "core_vs_baseline_min_expectancy_delta_krw": core_vs_baseline_min_expectancy_delta_krw,
+            "core_vs_baseline_min_total_profit_delta_krw": core_vs_baseline_min_total_profit_delta_krw,
+            "skip_core_vs_baseline_gate": skip_core_vs_baseline_gate,
+            # Backward compatibility aliases
+            "core_vs_legacy_min_profit_factor_delta": core_vs_baseline_min_pf_delta,
+            "core_vs_legacy_min_expectancy_delta_krw": core_vs_baseline_min_expectancy_delta_krw,
+            "core_vs_legacy_min_total_profit_delta_krw": core_vs_baseline_min_total_profit_delta_krw,
+            "skip_core_vs_legacy_gate": skip_core_vs_baseline_gate,
             "hostility_adaptive": threshold_bundle,
         },
         "profile_gate_pass": profile_gate_pass,
-        "core_vs_legacy": core_vs_legacy,
+        "core_vs_baseline": core_vs_baseline,
+        # Backward compatibility alias
+        "core_vs_legacy": core_vs_baseline,
         "overall_gate_pass": overall_gate_pass,
         "entry_rejection_by_profile": entry_rejection_by_profile,
         "profile_summaries": profile_summaries,
