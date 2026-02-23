@@ -334,22 +334,36 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
     - `avg_expectancy_krw: -12.0674 -> -0.3934`
     - `avg_risk_adjusted_score: -2.7589 -> -0.3387`
     - `avg_total_trades: 11.2 -> 7.2` (표본 축소 잔여)
+- [x] Strict Order 3 2차: 백테스트 EOD 미청산 포지션 강제청산으로 `profit/trade_count` 일관성 보정.
+  - code:
+    - `src/runtime/BacktestRuntime.cpp`
+  - 핵심:
+    - 백테스트 종료 시점에 열린 포지션을 `BacktestEOD` 사유로 강제 청산.
+    - order lifecycle + trade history + strategy stats를 동일 경로로 기록해 집계 불일치 제거.
+  - 검증:
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step3p_eod_only.json`
+  - 결과:
+    - `avg_profit_factor=4.6522`
+    - `avg_expectancy_krw=29.5667`
+    - `avg_risk_adjusted_score=1.6001`
+    - `avg_total_trades=8.2`
+    - 잔여 단일 실패: `sample_size_guard_pass` (`threshold avg_total_trades >= 10`)
 
 ## Next (Strict Order)
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
    - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.
-1. `risk_adjusted_score` 잔여 실패 원인 분해:
-   - 고손실 패턴 셀/레짐 분해(코인 하드코딩 금지)
-   - 손실 꼬리(heavy-loss tail) 중심 리스크 후행 제어 강화
+1. `sample_size_guard` 잔여 실패 원인 분해:
+   - `candidate_generation` 내 `no_signal_generated`/`filtered_out_by_manager` 분해 유지
+   - 코인 하드코딩 없이 패턴/레짐 기준으로 표본 회복
 2. 라벨/학습 구조 고도화:
    - optional triple-barrier 활성화 실험(기존 라벨과 병행)
    - `P(win)` + `E[pnl]` 2-head 학습 파이프라인 추가
 3. 진입 품질 재균형:
-   - 현재 저표본(`avg_total_trades=15.2`) 상태에서 품질 유지하며 표본을 점진 복구
+   - 현재 저표본(`avg_total_trades=8.2`) 상태에서 품질 유지하며 표본을 점진 복구
    - 확률 우선 유지 + 안전게이트 고정
 4. 동일 5-set 재검증:
-   - 목표: `risk_adjusted_score_guard_pass` 통과 + expectancy 추가 개선.
+   - 목표: `sample_size_guard_pass` 통과(`avg_total_trades >= 10`) + expectancy 비열화.
 
 ## Guardrails
 - Sequential only (`--max-workers 1` policy).

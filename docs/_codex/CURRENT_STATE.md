@@ -20,6 +20,8 @@ Last updated: 2026-02-23
 ## Active direction
 - Master spec baseline: `docs/_codex/MASTER_SPEC.md`
 - Execution mode target: Mode A (baseline-preserving), extensions behind flags
+- Current active ticket label:
+  - `Strict Order 3-2` (entry-quality/sample recovery follow-up)
 - Current implementation focus:
   - Ticket 0: docs/bootstrap reliability pack (implemented in current working tree)
   - Ticket 1: dynamic universe + scope-aware 1m fetch/build strictness (implemented in current working tree)
@@ -77,6 +79,18 @@ Last updated: 2026-02-23
   - remaining gap:
     - `risk_adjusted_score_guard_pass=false`
     - `avg_total_trades=7.2` (low-trade penalty still active)
+- Latest Step-3 follow-up (`Strict Order 3-2`, pipeline=`v1`):
+  - Runtime fix: backtest EOD open-position force-close (trade-count/profit consistency)
+    - `src/runtime/BacktestRuntime.cpp`
+  - verification:
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step3p_eod_only.json`
+  - result:
+    - `overall_gate_pass=false` (remaining single blocker: sample size)
+    - `avg_profit_factor=4.6522`
+    - `avg_expectancy_krw=29.5667`
+    - `avg_risk_adjusted_score=1.6001`
+    - `avg_total_trades=8.2` (`gate_avg_trades_pass=false`, threshold=10)
+    - `adaptive_verdict=inconclusive` (`failed_checks=["sample_size_guard_pass"]`)
 - Shadow/live staged enable: not active by default
 
 ## Known issues / watchpoints

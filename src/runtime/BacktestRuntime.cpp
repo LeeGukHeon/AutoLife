@@ -1666,6 +1666,74 @@ void BacktestEngine::run() {
     for (const auto& candle : history_data_) {
         processCandle(candle);
     }
+
+    if (risk_manager_ && !history_data_.empty()) {
+        const auto open_positions = risk_manager_->getAllPositions();
+        if (!open_positions.empty()) {
+            auto notifyStrategyClosed = [&](const risk::Position& closed_position, double exit_price) {
+                if (!strategy_manager_ || closed_position.strategy_name.empty()) {
+                    return;
+                }
+                auto strategy = strategy_manager_->getStrategy(closed_position.strategy_name);
+                if (!strategy) {
+                    return;
+                }
+                const double fee_rate = Config::getInstance().getFeeRate();
+                const double exit_value = exit_price * closed_position.quantity;
+                const double entry_fee = closed_position.invested_amount * fee_rate;
+                const double exit_fee = exit_value * fee_rate;
+                const double net_pnl = exit_value - closed_position.invested_amount - entry_fee - exit_fee;
+                strategy->updateStatistics(closed_position.market, net_pnl > 0.0, net_pnl);
+            };
+
+            const Candle& final_candle = history_data_.back();
+            int forced_closes = 0;
+            for (const auto& pos : open_positions) {
+                const double mark_price = (final_candle.close > 0.0)
+                    ? final_candle.close
+                    : ((pos.current_price > 0.0) ? pos.current_price : pos.entry_price);
+                if (!(mark_price > 0.0) || !(pos.quantity > 0.0)) {
+                    continue;
+                }
+
+                const auto eod_slippage = computeDynamicSlippageThresholds(
+                    engine_config_,
+                    market_hostility_ewma_,
+                    false,
+                    pos.market_regime,
+                    pos.signal_strength,
+                    pos.liquidity_score,
+                    pos.expected_value,
+                    "backtest_end"
+                );
+                const double fill_slippage = std::min(
+                    exitSlippagePct(engine_config_),
+                    eod_slippage.max_slippage_pct
+                );
+                const double forced_exit = mark_price * (1.0 - fill_slippage);
+                if (!(forced_exit > 0.0)) {
+                    continue;
+                }
+
+                Order eod_order;
+                eod_order.market = pos.market;
+                eod_order.side = OrderSide::SELL;
+                eod_order.volume = pos.quantity;
+                eod_order.price = forced_exit;
+                eod_order.strategy_name = pos.strategy_name;
+                executeOrder(eod_order, forced_exit);
+                risk_manager_->exitPosition(pos.market, forced_exit, "BacktestEOD");
+                notifyStrategyClosed(pos, forced_exit);
+                forced_closes++;
+            }
+
+            if (forced_closes > 0) {
+                checkOrders(final_candle);
+                LOG_INFO("Backtest EOD forced close applied: market={}, positions_closed={}",
+                         market_name_, forced_closes);
+            }
+        }
+    }
     
     LOG_INFO("Backtest Completed.");
     if (risk_manager_) {
