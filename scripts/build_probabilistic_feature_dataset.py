@@ -8,7 +8,7 @@ from collections import deque
 from datetime import datetime, timezone
 from typing import Dict, List, Tuple
 
-from _script_common import dump_json, ensure_parent_directory, resolve_repo_path
+from _script_common import dump_json, ensure_parent_directory, load_json_or_none, resolve_repo_path
 
 
 ANCHOR_TF = 1
@@ -40,6 +40,11 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--triple-barrier-horizon", type=int, default=30)
     parser.add_argument("--triple-barrier-take-profit-bps", type=float, default=45.0)
     parser.add_argument("--triple-barrier-stop-loss-bps", type=float, default=35.0)
+    parser.add_argument(
+        "--universe-file",
+        default="",
+        help="Optional runtime universe JSON. Applies strict/skip rules for missing 1m anchors.",
+    )
     return parser.parse_args(argv)
 
 
@@ -59,6 +64,31 @@ def parse_markets(raw: str) -> List[str]:
         seen.add(market)
         out.append(market)
     return out
+
+
+def merge_markets(primary: List[str], secondary: List[str]) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    for token in primary + secondary:
+        market = str(token or "").strip().upper()
+        if not market or market in seen:
+            continue
+        seen.add(market)
+        out.append(market)
+    return out
+
+
+def load_universe_final_1m_markets(universe_path: pathlib.Path) -> List[str]:
+    payload = load_json_or_none(universe_path)
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"invalid universe file json: {universe_path}")
+    raw_markets = payload.get("final_1m_markets", [])
+    if not isinstance(raw_markets, list):
+        raise RuntimeError(f"invalid final_1m_markets in universe file: {universe_path}")
+    markets = merge_markets([], [str(x) for x in raw_markets])
+    if not markets:
+        raise RuntimeError(f"empty final_1m_markets in universe file: {universe_path}")
+    return markets
 
 
 def market_to_safe(market: str) -> str:
@@ -588,19 +618,98 @@ def main(argv=None) -> int:
     if not input_dir.exists():
         raise FileNotFoundError(f"input dir not found: {input_dir}")
 
+    universe_file_path = ""
+    universe_final_1m_markets: List[str] = []
+    if str(args.universe_file).strip():
+        universe_path = resolve_repo_path(str(args.universe_file).strip())
+        if not universe_path.exists():
+            raise FileNotFoundError(f"universe file not found: {universe_path}")
+        universe_file_path = str(universe_path)
+        universe_final_1m_markets = load_universe_final_1m_markets(universe_path)
+        print(
+            f"[BuildProbFeatures] universe_scope enabled "
+            f"final_1m_count={len(universe_final_1m_markets)} file={universe_path}",
+            flush=True,
+        )
+    universe_final_1m_set = set(universe_final_1m_markets)
+
     requested_markets = parse_markets(args.markets)
     if requested_markets:
         markets = requested_markets
     else:
         markets = discover_markets(input_dir)
+        if universe_final_1m_markets:
+            # Include required universe markets so missing anchors fail closed in this run.
+            markets = merge_markets(markets, universe_final_1m_markets)
     if not markets:
         raise RuntimeError("no markets found for 1m anchor files")
 
     started = utc_now_iso()
     jobs: List[Dict[str, object]] = []
     failed: List[Dict[str, object]] = []
+    warnings: List[Dict[str, object]] = []
+
+    missing_required_universe_anchors: List[str] = []
+    if universe_final_1m_markets:
+        for market in universe_final_1m_markets:
+            anchor_path = input_dir / f"upbit_{market_to_safe(market)}_1m_full.csv"
+            if anchor_path.exists():
+                continue
+            missing_required_universe_anchors.append(market)
+            failed.append(
+                {
+                    "market": market,
+                    "error": f"missing required 1m anchor for universe market: {anchor_path}",
+                    "kind": "missing_required_universe_anchor",
+                }
+            )
+            print(
+                f"[BuildProbFeatures] failed market={market} "
+                f"error=missing required 1m anchor for universe market",
+                flush=True,
+            )
+    missing_required_set = set(missing_required_universe_anchors)
 
     for market in markets:
+        anchor_path = input_dir / f"upbit_{market_to_safe(market)}_1m_full.csv"
+        if not anchor_path.exists():
+            if market in universe_final_1m_set:
+                if market not in missing_required_set:
+                    failed.append(
+                        {
+                            "market": market,
+                            "error": f"missing required 1m anchor for universe market: {anchor_path}",
+                            "kind": "missing_required_universe_anchor",
+                        }
+                    )
+                    missing_required_universe_anchors.append(market)
+                    missing_required_set.add(market)
+                    print(
+                        f"[BuildProbFeatures] failed market={market} "
+                        f"error=missing required 1m anchor for universe market",
+                        flush=True,
+                    )
+            else:
+                warning_message = "missing 1m anchor outside final_1m_markets; skipped with warning"
+                warnings.append({"market": market, "warning": warning_message, "anchor_input_path": str(anchor_path)})
+                jobs.append(
+                    {
+                        "market": market,
+                        "status": "skipped_missing_anchor_non_universe",
+                        "anchor_input_path": str(anchor_path),
+                        "output_path": str(output_dir / f"prob_features_{market_to_safe(market)}_1m_v1.csv"),
+                        "anchor_rows": 0,
+                        "feature_rows_written": 0,
+                        "skipped_warmup": 0,
+                        "skipped_missing_context": 0,
+                        "from_utc": "",
+                        "to_utc": "",
+                        "output_size_bytes": 0,
+                        "warning": warning_message,
+                    }
+                )
+                print(f"[BuildProbFeatures] warn market={market} {warning_message}", flush=True)
+            continue
         try:
             print(f"[BuildProbFeatures] start market={market}", flush=True)
             job = build_market_dataset(
@@ -637,6 +746,14 @@ def main(argv=None) -> int:
 
     total_rows = sum(int(x.get("feature_rows_written", 0)) for x in jobs)
     total_bytes = sum(int(x.get("output_size_bytes", 0)) for x in jobs)
+    success_count = sum(
+        1
+        for x in jobs
+        if str(x.get("status", "")).strip().lower() in ("built", "skipped_existing")
+    )
+    skipped_missing_anchor_non_universe_count = sum(
+        1 for x in jobs if str(x.get("status", "")).strip().lower() == "skipped_missing_anchor_non_universe"
+    )
     finished = utc_now_iso()
     payload = {
         "version": "prob_features_v1",
@@ -647,6 +764,9 @@ def main(argv=None) -> int:
         "anchor_tf": "1m",
         "context_tfs": [int(x) for x in CONTEXT_TFS],
         "markets": markets,
+        "universe_file_path": universe_file_path,
+        "universe_final_1m_markets": universe_final_1m_markets,
+        "universe_final_1m_markets_count": len(universe_final_1m_markets),
         "roundtrip_cost_bps": float(args.roundtrip_cost_bps),
         "label_h1": int(args.label_h1),
         "label_h5": int(args.label_h5),
@@ -656,12 +776,16 @@ def main(argv=None) -> int:
         "triple_barrier_stop_loss_bps": float(args.triple_barrier_stop_loss_bps),
         "max_rows_per_market": int(args.max_rows_per_market),
         "job_count": len(markets),
-        "success_count": len(jobs),
+        "success_count": int(success_count),
+        "skipped_missing_anchor_non_universe_count": int(skipped_missing_anchor_non_universe_count),
         "failed_count": len(failed),
+        "warning_count": len(warnings),
+        "missing_required_universe_anchors": missing_required_universe_anchors,
         "total_feature_rows": int(total_rows),
         "total_output_bytes": int(total_bytes),
         "jobs": jobs,
         "failed": failed,
+        "warnings": warnings,
     }
     dump_json(summary_json, payload)
     dump_json(manifest_json, payload)
@@ -669,8 +793,10 @@ def main(argv=None) -> int:
     print("[BuildProbFeatures] Completed", flush=True)
     print(f"summary={summary_json}", flush=True)
     print(f"manifest={manifest_json}", flush=True)
-    print(f"success_count={len(jobs)}", flush=True)
+    print(f"success_count={int(success_count)}", flush=True)
+    print(f"skipped_missing_anchor_non_universe_count={int(skipped_missing_anchor_non_universe_count)}", flush=True)
     print(f"failed_count={len(failed)}", flush=True)
+    print(f"warning_count={len(warnings)}", flush=True)
     print(f"total_feature_rows={total_rows}", flush=True)
     print(f"total_output_bytes={total_bytes}", flush=True)
     return 0 if not failed else 2

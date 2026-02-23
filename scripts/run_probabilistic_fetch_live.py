@@ -25,6 +25,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--reuse-log", dest="fresh_log", action="store_false")
     parser.add_argument("--python-exe", default=sys.executable)
     parser.add_argument("--fetch-script", default=r".\scripts\fetch_probabilistic_training_bundle.py")
+    parser.add_argument("--universe-file", default="")
     return parser.parse_args(argv)
 
 
@@ -73,6 +74,8 @@ def main(argv=None) -> int:
         cmd.append("--skip-existing")
     if int(args.max_jobs) > 0:
         cmd.extend(["--max-jobs", str(int(args.max_jobs))])
+    if str(args.universe_file).strip():
+        cmd.extend(["--universe-file", str(resolve_repo_path(args.universe_file))])
 
     log_path = choose_log_path(log_path, bool(args.fresh_log))
     print(f"[RunProbabilisticFetch] started_at={utc_now_iso()}", flush=True)

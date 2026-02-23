@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import csv
+import hashlib
 import json
 import math
 import pathlib
@@ -11,7 +12,7 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, List, Tuple, Optional
 
-from _script_common import dump_json, ensure_parent_directory, resolve_repo_path
+from _script_common import dump_json, ensure_parent_directory, load_json_or_none, resolve_repo_path
 
 
 UPBIT_EPOCH_UTC = "2017-10-24T00:00:00Z"
@@ -87,6 +88,11 @@ def parse_args(argv=None) -> argparse.Namespace:
         "--fetch-script",
         default=r".\scripts\fetch_upbit_historical_candles.py",
     )
+    parser.add_argument(
+        "--universe-file",
+        default="",
+        help="Optional dynamic universe JSON; when set, 1m fetch scope follows final_1m_markets.",
+    )
     return parser.parse_args(argv)
 
 
@@ -101,6 +107,18 @@ def parse_utc(value: str, default_to_now: bool) -> datetime:
 
 def split_tokens(raw: str) -> List[str]:
     return [x.strip().upper() for x in str(raw or "").split(",") if x.strip()]
+
+
+def dedup_upper(values: List[str]) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    for raw in values:
+        token = str(raw or "").strip().upper()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        out.append(token)
+    return out
 
 
 def normalize_markets(major_raw: str, alt_raw: str) -> Tuple[List[str], List[str], List[str]]:
@@ -134,6 +152,30 @@ def normalize_timeframes(raw: str) -> List[int]:
     return sorted(out)
 
 
+def load_universe_final_1m_markets(universe_path: pathlib.Path) -> List[str]:
+    payload = load_json_or_none(universe_path)
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"invalid universe file json: {universe_path}")
+    markets_raw = payload.get("final_1m_markets", [])
+    if not isinstance(markets_raw, list):
+        raise RuntimeError(f"invalid final_1m_markets in universe file: {universe_path}")
+    markets = dedup_upper([str(x) for x in markets_raw])
+    if not markets:
+        raise RuntimeError(f"empty final_1m_markets in universe file: {universe_path}")
+    return markets
+
+
+def sha256_file(path_value: pathlib.Path) -> str:
+    hasher = hashlib.sha256()
+    with path_value.open("rb") as fh:
+        while True:
+            chunk = fh.read(1024 * 1024)
+            if not chunk:
+                break
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
 def estimate_candle_count(start_utc: datetime, end_utc: datetime, unit_min: int) -> int:
     if end_utc <= start_utc:
         return 0
@@ -147,11 +189,41 @@ def build_job_list(
     start_utc: datetime,
     end_utc: datetime,
     output_dir: pathlib.Path,
+    universe_1m_markets: Optional[List[str]] = None,
 ) -> List[Dict[str, object]]:
     jobs: List[Dict[str, object]] = []
-    for market in markets:
-        safe_market = market.replace("-", "_")
-        for unit in timeframe_units:
+    seen_keys = set()
+    scoped_1m_markets = dedup_upper(universe_1m_markets or [])
+    if not scoped_1m_markets:
+        # Baseline ordering (market-major) remains unchanged when universe scope is OFF.
+        for market in markets:
+            safe_market = market.replace("-", "_")
+            for unit in timeframe_units:
+                key = (str(market), int(unit))
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                candles = estimate_candle_count(start_utc, end_utc, unit)
+                file_name = f"upbit_{safe_market}_{unit}m_full.csv"
+                output_path = output_dir / file_name
+                jobs.append(
+                    {
+                        "market": market,
+                        "unit_min": int(unit),
+                        "estimated_candles": int(candles),
+                        "output_path": str(output_path),
+                    }
+                )
+        return jobs
+
+    for unit in timeframe_units:
+        target_markets = scoped_1m_markets if int(unit) == 1 else markets
+        for market in target_markets:
+            key = (str(market), int(unit))
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            safe_market = market.replace("-", "_")
             candles = estimate_candle_count(start_utc, end_utc, unit)
             file_name = f"upbit_{safe_market}_{unit}m_full.csv"
             output_path = output_dir / file_name
@@ -269,6 +341,10 @@ def build_manifest_payload(
     skip_existing: bool,
     incremental_update: bool,
     incremental_overlap_bars: int,
+    markets_scope: str,
+    universe_file_path: str,
+    universe_file_hash: str,
+    universe_final_1m_markets: List[str],
     planned_job_count: int,
     total_estimated_rows: int,
     total_estimated_raw_bytes: int,
@@ -300,6 +376,10 @@ def build_manifest_payload(
             "alt": alt_markets,
             "all_unique": all_markets,
         },
+        "markets_scope": str(markets_scope),
+        "universe_file_path": str(universe_file_path),
+        "universe_file_hash": str(universe_file_hash),
+        "universe_final_1m_markets": universe_final_1m_markets,
         "timeframes_min": timeframe_units,
         "estimate_only": bool(estimate_only),
         "skip_existing": bool(skip_existing),
@@ -339,6 +419,10 @@ def build_summary_payload(manifest_json: pathlib.Path, manifest_payload: Dict[st
         "generated_at_utc": manifest_payload["generated_at_utc"],
         "run_state": manifest_payload.get("run_state", ""),
         "manifest_json": str(manifest_json),
+        "markets_scope": str(manifest_payload.get("markets_scope", "all")),
+        "universe_file_path": str(manifest_payload.get("universe_file_path", "")),
+        "universe_file_hash": str(manifest_payload.get("universe_file_hash", "")),
+        "universe_final_1m_count": len(manifest_payload.get("universe_final_1m_markets", []) or []),
         "estimate_only": bool(manifest_payload.get("estimate_only", False)),
         "planned_job_count": int(manifest_payload.get("planned_job_count", 0)),
         "job_count": int(manifest_payload.get("job_count", 0)),
@@ -443,6 +527,24 @@ def main(argv=None) -> int:
     major_markets, alt_markets, all_markets = normalize_markets(args.markets_major, args.markets_alt)
     timeframe_units = normalize_timeframes(args.timeframes)
 
+    markets_scope = "all"
+    universe_file_path = ""
+    universe_file_hash = ""
+    universe_final_1m_markets: List[str] = []
+    if str(args.universe_file).strip():
+        universe_path = resolve_repo_path(str(args.universe_file).strip())
+        if not universe_path.exists():
+            raise FileNotFoundError(f"universe file not found: {universe_path}")
+        universe_final_1m_markets = load_universe_final_1m_markets(universe_path)
+        markets_scope = "universe"
+        universe_file_path = str(universe_path)
+        universe_file_hash = sha256_file(universe_path)
+        print(
+            f"[FetchProbabilisticBundle] universe_scope enabled "
+            f"final_1m_count={len(universe_final_1m_markets)} file={universe_path}",
+            flush=True,
+        )
+
     output_dir = resolve_repo_path(args.output_dir)
     manifest_json = resolve_repo_path(args.manifest_json)
     summary_json = resolve_repo_path(args.summary_json)
@@ -471,6 +573,7 @@ def main(argv=None) -> int:
         start_utc=start_utc,
         end_utc=end_utc,
         output_dir=output_dir,
+        universe_1m_markets=universe_final_1m_markets,
     )
     if int(args.max_jobs) > 0:
         jobs = jobs[: int(args.max_jobs)]
@@ -504,6 +607,10 @@ def main(argv=None) -> int:
             skip_existing=bool(args.skip_existing),
             incremental_update=bool(incremental_mode),
             incremental_overlap_bars=int(incremental_overlap_bars),
+            markets_scope=markets_scope,
+            universe_file_path=universe_file_path,
+            universe_file_hash=universe_file_hash,
+            universe_final_1m_markets=universe_final_1m_markets,
             planned_job_count=planned_job_count,
             total_estimated_rows=total_estimated_rows,
             total_estimated_raw_bytes=total_estimated_raw_bytes,
@@ -733,6 +840,11 @@ def main(argv=None) -> int:
     print(f"success_count={len(success_jobs)}")
     print(f"failed_count={len(failed_jobs)}")
     print(f"skipped_existing_count={len(skipped_jobs)}")
+    print(f"markets_scope={markets_scope}")
+    if markets_scope == "universe":
+        print(f"universe_file={universe_file_path}")
+        print(f"universe_file_hash={universe_file_hash}")
+        print(f"universe_final_1m_count={len(universe_final_1m_markets)}")
     print(f"estimated_raw_csv={manifest_payload['estimated_totals']['raw_ohlcv_csv_human']}")
     print(f"estimated_enriched_csv={manifest_payload['estimated_totals']['enriched_csv_human']}")
     print(f"actual_csv={manifest_payload['actual_totals']['csv_human']}")

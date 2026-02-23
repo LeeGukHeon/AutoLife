@@ -45,6 +45,11 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--feature-dir", default=r".\data\model_input\probabilistic_features_v1_latest")
     parser.add_argument("--runtime-bundle-json", default=r".\config\model\probabilistic_runtime_bundle_v1.json")
     parser.add_argument("--train-max-datasets", type=int, default=0)
+    parser.add_argument(
+        "--universe-file",
+        default="",
+        help="Optional dynamic universe JSON for scope-aware 1m fetch/build behavior.",
+    )
     return parser.parse_args(argv)
 
 
@@ -92,6 +97,9 @@ def main(argv=None) -> int:
     backtest_dir = resolve_repo_path(args.backtest_dir)
     feature_dir = resolve_repo_path(args.feature_dir)
     runtime_bundle_json = resolve_repo_path(args.runtime_bundle_json)
+    universe_file = resolve_repo_path(args.universe_file) if str(args.universe_file).strip() else None
+    if universe_file is not None and not universe_file.exists():
+        raise FileNotFoundError(f"universe file not found: {universe_file}")
     backtest_dir.mkdir(parents=True, exist_ok=True)
     feature_dir.mkdir(parents=True, exist_ok=True)
     ensure_parent_directory(runtime_bundle_json)
@@ -146,6 +154,8 @@ def main(argv=None) -> int:
         fetch_cmd.append("--incremental-update")
     if int(args.max_jobs) > 0:
         fetch_cmd.extend(["--max-jobs", str(int(args.max_jobs))])
+    if universe_file is not None:
+        fetch_cmd.extend(["--universe-file", str(universe_file)])
     steps.append(run_step("fetch_bundle", fetch_cmd))
     if not steps[-1]["ok"]:
         dump_json(cycle_summary_json, {"run_tag": run_tag, "status": "failed", "steps": steps})
@@ -165,6 +175,8 @@ def main(argv=None) -> int:
         "--markets",
         str(selected_markets),
     ]
+    if universe_file is not None:
+        build_cmd.extend(["--universe-file", str(universe_file)])
     steps.append(run_step("build_features", build_cmd))
     if not steps[-1]["ok"]:
         dump_json(cycle_summary_json, {"run_tag": run_tag, "status": "failed", "steps": steps})
@@ -270,6 +282,7 @@ def main(argv=None) -> int:
             "backtest_dir": str(backtest_dir),
             "feature_dir": str(feature_dir),
             "runtime_bundle_json": str(runtime_bundle_json),
+            "universe_file": str(universe_file) if universe_file is not None else "",
             "split_manifest_json": str(split_manifest_json),
             "train_summary_json": str(train_summary_json),
             "parity_json": str(parity_json),
