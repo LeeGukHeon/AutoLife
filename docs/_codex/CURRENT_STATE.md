@@ -49,6 +49,10 @@ Last updated: 2026-02-23
   - Verification diagnostics hardened for TODO Step-1 decomposition: `scripts/run_verification.py` now emits risk-score component breakdown + heavy-loss tail decomposition (pattern/regime/archetype) via `adaptive_validation.risk_adjusted_failure_decomposition`.
   - Global trainer target-flex parity fix: `scripts/train_probabilistic_pattern_model_global.py` now actually consumes `--h1-target-column/--h5-target-column/--edge-column`, applies edge fallback parity, and feeds `train_edge` for the edge regressor head; regression tests added (`scripts/test_train_probabilistic_pattern_model_global.py`).
   - Hybrid cycle now exposes strict-order Step-2 experiment switches end-to-end: triple-barrier build flags + global training target-column/head flags are wired in `scripts/run_probabilistic_hybrid_cycle.py` with fail-closed argument guards; regression tests updated (`scripts/test_probabilistic_hybrid_cycle_args.py`).
+  - Strict Order Step-3 entry-quality rebalance (phase-1) applied to live/backtest parity paths:
+    - shared regime/archetype helpers moved into `common::signal_policy` (`isHostileRegime`, `isRangePullbackLossTailRiskCell`)
+    - `passesProbabilisticPrimaryMinimums` now applies explicit range-pullback quality floors in ranging regime (same logic in `src/runtime/BacktestRuntime.cpp` and `src/runtime/LiveTradingRuntime.cpp`)
+    - legacy gate-profile labels normalized: verification/shadow `v1_legacy` -> `v1` (`scripts/run_verification.py`, `scripts/generate_probabilistic_shadow_report.py`)
 
 ## Last known gate status
 - Strict feature validation: run required after any feature/build changes
@@ -63,6 +67,16 @@ Last updated: 2026-02-23
   - `build/Release/logs/verification_report_global_full_5set_refresh_20260223.json`
   - `overall_gate_pass=false`, `avg_profit_factor=0.5203`, `avg_expectancy_krw=-12.0674`
   - risk-tail decomposition points to `RANGING + FOUNDATION_RANGE_PULLBACK` heavy-loss concentration.
+- Latest Step-3 rebalance run (`pipeline=v1`):
+  - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step3_final.json`
+  - `overall_gate_pass=false`, `adaptive_verdict=fail`, `gate_profile.name=v1`
+  - quality improved vs previous 5-set refresh:
+    - `avg_profit_factor: 0.5203 -> 1.1715`
+    - `avg_expectancy_krw: -12.0674 -> -0.3934`
+    - `avg_risk_adjusted_score: -2.7589 -> -0.3387`
+  - remaining gap:
+    - `risk_adjusted_score_guard_pass=false`
+    - `avg_total_trades=7.2` (low-trade penalty still active)
 - Shadow/live staged enable: not active by default
 
 ## Known issues / watchpoints

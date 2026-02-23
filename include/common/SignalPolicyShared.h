@@ -15,6 +15,11 @@ bool isTrendReaccelerationArchetype(const std::string& archetype);
 bool isConsolidationBreakArchetype(const std::string& archetype);
 bool isRangePullbackArchetype(const std::string& archetype);
 bool isDefensiveFoundationArchetype(const std::string& archetype);
+bool isHostileRegime(analytics::MarketRegime regime);
+bool isRangePullbackLossTailRiskCell(
+    const strategy::Signal& signal,
+    analytics::MarketRegime regime
+);
 bool isTrendContinuationStyleSignal(const strategy::Signal& signal);
 
 double computeTargetRewardRisk(double strength, const engine::EngineConfig& cfg);

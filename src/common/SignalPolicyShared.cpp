@@ -73,6 +73,19 @@ bool isDefensiveFoundationArchetype(const std::string& archetype) {
            archetype == "FOUNDATION_UNKNOWN_GUARDED";
 }
 
+bool isHostileRegime(analytics::MarketRegime regime) {
+    return regime == analytics::MarketRegime::HIGH_VOLATILITY ||
+           regime == analytics::MarketRegime::TRENDING_DOWN;
+}
+
+bool isRangePullbackLossTailRiskCell(
+    const strategy::Signal& signal,
+    analytics::MarketRegime regime
+) {
+    return isRangePullbackArchetype(signal.entry_archetype) &&
+           regime == analytics::MarketRegime::RANGING;
+}
+
 bool isTrendContinuationStyleSignal(const strategy::Signal& signal) {
     if (isBreakoutContinuationArchetype(signal.entry_archetype) ||
         isTrendReaccelerationArchetype(signal.entry_archetype) ||
@@ -174,9 +187,7 @@ bool rebalanceSignalRiskReward(strategy::Signal& signal, const engine::EngineCon
 
     const double asymmetry_pressure = computeHistoryRewardRiskAsymmetryPressure(signal, cfg);
     if (asymmetry_pressure > 1e-9) {
-        const bool hostile_regime =
-            signal.market_regime == analytics::MarketRegime::HIGH_VOLATILITY ||
-            signal.market_regime == analytics::MarketRegime::TRENDING_DOWN;
+        const bool hostile_regime = isHostileRegime(signal.market_regime);
         const double tighten_scale = hostile_regime ? 0.10 : 0.18;
         const double compressed_risk_price = risk_price * std::clamp(
             1.0 - (tighten_scale * asymmetry_pressure),
@@ -386,7 +397,18 @@ double computeCalibratedExpectedEdgePct(const strategy::Signal& signal, const en
         win_prob -= 0.06;
     }
     if (is_range_pullback && signal.market_regime == analytics::MarketRegime::RANGING) {
-        win_prob += 0.03;
+        const bool high_quality_range_pullback =
+            signal.strength >= 0.62 &&
+            signal.probabilistic_h5_calibrated >= 0.58 &&
+            signal.probabilistic_h5_margin >= 0.012 &&
+            signal.liquidity_score >= 45.0 &&
+            ((signal.volatility <= 0.0) || (signal.volatility <= 2.6));
+        if (high_quality_range_pullback) {
+            win_prob += 0.02;
+        } else {
+            // Keep neutral baseline (no optimistic boost) for non-strong setups.
+            // This avoids legacy optimistic bias without suppressing sample excessively.
+        }
     }
     if (is_defensive_foundation &&
         (signal.market_regime == analytics::MarketRegime::TRENDING_DOWN ||

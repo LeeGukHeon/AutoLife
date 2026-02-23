@@ -314,6 +314,26 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
     - `risk_adjusted_score_guard_pass=false`
   - decomposition focus:
     - `RANGING + FOUNDATION_RANGE_PULLBACK` loss tail concentration 우선 완화 필요
+- [x] Strict Order 3 1차: range-pullback loss-tail 중심 진입 품질 재균형 + 레거시 게이트 명칭 정리.
+  - code:
+    - `src/runtime/BacktestRuntime.cpp`
+    - `src/runtime/LiveTradingRuntime.cpp`
+    - `src/common/SignalPolicyShared.cpp`
+    - `include/common/SignalPolicyShared.h`
+  - 핵심:
+    - `RANGING + FOUNDATION_RANGE_PULLBACK` 셀에 대해 확률/마진/유동성/강도 최소 바닥값을 공통 적용(라이브/백테스트 동형).
+    - 과거 레거시 표기 `v1_legacy` 제거, `v1`로 정규화.
+      - `scripts/run_verification.py`
+      - `scripts/generate_probabilistic_shadow_report.py`
+  - 검증:
+    - `python scripts/test_probabilistic_promotion_readiness.py` 통과
+    - `build/Release/AutoLifeTrading.exe` Release 빌드 통과
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step3_final.json`
+  - 결과(기준: `..._refresh_20260223.json` 대비):
+    - `avg_profit_factor: 0.5203 -> 1.1715`
+    - `avg_expectancy_krw: -12.0674 -> -0.3934`
+    - `avg_risk_adjusted_score: -2.7589 -> -0.3387`
+    - `avg_total_trades: 11.2 -> 7.2` (표본 축소 잔여)
 
 ## Next (Strict Order)
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:

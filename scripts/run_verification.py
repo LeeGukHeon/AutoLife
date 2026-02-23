@@ -2387,7 +2387,7 @@ def main(argv=None) -> int:
         }
     else:
         report["gate_profile"] = {
-            "name": "v1_legacy",
+            "name": "v1",
             "checks": {
                 "adaptive_verdict_pass": bool(adaptive_pass),
             },

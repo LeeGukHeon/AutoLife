@@ -350,7 +350,7 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
         checks["same_bundle"] and
         checks["same_candles"]
     )
-    gate_profile_name = "v2_strict" if resolved_pipeline == "v2" else "v1_legacy"
+    gate_profile_name = "v2_strict" if resolved_pipeline == "v2" else "v1"
     status = "pass" if (overall_pass and len(errors) == 0) else "fail"
 
     runtime_bundle_version = ""

@@ -40,7 +40,7 @@ class ProbabilisticPromotionReadinessTest(unittest.TestCase):
                 {
                     "overall_gate_pass": True,
                     "pipeline_version": "v1",
-                    "gate_profile": {"name": "v1_legacy"},
+                    "gate_profile": {"name": "v1"},
                 },
             )
             write_json(runtime_cfg, {"trading": {"allow_live_orders": False}})

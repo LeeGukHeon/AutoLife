@@ -961,9 +961,7 @@ bool passesProbabilisticPrimaryMinimums(
 
     ProbabilisticPrimaryMinimums mins =
         effectiveProbabilisticPrimaryMinimums(cfg, regime, snapshot);
-    const bool hostile_regime =
-        regime == autolife::analytics::MarketRegime::HIGH_VOLATILITY ||
-        regime == autolife::analytics::MarketRegime::TRENDING_DOWN;
+    const bool hostile_regime = autolife::common::signal_policy::isHostileRegime(regime);
     const bool supply_probe_reason =
         signal.reason.find("signal_supply_fallback") != std::string::npos ||
         signal.reason.find("ranging_low_flow") != std::string::npos ||
@@ -988,8 +986,8 @@ bool passesProbabilisticPrimaryMinimums(
         signal.liquidity_score >= 16.0;
     const bool rescue_archetype =
         signal.entry_archetype.find("CORE_RESCUE") != std::string::npos;
-    const bool range_pullback_archetype =
-        signal.entry_archetype.find("FOUNDATION_RANGE_PULLBACK") != std::string::npos;
+    const bool range_pullback_loss_tail_risk_cell =
+        autolife::common::signal_policy::isRangePullbackLossTailRiskCell(signal, regime);
     if (!hostile_regime && rescue_archetype) {
         if (signal.probabilistic_h5_calibrated < 0.55 ||
             signal.probabilistic_h5_margin < 0.002 ||
@@ -997,16 +995,6 @@ bool passesProbabilisticPrimaryMinimums(
             signal.strength < 0.24) {
             if (reject_reason != nullptr) {
                 *reject_reason = "blocked_probabilistic_primary_rescue_quality";
-            }
-            return false;
-        }
-    }
-    if (!hostile_regime && range_pullback_archetype) {
-        if (signal.strength < 0.24 &&
-            (signal.probabilistic_h5_margin < 0.008 ||
-             signal.probabilistic_h5_calibrated < 0.54)) {
-            if (reject_reason != nullptr) {
-                *reject_reason = "blocked_probabilistic_primary_rangepullback_quality";
             }
             return false;
         }
@@ -1064,6 +1052,12 @@ bool passesProbabilisticPrimaryMinimums(
         mins.min_liquidity_score = std::max(0.0, mins.min_liquidity_score - 10.0);
         mins.min_signal_strength = std::max(0.0, mins.min_signal_strength - 0.04);
     }
+    if (range_pullback_loss_tail_risk_cell) {
+        mins.min_h5_calibrated = std::max(mins.min_h5_calibrated, 0.50);
+        mins.min_h5_margin = std::max(mins.min_h5_margin, 0.001);
+        mins.min_liquidity_score = std::max(mins.min_liquidity_score, 16.0);
+        mins.min_signal_strength = std::max(mins.min_signal_strength, 0.13);
+    }
     const bool calibrated_fail = signal.probabilistic_h5_calibrated < mins.min_h5_calibrated;
     const bool margin_fail = signal.probabilistic_h5_margin < mins.min_h5_margin;
     const bool liquidity_fail = signal.liquidity_score < mins.min_liquidity_score;
@@ -1076,16 +1070,6 @@ bool passesProbabilisticPrimaryMinimums(
              signal.strength < 0.26)) {
             if (reject_reason != nullptr) {
                 *reject_reason = "blocked_probabilistic_primary_rescue_quality";
-            }
-            return false;
-        }
-        if (range_pullback_archetype &&
-            !hostile_regime &&
-            signal.strength < 0.22 &&
-            (signal.probabilistic_h5_margin < 0.010 ||
-             signal.probabilistic_h5_calibrated < 0.53)) {
-            if (reject_reason != nullptr) {
-                *reject_reason = "blocked_probabilistic_primary_rangepullback_quality";
             }
             return false;
         }
@@ -1123,15 +1107,27 @@ bool passesProbabilisticPrimaryMinimums(
             (liquidity_score * 0.14) +
             (strength_score * 0.14) +
             (expected_edge_score * 0.10);
-        if (composite_score >= 0.48 &&
+        const double composite_threshold = range_pullback_loss_tail_risk_cell ? 0.50 : 0.48;
+        if (composite_score >= composite_threshold &&
             signal.probabilistic_h5_margin >= (mins.min_h5_margin - 0.028)) {
             return true;
         }
-        if (signal.probabilistic_h5_calibrated >= 0.44 &&
-            signal.probabilistic_h5_margin >= -0.018 &&
-            signal.liquidity_score >= 16.0 &&
-            signal.strength >= 0.10) {
-            return true;
+        if (range_pullback_loss_tail_risk_cell) {
+            if (signal.probabilistic_h5_calibrated >= 0.48 &&
+                signal.probabilistic_h5_margin >= -0.003 &&
+                signal.liquidity_score >= 16.0 &&
+                signal.strength >= 0.12 &&
+                signal.expected_value >= -0.00005) {
+                return true;
+            }
+        } else {
+            if (signal.probabilistic_h5_calibrated >= 0.43 &&
+                signal.probabilistic_h5_margin >= -0.020 &&
+                signal.liquidity_score >= 15.0 &&
+                signal.strength >= 0.09 &&
+                signal.expected_value >= -0.00008) {
+                return true;
+            }
         }
     } else {
         const double hostile_score =
