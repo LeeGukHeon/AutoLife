@@ -38,11 +38,28 @@ def parse_args(argv=None) -> argparse.Namespace:
         default="latest",
         help="Which fold to export per market.",
     )
+    parser.add_argument(
+        "--pipeline-version",
+        "--pipeline_version",
+        choices=("v1", "v2"),
+        default="v1",
+        help="MODE switch. v1 exports active bundle contract; v2 exports draft v2 contract.",
+    )
     return parser.parse_args(argv)
 
 
 def utc_now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
+
+
+def infer_train_summary_pipeline_version(summary: Dict[str, Any]) -> str:
+    explicit = str(summary.get("pipeline_version", "")).strip().lower()
+    if explicit in ("v1", "v2"):
+        return explicit
+    summary_version = str(summary.get("version", "")).strip().lower()
+    if "v2" in summary_version:
+        return "v2"
+    return "v1"
 
 
 def extract_linear(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -262,10 +279,17 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     train_summary_path = resolve_repo_path(args.train_summary_json)
     output_path = resolve_repo_path(args.output_json)
+    pipeline_version = str(args.pipeline_version).strip().lower()
 
     summary = load_json_or_none(train_summary_path)
     if not isinstance(summary, dict):
         raise RuntimeError(f"invalid training summary: {train_summary_path}")
+    summary_pipeline_version = infer_train_summary_pipeline_version(summary)
+    if summary_pipeline_version != pipeline_version:
+        raise RuntimeError(
+            "pipeline version mismatch: "
+            f"export={pipeline_version} train_summary={summary_pipeline_version}"
+        )
 
     feature_columns = list(summary.get("feature_columns", []) or [])
     if not feature_columns:
@@ -336,7 +360,11 @@ def main(argv=None) -> int:
     prefer_default_model = bool(default_model is not None)
 
     out = {
-        "version": "probabilistic_runtime_bundle_v1",
+        "version": (
+            "probabilistic_runtime_bundle_v1"
+            if pipeline_version == "v1"
+            else "probabilistic_runtime_bundle_v2_draft"
+        ),
         "generated_at_utc": utc_now_iso(),
         "source_train_summary_json": str(train_summary_path),
         "selection_policy": str(args.fold_policy),
@@ -355,6 +383,10 @@ def main(argv=None) -> int:
         "markets": markets_out,
         "cost_model": summary.get("cost_model", {}),
     }
+    if pipeline_version != "v1":
+        out["pipeline_version"] = str(pipeline_version)
+        out["feature_contract_version"] = "v2_draft"
+        out["runtime_bundle_contract_version"] = "v2_draft"
     if ensemble_summary_meta:
         out["ensemble"] = ensemble_summary_meta
     dump_json(output_path, out)
@@ -363,6 +395,7 @@ def main(argv=None) -> int:
     print(f"export_mode={args.export_mode}", flush=True)
     print(f"global_fallback_enabled={global_fallback_enabled}", flush=True)
     print(f"markets={len(markets_out)}", flush=True)
+    print(f"pipeline_version={pipeline_version}", flush=True)
     print(f"output={output_path}", flush=True)
     return 0
 

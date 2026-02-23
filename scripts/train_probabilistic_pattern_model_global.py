@@ -103,6 +103,13 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--max-datasets", type=int, default=0)
     parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument(
+        "--pipeline-version",
+        "--pipeline_version",
+        choices=("v1", "v2"),
+        default="v1",
+        help="MODE switch. v1 keeps baseline summary contract; v2 uses draft summary version.",
+    )
+    parser.add_argument(
         "--ensemble-k",
         type=int,
         default=1,
@@ -137,6 +144,16 @@ def parse_dataset_fold_windows(dataset: Dict[str, Any]) -> Dict[int, Dict[str, i
             continue
         fold_windows[fold_id] = win
     return fold_windows
+
+
+def infer_split_manifest_pipeline_version(split_manifest: Dict[str, Any]) -> str:
+    explicit = str(split_manifest.get("pipeline_version", "")).strip().lower()
+    if explicit in ("v1", "v2"):
+        return explicit
+    source_manifest_version = str(split_manifest.get("source_manifest_version", "")).strip().lower()
+    if "v2" in source_manifest_version:
+        return "v2"
+    return "v1"
 
 
 def build_global_state(fold_id: int, args: argparse.Namespace) -> Dict[str, Any]:
@@ -374,6 +391,13 @@ def main(argv=None) -> int:
     split_manifest = load_json_or_none(split_manifest_path)
     if not isinstance(split_manifest, dict):
         raise RuntimeError(f"invalid split manifest: {split_manifest_path}")
+    pipeline_version = str(args.pipeline_version).strip().lower()
+    split_pipeline_version = infer_split_manifest_pipeline_version(split_manifest)
+    if split_pipeline_version != pipeline_version:
+        raise RuntimeError(
+            "pipeline version mismatch: "
+            f"train={pipeline_version} split_manifest={split_pipeline_version}"
+        )
     split_policy = split_manifest.get("split_policy", {})
     if not isinstance(split_policy, dict):
         split_policy = {}
@@ -425,6 +449,7 @@ def main(argv=None) -> int:
     print(f"datasets={len(prepared)}", flush=True)
     print(f"fold_ids={fold_ids}", flush=True)
     print(f"model_dir={model_dir}", flush=True)
+    print(f"pipeline_version={pipeline_version}", flush=True)
 
     started_at = utc_now_iso()
     ensemble_k = max(1, int(args.ensemble_k))
@@ -466,7 +491,11 @@ def main(argv=None) -> int:
         status = "partial_fail"
 
     out = {
-        "version": "probabilistic_pattern_model_global_v1",
+        "version": (
+            "probabilistic_pattern_model_global_v1"
+            if pipeline_version == "v1"
+            else "probabilistic_pattern_model_global_v2_draft"
+        ),
         "scope": "global_cross_market",
         "started_at_utc": started_at,
         "finished_at_utc": ended_at,
@@ -509,6 +538,9 @@ def main(argv=None) -> int:
         "baseline_comparison": baseline_compare,
         "datasets": dataset_results,
     }
+    if pipeline_version != "v1":
+        out["pipeline_version"] = str(pipeline_version)
+        out["feature_contract_version"] = "v2_draft"
     purge_embargo_cfg = split_policy.get("purge_embargo", {})
     if isinstance(purge_embargo_cfg, dict) and bool(purge_embargo_cfg.get("enabled", False)):
         out["purge_embargo"] = purge_embargo_cfg

@@ -105,6 +105,13 @@ def parse_args(argv=None) -> argparse.Namespace:
         help="EXT-52 optional: rolling lookback window for sampling metrics.",
     )
     parser.add_argument(
+        "--pipeline-version",
+        "--pipeline_version",
+        choices=("v1", "v2"),
+        default="v1",
+        help="MODE switch. v1 keeps current baseline behavior; v2 is explicit draft path.",
+    )
+    parser.add_argument(
         "--universe-file",
         default="",
         help="Optional runtime universe JSON. Applies strict/skip rules for missing 1m anchors.",
@@ -800,6 +807,7 @@ def main(argv=None) -> int:
     output_dir = resolve_repo_path(args.output_dir)
     summary_json = resolve_repo_path(args.summary_json)
     manifest_json = resolve_repo_path(args.manifest_json)
+    pipeline_version = str(args.pipeline_version).strip().lower()
 
     if not input_dir.exists():
         raise FileNotFoundError(f"input dir not found: {input_dir}")
@@ -828,6 +836,7 @@ def main(argv=None) -> int:
         f"threshold={sample_threshold} lookback_minutes={sample_lookback_minutes}",
         flush=True,
     )
+    print(f"[BuildProbFeatures] pipeline_version={pipeline_version}", flush=True)
 
     cost_model_config = {
         "enabled": bool(args.enable_conditional_cost_model),
@@ -986,8 +995,9 @@ def main(argv=None) -> int:
         1 for x in jobs if str(x.get("status", "")).strip().lower() == "skipped_missing_anchor_non_universe"
     )
     finished = utc_now_iso()
+    dataset_version = "prob_features_v1" if pipeline_version == "v1" else "prob_features_v2_draft"
     payload = {
-        "version": "prob_features_v1",
+        "version": dataset_version,
         "started_at_utc": started,
         "finished_at_utc": finished,
         "input_dir": str(input_dir),
@@ -1026,6 +1036,9 @@ def main(argv=None) -> int:
         "failed": failed,
         "warnings": warnings,
     }
+    if pipeline_version != "v1":
+        payload["pipeline_version"] = str(pipeline_version)
+        payload["feature_contract_version"] = "v2_draft"
     dump_json(summary_json, payload)
     dump_json(manifest_json, payload)
 

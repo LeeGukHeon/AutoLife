@@ -1,6 +1,6 @@
 # MODE B / v2 Restructure Plan (Optional)
 Last updated: 2026-02-23
-Status: Draft kickoff only (no runtime activation)
+Status: Phase 2 implemented (pipeline branching added, v2 still draft)
 
 ## Goal
 - Prepare optional MODE B migration with explicit v2 contracts.
@@ -19,9 +19,10 @@ Status: Draft kickoff only (no runtime activation)
 1. Contract freeze:
    - finalize v2 column contract and transforms.
    - finalize v2 bundle fields and provenance.
-2. Pipeline branching:
+2. Pipeline branching (implemented):
    - add explicit `v1|v2` switches in build/train/export scripts.
    - keep `v1` default.
+   - fail closed on v1/v2 mixed inputs.
 3. Runtime compatibility:
    - add safe v2 parsing with strict version checks.
    - fail closed on unknown/mixed contracts.
@@ -34,3 +35,18 @@ Status: Draft kickoff only (no runtime activation)
 ## Exit criteria for full Ticket 7 completion
 - v2 end-to-end pipeline passes strict validation/parity/verification.
 - v1 remains fully supported and reproducible.
+
+## Implemented in Phase 2
+- `scripts/build_probabilistic_feature_dataset.py`
+  - `--pipeline-version v1|v2` (default `v1`)
+  - `v2` emits `prob_features_v2_draft` manifest version.
+- `scripts/train_probabilistic_pattern_model_global.py`
+  - `--pipeline-version v1|v2` (default `v1`)
+  - verifies split-manifest pipeline/version compatibility before training.
+- `scripts/export_probabilistic_runtime_bundle.py`
+  - `--pipeline-version v1|v2` (default `v1`)
+  - verifies train-summary pipeline/version compatibility before export.
+  - `v2` emits `probabilistic_runtime_bundle_v2_draft`.
+- `scripts/run_probabilistic_hybrid_cycle.py`
+  - passes pipeline version to build/train/export.
+  - when `v2` and defaults are used, output paths auto-switch to v2 draft paths.

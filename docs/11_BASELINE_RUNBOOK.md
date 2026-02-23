@@ -136,6 +136,11 @@ python scripts/run_probabilistic_hybrid_cycle.py `
   --sample-mode dollar `
   --sample-threshold 250000000 `
   --sample-lookback-minutes 60
+
+# Optional MODE B draft path (explicit v2)
+python scripts/run_probabilistic_hybrid_cycle.py `
+  --pipeline-version v2 `
+  --universe-file ".\config\universe\runtime_universe.json"
 ```
 
 ## 10) EXT-55 optional runtime regime policy (default OFF)

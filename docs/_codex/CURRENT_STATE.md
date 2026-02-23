@@ -24,7 +24,7 @@ Last updated: 2026-02-23
   - Ticket 4: explicit probabilistic regime spec + runtime actions (implemented in current working tree)
   - Ticket 5: uncertainty ensemble + confidence-aware sizing (implemented)
   - Ticket 6: event sampling (time|dollar|volatility) for training rows (implemented in current working tree)
-  - Optional Ticket 7 (MODE B): v2 contract/bundle draft kickoff added, not active by default
+  - Optional Ticket 7 (MODE B): v2 draft kickoff + Phase 2 pipeline branching (`v1|v2` switches) implemented
 
 ## Last known gate status
 - Strict feature validation: run required after any feature/build changes

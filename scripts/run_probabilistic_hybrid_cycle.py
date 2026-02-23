@@ -8,6 +8,11 @@ from typing import Any, Dict, List
 
 from _script_common import dump_json, ensure_parent_directory, resolve_repo_path
 
+DEFAULT_FEATURE_DIR = r".\data\model_input\probabilistic_features_v1_latest"
+DEFAULT_FEATURE_DIR_V2_DRAFT = r".\data\model_input\probabilistic_features_v2_draft_latest"
+DEFAULT_RUNTIME_BUNDLE_JSON = r".\config\model\probabilistic_runtime_bundle_v1.json"
+DEFAULT_RUNTIME_BUNDLE_JSON_V2_DRAFT = r".\config\model\probabilistic_runtime_bundle_v2.json"
+
 
 def utc_now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
@@ -42,8 +47,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--sleep-ms-per-request", type=int, default=120)
 
     parser.add_argument("--backtest-dir", default=r".\data\backtest_probabilistic")
-    parser.add_argument("--feature-dir", default=r".\data\model_input\probabilistic_features_v1_latest")
-    parser.add_argument("--runtime-bundle-json", default=r".\config\model\probabilistic_runtime_bundle_v1.json")
+    parser.add_argument("--feature-dir", default=DEFAULT_FEATURE_DIR)
+    parser.add_argument("--runtime-bundle-json", default=DEFAULT_RUNTIME_BUNDLE_JSON)
     parser.add_argument("--train-max-datasets", type=int, default=0)
     parser.add_argument(
         "--universe-file",
@@ -72,6 +77,13 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--sample-mode", "--sample_mode", choices=("time", "dollar", "volatility"), default="time")
     parser.add_argument("--sample-threshold", "--sample_threshold", type=float, default=0.0)
     parser.add_argument("--sample-lookback-minutes", "--sample_lookback_minutes", type=int, default=60)
+    parser.add_argument(
+        "--pipeline-version",
+        "--pipeline_version",
+        choices=("v1", "v2"),
+        default="v1",
+        help="MODE switch for build/train/export path. default=v1 baseline.",
+    )
     parser.add_argument("--ensemble-k", type=int, default=1)
     parser.add_argument("--ensemble-seed-step", type=int, default=1000)
     return parser.parse_args(argv)
@@ -111,6 +123,7 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     if str(args.sample_mode) in ("dollar", "volatility") and float(args.sample_threshold) <= 0.0:
         raise ValueError("--sample-threshold must be > 0 when --sample-mode is dollar or volatility")
+    pipeline_version = str(args.pipeline_version).strip().lower()
     run_tag = str(args.run_tag).strip() or datetime.now().strftime("%Y%m%d_%H%M%S")
     py = str(args.python_exe)
     selected_markets = normalize_markets(args.markets_major, args.markets_alt)
@@ -123,6 +136,11 @@ def main(argv=None) -> int:
     backtest_dir = resolve_repo_path(args.backtest_dir)
     feature_dir = resolve_repo_path(args.feature_dir)
     runtime_bundle_json = resolve_repo_path(args.runtime_bundle_json)
+    if pipeline_version == "v2":
+        if feature_dir == resolve_repo_path(DEFAULT_FEATURE_DIR):
+            feature_dir = resolve_repo_path(DEFAULT_FEATURE_DIR_V2_DRAFT)
+        if runtime_bundle_json == resolve_repo_path(DEFAULT_RUNTIME_BUNDLE_JSON):
+            runtime_bundle_json = resolve_repo_path(DEFAULT_RUNTIME_BUNDLE_JSON_V2_DRAFT)
     universe_file = resolve_repo_path(args.universe_file) if str(args.universe_file).strip() else None
     if universe_file is not None and not universe_file.exists():
         raise FileNotFoundError(f"universe file not found: {universe_file}")
@@ -135,7 +153,11 @@ def main(argv=None) -> int:
     feature_manifest_json = feature_dir / "feature_dataset_manifest.json"
     feature_build_summary_json = log_dir / f"probabilistic_feature_build_summary_{run_tag}.json"
     feature_validation_json = log_dir / f"probabilistic_feature_validation_summary_{run_tag}.json"
-    split_manifest_json = feature_dir / "probabilistic_split_manifest_v1.json"
+    split_manifest_json = feature_dir / (
+        "probabilistic_split_manifest_v1.json"
+        if pipeline_version == "v1"
+        else "probabilistic_split_manifest_v2_draft.json"
+    )
     baseline_json = log_dir / f"probabilistic_baseline_summary_{run_tag}.json"
     train_summary_json = log_dir / f"probabilistic_model_train_summary_global_{run_tag}.json"
     train_model_dir = model_root / f"probabilistic_pattern_global_{run_tag}"
@@ -206,6 +228,8 @@ def main(argv=None) -> int:
         str(float(args.sample_threshold)),
         "--sample-lookback-minutes",
         str(int(args.sample_lookback_minutes)),
+        "--pipeline-version",
+        str(pipeline_version),
     ]
     if universe_file is not None:
         build_cmd.extend(["--universe-file", str(universe_file)])
@@ -305,6 +329,8 @@ def main(argv=None) -> int:
         str(train_summary_json),
         "--model-dir",
         str(train_model_dir),
+        "--pipeline-version",
+        str(pipeline_version),
     ]
     if int(args.ensemble_k) > 1:
         train_cmd.extend(["--ensemble-k", str(int(args.ensemble_k))])
@@ -325,6 +351,8 @@ def main(argv=None) -> int:
         str(runtime_bundle_json),
         "--export-mode",
         "global_only",
+        "--pipeline-version",
+        str(pipeline_version),
     ]
     steps.append(run_step("export_runtime_bundle", export_cmd))
     if not steps[-1]["ok"]:
@@ -368,6 +396,8 @@ def main(argv=None) -> int:
         },
         "steps": steps,
     }
+    if pipeline_version != "v1":
+        summary["pipeline_version"] = str(pipeline_version)
     dump_json(cycle_summary_json, summary)
     print(f"[HybridCycle] summary={cycle_summary_json}", flush=True)
     return 0 if status == "pass" else int(steps[-1]["returncode"] or 2)
