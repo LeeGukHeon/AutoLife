@@ -224,6 +224,13 @@ if(AUTOLIFE_BUILD_GATE_TESTS)
         src/execution/OrderLifecycleStateMachine.cpp
     )
     target_link_libraries(AutoLifeExecutionStateTest PRIVATE nlohmann_json::nlohmann_json)
+
+    add_executable(
+        AutoLifeProbBundleContractTest
+        tests/TestProbabilisticRuntimeBundleContract.cpp
+        src/analytics/ProbabilisticRuntimeModel.cpp
+    )
+    target_link_libraries(AutoLifeProbBundleContractTest PRIVATE nlohmann_json::nlohmann_json)
 endif()
 
 if(AUTOLIFE_BUILD_EXTRA_TESTS)

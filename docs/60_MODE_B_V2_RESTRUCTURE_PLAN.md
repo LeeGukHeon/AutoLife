@@ -68,6 +68,12 @@ Status: Phase 1 transitional + Phase 2 implemented + Phase 3 expanded + Phase 4 
       - `pipeline_version`
       - `feature_contract_version`
       - `runtime_bundle_contract_version`
+- `tests/TestProbabilisticRuntimeBundleContract.cpp`
+  - regression coverage for v2 runtime loader strictness:
+    - missing `pipeline_version` => fail
+    - missing `feature_contract_version` => fail
+    - missing `runtime_bundle_contract_version` => fail
+    - valid minimal v2 bundle => pass
 - `scripts/validate_runtime_bundle_parity.py`
   - fail-closed when bundle/train/split pipeline versions are mixed
   - parity output records `runtime_bundle_version` and `pipeline_version`
