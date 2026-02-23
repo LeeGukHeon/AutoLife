@@ -444,6 +444,43 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
     - BTC expectancy 개선:
       - `BTC: -0.5089 -> +0.3158`
     - `no_signal_generated share: 0.7079 -> 0.7079` (추가 완화는 미달성)
+- [x] Strict Order 4 5차: weak uptrend-continuation 셀 stop 리스크 폭 축소(공통 RR 리밸런서, 라이브/백테스트 동형).
+  - code:
+    - `src/common/SignalPolicyShared.cpp`
+  - 핵심:
+    - `TRENDING_UP + FOUNDATION_UPTREND_CONTINUATION`에서
+      `probabilistic_h5_calibrated`/`probabilistic_h5_margin`이 동시에 약한 경우
+      stop 리스크 폭을 축소해 손실 tail을 억제.
+  - 검증:
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step5j_signalpolicy_final.json`
+  - 결과(기준: `..._step5f_constructive_rr_final.json` 대비):
+    - `overall_gate_pass=true` 유지
+    - `avg_profit_factor: 3.0744 -> 3.0789`
+    - `avg_expectancy_krw: 18.3844 -> 18.5147`
+    - `avg_total_trades: 10.0 -> 10.0`
+    - `no_signal_generated share: 0.7079 -> 0.7079` (변화 없음)
+- [x] Strict Order 4 6차: downtrend low-flow rebound probe 추가(Foundation gate, 라이브/백테스트 동형).
+  - code:
+    - `src/strategy/FoundationAdaptiveStrategy.cpp`
+  - 핵심:
+    - `TRENDING_DOWN`에서 `liq_low + vol_low` 구간의 완전 무신호 병목을 줄이기 위해
+      미세구조 조건(스프레드/체결 압력/반등 모멘텀) 충족 시에만 보수적 probe 경로를 허용.
+    - probe 경로는 `risk_pct`/`position_size`를 강하게 축소해 fail-closed 성격 유지.
+  - 검증:
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step5n_downtrend_lowflow_rebound_tuned_v1.json`
+  - 결과(기준: `..._step5j_signalpolicy_final.json` 대비):
+    - `overall_gate_pass=true` 유지
+    - `avg_profit_factor: 3.0789 -> 3.0789`
+    - `avg_expectancy_krw: 18.5147 -> 18.5147`
+    - `avg_total_trades: 10.0 -> 10.0`
+    - `candidate_generation.no_signal_generated share: 0.7079 -> 0.7051` (소폭 완화)
+    - 주의:
+      - baseline non-degradation subcheck에서 `primary_candidate_conversion_non_degrade_pass=false` 단일 실패(관찰 필요)
+  - 폐기 실험:
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step5k_core_rescue_lowvol_downtrend_v1.json`
+      - rescue safety floor 완화는 `no_signal share`를 `0.7079 -> 0.7969`로 악화시켜 폐기.
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step5l_fallback_hostile_relax_wide_v1.json`
+      - hostile fallback 임계 완화는 측정치 변화가 없어 폐기.
 
 ## Next (Strict Order)
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
@@ -451,7 +488,7 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.
 1. 표본 유지 + 품질 보강(Strict Order 4):
    - 현재 `avg_total_trades=10.0` 임계선 방어 상태에서 BTC/XRP 약한 셀(저품질 rescue/continuation) 추가 안정화
-   - `candidate_generation`의 `no_signal_generated` 비중(`share=0.7079`) 추가 완화
+   - `candidate_generation`의 `no_signal_generated` 비중(`share=0.7051`) 추가 완화
 2. 라벨/학습 구조 고도화:
    - optional triple-barrier 활성화 실험(기존 라벨과 병행)
    - `P(win)` + `E[pnl]` 2-head 학습 파이프라인 추가

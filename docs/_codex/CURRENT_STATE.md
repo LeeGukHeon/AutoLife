@@ -21,7 +21,7 @@ Last updated: 2026-02-24
 - Master spec baseline: `docs/_codex/MASTER_SPEC.md`
 - Execution mode target: Mode A (baseline-preserving), extensions behind flags
 - Current active ticket label:
-  - `Strict Order 4-5` (weak uptrend-continuation risk tightening with fail-closed gate preservation)
+  - `Strict Order 4-6` (downtrend low-flow rebound probe for no-signal reduction with fail-closed gate preservation)
 - Current implementation focus:
   - Ticket 0: docs/bootstrap reliability pack (implemented in current working tree)
   - Ticket 1: dynamic universe + scope-aware 1m fetch/build strictness (implemented in current working tree)
@@ -72,6 +72,11 @@ Last updated: 2026-02-24
     - `rebalanceSignalRiskReward` now tightens stop risk width when uptrend-continuation quality is weak (`calibrated` and `margin` both weak)
     - code path:
       - `src/common/SignalPolicyShared.cpp`
+  - Strict Order 4-6 downtrend low-flow rebound probe applied (foundation gate, live/backtest isomorphic):
+    - `evaluateEntryGate` now includes `TRENDING_DOWN` low-flow rebound probe path under strict microstructure constraints
+    - probe path uses conservative risk/size scaling in signal construction
+    - code path:
+      - `src/strategy/FoundationAdaptiveStrategy.cpp`
 
 ## Last known gate status
 - Strict feature validation: run required after any feature/build changes
@@ -201,6 +206,24 @@ Last updated: 2026-02-24
   - experiment note:
     - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step5i_uptrend_structural_relief_v1.json`
     - no measurable change vs step5h baseline; discarded to avoid dead/ineffective logic carryover.
+- Latest Step-4 follow-up (`Strict Order 4-6`, pipeline=`v1`):
+  - runtime tuning: add `TRENDING_DOWN` low-flow rebound probe path in foundation entry gate (conservative risk/size)
+    - `src/strategy/FoundationAdaptiveStrategy.cpp`
+  - verification:
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step5n_downtrend_lowflow_rebound_tuned_v1.json`
+  - result (vs `..._step5j_signalpolicy_final.json`):
+    - `overall_gate_pass=true`
+    - `adaptive_verdict=pass`
+    - `avg_profit_factor: 3.0789 -> 3.0789`
+    - `avg_expectancy_krw: 18.5147 -> 18.5147`
+    - `avg_total_trades: 10.0 -> 10.0`
+    - `candidate_generation.no_signal_generated share: 0.7079 -> 0.7051`
+    - note: `baseline_comparison.non_degradation_contract` failed on `primary_candidate_conversion_non_degrade_pass` only.
+  - experiment notes:
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step5k_core_rescue_lowvol_downtrend_v1.json`
+    - rescue-safety-floor relaxation increased no-signal share (`0.7079 -> 0.7969`), discarded.
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step5l_fallback_hostile_relax_wide_v1.json`
+    - hostile fallback threshold relaxation produced no measurable effect, discarded.
 - Shadow/live staged enable: not active by default
 
 ## Known issues / watchpoints
