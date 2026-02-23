@@ -69,6 +69,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--cost-liquidity-ref-ratio", type=float, default=1.0)
     parser.add_argument("--cost-liquidity-penalty-cap", type=float, default=8.0)
     parser.add_argument("--cost-cap-bps", type=float, default=200.0)
+    parser.add_argument("--sample-mode", "--sample_mode", choices=("time", "dollar", "volatility"), default="time")
+    parser.add_argument("--sample-threshold", "--sample_threshold", type=float, default=0.0)
+    parser.add_argument("--sample-lookback-minutes", "--sample_lookback_minutes", type=int, default=60)
     parser.add_argument("--ensemble-k", type=int, default=1)
     parser.add_argument("--ensemble-seed-step", type=int, default=1000)
     return parser.parse_args(argv)
@@ -106,6 +109,8 @@ def run_step(name: str, cmd: List[str]) -> Dict[str, Any]:
 
 def main(argv=None) -> int:
     args = parse_args(argv)
+    if str(args.sample_mode) in ("dollar", "volatility") and float(args.sample_threshold) <= 0.0:
+        raise ValueError("--sample-threshold must be > 0 when --sample-mode is dollar or volatility")
     run_tag = str(args.run_tag).strip() or datetime.now().strftime("%Y%m%d_%H%M%S")
     py = str(args.python_exe)
     selected_markets = normalize_markets(args.markets_major, args.markets_alt)
@@ -195,6 +200,12 @@ def main(argv=None) -> int:
         str(feature_manifest_json),
         "--markets",
         str(selected_markets),
+        "--sample-mode",
+        str(args.sample_mode),
+        "--sample-threshold",
+        str(float(args.sample_threshold)),
+        "--sample-lookback-minutes",
+        str(int(args.sample_lookback_minutes)),
     ]
     if universe_file is not None:
         build_cmd.extend(["--universe-file", str(universe_file)])
@@ -342,6 +353,9 @@ def main(argv=None) -> int:
         "incremental_update": bool(args.incremental_update),
         "enable_purged_walk_forward": bool(args.enable_purged_walk_forward),
         "enable_conditional_cost_model": bool(args.enable_conditional_cost_model),
+        "sample_mode": str(args.sample_mode),
+        "sample_threshold": float(args.sample_threshold),
+        "sample_lookback_minutes": int(args.sample_lookback_minutes),
         "ensemble_k": int(args.ensemble_k),
         "paths": {
             "backtest_dir": str(backtest_dir),

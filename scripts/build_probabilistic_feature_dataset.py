@@ -84,6 +84,27 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--triple-barrier-take-profit-bps", type=float, default=45.0)
     parser.add_argument("--triple-barrier-stop-loss-bps", type=float, default=35.0)
     parser.add_argument(
+        "--sample-mode",
+        "--sample_mode",
+        choices=("time", "dollar", "volatility"),
+        default="time",
+        help="EXT-52 optional: training row sampling mode (default time = baseline).",
+    )
+    parser.add_argument(
+        "--sample-threshold",
+        "--sample_threshold",
+        type=float,
+        default=0.0,
+        help="EXT-52 optional: threshold used by dollar/volatility sampling modes.",
+    )
+    parser.add_argument(
+        "--sample-lookback-minutes",
+        "--sample_lookback_minutes",
+        type=int,
+        default=60,
+        help="EXT-52 optional: rolling lookback window for sampling metrics.",
+    )
+    parser.add_argument(
         "--universe-file",
         default="",
         help="Optional runtime universe JSON. Applies strict/skip rules for missing 1m anchors.",
@@ -342,6 +363,58 @@ def round6(value: float) -> float:
     return round(float(value), 6)
 
 
+def normalize_sample_mode(sample_mode: str) -> str:
+    mode = str(sample_mode or "time").strip().lower()
+    return mode if mode in ("time", "dollar", "volatility") else "time"
+
+
+def update_sampling_state(
+    *,
+    mode: str,
+    threshold: float,
+    lookback_minutes: int,
+    notional_value: float,
+    ret_1m_value: float,
+    state: Dict[str, object],
+) -> Tuple[bool, float]:
+    norm_mode = normalize_sample_mode(mode)
+    if norm_mode == "time":
+        return True, 0.0
+
+    window_values: deque = state.setdefault("window_values", deque())  # type: ignore[assignment]
+    rolling_sum = float(state.get("rolling_sum", 0.0) or 0.0)
+    rolling_sq_sum = float(state.get("rolling_sq_sum", 0.0) or 0.0)
+    window_limit = max(2, int(lookback_minutes))
+    threshold_value = max(0.0, float(threshold))
+
+    if norm_mode == "dollar":
+        value = float(notional_value) if math.isfinite(notional_value) else 0.0
+    else:
+        value = float(ret_1m_value) if math.isfinite(ret_1m_value) else 0.0
+    window_values.append(value)
+    rolling_sum += value
+    rolling_sq_sum += (value * value)
+    if len(window_values) > window_limit:
+        old = float(window_values.popleft())
+        rolling_sum -= old
+        rolling_sq_sum -= (old * old)
+    state["rolling_sum"] = rolling_sum
+    state["rolling_sq_sum"] = rolling_sq_sum
+
+    n = len(window_values)
+    if n < window_limit:
+        metric = rolling_sum if norm_mode == "dollar" else 0.0
+        return False, metric
+
+    if norm_mode == "dollar":
+        metric = rolling_sum
+    else:
+        mean = rolling_sum / float(n)
+        var = max(0.0, (rolling_sq_sum / float(n)) - (mean * mean))
+        metric = math.sqrt(var)
+    return metric >= threshold_value, metric
+
+
 def count_csv_data_rows(path_value: pathlib.Path) -> int:
     if not path_value.exists():
         return 0
@@ -365,6 +438,9 @@ def build_market_dataset(
     triple_barrier_horizon: int,
     triple_barrier_take_profit_bps: float,
     triple_barrier_stop_loss_bps: float,
+    sample_mode: str,
+    sample_threshold: float,
+    sample_lookback_minutes: int,
     roundtrip_cost_bps: float,
     cost_model_config: Dict[str, object],
     skip_existing: bool,
@@ -404,6 +480,9 @@ def build_market_dataset(
     output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / f"prob_features_{safe_market}_1m_v1.csv"
     ensure_parent_directory(out_path)
+    normalized_sample_mode = normalize_sample_mode(sample_mode)
+    sample_threshold_value = float(sample_threshold)
+    sample_lookback_value = max(2, int(sample_lookback_minutes))
     if bool(skip_existing) and out_path.exists() and out_path.stat().st_size > 0:
         existing_rows = count_csv_data_rows(out_path)
         return {
@@ -415,6 +494,16 @@ def build_market_dataset(
             "feature_rows_written": int(existing_rows),
             "skipped_warmup": 0,
             "skipped_missing_context": 0,
+            "sample_mode": normalized_sample_mode,
+            "sample_threshold": sample_threshold_value,
+            "sample_lookback_minutes": sample_lookback_value,
+            "sampling_rows_considered": int(existing_rows),
+            "sampling_rows_selected": int(existing_rows),
+            "sampling_rows_dropped": 0,
+            "sampling_selected_ratio": 1.0,
+            "sampling_metric_min": math.nan,
+            "sampling_metric_max": math.nan,
+            "sampling_metric_mean": math.nan,
             "from_utc": to_iso(int(anchor_ts[0])),
             "to_utc": to_iso(int(anchor_ts[-1])),
             "output_size_bytes": out_path.stat().st_size,
@@ -476,6 +565,13 @@ def build_market_dataset(
     skipped_missing_ctx = 0
     first_written_ts = 0
     last_written_ts = 0
+    sampling_rows_considered = 0
+    sampling_rows_selected = 0
+    sampling_rows_dropped = 0
+    sampling_metric_sum = 0.0
+    sampling_metric_min = math.inf
+    sampling_metric_max = -math.inf
+    sampling_state: Dict[str, object] = {}
 
     tf_ptrs = {tf: -1 for tf in CONTEXT_TFS}
     close_win = deque()
@@ -633,6 +729,24 @@ def build_market_dataset(
                 row["label_tb_exit_bps"] = round6(tb_exit_bps - float(row_cost_bps))
                 row["label_tb_event"] = str(tb_event)
 
+            sampling_rows_considered += 1
+            keep_row, sampling_metric = update_sampling_state(
+                mode=normalized_sample_mode,
+                threshold=sample_threshold_value,
+                lookback_minutes=sample_lookback_value,
+                notional_value=notional,
+                ret_1m_value=float(row["ret_1m"]) if isinstance(row.get("ret_1m"), (float, int)) else 0.0,
+                state=sampling_state,
+            )
+            if not keep_row:
+                sampling_rows_dropped += 1
+                continue
+
+            sampling_rows_selected += 1
+            if math.isfinite(sampling_metric):
+                sampling_metric_sum += float(sampling_metric)
+                sampling_metric_min = min(float(sampling_metric_min), float(sampling_metric))
+                sampling_metric_max = max(float(sampling_metric_max), float(sampling_metric))
             writer.writerow(row)
             written += 1
             if first_written_ts <= 0:
@@ -645,6 +759,16 @@ def build_market_dataset(
 
     from_ts = int(first_written_ts if first_written_ts > 0 else anchor_ts[0])
     to_ts = int(last_written_ts if last_written_ts > 0 else anchor_ts[-1])
+    sampling_ratio = (
+        float(sampling_rows_selected) / float(sampling_rows_considered)
+        if sampling_rows_considered > 0
+        else 0.0
+    )
+    sampling_metric_mean = (
+        float(sampling_metric_sum) / float(sampling_rows_selected)
+        if sampling_rows_selected > 0
+        else math.nan
+    )
     return {
         "market": market,
         "status": "built",
@@ -654,6 +778,16 @@ def build_market_dataset(
         "feature_rows_written": int(written),
         "skipped_warmup": int(skipped_warmup),
         "skipped_missing_context": int(skipped_missing_ctx),
+        "sample_mode": normalized_sample_mode,
+        "sample_threshold": sample_threshold_value,
+        "sample_lookback_minutes": sample_lookback_value,
+        "sampling_rows_considered": int(sampling_rows_considered),
+        "sampling_rows_selected": int(sampling_rows_selected),
+        "sampling_rows_dropped": int(sampling_rows_dropped),
+        "sampling_selected_ratio": round6(sampling_ratio),
+        "sampling_metric_min": round6(sampling_metric_min) if math.isfinite(sampling_metric_min) else math.nan,
+        "sampling_metric_max": round6(sampling_metric_max) if math.isfinite(sampling_metric_max) else math.nan,
+        "sampling_metric_mean": round6(sampling_metric_mean),
         "from_utc": to_iso(from_ts),
         "to_utc": to_iso(to_ts),
         "output_size_bytes": out_path.stat().st_size if out_path.exists() else 0,
@@ -684,6 +818,17 @@ def main(argv=None) -> int:
             flush=True,
         )
     universe_final_1m_set = set(universe_final_1m_markets)
+    sample_mode = normalize_sample_mode(args.sample_mode)
+    sample_threshold = float(args.sample_threshold)
+    sample_lookback_minutes = max(2, int(args.sample_lookback_minutes))
+    if sample_mode in ("dollar", "volatility") and sample_threshold <= 0.0:
+        raise ValueError("--sample-threshold must be > 0 when --sample-mode is dollar or volatility")
+    print(
+        f"[BuildProbFeatures] sample_mode={sample_mode} "
+        f"threshold={sample_threshold} lookback_minutes={sample_lookback_minutes}",
+        flush=True,
+    )
+
     cost_model_config = {
         "enabled": bool(args.enable_conditional_cost_model),
         "fee_floor_bps": float(args.cost_fee_floor_bps),
@@ -766,6 +911,16 @@ def main(argv=None) -> int:
                         "feature_rows_written": 0,
                         "skipped_warmup": 0,
                         "skipped_missing_context": 0,
+                        "sample_mode": sample_mode,
+                        "sample_threshold": sample_threshold,
+                        "sample_lookback_minutes": sample_lookback_minutes,
+                        "sampling_rows_considered": 0,
+                        "sampling_rows_selected": 0,
+                        "sampling_rows_dropped": 0,
+                        "sampling_selected_ratio": 0.0,
+                        "sampling_metric_min": math.nan,
+                        "sampling_metric_max": math.nan,
+                        "sampling_metric_mean": math.nan,
                         "from_utc": "",
                         "to_utc": "",
                         "output_size_bytes": 0,
@@ -787,6 +942,9 @@ def main(argv=None) -> int:
                 triple_barrier_horizon=int(args.triple_barrier_horizon),
                 triple_barrier_take_profit_bps=float(args.triple_barrier_take_profit_bps),
                 triple_barrier_stop_loss_bps=float(args.triple_barrier_stop_loss_bps),
+                sample_mode=sample_mode,
+                sample_threshold=sample_threshold,
+                sample_lookback_minutes=sample_lookback_minutes,
                 roundtrip_cost_bps=float(args.roundtrip_cost_bps),
                 cost_model_config=cost_model_config,
                 skip_existing=bool(args.skip_existing),
@@ -811,6 +969,14 @@ def main(argv=None) -> int:
 
     total_rows = sum(int(x.get("feature_rows_written", 0)) for x in jobs)
     total_bytes = sum(int(x.get("output_size_bytes", 0)) for x in jobs)
+    sampling_rows_considered_total = sum(int(x.get("sampling_rows_considered", 0) or 0) for x in jobs)
+    sampling_rows_selected_total = sum(int(x.get("sampling_rows_selected", 0) or 0) for x in jobs)
+    sampling_rows_dropped_total = sum(int(x.get("sampling_rows_dropped", 0) or 0) for x in jobs)
+    sampling_selected_ratio_total = (
+        float(sampling_rows_selected_total) / float(sampling_rows_considered_total)
+        if sampling_rows_considered_total > 0
+        else 0.0
+    )
     success_count = sum(
         1
         for x in jobs
@@ -840,6 +1006,9 @@ def main(argv=None) -> int:
         "triple_barrier_horizon": int(args.triple_barrier_horizon),
         "triple_barrier_take_profit_bps": float(args.triple_barrier_take_profit_bps),
         "triple_barrier_stop_loss_bps": float(args.triple_barrier_stop_loss_bps),
+        "sample_mode": sample_mode,
+        "sample_threshold": sample_threshold,
+        "sample_lookback_minutes": sample_lookback_minutes,
         "max_rows_per_market": int(args.max_rows_per_market),
         "job_count": len(markets),
         "success_count": int(success_count),
@@ -849,6 +1018,10 @@ def main(argv=None) -> int:
         "missing_required_universe_anchors": missing_required_universe_anchors,
         "total_feature_rows": int(total_rows),
         "total_output_bytes": int(total_bytes),
+        "sampling_rows_considered_total": int(sampling_rows_considered_total),
+        "sampling_rows_selected_total": int(sampling_rows_selected_total),
+        "sampling_rows_dropped_total": int(sampling_rows_dropped_total),
+        "sampling_selected_ratio_total": round6(sampling_selected_ratio_total),
         "jobs": jobs,
         "failed": failed,
         "warnings": warnings,

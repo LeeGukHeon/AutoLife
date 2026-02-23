@@ -53,6 +53,16 @@ python scripts/build_probabilistic_feature_dataset.py `
   --cost-liquidity-ref-ratio 1.0 `
   --cost-liquidity-penalty-cap 8.0 `
   --cost-cap-bps 200.0
+
+# EXT-52 optional (default OFF)
+python scripts/build_probabilistic_feature_dataset.py `
+  --input-dir ".\data\backtest_probabilistic" `
+  --output-dir ".\data\model_input\probabilistic_features_v1_latest" `
+  --manifest-json ".\data\model_input\probabilistic_features_v1_latest\feature_dataset_manifest.json" `
+  --universe-file ".\config\universe\runtime_universe.json" `
+  --sample-mode volatility `
+  --sample-threshold 0.0015 `
+  --sample-lookback-minutes 60
 ```
 
 ## 3) Strict feature validation
@@ -119,6 +129,13 @@ python scripts/run_verification.py
 ```powershell
 python scripts/run_probabilistic_hybrid_cycle.py `
   --universe-file ".\config\universe\runtime_universe.json"
+
+# Hybrid + EXT-52 optional
+python scripts/run_probabilistic_hybrid_cycle.py `
+  --universe-file ".\config\universe\runtime_universe.json" `
+  --sample-mode dollar `
+  --sample-threshold 250000000 `
+  --sample-lookback-minutes 60
 ```
 
 ## 10) EXT-55 optional runtime regime policy (default OFF)
