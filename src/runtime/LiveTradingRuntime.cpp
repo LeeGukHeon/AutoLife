@@ -1468,6 +1468,17 @@ void appendPolicyDecisionAudit(
     out << line.dump() << "\n";
 }
 
+void resetPolicyDecisionAuditArtifact() {
+    auto path = autolife::utils::PathUtils::resolveRelativePath("logs/policy_decisions.jsonl");
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream out(path.string(), std::ios::out | std::ios::trunc);
+    if (!out.is_open()) {
+        LOG_WARN("Policy decision audit reset failed: {}", path.string());
+        return;
+    }
+    LOG_INFO("Policy decision audit reset: {}", path.string());
+}
+
 }
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -1633,6 +1644,9 @@ bool TradingEngine::start() {
     pre_cat_negative_history_quarantine_hold_by_key_.clear();
     live_warmup_scans_completed_ = 0;
     live_warmup_done_ = !config_.enable_live_cache_warmup;
+    if (config_.mode == TradingMode::LIVE) {
+        resetPolicyDecisionAuditArtifact();
+    }
 
     loadState();
     loadLearningState();

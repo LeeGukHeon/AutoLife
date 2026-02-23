@@ -64,6 +64,7 @@ Requirements:
 - compare decision logs against backtest using same bundle and same candles
 - shadow report `pipeline_version` must match promotion target pipeline
 - if shadow report exposes `gate_profile` in v2 flow, it must be `v2_strict`
+- live runtime resets `logs/policy_decisions.jsonl` on engine start to avoid stale-scan contamination
 
 Shadow report generation command:
 ```powershell

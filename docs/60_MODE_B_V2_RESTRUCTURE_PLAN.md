@@ -140,6 +140,8 @@ Status: Phase 1 transitional + Phase 2 implemented + Phase 3 expanded + Phase 4 
     - `metadata.mismatch_count`
 - `src/runtime/BacktestRuntime.cpp`
   - writes `logs/policy_decisions_backtest.jsonl` for deterministic shadow decision comparison
+- `src/runtime/LiveTradingRuntime.cpp`
+  - resets `logs/policy_decisions.jsonl` on engine start to keep Gate4 decision-log comparison window deterministic
 - `scripts/run_probabilistic_hybrid_cycle.py`
   - optional `--evaluate-promotion-readiness` step
   - supports `--promotion-target-stage prelive|live_enable`
