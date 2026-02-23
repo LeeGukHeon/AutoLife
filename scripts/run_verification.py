@@ -577,6 +577,149 @@ def top_loss_pattern_cells(
     return rows[: max(1, int(limit))]
 
 
+def bounded(value: float, low: float, high: float) -> float:
+    return max(float(low), min(float(high), float(value)))
+
+
+def compute_risk_adjusted_score_components(
+    *,
+    expectancy_krw: float,
+    profit_factor: float,
+    max_drawdown_pct: float,
+    downtrend_loss_per_trade_krw: float,
+    downtrend_trade_share: float,
+    total_trades: int,
+) -> Dict[str, float]:
+    expectancy_term = bounded(float(expectancy_krw) / 10.0, -3.0, 3.0)
+    profit_factor_term = bounded((float(profit_factor) - 1.0) * 2.0, -2.0, 2.0)
+    drawdown_penalty = bounded(float(max_drawdown_pct) / 6.0, 0.0, 3.0)
+    downtrend_loss_penalty = bounded(float(downtrend_loss_per_trade_krw) / 8.0, 0.0, 3.0)
+    downtrend_share_penalty = (
+        bounded((float(downtrend_trade_share) - 0.50) * 4.0, 0.0, 2.0)
+        if float(downtrend_trade_share) > 0.50
+        else 0.0
+    )
+    low_trade_penalty = 0.5 if int(total_trades) < 10 else 0.0
+    score = (
+        expectancy_term
+        + profit_factor_term
+        - drawdown_penalty
+        - downtrend_loss_penalty
+        - downtrend_share_penalty
+        - low_trade_penalty
+    )
+    return {
+        "expectancy_term": round(expectancy_term, 4),
+        "profit_factor_term": round(profit_factor_term, 4),
+        "drawdown_penalty": round(drawdown_penalty, 4),
+        "downtrend_loss_penalty": round(downtrend_loss_penalty, 4),
+        "downtrend_share_penalty": round(downtrend_share_penalty, 4),
+        "low_trade_penalty": round(low_trade_penalty, 4),
+        "score": round(score, 4),
+    }
+
+
+def build_loss_tail_decomposition(
+    *,
+    pattern_rows: Any,
+    dataset_name: str,
+    top_cell_limit: int = 8,
+) -> Dict[str, Any]:
+    negative_profit_total = 0.0
+    regime_loss_abs: Dict[str, float] = {}
+    archetype_loss_abs: Dict[str, float] = {}
+    cell_rows: List[Dict[str, Any]] = []
+
+    if not isinstance(pattern_rows, list):
+        pattern_rows = []
+
+    for row in pattern_rows:
+        if not isinstance(row, dict):
+            continue
+        trades = max(0, to_int(row.get("total_trades", 0)))
+        total_profit = to_float(row.get("total_profit", row.get("total_profit_krw", 0.0)))
+        if trades <= 0 or total_profit >= 0.0:
+            continue
+
+        regime = str(row.get("regime", "")).strip() or "UNKNOWN"
+        archetype = str(row.get("entry_archetype", "")).strip() or "UNSPECIFIED"
+        vol_bucket = str(row.get("volatility_bucket", "")).strip() or "vol_unknown"
+        liq_bucket = str(row.get("liquidity_bucket", "")).strip() or "liq_unknown"
+        strength_bucket = str(row.get("strength_bucket", "")).strip() or "strength_unknown"
+        pattern_key = (
+            f"regime={regime}|vol={vol_bucket}|liq={liq_bucket}|"
+            f"strength={strength_bucket}|arch={archetype}"
+        )
+
+        loss_abs = -float(total_profit)
+        negative_profit_total += loss_abs
+        regime_loss_abs[regime] = regime_loss_abs.get(regime, 0.0) + loss_abs
+        archetype_loss_abs[archetype] = archetype_loss_abs.get(archetype, 0.0) + loss_abs
+
+        cell_rows.append(
+            {
+                "dataset": str(dataset_name),
+                "pattern": pattern_key,
+                "regime": regime,
+                "entry_archetype": archetype,
+                "trades": int(trades),
+                "total_profit_krw": round(float(total_profit), 4),
+                "avg_profit_krw": round(float(total_profit) / float(trades), 4),
+                "loss_abs_krw": round(loss_abs, 4),
+            }
+        )
+
+    cell_rows.sort(key=lambda x: (float(x["total_profit_krw"]), -int(x["trades"]), str(x["pattern"])))
+    top_cells = cell_rows[: max(1, int(top_cell_limit))]
+
+    cumulative = 0.0
+    for item in top_cells:
+        loss_abs = max(0.0, to_float(item.get("loss_abs_krw", 0.0)))
+        share = (loss_abs / negative_profit_total) if negative_profit_total > 0.0 else 0.0
+        cumulative += share
+        item["loss_share"] = round(share, 4)
+        item["loss_share_cumulative"] = round(cumulative, 4)
+
+    def _top_loss_rows(loss_map: Dict[str, float], key_name: str, limit: int) -> List[Dict[str, Any]]:
+        rows = []
+        for key, loss_abs in loss_map.items():
+            share = (loss_abs / negative_profit_total) if negative_profit_total > 0.0 else 0.0
+            rows.append(
+                {
+                    key_name: str(key),
+                    "loss_abs_krw": round(float(loss_abs), 4),
+                    "loss_share": round(float(share), 4),
+                }
+            )
+        rows.sort(key=lambda x: (-to_float(x["loss_abs_krw"]), str(x[key_name])))
+        return rows[: max(1, int(limit))]
+
+    top_loss_regimes = _top_loss_rows(regime_loss_abs, "regime", limit=5) if regime_loss_abs else []
+    top_loss_archetypes = (
+        _top_loss_rows(archetype_loss_abs, "entry_archetype", limit=5)
+        if archetype_loss_abs else []
+    )
+    top3_concentration = 0.0
+    if negative_profit_total > 0.0 and top_cells:
+        top3_abs = sum(max(0.0, to_float(x.get("loss_abs_krw", 0.0))) for x in top_cells[:3])
+        top3_concentration = top3_abs / negative_profit_total
+
+    return {
+        "negative_profit_abs_krw": round(negative_profit_total, 4),
+        "negative_cell_count": len(cell_rows),
+        "top3_loss_concentration": round(top3_concentration, 4),
+        "top_loss_cells": top_cells,
+        "top_loss_regimes": top_loss_regimes,
+        "top_loss_archetypes": top_loss_archetypes,
+        "loss_by_regime_abs_krw": {
+            str(k): round(float(v), 4) for k, v in sorted(regime_loss_abs.items(), key=lambda item: item[0])
+        },
+        "loss_by_archetype_abs_krw": {
+            str(k): round(float(v), 4) for k, v in sorted(archetype_loss_abs.items(), key=lambda item: item[0])
+        },
+    }
+
+
 def build_strategy_funnel_diagnostics(strategy_signal_funnel: Any) -> Dict[str, Any]:
     rows: List[Dict[str, Any]] = []
     if isinstance(strategy_signal_funnel, list):
@@ -1381,6 +1524,11 @@ def parse_post_entry_risk_telemetry(backtest_result: Dict[str, Any]) -> Dict[str
 def build_adaptive_dataset_profile(dataset_name: str, backtest_result: Dict[str, Any]) -> Dict[str, Any]:
     regime_metrics = build_regime_metrics_from_patterns(backtest_result)
     post_entry_telemetry = parse_post_entry_risk_telemetry(backtest_result)
+    loss_tail_decomposition = build_loss_tail_decomposition(
+        pattern_rows=backtest_result.get("pattern_summaries", []),
+        dataset_name=dataset_name,
+        top_cell_limit=8,
+    )
     regimes = regime_metrics.get("regimes", {})
     downtrend = regimes.get("TRENDING_DOWN", {})
     uptrend = regimes.get("TRENDING_UP", {})
@@ -1394,15 +1542,15 @@ def build_adaptive_dataset_profile(dataset_name: str, backtest_result: Dict[str,
     expectancy_krw = to_float(backtest_result.get("expectancy_krw", 0.0))
     max_drawdown_pct = max(0.0, to_float(backtest_result.get("max_drawdown", 0.0)) * 100.0)
 
-    score = 0.0
-    score += max(-3.0, min(3.0, expectancy_krw / 10.0))
-    score += max(-2.0, min(2.0, (profit_factor - 1.0) * 2.0))
-    score -= max(0.0, min(3.0, max_drawdown_pct / 6.0))
-    score -= max(0.0, min(3.0, downtrend_loss_per_trade / 8.0))
-    if downtrend_trade_share > 0.50:
-        score -= max(0.0, min(2.0, (downtrend_trade_share - 0.50) * 4.0))
-    if total_trades < 10:
-        score -= 0.5
+    risk_score_components = compute_risk_adjusted_score_components(
+        expectancy_krw=expectancy_krw,
+        profit_factor=profit_factor,
+        max_drawdown_pct=max_drawdown_pct,
+        downtrend_loss_per_trade_krw=downtrend_loss_per_trade,
+        downtrend_trade_share=downtrend_trade_share,
+        total_trades=total_trades,
+    )
+    score = to_float(risk_score_components.get("score", 0.0))
 
     generated_signals = 0
     entries_executed = 0
@@ -1460,6 +1608,7 @@ def build_adaptive_dataset_profile(dataset_name: str, backtest_result: Dict[str,
         "downtrend_loss_per_trade_krw": round(downtrend_loss_per_trade, 4),
         "uptrend_expectancy_krw": round(uptrend_expectancy, 4),
         "risk_adjusted_score": round(score, 4),
+        "risk_adjusted_score_components": risk_score_components,
         "generated_signals": int(generated_signals),
         "entries_executed": int(entries_executed),
         "opportunity_conversion": round(opportunity_conversion, 4),
@@ -1471,6 +1620,7 @@ def build_adaptive_dataset_profile(dataset_name: str, backtest_result: Dict[str,
         ),
         "post_entry_risk_telemetry": post_entry_telemetry,
         "regime_metrics": regime_metrics,
+        "loss_tail_decomposition": loss_tail_decomposition,
     }
 
 
@@ -1495,6 +1645,21 @@ def aggregate_adaptive_validation(dataset_profiles: List[Dict[str, Any]]) -> Dic
                 "0.55_0.64": 0,
                 "0.65_0.74": 0,
                 "0.75_0.80": 0,
+            },
+            "avg_risk_adjusted_score_components": {
+                "expectancy_term": 0.0,
+                "profit_factor_term": 0.0,
+                "drawdown_penalty": 0.0,
+                "downtrend_loss_penalty": 0.0,
+                "downtrend_share_penalty": 0.0,
+                "low_trade_penalty": 0.0,
+            },
+            "loss_tail_aggregate": {
+                "negative_profit_abs_krw": 0.0,
+                "avg_top3_loss_concentration": 0.0,
+                "top_loss_regimes": [],
+                "top_loss_archetypes": [],
+                "top_loss_cells": [],
             },
         }
 
@@ -1524,6 +1689,18 @@ def aggregate_adaptive_validation(dataset_profiles: List[Dict[str, Any]]) -> Dic
         "0.65_0.74": 0,
         "0.75_0.80": 0,
     }
+    score_expectancy_terms: List[float] = []
+    score_profit_factor_terms: List[float] = []
+    score_drawdown_penalties: List[float] = []
+    score_downtrend_loss_penalties: List[float] = []
+    score_downtrend_share_penalties: List[float] = []
+    score_low_trade_penalties: List[float] = []
+    top3_concentrations: List[float] = []
+    aggregate_negative_profit_abs = 0.0
+    aggregate_regime_loss_abs: Dict[str, float] = {}
+    aggregate_archetype_loss_abs: Dict[str, float] = {}
+    aggregate_loss_cells: List[Dict[str, Any]] = []
+
     for profile in dataset_profiles:
         telemetry = profile.get("post_entry_risk_telemetry", {})
         if not isinstance(telemetry, dict):
@@ -1545,6 +1722,50 @@ def aggregate_adaptive_validation(dataset_profiles: List[Dict[str, Any]]) -> Dic
             for key in partial_ratio_histogram:
                 partial_ratio_histogram[key] += max(0, to_int(hist.get(key, 0)))
 
+        components = profile.get("risk_adjusted_score_components", {})
+        if isinstance(components, dict):
+            score_expectancy_terms.append(to_float(components.get("expectancy_term", 0.0)))
+            score_profit_factor_terms.append(to_float(components.get("profit_factor_term", 0.0)))
+            score_drawdown_penalties.append(to_float(components.get("drawdown_penalty", 0.0)))
+            score_downtrend_loss_penalties.append(to_float(components.get("downtrend_loss_penalty", 0.0)))
+            score_downtrend_share_penalties.append(to_float(components.get("downtrend_share_penalty", 0.0)))
+            score_low_trade_penalties.append(to_float(components.get("low_trade_penalty", 0.0)))
+
+        tail = profile.get("loss_tail_decomposition", {})
+        if isinstance(tail, dict):
+            aggregate_negative_profit_abs += max(0.0, to_float(tail.get("negative_profit_abs_krw", 0.0)))
+            top3_concentrations.append(max(0.0, to_float(tail.get("top3_loss_concentration", 0.0))))
+            regime_map = tail.get("loss_by_regime_abs_krw", {})
+            if isinstance(regime_map, dict):
+                for k, v in regime_map.items():
+                    key = str(k).strip() or "UNKNOWN"
+                    aggregate_regime_loss_abs[key] = (
+                        aggregate_regime_loss_abs.get(key, 0.0) + max(0.0, to_float(v))
+                    )
+            archetype_map = tail.get("loss_by_archetype_abs_krw", {})
+            if isinstance(archetype_map, dict):
+                for k, v in archetype_map.items():
+                    key = str(k).strip() or "UNSPECIFIED"
+                    aggregate_archetype_loss_abs[key] = (
+                        aggregate_archetype_loss_abs.get(key, 0.0) + max(0.0, to_float(v))
+                    )
+            cells = tail.get("top_loss_cells", [])
+            if isinstance(cells, list):
+                for item in cells:
+                    if not isinstance(item, dict):
+                        continue
+                    aggregate_loss_cells.append(
+                        {
+                            "dataset": str(item.get("dataset", profile.get("dataset", ""))).strip(),
+                            "pattern": str(item.get("pattern", "")).strip(),
+                            "regime": str(item.get("regime", "")).strip(),
+                            "entry_archetype": str(item.get("entry_archetype", "")).strip(),
+                            "trades": max(0, to_int(item.get("trades", 0))),
+                            "total_profit_krw": round(to_float(item.get("total_profit_krw", 0.0)), 4),
+                            "loss_abs_krw": round(max(0.0, to_float(item.get("loss_abs_krw", 0.0))), 4),
+                        }
+                    )
+
     total_generated = sum(generated)
     total_executed = sum(executed)
     total_partial_ratio_samples = sum(partial_ratio_samples)
@@ -1556,6 +1777,29 @@ def aggregate_adaptive_validation(dataset_profiles: List[Dict[str, Any]]) -> Dic
         if total_partial_ratio_samples > 0.0
         else 0.0
     )
+
+    def _top_loss_rows(loss_map: Dict[str, float], key_name: str, limit: int) -> List[Dict[str, Any]]:
+        rows = []
+        for key, loss_abs in loss_map.items():
+            share = (float(loss_abs) / aggregate_negative_profit_abs) if aggregate_negative_profit_abs > 0.0 else 0.0
+            rows.append(
+                {
+                    key_name: str(key),
+                    "loss_abs_krw": round(float(loss_abs), 4),
+                    "loss_share": round(float(share), 4),
+                }
+            )
+        rows.sort(key=lambda x: (-to_float(x["loss_abs_krw"]), str(x[key_name])))
+        return rows[: max(1, int(limit))]
+
+    aggregate_loss_cells_sorted = sorted(
+        aggregate_loss_cells,
+        key=lambda x: (to_float(x["total_profit_krw"]), -to_int(x["trades"]), str(x["pattern"])),
+    )
+    for item in aggregate_loss_cells_sorted:
+        loss_abs = max(0.0, to_float(item.get("loss_abs_krw", 0.0)))
+        item["loss_share"] = round((loss_abs / aggregate_negative_profit_abs), 4) if aggregate_negative_profit_abs > 0.0 else 0.0
+
     return {
         "dataset_count": len(dataset_profiles),
         "avg_risk_adjusted_score": round(safe_avg(scores), 4),
@@ -1582,6 +1826,23 @@ def aggregate_adaptive_validation(dataset_profiles: List[Dict[str, Any]]) -> Dic
         "avg_adaptive_partial_ratio_samples": round(safe_avg(partial_ratio_samples), 4),
         "avg_adaptive_partial_ratio": round(avg_adaptive_partial_ratio, 4),
         "adaptive_partial_ratio_histogram": partial_ratio_histogram,
+        "avg_risk_adjusted_score_components": {
+            "expectancy_term": round(safe_avg(score_expectancy_terms), 4),
+            "profit_factor_term": round(safe_avg(score_profit_factor_terms), 4),
+            "drawdown_penalty": round(safe_avg(score_drawdown_penalties), 4),
+            "downtrend_loss_penalty": round(safe_avg(score_downtrend_loss_penalties), 4),
+            "downtrend_share_penalty": round(safe_avg(score_downtrend_share_penalties), 4),
+            "low_trade_penalty": round(safe_avg(score_low_trade_penalties), 4),
+        },
+        "loss_tail_aggregate": {
+            "negative_profit_abs_krw": round(aggregate_negative_profit_abs, 4),
+            "avg_top3_loss_concentration": round(safe_avg(top3_concentrations), 4),
+            "top_loss_regimes": _top_loss_rows(aggregate_regime_loss_abs, "regime", limit=6)
+            if aggregate_regime_loss_abs else [],
+            "top_loss_archetypes": _top_loss_rows(aggregate_archetype_loss_abs, "entry_archetype", limit=6)
+            if aggregate_archetype_loss_abs else [],
+            "top_loss_cells": aggregate_loss_cells_sorted[:8],
+        },
     }
 
 
@@ -1677,6 +1938,118 @@ def build_adaptive_verdict(
             "avg_shadow_candidate_supply_lift": round(avg_shadow_candidate_supply_lift, 4),
             "low_opportunity_observed": bool(low_opportunity_observed),
         },
+    }
+
+
+def build_risk_adjusted_failure_decomposition(
+    *,
+    adaptive_aggregates: Dict[str, Any],
+    adaptive_verdict: Dict[str, Any],
+    min_risk_adjusted_score: float,
+) -> Dict[str, Any]:
+    checks = adaptive_verdict.get("checks", {})
+    if not isinstance(checks, dict):
+        checks = {}
+    risk_guard_pass = bool(checks.get("risk_adjusted_score_guard_pass", False))
+    avg_score = to_float(adaptive_aggregates.get("avg_risk_adjusted_score", 0.0))
+    components = adaptive_aggregates.get("avg_risk_adjusted_score_components", {})
+    if not isinstance(components, dict):
+        components = {}
+
+    expectancy_term = to_float(components.get("expectancy_term", 0.0))
+    profit_factor_term = to_float(components.get("profit_factor_term", 0.0))
+    drawdown_penalty = to_float(components.get("drawdown_penalty", 0.0))
+    downtrend_loss_penalty = to_float(components.get("downtrend_loss_penalty", 0.0))
+    downtrend_share_penalty = to_float(components.get("downtrend_share_penalty", 0.0))
+    low_trade_penalty = to_float(components.get("low_trade_penalty", 0.0))
+    reconstructed_score = (
+        expectancy_term
+        + profit_factor_term
+        - drawdown_penalty
+        - downtrend_loss_penalty
+        - downtrend_share_penalty
+        - low_trade_penalty
+    )
+
+    penalty_rows = [
+        {"name": "drawdown_penalty", "value": round(drawdown_penalty, 4)},
+        {"name": "downtrend_loss_penalty", "value": round(downtrend_loss_penalty, 4)},
+        {"name": "downtrend_share_penalty", "value": round(downtrend_share_penalty, 4)},
+        {"name": "low_trade_penalty", "value": round(low_trade_penalty, 4)},
+    ]
+    penalty_rows = [x for x in penalty_rows if to_float(x.get("value", 0.0)) > 0.0]
+    penalty_rows.sort(key=lambda x: (-to_float(x["value"]), str(x["name"])))
+
+    positive_rows = [
+        {"name": "expectancy_term", "value": round(expectancy_term, 4)},
+        {"name": "profit_factor_term", "value": round(profit_factor_term, 4)},
+    ]
+    positive_rows.sort(key=lambda x: (-to_float(x["value"]), str(x["name"])))
+
+    tail = adaptive_aggregates.get("loss_tail_aggregate", {})
+    if not isinstance(tail, dict):
+        tail = {}
+    top_loss_regimes = tail.get("top_loss_regimes", [])
+    if not isinstance(top_loss_regimes, list):
+        top_loss_regimes = []
+    top_loss_archetypes = tail.get("top_loss_archetypes", [])
+    if not isinstance(top_loss_archetypes, list):
+        top_loss_archetypes = []
+    top_loss_cells = tail.get("top_loss_cells", [])
+    if not isinstance(top_loss_cells, list):
+        top_loss_cells = []
+
+    score_gap = float(min_risk_adjusted_score) - float(avg_score)
+    recommended_focus: List[str] = []
+    if not risk_guard_pass:
+        recommended_focus.append(
+            "Prioritize heavy-loss tail reduction by regime/archetype before broad threshold relaxation."
+        )
+        if top_loss_regimes:
+            first = top_loss_regimes[0]
+            recommended_focus.append(
+                "Primary loss regime: "
+                f"{str(first.get('regime', '')).strip() or 'UNKNOWN'} "
+                f"(share={to_float(first.get('loss_share', 0.0)):.4f})"
+            )
+        if top_loss_archetypes:
+            first = top_loss_archetypes[0]
+            recommended_focus.append(
+                "Primary loss archetype: "
+                f"{str(first.get('entry_archetype', '')).strip() or 'UNSPECIFIED'} "
+                f"(share={to_float(first.get('loss_share', 0.0)):.4f})"
+            )
+        if penalty_rows:
+            recommended_focus.append(
+                "Largest score penalty term: "
+                f"{penalty_rows[0]['name']}={to_float(penalty_rows[0]['value']):.4f}"
+            )
+
+    return {
+        "active": not risk_guard_pass,
+        "risk_adjusted_score_guard_pass": bool(risk_guard_pass),
+        "min_risk_adjusted_score": round(float(min_risk_adjusted_score), 4),
+        "avg_risk_adjusted_score": round(float(avg_score), 4),
+        "score_gap_to_threshold": round(float(score_gap), 4),
+        "score_components": {
+            "expectancy_term": round(expectancy_term, 4),
+            "profit_factor_term": round(profit_factor_term, 4),
+            "drawdown_penalty": round(drawdown_penalty, 4),
+            "downtrend_loss_penalty": round(downtrend_loss_penalty, 4),
+            "downtrend_share_penalty": round(downtrend_share_penalty, 4),
+            "low_trade_penalty": round(low_trade_penalty, 4),
+            "reconstructed_score": round(reconstructed_score, 4),
+        },
+        "dominant_penalties": penalty_rows[:4],
+        "positive_terms": positive_rows,
+        "loss_tail": {
+            "negative_profit_abs_krw": round(to_float(tail.get("negative_profit_abs_krw", 0.0)), 4),
+            "avg_top3_loss_concentration": round(to_float(tail.get("avg_top3_loss_concentration", 0.0)), 4),
+            "top_loss_regimes": top_loss_regimes[:5],
+            "top_loss_archetypes": top_loss_archetypes[:5],
+            "top_loss_cells": top_loss_cells[:5],
+        },
+        "recommended_focus": recommended_focus,
     }
 
 
@@ -1921,6 +2294,11 @@ def main(argv=None) -> int:
         peak_max_drawdown_pct=peak_max_drawdown_pct,
         max_drawdown_pct_limit=float(args.max_drawdown_pct),
     )
+    risk_adjusted_failure_decomposition = build_risk_adjusted_failure_decomposition(
+        adaptive_aggregates=adaptive_aggregates,
+        adaptive_verdict=adaptive_verdict,
+        min_risk_adjusted_score=float(args.min_risk_adjusted_score),
+    )
     adaptive_pass = str(adaptive_verdict.get("verdict", "fail")) == "pass"
     overall_gate_pass = adaptive_pass
 
@@ -1965,6 +2343,7 @@ def main(argv=None) -> int:
             },
             "aggregates": adaptive_aggregates,
             "verdict": adaptive_verdict,
+            "risk_adjusted_failure_decomposition": risk_adjusted_failure_decomposition,
             "per_dataset": adaptive_dataset_profiles,
         },
         "overall_gate_pass": overall_gate_pass,

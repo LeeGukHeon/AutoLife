@@ -58,6 +58,15 @@ v2 strict profile:
   - non-degradation contract applied + pass
 - v2 gate fail returns non-zero exit code.
 
+Risk-adjusted decomposition (diagnostic, fail-closed support):
+- verification report now emits structured decomposition fields to isolate `risk_adjusted_score` failures:
+  - `adaptive_validation.aggregates.avg_risk_adjusted_score_components`
+  - `adaptive_validation.aggregates.loss_tail_aggregate`
+  - `adaptive_validation.per_dataset[].risk_adjusted_score_components`
+  - `adaptive_validation.per_dataset[].loss_tail_decomposition`
+  - `adaptive_validation.risk_adjusted_failure_decomposition`
+- use these fields to identify heavy-loss tail concentration by regime/archetype without market hardcoding.
+
 ## Gate 4: Shadow run (live orders disabled)
 Requirements:
 - `allow_live_orders=false`

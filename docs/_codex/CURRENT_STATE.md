@@ -46,12 +46,15 @@ Last updated: 2026-02-23
   - Runtime API policy hardening: `src/execution/RateLimiter.cpp` + `src/network/UpbitHttpClient.cpp` now apply sec==0 throttle evidence, bounded 429 exponential backoff path, and defensive Origin-header stripping in request header assembly.
   - Codex context refresh checks now enforce gate-output fail-closed semantics (`scripts/run_codex_context_refresh_checks.py`): feature/parity require `status=pass`, runtime verification requires `overall_gate_pass=true`.
   - Standalone Gate4 flow runner now auto-resolves latest run-tagged inputs when default canonical files are absent (`scripts/run_probabilistic_shadow_gate_flow.py`) and records resolution metadata.
+  - Verification diagnostics hardened for TODO Step-1 decomposition: `scripts/run_verification.py` now emits risk-score component breakdown + heavy-loss tail decomposition (pattern/regime/archetype) via `adaptive_validation.risk_adjusted_failure_decomposition`.
 
 ## Last known gate status
 - Strict feature validation: run required after any feature/build changes
 - Bundle parity: run required after model/bundle/export changes
 - Verification: run required after decision/runtime logic changes
 - Latest runtime context-refresh verification check (`pipeline=v1`) executed and failed fail-closed (`overall_gate_pass=false` in `build/Release/logs/context_refresh_verification.json`).
+- Latest verification smoke after decomposition changes:
+  - `build/Release/logs/verification_report_risk_tail_smoke.json` generated successfully and includes risk-tail decomposition fields.
 - Shadow/live staged enable: not active by default
 
 ## Known issues / watchpoints
