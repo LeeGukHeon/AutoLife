@@ -59,6 +59,10 @@ Last updated: 2026-02-23
   - `build/Release/logs/verification_report_risk_tail_smoke.json` generated successfully and includes risk-tail decomposition fields.
 - Latest global-train target-flex smoke:
   - `build/Release/logs/probabilistic_model_train_summary_global_targetflex_smoke_20260223.json` status=`pass` (max_datasets=1).
+- Latest 5-set verification refresh (`pipeline=v1`):
+  - `build/Release/logs/verification_report_global_full_5set_refresh_20260223.json`
+  - `overall_gate_pass=false`, `avg_profit_factor=0.5203`, `avg_expectancy_krw=-12.0674`
+  - risk-tail decomposition points to `RANGING + FOUNDATION_RANGE_PULLBACK` heavy-loss concentration.
 - Shadow/live staged enable: not active by default
 
 ## Known issues / watchpoints

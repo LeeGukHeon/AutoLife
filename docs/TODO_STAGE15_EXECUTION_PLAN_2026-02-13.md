@@ -305,6 +305,15 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
     - `label_tb_*` 타깃/edge 선택 시 `--enable-triple-barrier-labels` 없으면 즉시 실패
   - regression:
     - `scripts/test_probabilistic_hybrid_cycle_args.py`
+- [x] 동일 5-set 재검증 refresh 실행(현재 기준 재측정).
+  - report:
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223.json`
+  - result:
+    - `overall_gate_pass=false`
+    - `avg_profit_factor=0.5203`, `avg_expectancy_krw=-12.0674`
+    - `risk_adjusted_score_guard_pass=false`
+  - decomposition focus:
+    - `RANGING + FOUNDATION_RANGE_PULLBACK` loss tail concentration 우선 완화 필요
 
 ## Next (Strict Order)
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
