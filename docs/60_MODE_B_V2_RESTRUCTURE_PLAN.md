@@ -1,6 +1,6 @@
 # MODE B / v2 Restructure Plan (Optional)
 Last updated: 2026-02-23
-Status: Phase 1 transitional + Phase 2 implemented + Phase 3 partial + Phase 4 expanded + Phase 5 partial
+Status: Phase 1 transitional + Phase 2 implemented + Phase 3 expanded + Phase 4 expanded + Phase 5 expanded
 
 ## Goal
 - Prepare optional MODE B migration with explicit v2 contracts.
@@ -56,7 +56,7 @@ Status: Phase 1 transitional + Phase 2 implemented + Phase 3 partial + Phase 4 e
   - passes pipeline version to build/train/export.
   - when `v2` and defaults are used, output paths auto-switch to v2 draft paths.
 
-## Implemented in Phase 3 (partial)
+## Implemented in Phase 3 (expanded)
 - `src/analytics/ProbabilisticRuntimeModel.cpp`
   - strict bundle version validation:
     - allowed: `probabilistic_runtime_bundle_v1`, `probabilistic_runtime_bundle_v2_draft`
@@ -64,11 +64,15 @@ Status: Phase 1 transitional + Phase 2 implemented + Phase 3 partial + Phase 4 e
     - unknown `version`
     - `version` vs `pipeline_version` mismatch
     - unsupported v2 draft contract tags
+    - missing v2 strict fields:
+      - `pipeline_version`
+      - `feature_contract_version`
+      - `runtime_bundle_contract_version`
 - `scripts/validate_runtime_bundle_parity.py`
   - fail-closed when bundle/train/split pipeline versions are mixed
   - parity output records `runtime_bundle_version` and `pipeline_version`
 
-## Implemented in Phase 4 (partial)
+## Implemented in Phase 4 (expanded)
 - `scripts/validate_probabilistic_feature_dataset.py`
   - adds `--pipeline-version auto|v1|v2`.
   - fail-closed preflight alignment checks:
@@ -97,7 +101,7 @@ Status: Phase 1 transitional + Phase 2 implemented + Phase 3 partial + Phase 4 e
   - passes pipeline-specific feature contract path to strict feature validation gate
   - allows v2 draft cycle to fail fast on strict verification gate failure
 
-## Implemented in Phase 5 (partial)
+## Implemented in Phase 5 (expanded)
 - `scripts/evaluate_probabilistic_promotion_readiness.py`
   - fail-closed promotion readiness evaluation for:
     - Gate1 feature validation
@@ -108,6 +112,8 @@ Status: Phase 1 transitional + Phase 2 implemented + Phase 3 partial + Phase 4 e
   - v2 checks:
     - feature/parity/verification `gate_profile` consistency (`v2_strict`)
     - feature validation preflight errors must be empty
+    - shadow report pipeline consistency with promotion target pipeline
+    - if shadow report publishes gate profile, v2 requires `v2_strict`
     - pipeline consistency across gate artifacts
 - `scripts/run_probabilistic_hybrid_cycle.py`
   - optional `--evaluate-promotion-readiness` step

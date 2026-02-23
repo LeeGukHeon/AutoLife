@@ -107,6 +107,26 @@ def infer_pipeline_from_verification(verification: Dict[str, Any]) -> str:
     return "v1"
 
 
+def extract_gate_profile_name(payload: Dict[str, Any]) -> str:
+    raw = payload.get("gate_profile", "")
+    if isinstance(raw, dict):
+        return str(raw.get("name", "")).strip()
+    return str(raw).strip()
+
+
+def infer_pipeline_from_shadow(shadow_payload: Dict[str, Any]) -> str:
+    explicit = str(shadow_payload.get("pipeline_version", "")).strip().lower()
+    if explicit in ("v1", "v2"):
+        return explicit
+    runtime_bundle_version = str(shadow_payload.get("runtime_bundle_version", "")).strip().lower()
+    if "v2" in runtime_bundle_version:
+        return "v2"
+    gate_profile = extract_gate_profile_name(shadow_payload).strip().lower()
+    if gate_profile == "v2_strict":
+        return "v2"
+    return "v1"
+
+
 def shadow_report_pass(shadow_payload: Dict[str, Any]) -> bool:
     status = str(shadow_payload.get("status", "")).strip().lower()
     if status == "pass":
@@ -239,11 +259,38 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
     require_shadow = target_stage == "live_enable"
     require_live_disabled = target_stage == "live_enable"
 
+    shadow_pipeline = infer_pipeline_from_shadow(shadow_payload) if isinstance(shadow_payload, dict) else ""
+    shadow_pipeline_ok = bool(isinstance(shadow_payload, dict) and shadow_pipeline == resolved_pipeline)
+    checks["gate4_shadow_pipeline_consistency"] = {
+        "pass": bool(shadow_pipeline_ok) if require_shadow else bool(shadow_pipeline_ok or shadow_payload is None),
+        "required": bool(require_shadow),
+        "path": str(shadow_report_path) if shadow_report_path is not None else "",
+        "resolved_pipeline": resolved_pipeline,
+        "shadow_pipeline": shadow_pipeline,
+    }
+    if require_shadow and not shadow_pipeline_ok:
+        errors.append("gate4_shadow_pipeline_mismatch")
+
+    shadow_gate_profile_name = extract_gate_profile_name(shadow_payload) if isinstance(shadow_payload, dict) else ""
+    shadow_v2_gate_profile_ok = bool(
+        resolved_pipeline != "v2" or not shadow_gate_profile_name or shadow_gate_profile_name.strip().lower() == "v2_strict"
+    )
+    checks["gate4_shadow_gate_profile"] = {
+        "pass": bool(shadow_v2_gate_profile_ok) if require_shadow else bool(shadow_v2_gate_profile_ok or shadow_payload is None),
+        "required": bool(require_shadow and resolved_pipeline == "v2"),
+        "path": str(shadow_report_path) if shadow_report_path is not None else "",
+        "shadow_gate_profile": shadow_gate_profile_name,
+    }
+    if require_shadow and not shadow_v2_gate_profile_ok:
+        errors.append("gate4_shadow_gate_profile_mismatch")
+
     if require_shadow:
         shadow_ok = (
             shadow_report_path is not None and
             isinstance(shadow_payload, dict) and
             shadow_report_pass(shadow_payload)
+            and shadow_pipeline_ok
+            and shadow_v2_gate_profile_ok
         )
         checks["gate4_shadow_pass"] = {
             "pass": bool(shadow_ok),
@@ -255,7 +302,11 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
             errors.append("gate4_shadow_failed_or_missing")
     else:
         shadow_info = (
-            shadow_report_path is not None and isinstance(shadow_payload, dict) and shadow_report_pass(shadow_payload)
+            shadow_report_path is not None and
+            isinstance(shadow_payload, dict) and
+            shadow_report_pass(shadow_payload) and
+            (shadow_pipeline == resolved_pipeline) and
+            shadow_v2_gate_profile_ok
         )
         checks["gate4_shadow_pass"] = {
             "pass": True,

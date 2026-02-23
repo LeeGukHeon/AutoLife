@@ -62,6 +62,8 @@ v2 strict profile:
 Requirements:
 - `allow_live_orders=false`
 - compare decision logs against backtest using same bundle and same candles
+- shadow report `pipeline_version` must match promotion target pipeline
+- if shadow report exposes `gate_profile` in v2 flow, it must be `v2_strict`
 
 Readiness evaluator command (live_enable target requires shadow report):
 ```powershell

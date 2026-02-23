@@ -3,7 +3,7 @@ Last updated: 2026-02-23
 
 ## Repository
 - Branch: current working branch (check with `git branch --show-current`)
-- Commit (snapshot): `84b066f273e40dc73552cac24f0c4b6a10ce3144`
+- Commit (snapshot): check with `git rev-parse HEAD`
 
 ## Contract hashes
 - `config/model/probabilistic_feature_contract_v1.json`:
@@ -12,6 +12,8 @@ Last updated: 2026-02-23
   - `8dc014f9a52305dc26bce0b6c8cc7a10cb3047ddfeb725aad09f62a8140704f6`
 - `config/model/probabilistic_runtime_bundle_v1.json`:
   - `fddbfe3514e1e2d726c5c6cd58b6105fda50459c038ae283acb5af14aacdba84`
+- `config/model/probabilistic_runtime_bundle_v2.json`:
+  - `d9f2749382e931488f4d0e2fa03f367db4effc180f846d232a83816c7fbfdc3e`
 - `data/backtest_probabilistic/probabilistic_bundle_manifest.json`:
   - `6c6568cbfc5349332e1899fb9ac154d3f372de09ccd51ad8d24e91a75591f89a`
 
@@ -28,10 +30,10 @@ Last updated: 2026-02-23
   - Ticket 6: event sampling (time|dollar|volatility) for training rows (implemented in current working tree)
   - Optional Ticket 7 (MODE B): Phase 1 transitional contract freeze (`v2_draft` row schema explicit) implemented
   - Optional Ticket 7 (MODE B): v2 draft kickoff + Phase 2 pipeline branching (`v1|v2` switches) implemented
-  - Optional Ticket 7 (MODE B): Phase 3 partial implemented (strict version/pipeline fail-closed checks)
+  - Optional Ticket 7 (MODE B): Phase 3 expanded (runtime v2 strict field presence + version/pipeline fail-closed checks)
   - Optional Ticket 7 (MODE B): Phase 4 expanded (Gate1 + Gate2 + Gate3 v2 strict profile alignment)
   - Optional Ticket 7 (MODE B): hybrid cycle optional verification-step wiring implemented
-  - Optional Ticket 7 (MODE B): Phase 5 partial implemented (promotion readiness evaluator + hybrid wiring, includes Gate1 preflight/profile checks)
+  - Optional Ticket 7 (MODE B): Phase 5 expanded (promotion readiness evaluator + hybrid wiring, includes Gate1 preflight/profile checks and Gate4 shadow pipeline/profile checks)
 
 ## Last known gate status
 - Strict feature validation: run required after any feature/build changes

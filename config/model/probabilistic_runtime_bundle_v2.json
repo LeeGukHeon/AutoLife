@@ -1,11 +1,13 @@
 {
   "version": "probabilistic_runtime_bundle_v2_draft",
+  "pipeline_version": "v2",
   "status": "draft_not_active",
   "generated_at_utc": "2026-02-23T00:00:00Z",
   "source_train_summary_json": "",
   "selection_policy": "latest",
   "export_mode": "global_only",
   "feature_contract_version": "v2_draft",
+  "runtime_bundle_contract_version": "v2_draft",
   "feature_columns": [],
   "feature_transform_contract": {},
   "global_fallback_enabled": true,

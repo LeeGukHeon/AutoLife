@@ -40,3 +40,10 @@ Last updated: 2026-02-23
   - unknown runtime bundle `version`
   - `version` and `pipeline_version` mismatch
   - mixed pipeline versions across bundle/train/split inputs
+
+## v2 strict fields
+- For `probabilistic_runtime_bundle_v2_draft`, these fields are mandatory:
+  - `pipeline_version=v2`
+  - `feature_contract_version=v2_draft`
+  - `runtime_bundle_contract_version=v2_draft`
+- Missing v2 strict fields are treated as fail-closed runtime load errors.

@@ -249,6 +249,15 @@ bool validateBundleVersionAndContracts(
         return false;
     }
 
+    if (expected_pipeline == "v2") {
+        if (!root.contains("pipeline_version") || !root["pipeline_version"].is_string()) {
+            if (error_message != nullptr) {
+                *error_message = "missing_pipeline_version_for_v2";
+            }
+            return false;
+        }
+    }
+
     std::string declared_pipeline = root.value("pipeline_version", expected_pipeline);
     declared_pipeline = lowerCopy(declared_pipeline);
     if (declared_pipeline != expected_pipeline) {
@@ -259,17 +268,31 @@ bool validateBundleVersionAndContracts(
     }
 
     if (expected_pipeline == "v2") {
+        if (!root.contains("feature_contract_version") || !root["feature_contract_version"].is_string()) {
+            if (error_message != nullptr) {
+                *error_message = "missing_feature_contract_version_for_v2";
+            }
+            return false;
+        }
+        if (!root.contains("runtime_bundle_contract_version") ||
+            !root["runtime_bundle_contract_version"].is_string()) {
+            if (error_message != nullptr) {
+                *error_message = "missing_runtime_bundle_contract_version_for_v2";
+            }
+            return false;
+        }
+
         const std::string feature_contract_version =
             lowerCopy(root.value("feature_contract_version", std::string{}));
         const std::string runtime_contract_version =
             lowerCopy(root.value("runtime_bundle_contract_version", std::string{}));
-        if (!feature_contract_version.empty() && feature_contract_version != "v2_draft") {
+        if (feature_contract_version != "v2_draft") {
             if (error_message != nullptr) {
                 *error_message = "unsupported_feature_contract_version";
             }
             return false;
         }
-        if (!runtime_contract_version.empty() && runtime_contract_version != "v2_draft") {
+        if (runtime_contract_version != "v2_draft") {
             if (error_message != nullptr) {
                 *error_message = "unsupported_runtime_bundle_contract_version";
             }
