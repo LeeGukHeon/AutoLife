@@ -20,6 +20,7 @@ Last updated: 2026-02-23
 - [ ] Strict feature validation pass (if applicable).
 - [ ] Runtime bundle parity pass (if applicable).
 - [ ] Verification pass (if decision/runtime logic touched).
+- [ ] If MODE B/v2 touched: run v2 strict gate profile (`parity` + `verification --pipeline-version v2` + promotion readiness where applicable).
 - [ ] Tests added/updated for new behavior.
 
 ## Documentation
