@@ -80,6 +80,14 @@ struct EngineConfig {
     int probabilistic_runtime_online_learning_min_samples = 12;
     double probabilistic_runtime_online_learning_max_margin_bias = 0.02;
     double probabilistic_runtime_online_learning_strength_gain = 0.35;
+    // EXT-53 (default OFF): uncertainty-aware sizing from ensemble disagreement.
+    bool probabilistic_uncertainty_ensemble_enabled = false;
+    std::string probabilistic_uncertainty_size_mode = "linear"; // linear | exp
+    double probabilistic_uncertainty_u_max = 0.06;
+    double probabilistic_uncertainty_exp_k = 8.0;
+    double probabilistic_uncertainty_min_scale = 0.10;
+    bool probabilistic_uncertainty_skip_when_high = false;
+    double probabilistic_uncertainty_skip_u = 0.12;
     // EXT-55 (default OFF): explicit probabilistic runtime regime policy.
     bool probabilistic_regime_spec_enabled = false;
     int probabilistic_regime_volatility_window = 48;

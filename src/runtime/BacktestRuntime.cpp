@@ -193,6 +193,10 @@ struct ProbabilisticRuntimeSnapshot {
     bool applied = false;
     double prob_h1_calibrated = 0.5;
     double prob_h5_calibrated = 0.5;
+    double prob_h1_mean = 0.5;
+    double prob_h5_mean = 0.5;
+    double prob_h5_std = 0.0;
+    int ensemble_member_count = 1;
     double threshold_h5 = 0.6;
     double margin_h5 = 0.0;
     double expected_edge_pct = 0.0;
@@ -296,6 +300,36 @@ double effectiveProbabilisticScanPrefilterMargin(
     return std::clamp(gate, -0.30, 0.15);
 }
 
+double probabilisticUncertaintySizeScale(
+    const autolife::engine::EngineConfig& cfg,
+    const ProbabilisticRuntimeSnapshot& snapshot
+) {
+    if (!cfg.probabilistic_uncertainty_ensemble_enabled || snapshot.ensemble_member_count < 2) {
+        return 1.0;
+    }
+    const double u = std::max(0.0, snapshot.prob_h5_std);
+    const double u_max = std::max(1e-6, cfg.probabilistic_uncertainty_u_max);
+    double scale = 1.0;
+    if (cfg.probabilistic_uncertainty_size_mode == "exp") {
+        scale = std::exp(-std::max(0.0, cfg.probabilistic_uncertainty_exp_k) * u);
+    } else {
+        scale = 1.0 - (u / u_max);
+    }
+    return std::clamp(scale, cfg.probabilistic_uncertainty_min_scale, 1.0);
+}
+
+bool probabilisticUncertaintyBlocksEntry(
+    const autolife::engine::EngineConfig& cfg,
+    const ProbabilisticRuntimeSnapshot& snapshot
+) {
+    if (!cfg.probabilistic_uncertainty_ensemble_enabled ||
+        !cfg.probabilistic_uncertainty_skip_when_high ||
+        snapshot.ensemble_member_count < 2) {
+        return false;
+    }
+    return snapshot.prob_h5_std > std::max(cfg.probabilistic_uncertainty_u_max, cfg.probabilistic_uncertainty_skip_u);
+}
+
 bool inferProbabilisticRuntimeSnapshot(
     const autolife::analytics::ProbabilisticRuntimeModel& model,
     const autolife::engine::EngineConfig& cfg,
@@ -382,6 +416,10 @@ bool inferProbabilisticRuntimeSnapshot(
     out_snapshot.applied = true;
     out_snapshot.prob_h1_calibrated = std::clamp(inference.prob_h1_calibrated, 0.0, 1.0);
     out_snapshot.prob_h5_calibrated = std::clamp(inference.prob_h5_calibrated, 0.0, 1.0);
+    out_snapshot.prob_h1_mean = std::clamp(inference.prob_h1_mean, 0.0, 1.0);
+    out_snapshot.prob_h5_mean = std::clamp(inference.prob_h5_mean, 0.0, 1.0);
+    out_snapshot.prob_h5_std = std::max(0.0, inference.prob_h5_std);
+    out_snapshot.ensemble_member_count = std::max(1, inference.ensemble_member_count);
     out_snapshot.threshold_h5 = std::clamp(inference.selection_threshold_h5, 0.0, 1.0);
     out_snapshot.expected_edge_pct = std::clamp(inference.expected_edge_pct, -0.05, 0.05);
     out_snapshot.margin_h5 = std::clamp(
@@ -466,6 +504,8 @@ bool applyProbabilisticRuntimeAdjustment(
     signal.probabilistic_h5_calibrated = 0.5;
     signal.probabilistic_h5_threshold = 0.6;
     signal.probabilistic_h5_margin = 0.0;
+    signal.probabilistic_h5_uncertainty_std = 0.0;
+    signal.probabilistic_ensemble_member_count = 1;
     if (!snapshot.applied) {
         return true;
     }
@@ -481,6 +521,8 @@ bool applyProbabilisticRuntimeAdjustment(
     signal.probabilistic_h5_calibrated = snapshot.prob_h5_calibrated;
     signal.probabilistic_h5_threshold = snapshot.threshold_h5;
     signal.probabilistic_h5_margin = effective_margin;
+    signal.probabilistic_h5_uncertainty_std = std::max(0.0, snapshot.prob_h5_std);
+    signal.probabilistic_ensemble_member_count = std::max(1, snapshot.ensemble_member_count);
 
     const double score_weight = std::clamp(cfg.probabilistic_runtime_score_weight, 0.0, 1.0);
     signal.score += std::clamp(effective_margin * score_weight, -0.12, 0.12);
@@ -542,10 +584,25 @@ double probabilisticPositionScaleForEntry(
         signal.probabilistic_h5_margin < 0.0) {
         scale *= 0.92;
     }
+    int ensemble_member_count = signal.probabilistic_ensemble_member_count;
+    double uncertainty_std = std::max(0.0, signal.probabilistic_h5_uncertainty_std);
+    if (snapshot != nullptr) {
+        ensemble_member_count = std::max(ensemble_member_count, snapshot->ensemble_member_count);
+        uncertainty_std = std::max(uncertainty_std, snapshot->prob_h5_std);
+    }
+    if (cfg.probabilistic_uncertainty_ensemble_enabled && ensemble_member_count >= 2) {
+        ProbabilisticRuntimeSnapshot temp_snapshot;
+        temp_snapshot.prob_h5_std = uncertainty_std;
+        temp_snapshot.ensemble_member_count = ensemble_member_count;
+        scale *= probabilisticUncertaintySizeScale(cfg, temp_snapshot);
+    }
     if (snapshot != nullptr && cfg.probabilistic_regime_spec_enabled) {
         scale *= std::clamp(snapshot->regime_size_multiplier, 0.01, 1.0);
     }
-    return std::clamp(scale, 0.45, 1.45);
+    const double min_scale = (cfg.probabilistic_uncertainty_ensemble_enabled && ensemble_member_count >= 2)
+        ? cfg.probabilistic_uncertainty_min_scale
+        : 0.45;
+    return std::clamp(scale, min_scale, 1.45);
 }
 
 void applyProbabilisticPrimaryDecisionProfile(
@@ -727,6 +784,9 @@ bool shouldUseProbabilisticPrimaryFallback(
     if (!cfg.enable_probabilistic_runtime_model ||
         !cfg.probabilistic_runtime_primary_mode ||
         !snapshot.applied) {
+        return false;
+    }
+    if (probabilisticUncertaintyBlocksEntry(cfg, snapshot)) {
         return false;
     }
     if (cfg.probabilistic_regime_spec_enabled && snapshot.regime_block_new_entries) {
@@ -999,6 +1059,12 @@ bool passesProbabilisticPrimaryMinimums(
         snapshot->regime_block_new_entries) {
         if (reject_reason != nullptr) {
             *reject_reason = "blocked_probabilistic_regime_hostile";
+        }
+        return false;
+    }
+    if (snapshot != nullptr && probabilisticUncertaintyBlocksEntry(cfg, *snapshot)) {
+        if (reject_reason != nullptr) {
+            *reject_reason = "blocked_probabilistic_uncertainty_high";
         }
         return false;
     }
@@ -2350,7 +2416,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
             );
             best_signal = candidate_signals.front();
             LOG_INFO(
-                "{} probabilistic-primary best selected [{}]: p_h5={:.4f}, margin={:+.4f}, liq={:.1f}, strength={:.3f}, candidates={}, regime_state={}, vol_z={:+.3f}, dd_speed_bps={:.2f}",
+                "{} probabilistic-primary best selected [{}]: p_h5={:.4f}, margin={:+.4f}, liq={:.1f}, strength={:.3f}, candidates={}, regime_state={}, vol_z={:+.3f}, dd_speed_bps={:.2f}, ens_n={}, u_std={:.4f}",
                 market_name_,
                 best_signal.strategy_name,
                 best_signal.probabilistic_h5_calibrated,
@@ -2360,7 +2426,9 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 static_cast<int>(candidate_signals.size()),
                 autolife::common::probabilistic_regime::stateLabel(probabilistic_snapshot.regime_state),
                 probabilistic_snapshot.regime_volatility_zscore,
-                probabilistic_snapshot.regime_drawdown_speed_bps
+                probabilistic_snapshot.regime_drawdown_speed_bps,
+                probabilistic_snapshot.ensemble_member_count,
+                probabilistic_snapshot.prob_h5_std
             );
         }
         if (!candidate_signals.empty() && best_signal.type == strategy::SignalType::NONE) {

@@ -22,7 +22,10 @@ Last updated: 2026-02-23
   - created timestamp
   - version identifiers
 - For extension mode (future):
-  - include optional ensemble artifacts/config only when enabled.
+  - include optional ensemble artifacts/config only when enabled:
+    - `default_model.ensemble_members[]`
+    - `default_model.ensemble_model_artifacts[]`
+    - top-level `ensemble`
 
 ## Baseline invariants
 - Runtime prediction path must match training/export semantics.

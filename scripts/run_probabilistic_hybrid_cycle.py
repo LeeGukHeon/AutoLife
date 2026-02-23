@@ -69,6 +69,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--cost-liquidity-ref-ratio", type=float, default=1.0)
     parser.add_argument("--cost-liquidity-penalty-cap", type=float, default=8.0)
     parser.add_argument("--cost-cap-bps", type=float, default=200.0)
+    parser.add_argument("--ensemble-k", type=int, default=1)
+    parser.add_argument("--ensemble-seed-step", type=int, default=1000)
     return parser.parse_args(argv)
 
 
@@ -293,6 +295,9 @@ def main(argv=None) -> int:
         "--model-dir",
         str(train_model_dir),
     ]
+    if int(args.ensemble_k) > 1:
+        train_cmd.extend(["--ensemble-k", str(int(args.ensemble_k))])
+        train_cmd.extend(["--ensemble-seed-step", str(int(args.ensemble_seed_step))])
     if int(args.train_max_datasets) > 0:
         train_cmd.extend(["--max-datasets", str(int(args.train_max_datasets))])
     steps.append(run_step("train_global_model", train_cmd))
@@ -337,6 +342,7 @@ def main(argv=None) -> int:
         "incremental_update": bool(args.incremental_update),
         "enable_purged_walk_forward": bool(args.enable_purged_walk_forward),
         "enable_conditional_cost_model": bool(args.enable_conditional_cost_model),
+        "ensemble_k": int(args.ensemble_k),
         "paths": {
             "backtest_dir": str(backtest_dir),
             "feature_dir": str(feature_dir),

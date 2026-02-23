@@ -101,6 +101,8 @@ struct Signal {
     double probabilistic_h5_calibrated;
     double probabilistic_h5_threshold;
     double probabilistic_h5_margin;
+    double probabilistic_h5_uncertainty_std;
+    int probabilistic_ensemble_member_count;
     bool probabilistic_runtime_applied;
     double liquidity_score;
     double volatility;
@@ -139,6 +141,8 @@ struct Signal {
         , probabilistic_h5_calibrated(0.5)
         , probabilistic_h5_threshold(0.6)
         , probabilistic_h5_margin(0.0)
+        , probabilistic_h5_uncertainty_std(0.0)
+        , probabilistic_ensemble_member_count(1)
         , probabilistic_runtime_applied(false)
         , liquidity_score(0.0)
         , volatility(0.0)

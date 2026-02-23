@@ -98,6 +98,63 @@ bool parseHead(const nlohmann::json& node, ProbabilisticRuntimeModel::LinearHead
     return !out.coef.empty();
 }
 
+double meanOrDefault(const std::vector<double>& values, double fallback) {
+    if (values.empty()) {
+        return fallback;
+    }
+    double sum = 0.0;
+    for (double v : values) {
+        sum += v;
+    }
+    return sum / static_cast<double>(values.size());
+}
+
+double stdOrZero(const std::vector<double>& values, double mean) {
+    if (values.size() < 2) {
+        return 0.0;
+    }
+    double acc = 0.0;
+    for (double v : values) {
+        const double d = v - mean;
+        acc += (d * d);
+    }
+    const double var = acc / static_cast<double>(values.size());
+    return std::sqrt(std::max(0.0, var));
+}
+
+void parseEnsembleMembers(
+    const nlohmann::json& parent_node,
+    std::size_t feature_count,
+    std::vector<ProbabilisticRuntimeModel::MarketEntry::EnsembleMember>& out_members
+) {
+    out_members.clear();
+    const auto ensemble_members = parent_node.value("ensemble_members", nlohmann::json::array());
+    if (!ensemble_members.is_array()) {
+        return;
+    }
+    for (const auto& node : ensemble_members) {
+        if (!node.is_object()) {
+            continue;
+        }
+        ProbabilisticRuntimeModel::MarketEntry::EnsembleMember member;
+        member.member_index = node.value("member_index", static_cast<int>(out_members.size()));
+        if (!parseHead(node.value("h1_model", nlohmann::json::object()), member.h1, false)) {
+            continue;
+        }
+        if (!parseHead(node.value("h5_model", nlohmann::json::object()), member.h5, true)) {
+            continue;
+        }
+        if (member.h1.coef.size() != feature_count || member.h5.coef.size() != feature_count) {
+            continue;
+        }
+        if (member.h5.has_edge_regressor && member.h5.edge_coef.size() != feature_count) {
+            member.h5.has_edge_regressor = false;
+            member.h5.edge_coef.clear();
+        }
+        out_members.push_back(std::move(member));
+    }
+}
+
 int findFeatureIndex(const std::vector<std::string>& cols, const std::string& key) {
     for (std::size_t i = 0; i < cols.size(); ++i) {
         if (cols[i] == key) {
@@ -259,6 +316,7 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
                 entry.h5.has_edge_regressor = false;
                 entry.h5.edge_coef.clear();
             }
+            parseEnsembleMembers(default_model, feature_columns_.size(), entry.ensemble_members);
             default_entry_ = std::move(entry);
             has_default_entry_ = true;
         }
@@ -291,6 +349,7 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
                 entry.h5.has_edge_regressor = false;
                 entry.h5.edge_coef.clear();
             }
+            parseEnsembleMembers(m, feature_columns_.size(), entry.ensemble_members);
             markets_.insert_or_assign(market, std::move(entry));
         }
     }
@@ -334,19 +393,53 @@ bool ProbabilisticRuntimeModel::infer(
         return false;
     }
 
-    const double h1_raw = clipProb(sigmoid(linearScore(entry->h1.coef, entry->h1.intercept, transformed_features)));
-    const double h5_raw = clipProb(sigmoid(linearScore(entry->h5.coef, entry->h5.intercept, transformed_features)));
-    const double h1_cal = calibrateProb(h1_raw, entry->h1.calib_a, entry->h1.calib_b);
-    const double h5_cal = calibrateProb(h5_raw, entry->h5.calib_a, entry->h5.calib_b);
+    const double h1_raw_primary = clipProb(sigmoid(linearScore(entry->h1.coef, entry->h1.intercept, transformed_features)));
+    const double h5_raw_primary = clipProb(sigmoid(linearScore(entry->h5.coef, entry->h5.intercept, transformed_features)));
+    const double h1_cal_primary = calibrateProb(h1_raw_primary, entry->h1.calib_a, entry->h1.calib_b);
+    const double h5_cal_primary = calibrateProb(h5_raw_primary, entry->h5.calib_a, entry->h5.calib_b);
 
-    out.prob_h1_raw = h1_raw;
-    out.prob_h1_calibrated = h1_cal;
-    out.prob_h5_raw = h5_raw;
-    out.prob_h5_calibrated = h5_cal;
+    double h1_mean = h1_cal_primary;
+    double h5_mean = h5_cal_primary;
+    double h1_std = 0.0;
+    double h5_std = 0.0;
+    int ensemble_member_count = 1;
+    if (entry->ensemble_members.size() >= 2) {
+        std::vector<double> h1_probs;
+        std::vector<double> h5_probs;
+        h1_probs.reserve(entry->ensemble_members.size());
+        h5_probs.reserve(entry->ensemble_members.size());
+        for (const auto& member : entry->ensemble_members) {
+            if (member.h1.coef.size() != transformed_features.size() ||
+                member.h5.coef.size() != transformed_features.size()) {
+                continue;
+            }
+            const double m_h1_raw = clipProb(sigmoid(linearScore(member.h1.coef, member.h1.intercept, transformed_features)));
+            const double m_h5_raw = clipProb(sigmoid(linearScore(member.h5.coef, member.h5.intercept, transformed_features)));
+            h1_probs.push_back(calibrateProb(m_h1_raw, member.h1.calib_a, member.h1.calib_b));
+            h5_probs.push_back(calibrateProb(m_h5_raw, member.h5.calib_a, member.h5.calib_b));
+        }
+        if (h5_probs.size() >= 2 && h1_probs.size() == h5_probs.size()) {
+            h1_mean = clipProb(meanOrDefault(h1_probs, h1_cal_primary));
+            h5_mean = clipProb(meanOrDefault(h5_probs, h5_cal_primary));
+            h1_std = stdOrZero(h1_probs, h1_mean);
+            h5_std = stdOrZero(h5_probs, h5_mean);
+            ensemble_member_count = static_cast<int>(h5_probs.size());
+        }
+    }
+
+    out.prob_h1_raw = h1_raw_primary;
+    out.prob_h1_calibrated = h1_cal_primary;
+    out.prob_h1_mean = h1_mean;
+    out.prob_h1_std = h1_std;
+    out.prob_h5_raw = h5_raw_primary;
+    out.prob_h5_calibrated = h5_cal_primary;
+    out.prob_h5_mean = h5_mean;
+    out.prob_h5_std = h5_std;
+    out.ensemble_member_count = ensemble_member_count;
     out.selection_threshold_h5 = entry->h5.threshold;
     const double fallback_expected_edge_bps =
-        (h5_cal * entry->h5.edge_win_mean_bps) +
-        ((1.0 - h5_cal) * entry->h5.edge_loss_mean_bps);
+        (h5_cal_primary * entry->h5.edge_win_mean_bps) +
+        ((1.0 - h5_cal_primary) * entry->h5.edge_loss_mean_bps);
     double expected_edge_bps = fallback_expected_edge_bps;
     if (entry->h5.has_edge_regressor && entry->h5.edge_coef.size() == transformed_features.size()) {
         const double reg_edge = linearScore(entry->h5.edge_coef, entry->h5.edge_intercept, transformed_features);
@@ -358,7 +451,7 @@ bool ProbabilisticRuntimeModel::infer(
     out.cost_bps_estimate = estimateRuntimeCostBps(cost_model_, transformed_features);
     out.expected_edge_bps = expected_edge_bps - out.cost_bps_estimate;
     out.expected_edge_pct = out.expected_edge_bps / 10000.0;
-    out.select_h5 = (h5_cal >= entry->h5.threshold);
+    out.select_h5 = (h5_cal_primary >= entry->h5.threshold);
     return true;
 }
 

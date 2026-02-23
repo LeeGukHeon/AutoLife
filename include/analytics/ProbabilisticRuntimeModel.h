@@ -10,8 +10,13 @@ namespace analytics {
 struct ProbabilisticInference {
     double prob_h1_raw = 0.5;
     double prob_h1_calibrated = 0.5;
+    double prob_h1_mean = 0.5;
+    double prob_h1_std = 0.0;
     double prob_h5_raw = 0.5;
     double prob_h5_calibrated = 0.5;
+    double prob_h5_mean = 0.5;
+    double prob_h5_std = 0.0;
+    int ensemble_member_count = 1;
     double selection_threshold_h5 = 0.6;
     double expected_edge_before_cost_bps = 0.0;
     double cost_bps_estimate = 0.0;
@@ -52,9 +57,15 @@ public:
     };
 
     struct MarketEntry {
+        struct EnsembleMember {
+            int member_index = 0;
+            LinearHead h1;
+            LinearHead h5;
+        };
         int selected_fold_id = 0;
         LinearHead h1;
         LinearHead h5;
+        std::vector<EnsembleMember> ensemble_members;
     };
 
 public:

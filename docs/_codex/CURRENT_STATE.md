@@ -22,6 +22,7 @@ Last updated: 2026-02-23
   - Ticket 2: purged walk-forward + embargo split option (implemented)
   - Ticket 3: conditional cost model isomorphism (implemented in current working tree)
   - Ticket 4: explicit probabilistic regime spec + runtime actions (implemented in current working tree)
+  - Ticket 5: uncertainty ensemble + confidence-aware sizing (implemented in current working tree)
 
 ## Last known gate status
 - Strict feature validation: run required after any feature/build changes

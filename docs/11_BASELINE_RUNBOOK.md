@@ -89,6 +89,12 @@ python scripts/generate_probabilistic_baseline.py `
 ```powershell
 python scripts/train_probabilistic_pattern_model_global.py `
   --split-manifest-json ".\data\model_input\probabilistic_features_v1_latest\probabilistic_split_manifest_v1.json"
+
+# EXT-53 optional (default OFF)
+python scripts/train_probabilistic_pattern_model_global.py `
+  --split-manifest-json ".\data\model_input\probabilistic_features_v1_latest\probabilistic_split_manifest_v1.json" `
+  --ensemble-k 5 `
+  --ensemble-seed-step 1000
 ```
 
 ## 6) Export runtime bundle
@@ -119,6 +125,13 @@ python scripts/run_probabilistic_hybrid_cycle.py `
 Set in trading config JSON (used by live/backtest runtime):
 ```json
 {
+  "probabilistic_uncertainty_ensemble_enabled": true,
+  "probabilistic_uncertainty_size_mode": "linear",
+  "probabilistic_uncertainty_u_max": 0.06,
+  "probabilistic_uncertainty_exp_k": 8.0,
+  "probabilistic_uncertainty_min_scale": 0.10,
+  "probabilistic_uncertainty_skip_when_high": false,
+  "probabilistic_uncertainty_skip_u": 0.12,
   "probabilistic_regime_spec_enabled": true,
   "probabilistic_regime_volatility_window": 48,
   "probabilistic_regime_drawdown_window": 36,

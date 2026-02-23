@@ -102,6 +102,18 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument("--max-datasets", type=int, default=0)
     parser.add_argument("--random-state", type=int, default=42)
+    parser.add_argument(
+        "--ensemble-k",
+        type=int,
+        default=1,
+        help="EXT-53 optional: number of independent global members to train (default 1 = baseline).",
+    )
+    parser.add_argument(
+        "--ensemble-seed-step",
+        type=int,
+        default=1000,
+        help="Seed offset step between ensemble members.",
+    )
     return parser.parse_args(argv)
 
 
@@ -260,6 +272,97 @@ def build_weighted_summary(global_folds: List[Dict[str, Any]]) -> Dict[str, Any]
     return weighted_summary
 
 
+def run_single_global_member(
+    *,
+    prepared: List[Dict[str, Any]],
+    fold_ids: List[int],
+    fold_dataset_counts: Dict[int, int],
+    args: argparse.Namespace,
+    model_dir: pathlib.Path,
+    member_index: int,
+    member_random_state: int,
+) -> Dict[str, Any]:
+    member_args = argparse.Namespace(**vars(args))
+    member_args.random_state = int(member_random_state)
+    if int(getattr(args, "ensemble_k", 1)) > 1:
+        member_model_dir = model_dir / f"ensemble_member_{int(member_index):02d}"
+    else:
+        member_model_dir = model_dir
+    member_model_dir.mkdir(parents=True, exist_ok=True)
+
+    global_states: Dict[int, Dict[str, Any]] = {
+        int(fid): build_global_state(int(fid), member_args) for fid in fold_ids
+    }
+
+    dataset_results: List[Dict[str, Any]] = []
+    failed_datasets: List[Dict[str, Any]] = []
+    for ds in prepared:
+        market = str(ds["market"])
+        csv_path = pathlib.Path(ds["csv_path"])
+        try:
+            result = stream_dataset_into_global_states(
+                dataset_market=market,
+                csv_path=csv_path,
+                dataset_fold_windows=ds["fold_windows"],
+                global_states=global_states,
+                args=member_args,
+            )
+            dataset_results.append(result)
+        except Exception as exc:
+            failed = {
+                "market": market,
+                "csv_path": str(csv_path),
+                "status": "failed",
+                "error": str(exc),
+            }
+            dataset_results.append(failed)
+            failed_datasets.append(failed)
+
+    for state in global_states.values():
+        flush_train_buffer(state)
+        flush_infer_buffer(state, "valid", float(member_args.prob_eps))
+        flush_infer_buffer(state, "test", float(member_args.prob_eps))
+
+    global_fold_rows: List[Dict[str, Any]] = []
+    failed_folds: List[Dict[str, Any]] = []
+    for fold_id in fold_ids:
+        state = global_states[int(fold_id)]
+        fold_eval = evaluate_fold_state(state=state, args=member_args)
+        model_paths = save_fold_model_artifacts(
+            model_dir=member_model_dir,
+            market="GLOBAL",
+            fold_eval=fold_eval,
+            args=member_args,
+        )
+        fold_eval.pop("model_state", None)
+        fold_eval["model_artifacts"] = model_paths
+        fold_eval["dataset_count_for_fold"] = int(fold_dataset_counts.get(int(fold_id), 0))
+        global_fold_rows.append(fold_eval)
+        if fold_eval["train_count"] <= 0 or fold_eval["test_count"] <= 0:
+            failed_folds.append(
+                {
+                    "fold_id": int(fold_id),
+                    "reason": "insufficient_samples",
+                    "train_count": int(fold_eval["train_count"]),
+                    "test_count": int(fold_eval["test_count"]),
+                }
+            )
+
+    weighted_summary = build_weighted_summary(global_fold_rows)
+    status = "pass" if not failed_datasets and not failed_folds else "partial_fail"
+    return {
+        "member_index": int(member_index),
+        "random_state": int(member_random_state),
+        "status": str(status),
+        "model_dir": str(member_model_dir),
+        "datasets": dataset_results,
+        "failed_datasets": failed_datasets,
+        "global_folds": global_fold_rows,
+        "failed_folds": failed_folds,
+        "weighted_summary": weighted_summary,
+    }
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
     split_manifest_path = resolve_repo_path(args.split_manifest_json)
@@ -312,9 +415,6 @@ def main(argv=None) -> int:
     if not fold_ids:
         raise RuntimeError("no fold ids discovered for global training")
 
-    global_states: Dict[int, Dict[str, Any]] = {
-        int(fid): build_global_state(int(fid), args) for fid in fold_ids
-    }
     fold_dataset_counts: Dict[int, int] = {int(fid): 0 for fid in fold_ids}
     for ds in prepared:
         for fid in ds["fold_windows"].keys():
@@ -327,67 +427,32 @@ def main(argv=None) -> int:
     print(f"model_dir={model_dir}", flush=True)
 
     started_at = utc_now_iso()
-    dataset_results: List[Dict[str, Any]] = []
-    failed_datasets: List[Dict[str, Any]] = []
-    for idx, ds in enumerate(prepared, start=1):
-        market = str(ds["market"])
-        csv_path = pathlib.Path(ds["csv_path"])
-        print(f"[TrainProbModelGlobal] [{idx}/{len(prepared)}] market={market}", flush=True)
-        try:
-            result = stream_dataset_into_global_states(
-                dataset_market=market,
-                csv_path=csv_path,
-                dataset_fold_windows=ds["fold_windows"],
-                global_states=global_states,
-                args=args,
-            )
-            dataset_results.append(result)
-            print(
-                f"[TrainProbModelGlobal] [{idx}] ok market={market} used={result.get('rows_used', 0)}",
-                flush=True,
-            )
-        except Exception as exc:
-            failed = {
-                "market": market,
-                "csv_path": str(csv_path),
-                "status": "failed",
-                "error": str(exc),
-            }
-            dataset_results.append(failed)
-            failed_datasets.append(failed)
-            print(f"[TrainProbModelGlobal] [{idx}] fail market={market} error={exc}", flush=True)
-
-    for state in global_states.values():
-        flush_train_buffer(state)
-        flush_infer_buffer(state, "valid", float(args.prob_eps))
-        flush_infer_buffer(state, "test", float(args.prob_eps))
-
-    global_fold_rows: List[Dict[str, Any]] = []
-    failed_folds: List[Dict[str, Any]] = []
-    for fold_id in fold_ids:
-        state = global_states[int(fold_id)]
-        fold_eval = evaluate_fold_state(state=state, args=args)
-        model_paths = save_fold_model_artifacts(
-            model_dir=model_dir,
-            market="GLOBAL",
-            fold_eval=fold_eval,
-            args=args,
+    ensemble_k = max(1, int(args.ensemble_k))
+    ensemble_seed_step = max(1, int(args.ensemble_seed_step))
+    member_runs: List[Dict[str, Any]] = []
+    for member_index in range(ensemble_k):
+        member_random_state = int(args.random_state) + (int(member_index) * int(ensemble_seed_step))
+        print(
+            f"[TrainProbModelGlobal] ensemble member={member_index + 1}/{ensemble_k} seed={member_random_state}",
+            flush=True,
         )
-        fold_eval.pop("model_state", None)
-        fold_eval["model_artifacts"] = model_paths
-        fold_eval["dataset_count_for_fold"] = int(fold_dataset_counts.get(int(fold_id), 0))
-        global_fold_rows.append(fold_eval)
-        if fold_eval["train_count"] <= 0 or fold_eval["test_count"] <= 0:
-            failed_folds.append(
-                {
-                    "fold_id": int(fold_id),
-                    "reason": "insufficient_samples",
-                    "train_count": int(fold_eval["train_count"]),
-                    "test_count": int(fold_eval["test_count"]),
-                }
-            )
+        member_result = run_single_global_member(
+            prepared=prepared,
+            fold_ids=fold_ids,
+            fold_dataset_counts=fold_dataset_counts,
+            args=args,
+            model_dir=model_dir,
+            member_index=member_index,
+            member_random_state=member_random_state,
+        )
+        member_runs.append(member_result)
 
-    weighted_summary = build_weighted_summary(global_fold_rows)
+    primary_member = member_runs[0]
+    dataset_results = list(primary_member.get("datasets", []))
+    failed_datasets = list(primary_member.get("failed_datasets", []))
+    global_fold_rows = list(primary_member.get("global_folds", []))
+    failed_folds = list(primary_member.get("failed_folds", []))
+    weighted_summary = dict(primary_member.get("weighted_summary", {}))
     baseline_compare = compare_with_baseline(
         baseline_json=baseline_json_path,
         weighted_summary=weighted_summary,
@@ -396,6 +461,8 @@ def main(argv=None) -> int:
     ended_at = utc_now_iso()
     status = "pass"
     if failed_datasets or failed_folds:
+        status = "partial_fail"
+    if any(str(m.get("status", "partial_fail")) != "pass" for m in member_runs):
         status = "partial_fail"
 
     out = {
@@ -447,6 +514,30 @@ def main(argv=None) -> int:
         out["purge_embargo"] = purge_embargo_cfg
     if bool(split_cost_model.get("enabled", False)):
         out["cost_model"] = split_cost_model
+    if ensemble_k > 1:
+        out["ensemble"] = {
+            "enabled": True,
+            "ensemble_k": int(ensemble_k),
+            "seed_step": int(ensemble_seed_step),
+            "members": [
+                {
+                    "member_index": int(m.get("member_index", 0) or 0),
+                    "random_state": int(m.get("random_state", 0) or 0),
+                    "status": str(m.get("status", "partial_fail")),
+                    "model_dir": str(m.get("model_dir", "")),
+                    "weighted_summary": m.get("weighted_summary", {}),
+                    "global_model": {
+                        "status": "pass" if not m.get("failed_folds", []) else "partial_fail",
+                        "fold_count": int(len(m.get("global_folds", []) or [])),
+                        "failed_folds": m.get("failed_folds", []),
+                        "folds": m.get("global_folds", []),
+                    },
+                    "dataset_processed": int(len(m.get("datasets", []) or [])),
+                    "dataset_failed": int(len(m.get("failed_datasets", []) or [])),
+                }
+                for m in member_runs
+            ],
+        }
     dump_json(output_json_path, out)
 
     print("[TrainProbModelGlobal] completed", flush=True)

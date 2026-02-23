@@ -349,6 +349,43 @@ void Config::load(const std::string& path) {
                 0.0,
                 1.0
             );
+            engine_config_.probabilistic_uncertainty_ensemble_enabled =
+                t.value("probabilistic_uncertainty_ensemble_enabled", false);
+            engine_config_.probabilistic_uncertainty_size_mode = trimCopy(
+                t.value("probabilistic_uncertainty_size_mode", "linear")
+            );
+            std::transform(
+                engine_config_.probabilistic_uncertainty_size_mode.begin(),
+                engine_config_.probabilistic_uncertainty_size_mode.end(),
+                engine_config_.probabilistic_uncertainty_size_mode.begin(),
+                [](unsigned char c) { return static_cast<char>(std::tolower(c)); }
+            );
+            if (engine_config_.probabilistic_uncertainty_size_mode != "linear" &&
+                engine_config_.probabilistic_uncertainty_size_mode != "exp") {
+                engine_config_.probabilistic_uncertainty_size_mode = "linear";
+            }
+            engine_config_.probabilistic_uncertainty_u_max = std::clamp(
+                t.value("probabilistic_uncertainty_u_max", 0.06),
+                1e-6,
+                1.0
+            );
+            engine_config_.probabilistic_uncertainty_exp_k = std::clamp(
+                t.value("probabilistic_uncertainty_exp_k", 8.0),
+                0.0,
+                100.0
+            );
+            engine_config_.probabilistic_uncertainty_min_scale = std::clamp(
+                t.value("probabilistic_uncertainty_min_scale", 0.10),
+                0.01,
+                1.0
+            );
+            engine_config_.probabilistic_uncertainty_skip_when_high =
+                t.value("probabilistic_uncertainty_skip_when_high", false);
+            engine_config_.probabilistic_uncertainty_skip_u = std::clamp(
+                t.value("probabilistic_uncertainty_skip_u", 0.12),
+                engine_config_.probabilistic_uncertainty_u_max,
+                1.0
+            );
             engine_config_.probabilistic_regime_spec_enabled =
                 t.value("probabilistic_regime_spec_enabled", false);
             engine_config_.probabilistic_regime_volatility_window = std::clamp(

@@ -215,6 +215,49 @@ def build_global_default_model(
     return out
 
 
+def build_global_ensemble_members(
+    summary: Dict[str, Any],
+    fold_policy: str,
+) -> List[Dict[str, Any]]:
+    ensemble_node = summary.get("ensemble", {})
+    if not isinstance(ensemble_node, dict) or not bool(ensemble_node.get("enabled", False)):
+        return []
+    members_raw = [x for x in (ensemble_node.get("members", []) or []) if isinstance(x, dict)]
+    out_members: List[Dict[str, Any]] = []
+    for member in members_raw:
+        global_model = member.get("global_model", {})
+        if not isinstance(global_model, dict):
+            continue
+        folds = [f for f in (global_model.get("folds", []) or []) if isinstance(f, dict)]
+        if not folds:
+            continue
+        chosen = pick_fold(folds, fold_policy)
+        if chosen is None:
+            continue
+        h1_path = str(chosen.get("model_artifacts", {}).get("h1_model", "")).strip()
+        h5_path = str(chosen.get("model_artifacts", {}).get("h5_model", "")).strip()
+        if not h1_path or not h5_path:
+            continue
+        h1_payload = joblib.load(h1_path)
+        h5_payload = joblib.load(h5_path)
+        runtime_entry = make_runtime_entry(chosen=chosen, h1_payload=h1_payload, h5_payload=h5_payload)
+        out_members.append(
+            {
+                "member_index": int(member.get("member_index", 0) or 0),
+                "random_state": int(member.get("random_state", 0) or 0),
+                "selected_fold_id": int(runtime_entry.get("selected_fold_id", 0) or 0),
+                "model_artifacts": {
+                    "h1_model": h1_path,
+                    "h5_model": h5_path,
+                },
+                "h1_model": runtime_entry.get("h1_model", {}),
+                "h5_model": runtime_entry.get("h5_model", {}),
+                "selected_fold_metrics": runtime_entry.get("selected_fold_metrics", {}),
+            }
+        )
+    return out_members
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
     train_summary_path = resolve_repo_path(args.train_summary_json)
@@ -253,12 +296,36 @@ def main(argv=None) -> int:
             markets_out.append(row)
 
     default_model = None
+    ensemble_members: List[Dict[str, Any]] = []
+    ensemble_summary_meta: Dict[str, Any] = {}
     if str(args.export_mode) in ("global_only", "hybrid"):
         default_model = build_global_default_model(summary, str(args.fold_policy))
         if default_model is None:
             raise RuntimeError(
                 "export_mode requires global_model in train summary, but global fold artifacts were not found"
             )
+        ensemble_members = build_global_ensemble_members(summary, str(args.fold_policy))
+        ensemble_node = summary.get("ensemble", {})
+        ensemble_enabled_in_summary = isinstance(ensemble_node, dict) and bool(ensemble_node.get("enabled", False))
+        if ensemble_enabled_in_summary and not ensemble_members:
+            raise RuntimeError("ensemble enabled in training summary, but no valid ensemble member artifacts were found")
+        if ensemble_members:
+            default_model["ensemble_members"] = ensemble_members
+            default_model["ensemble_member_count"] = int(len(ensemble_members))
+            default_model["ensemble_model_artifacts"] = [
+                x.get("model_artifacts", {}) for x in ensemble_members
+            ]
+            ensemble_summary_meta = {
+                "enabled": True,
+                "ensemble_k": int(
+                    (ensemble_node.get("ensemble_k", len(ensemble_members)) if isinstance(ensemble_node, dict) else len(ensemble_members))
+                    or len(ensemble_members)
+                ),
+                "member_count": int(len(ensemble_members)),
+                "seed_step": int(
+                    (ensemble_node.get("seed_step", 0) if isinstance(ensemble_node, dict) else 0) or 0
+                ),
+            }
 
     if str(args.export_mode) == "per_market" and not markets_out:
         raise RuntimeError("per_market export requested, but no valid market fold artifacts found")
@@ -288,6 +355,8 @@ def main(argv=None) -> int:
         "markets": markets_out,
         "cost_model": summary.get("cost_model", {}),
     }
+    if ensemble_summary_meta:
+        out["ensemble"] = ensemble_summary_meta
     dump_json(output_path, out)
 
     print("[ExportRuntimeBundle] completed", flush=True)
