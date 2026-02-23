@@ -36,6 +36,10 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--roundtrip-cost-bps", type=float, default=12.0)
     parser.add_argument("--label-h1", type=int, default=1)
     parser.add_argument("--label-h5", type=int, default=5)
+    parser.add_argument("--enable-triple-barrier-labels", action="store_true")
+    parser.add_argument("--triple-barrier-horizon", type=int, default=30)
+    parser.add_argument("--triple-barrier-take-profit-bps", type=float, default=45.0)
+    parser.add_argument("--triple-barrier-stop-loss-bps", type=float, default=35.0)
     return parser.parse_args(argv)
 
 
@@ -206,6 +210,45 @@ def safe_ret(values: List[float], idx_now: int, idx_prev: int) -> float:
     return (cur / base) - 1.0
 
 
+def compute_triple_barrier_label(
+    *,
+    entry_price: float,
+    highs: List[float],
+    lows: List[float],
+    closes: List[float],
+    start_idx: int,
+    horizon_bars: int,
+    take_profit_bps: float,
+    stop_loss_bps: float,
+) -> Tuple[int, int, float, str]:
+    if entry_price <= 0.0 or horizon_bars <= 0:
+        return 0, 0, 0.0, "disabled"
+    if start_idx < 0 or start_idx >= len(closes):
+        return 0, 0, 0.0, "invalid_index"
+
+    up_px = entry_price * (1.0 + (float(take_profit_bps) / 10000.0))
+    down_px = entry_price * (1.0 - (float(stop_loss_bps) / 10000.0))
+    end_idx = min(len(closes) - 1, int(start_idx + horizon_bars))
+
+    for idx in range(start_idx + 1, end_idx + 1):
+        high_v = float(highs[idx])
+        low_v = float(lows[idx])
+        hit_up = high_v >= up_px
+        hit_down = low_v <= down_px
+        if hit_up and hit_down:
+            ret_bps = ((float(closes[idx]) / entry_price) - 1.0) * 10000.0
+            return 0, int(idx - start_idx), float(ret_bps), "ambiguous"
+        if hit_up:
+            return 1, int(idx - start_idx), float(take_profit_bps), "tp_hit"
+        if hit_down:
+            return -1, int(idx - start_idx), float(-abs(stop_loss_bps)), "sl_hit"
+
+    close_end = float(closes[end_idx])
+    ret_bps = ((close_end / entry_price) - 1.0) * 10000.0 if entry_price > 0.0 else 0.0
+    direction = 1 if ret_bps > 0.0 else (-1 if ret_bps < 0.0 else 0)
+    return int(direction), int(end_idx - start_idx), float(ret_bps), "timeout"
+
+
 def sign3(value: float) -> int:
     if not math.isfinite(value):
         return 0
@@ -245,6 +288,10 @@ def build_market_dataset(
     max_rows_per_market: int,
     label_h1: int,
     label_h5: int,
+    enable_triple_barrier_labels: bool,
+    triple_barrier_horizon: int,
+    triple_barrier_take_profit_bps: float,
+    triple_barrier_stop_loss_bps: float,
     roundtrip_cost_bps: float,
     skip_existing: bool,
 ) -> Dict[str, object]:
@@ -335,8 +382,21 @@ def build_market_dataset(
             "label_edge_bps_h5",
         ]
     )
+    if bool(enable_triple_barrier_labels):
+        fieldnames.extend(
+            [
+                "label_tb_dir",
+                "label_tb_hit_bars",
+                "label_tb_exit_bps",
+                "label_tb_event",
+            ]
+        )
 
-    max_h = max(int(label_h1), int(label_h5))
+    max_h = max(
+        int(label_h1),
+        int(label_h5),
+        int(triple_barrier_horizon) if bool(enable_triple_barrier_labels) else 0,
+    )
     written = 0
     skipped_warmup = 0
     skipped_missing_ctx = 0
@@ -475,6 +535,21 @@ def build_market_dataset(
             row["label_up_h5"] = 1 if close_h5 > c else 0
             gross_bps_h5 = ((close_h5 / c) - 1.0) * 10000.0 if c > 0.0 else math.nan
             row["label_edge_bps_h5"] = round6(gross_bps_h5 - float(roundtrip_cost_bps))
+            if bool(enable_triple_barrier_labels):
+                tb_dir, tb_hit_bars, tb_exit_bps, tb_event = compute_triple_barrier_label(
+                    entry_price=c,
+                    highs=anchor_high,
+                    lows=anchor_low,
+                    closes=anchor_close,
+                    start_idx=i,
+                    horizon_bars=int(triple_barrier_horizon),
+                    take_profit_bps=float(triple_barrier_take_profit_bps),
+                    stop_loss_bps=float(triple_barrier_stop_loss_bps),
+                )
+                row["label_tb_dir"] = int(tb_dir)
+                row["label_tb_hit_bars"] = int(tb_hit_bars)
+                row["label_tb_exit_bps"] = round6(tb_exit_bps - float(roundtrip_cost_bps))
+                row["label_tb_event"] = str(tb_event)
 
             writer.writerow(row)
             written += 1
@@ -535,6 +610,10 @@ def main(argv=None) -> int:
                 max_rows_per_market=int(args.max_rows_per_market),
                 label_h1=int(args.label_h1),
                 label_h5=int(args.label_h5),
+                enable_triple_barrier_labels=bool(args.enable_triple_barrier_labels),
+                triple_barrier_horizon=int(args.triple_barrier_horizon),
+                triple_barrier_take_profit_bps=float(args.triple_barrier_take_profit_bps),
+                triple_barrier_stop_loss_bps=float(args.triple_barrier_stop_loss_bps),
                 roundtrip_cost_bps=float(args.roundtrip_cost_bps),
                 skip_existing=bool(args.skip_existing),
             )
@@ -571,6 +650,10 @@ def main(argv=None) -> int:
         "roundtrip_cost_bps": float(args.roundtrip_cost_bps),
         "label_h1": int(args.label_h1),
         "label_h5": int(args.label_h5),
+        "enable_triple_barrier_labels": bool(args.enable_triple_barrier_labels),
+        "triple_barrier_horizon": int(args.triple_barrier_horizon),
+        "triple_barrier_take_profit_bps": float(args.triple_barrier_take_profit_bps),
+        "triple_barrier_stop_loss_bps": float(args.triple_barrier_stop_loss_bps),
         "max_rows_per_market": int(args.max_rows_per_market),
         "job_count": len(markets),
         "success_count": len(jobs),

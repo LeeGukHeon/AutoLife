@@ -13,6 +13,8 @@ struct ProbabilisticInference {
     double prob_h5_raw = 0.5;
     double prob_h5_calibrated = 0.5;
     double selection_threshold_h5 = 0.6;
+    double expected_edge_bps = 0.0;
+    double expected_edge_pct = 0.0;
     bool select_h5 = false;
 };
 
@@ -38,6 +40,13 @@ public:
         double calib_a = 1.0;
         double calib_b = 0.0;
         double threshold = 0.6;
+        bool has_edge_regressor = false;
+        std::vector<double> edge_coef;
+        double edge_intercept = 0.0;
+        double edge_clip_abs_bps = 250.0;
+        double edge_win_mean_bps = 0.0;
+        double edge_loss_mean_bps = 0.0;
+        double edge_neutral_mean_bps = 0.0;
     };
 
     struct MarketEntry {

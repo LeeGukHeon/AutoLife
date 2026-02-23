@@ -7,6 +7,7 @@ import urllib.parse
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+from typing import Dict, Any
 
 from _script_common import dump_json, ensure_parent_directory, resolve_repo_path
 
@@ -17,7 +18,10 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--unit", "-Unit", choices=["1", "3", "5", "10", "15", "30", "60", "240"], default="1")
     parser.add_argument("--candles", "-Candles", type=int, default=12000)
     parser.add_argument("--output-path", "-OutputPath", default="")
+    parser.add_argument("--start-utc", "-StartUtc", default="")
     parser.add_argument("--end-utc", "-EndUtc", default="")
+    parser.add_argument("--append-existing", "-AppendExisting", action="store_true")
+    parser.add_argument("--auto-start-from-output", "-AutoStartFromOutput", action="store_true")
     parser.add_argument("--chunk-size", "-ChunkSize", type=int, default=200)
     parser.add_argument("--sleep-ms", "-SleepMs", type=int, default=120)
     parser.add_argument("--base-url", "-BaseUrl", default="https://api.upbit.com")
@@ -71,10 +75,34 @@ def append_jsonl(path_value, payload):
         fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
+def load_existing_rows(path_value) -> Dict[int, Dict[str, float]]:
+    rows: Dict[int, Dict[str, float]] = {}
+    if not path_value.exists():
+        return rows
+    with path_value.open("r", encoding="utf-8", errors="ignore", newline="") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            try:
+                ts = int(float(row.get("timestamp", 0)))
+                if ts <= 0:
+                    continue
+                rows[int(ts)] = {
+                    "timestamp": int(ts),
+                    "open": float(row.get("open", 0.0)),
+                    "high": float(row.get("high", 0.0)),
+                    "low": float(row.get("low", 0.0)),
+                    "close": float(row.get("close", 0.0)),
+                    "volume": float(row.get("volume", 0.0)),
+                }
+            except Exception:
+                continue
+    return rows
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
-    if args.candles <= 0:
-        raise RuntimeError("Candles must be > 0.")
+    if args.candles < 0:
+        raise RuntimeError("Candles must be >= 0.")
     if args.chunk_size <= 0 or args.chunk_size > 200:
         raise RuntimeError("ChunkSize must be between 1 and 200.")
     if args.sleep_ms < 0:
@@ -106,9 +134,34 @@ def main(argv=None) -> int:
     cursor_utc = None
     if args.end_utc.strip():
         cursor_utc = datetime.fromisoformat(args.end_utc.replace("Z", "+00:00")).astimezone(timezone.utc)
+    if cursor_utc is None:
+        cursor_utc = datetime.now(tz=timezone.utc)
+
+    start_ts_ms = None
+    if args.start_utc.strip():
+        start_dt = datetime.fromisoformat(args.start_utc.replace("Z", "+00:00")).astimezone(timezone.utc)
+        start_ts_ms = int(start_dt.timestamp() * 1000)
 
     endpoint = f"/v1/candles/minutes/{args.unit}"
-    rows_by_ts = {}
+    rows_by_ts: Dict[int, Dict[str, float]] = {}
+    existing_rows_loaded = 0
+    existing_last_ts = 0
+    if bool(args.append_existing):
+        rows_by_ts = load_existing_rows(output_path)
+        existing_rows_loaded = int(len(rows_by_ts))
+        if existing_rows_loaded > 0:
+            existing_last_ts = int(max(rows_by_ts.keys()))
+    if bool(args.auto_start_from_output) and existing_last_ts > 0:
+        auto_start_ts = int(existing_last_ts + 1)
+        if start_ts_ms is None:
+            start_ts_ms = auto_start_ts
+        else:
+            start_ts_ms = max(int(start_ts_ms), auto_start_ts)
+
+    if args.candles == 0 and start_ts_ms is None:
+        raise RuntimeError("Candles=0 requires --start-utc or --auto-start-from-output.")
+
+    initial_rows = int(len(rows_by_ts))
     prev_oldest_ts = None
     stagnant_cursor_count = 0
     stagnant_unique_count = 0
@@ -123,8 +176,13 @@ def main(argv=None) -> int:
     throttle_events = []
     recover_events = []
 
-    while len(rows_by_ts) < args.candles:
-        remaining = args.candles - len(rows_by_ts)
+    reached_start_boundary = False
+    while True:
+        if args.candles > 0 and len(rows_by_ts) >= args.candles:
+            break
+        if reached_start_boundary:
+            break
+        remaining = max(1, args.candles - len(rows_by_ts)) if args.candles > 0 else args.chunk_size
         count = min(args.chunk_size, remaining)
         query = {"market": args.market, "count": str(count)}
         if cursor_utc is not None:
@@ -223,6 +281,8 @@ def main(argv=None) -> int:
             if not isinstance(item, dict):
                 continue
             ts = to_unix_ms(item)
+            if start_ts_ms is not None and int(ts) < int(start_ts_ms):
+                continue
             if int(ts) not in rows_by_ts:
                 batch_new_unique += 1
             rows_by_ts[int(ts)] = {
@@ -235,6 +295,8 @@ def main(argv=None) -> int:
             }
 
         oldest = min(to_unix_ms(item) for item in batch if isinstance(item, dict))
+        if start_ts_ms is not None and int(oldest) <= int(start_ts_ms):
+            reached_start_boundary = True
         if prev_oldest_ts is not None and int(oldest) >= int(prev_oldest_ts):
             stagnant_cursor_count += 1
         else:
@@ -300,6 +362,7 @@ def main(argv=None) -> int:
     print(f"market={args.market}")
     print(f"unit={args.unit}m")
     print(f"rows={len(sorted_rows)}")
+    print(f"new_rows={max(0, len(sorted_rows) - initial_rows)}")
     print(f"from_utc={first_utc}")
     print(f"to_utc={last_utc}")
     print(f"output={output_path}")
@@ -317,6 +380,18 @@ def main(argv=None) -> int:
         "recover_event_count": len(recover_events),
         "telemetry_jsonl": str(compliance_telemetry_jsonl),
         "rows": len(sorted_rows),
+        "new_rows": int(max(0, len(sorted_rows) - initial_rows)),
+        "append_existing": bool(args.append_existing),
+        "auto_start_from_output": bool(args.auto_start_from_output),
+        "existing_rows_loaded": int(existing_rows_loaded),
+        "existing_last_utc": (
+            datetime.fromtimestamp(existing_last_ts / 1000.0, tz=timezone.utc).isoformat()
+            if existing_last_ts > 0 else ""
+        ),
+        "start_utc": (
+            datetime.fromtimestamp(int(start_ts_ms) / 1000.0, tz=timezone.utc).isoformat()
+            if start_ts_ms is not None else ""
+        ),
         "from_utc": first_utc,
         "to_utc": last_utc,
         "stagnant_cursor_break": bool(broke_on_stagnant_cursor),

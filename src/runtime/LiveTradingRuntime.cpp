@@ -74,6 +74,7 @@ struct ProbabilisticRuntimeSnapshot {
     double prob_h5_calibrated = 0.5;
     double threshold_h5 = 0.6;
     double margin_h5 = 0.0;
+    double expected_edge_pct = 0.0;
     double online_margin_bias = 0.0;
     double online_strength_gain = 1.0;
 };
@@ -253,6 +254,7 @@ bool inferProbabilisticRuntimeSnapshot(
     out_snapshot.prob_h1_calibrated = std::clamp(inference.prob_h1_calibrated, 0.0, 1.0);
     out_snapshot.prob_h5_calibrated = std::clamp(inference.prob_h5_calibrated, 0.0, 1.0);
     out_snapshot.threshold_h5 = std::clamp(inference.selection_threshold_h5, 0.0, 1.0);
+    out_snapshot.expected_edge_pct = std::clamp(inference.expected_edge_pct, -0.05, 0.05);
     out_snapshot.margin_h5 = std::clamp(
         inference.prob_h5_calibrated - inference.selection_threshold_h5,
         -1.0,
@@ -331,6 +333,12 @@ bool applyProbabilisticRuntimeAdjustment(
         0.0,
         0.01
     );
+    if (std::isfinite(snapshot.expected_edge_pct) && std::abs(snapshot.expected_edge_pct) > 1e-9) {
+        const double ev_blend = 0.20;
+        signal.expected_value =
+            (signal.expected_value * (1.0 - ev_blend)) +
+            (std::clamp(snapshot.expected_edge_pct, -0.05, 0.05) * ev_blend);
+    }
 
     if (cfg.probabilistic_runtime_primary_mode) {
         const double blend = std::clamp(cfg.probabilistic_runtime_strength_blend, 0.0, 1.0);

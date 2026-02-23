@@ -55,6 +55,51 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--threshold-step", type=float, default=0.01)
     parser.add_argument("--threshold-min-coverage", type=float, default=0.02)
     parser.add_argument("--threshold-min-selected", type=int, default=100)
+    parser.add_argument(
+        "--h1-target-column",
+        default="label_up_h1",
+        help="Binary target column for h1 head.",
+    )
+    parser.add_argument(
+        "--h5-target-column",
+        default="label_up_h5",
+        help="Target column for h5 head.",
+    )
+    parser.add_argument(
+        "--edge-column",
+        default="label_edge_bps_h5",
+        help="Edge/return column name recorded in artifact metadata.",
+    )
+    parser.add_argument(
+        "--drop-neutral-target",
+        action="store_true",
+        default=True,
+        help="Compatibility flag with per-market trainer artifact schema.",
+    )
+    parser.add_argument(
+        "--keep-neutral-target",
+        dest="drop_neutral_target",
+        action="store_false",
+        help="Compatibility flag with per-market trainer artifact schema.",
+    )
+    parser.add_argument(
+        "--enable-edge-regressor",
+        action="store_true",
+        default=True,
+        help="Enable h5 edge regressor head (shared with per-market trainer state layout).",
+    )
+    parser.add_argument(
+        "--disable-edge-regressor",
+        dest="enable_edge_regressor",
+        action="store_false",
+        help="Disable h5 edge regressor head.",
+    )
+    parser.add_argument(
+        "--edge-target-clip-bps",
+        type=float,
+        default=250.0,
+        help="Clip absolute edge target for regression stability.",
+    )
     parser.add_argument("--max-datasets", type=int, default=0)
     parser.add_argument("--random-state", type=int, default=42)
     return parser.parse_args(argv)

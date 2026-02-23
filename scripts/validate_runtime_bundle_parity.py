@@ -55,6 +55,33 @@ def sigmoid(z: np.ndarray) -> np.ndarray:
     return 1.0 / (1.0 + np.exp(-zz))
 
 
+def extract_edge_regressor(node: Any) -> Any:
+    if not isinstance(node, dict):
+        return None
+    linear = node.get("linear")
+    if not isinstance(linear, dict):
+        return None
+    coef_raw = linear.get("coef")
+    if not isinstance(coef_raw, list) or not coef_raw:
+        return None
+    try:
+        coef = np.asarray(coef_raw, dtype=np.float64)
+        intercept = float(linear.get("intercept", 0.0) or 0.0)
+        clip_abs = float(node.get("clip_abs_bps", 250.0) or 250.0)
+    except Exception:
+        return None
+    if not np.isfinite(intercept):
+        return None
+    if not np.isfinite(clip_abs):
+        clip_abs = 250.0
+    clip_abs = float(np.clip(clip_abs, 10.0, 5000.0))
+    return {
+        "coef": coef,
+        "intercept": intercept,
+        "clip_abs_bps": clip_abs,
+    }
+
+
 def get_test_window(split_manifest: Dict[str, Any], market: str, fold_id: int) -> Dict[str, int]:
     for ds in split_manifest.get("datasets", []) or []:
         if not isinstance(ds, dict):
@@ -127,6 +154,7 @@ def main(argv=None) -> int:
             continue
         model_payload = joblib.load(h5_model_path)
         model = model_payload["model"]
+        edge_reg_job = extract_edge_regressor(model_payload.get("edge_regressor"))
 
         win = get_test_window(split_manifest, market, fold_id)
         if int(win["test_start"]) <= 0 or int(win["test_end"]) <= 0:
@@ -179,6 +207,34 @@ def main(argv=None) -> int:
         max_diff = float(np.max(diff))
         mean_diff = float(np.mean(diff))
         worst = max(worst, max_diff)
+        edge_max_diff = math.nan
+        edge_mean_diff = math.nan
+        edge_parity_mode = "not_available"
+        edge_reg_bundle = extract_edge_regressor(item.get("h5_model", {}).get("edge_regressor"))
+        if edge_reg_job is not None and edge_reg_bundle is not None:
+            if edge_reg_job["coef"].size != x_np.shape[1]:
+                raise RuntimeError(
+                    f"job edge coef size mismatch for {market}: {edge_reg_job['coef'].size} vs {x_np.shape[1]}"
+                )
+            if edge_reg_bundle["coef"].size != x_np.shape[1]:
+                raise RuntimeError(
+                    f"bundle edge coef size mismatch for {market}: {edge_reg_bundle['coef'].size} vs {x_np.shape[1]}"
+                )
+            edge_job = np.clip(
+                (x_np @ edge_reg_job["coef"]) + float(edge_reg_job["intercept"]),
+                -float(edge_reg_job["clip_abs_bps"]),
+                float(edge_reg_job["clip_abs_bps"]),
+            )
+            edge_bundle = np.clip(
+                (x_np @ edge_reg_bundle["coef"]) + float(edge_reg_bundle["intercept"]),
+                -float(edge_reg_bundle["clip_abs_bps"]),
+                float(edge_reg_bundle["clip_abs_bps"]),
+            )
+            edge_diff = np.abs(edge_job - edge_bundle)
+            edge_max_diff = float(np.max(edge_diff))
+            edge_mean_diff = float(np.mean(edge_diff))
+            worst = max(worst, edge_max_diff)
+            edge_parity_mode = "checked"
         results.append(
             {
                 "market": market,
@@ -186,6 +242,9 @@ def main(argv=None) -> int:
                 "n": int(x_np.shape[0]),
                 "max_abs_diff": max_diff,
                 "mean_abs_diff": mean_diff,
+                "edge_parity_mode": edge_parity_mode,
+                "edge_max_abs_diff_bps": edge_max_diff,
+                "edge_mean_abs_diff_bps": edge_mean_diff,
             }
         )
 
@@ -209,10 +268,12 @@ def main(argv=None) -> int:
                 if str(h5_model_path):
                     model_payload = joblib.load(h5_model_path)
                     model = model_payload["model"]
+                    edge_reg_job = extract_edge_regressor(model_payload.get("edge_regressor"))
                     lin = default_model.get("h5_model", {}).get("linear", {}) or {}
                     coef = np.asarray(lin.get("coef", []), dtype=np.float64)
                     intercept = float(lin.get("intercept", 0.0) or 0.0)
                     cal2 = default_model.get("h5_model", {}).get("calibration", {}) or {}
+                    edge_reg_bundle = extract_edge_regressor(default_model.get("h5_model", {}).get("edge_regressor"))
                     cal_fold = fold_match.get("calibration", {}).get("h5", {}) or {}
 
                     for market, ds in sorted(by_market_summary.items()):
@@ -267,6 +328,33 @@ def main(argv=None) -> int:
                         max_diff = float(np.max(diff))
                         mean_diff = float(np.mean(diff))
                         worst = max(worst, max_diff)
+                        edge_max_diff = math.nan
+                        edge_mean_diff = math.nan
+                        edge_parity_mode = "not_available"
+                        if edge_reg_job is not None and edge_reg_bundle is not None:
+                            if edge_reg_job["coef"].size != x_np.shape[1]:
+                                raise RuntimeError(
+                                    f"job edge coef size mismatch for {market}: {edge_reg_job['coef'].size} vs {x_np.shape[1]}"
+                                )
+                            if edge_reg_bundle["coef"].size != x_np.shape[1]:
+                                raise RuntimeError(
+                                    f"bundle edge coef size mismatch for {market}: {edge_reg_bundle['coef'].size} vs {x_np.shape[1]}"
+                                )
+                            edge_job = np.clip(
+                                (x_np @ edge_reg_job["coef"]) + float(edge_reg_job["intercept"]),
+                                -float(edge_reg_job["clip_abs_bps"]),
+                                float(edge_reg_job["clip_abs_bps"]),
+                            )
+                            edge_bundle = np.clip(
+                                (x_np @ edge_reg_bundle["coef"]) + float(edge_reg_bundle["intercept"]),
+                                -float(edge_reg_bundle["clip_abs_bps"]),
+                                float(edge_reg_bundle["clip_abs_bps"]),
+                            )
+                            edge_diff = np.abs(edge_job - edge_bundle)
+                            edge_max_diff = float(np.max(edge_diff))
+                            edge_mean_diff = float(np.mean(edge_diff))
+                            worst = max(worst, edge_max_diff)
+                            edge_parity_mode = "checked"
                         results.append(
                             {
                                 "market": market,
@@ -274,6 +362,9 @@ def main(argv=None) -> int:
                                 "n": int(x_np.shape[0]),
                                 "max_abs_diff": max_diff,
                                 "mean_abs_diff": mean_diff,
+                                "edge_parity_mode": edge_parity_mode,
+                                "edge_max_abs_diff_bps": edge_max_diff,
+                                "edge_mean_abs_diff_bps": edge_mean_diff,
                             }
                         )
 

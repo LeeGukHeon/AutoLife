@@ -11,6 +11,7 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
 - `docs/CHAPTER_CURRENT.md`
 - `docs/CHAPTER_HISTORY_BRIEF.md`
 - `docs/PROBABILISTIC_HYBRID_TRANSITION_2026-02-20.md`
+- `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`
 - `docs/TODO_STAGE15_EXECUTION_PLAN_2026-02-13.md`
 
 ## Build Path (Fixed)
@@ -208,15 +209,90 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
     - `avg_total_trades: 262.2 -> 15.2` (표본 축소)
   - 판정:
     - adaptive fail 원인은 `risk_adjusted_score_guard_pass` 단일 잔여.
+- [x] 대용량 수집 디스크 가드 추가(200GB 운영 환경 대응).
+  - script: `scripts/fetch_probabilistic_training_bundle.py`
+  - 옵션:
+    - `--min-free-gb`
+    - `--max-output-gb`
+    - `--disk-budget-policy {halt|skip}`
+  - 결과: budget 초과 예상 job은 `blocked_disk_budget`로 기록되고 정책에 따라 halt/skip 처리.
+- [x] feature builder에 optional triple-barrier 라벨 추가(기본 OFF).
+  - script: `scripts/build_probabilistic_feature_dataset.py`
+  - 옵션:
+    - `--enable-triple-barrier-labels`
+    - `--triple-barrier-horizon`
+    - `--triple-barrier-take-profit-bps`
+    - `--triple-barrier-stop-loss-bps`
+  - 목적: 단순 up/down 라벨 대비 실전형 진입/청산 이벤트 학습 기반 마련.
+- [x] 학습 스크립트 타깃 컬럼 선택 옵션 추가.
+  - script: `scripts/train_probabilistic_pattern_model.py`
+  - 옵션:
+    - `--h1-target-column`
+    - `--h5-target-column`
+    - `--edge-column`
+    - `--drop-neutral-target / --keep-neutral-target`
+  - 목적: `label_up_h5` 고정 의존 제거, triple-barrier 기반 타깃 실험 경로 확보.
+  - smoke:
+    - `python scripts/train_probabilistic_pattern_model.py --max-datasets 1 --output-json build/Release/logs/probabilistic_model_train_summary_smoke_targetflex_20260221.json --model-dir build/Release/models/probabilistic_pattern_v1_smoke_targetflex_20260221`
+    - 결과: `status=pass`
+- [x] EV 브리지 1차(학습 artifact -> runtime inference) 연결.
+  - train:
+    - `h5 valid/test edge_profile` 산출 및 `h5 artifact`에 저장
+  - export:
+    - runtime bundle에 `h5_model.edge_profile` 포함
+  - runtime(C++):
+    - `expected_edge_bps/pct` 추론값 반영
+    - live/backtest expected-value blend 연결
+  - smoke:
+    - train: `build/Release/logs/probabilistic_model_train_summary_smoke_evprofile_20260221.json` (`pass`)
+    - bundle: `build/Release/logs/probabilistic_runtime_bundle_smoke_evprofile_20260221.json`
+    - parity: `build/Release/logs/probabilistic_runtime_bundle_parity_smoke_evprofile_20260221.json` (`status=pass`)
+- [x] EV 브리지 2차(회귀 헤드 우선 + profile fallback) 연결.
+  - train:
+    - `--enable-edge-regressor` / `--disable-edge-regressor`
+    - `--edge-target-clip-bps`
+    - `h5 valid/test edge_regression(mae/rmse/corr)` 집계
+    - `h5 artifact.edge_regressor` 저장
+  - export:
+    - runtime bundle에 `h5_model.edge_regressor` 포함
+  - runtime(C++):
+    - `edge_regressor` 존재 시 EV 계산 우선 사용
+    - 미존재/차원불일치 시 `edge_profile` fallback
+  - smoke:
+    - train: `build/Release/logs/probabilistic_model_train_summary_smoke_evbridge2_20260221.json` (`pass`)
+    - bundle: `config/model/probabilistic_runtime_bundle_smoke_evbridge2_20260221.json`
+    - parity: `build/Release/logs/probabilistic_runtime_bundle_parity_smoke_evbridge2_20260221.json` (`status=pass`, edge parity checked)
+    - build: `AutoLifeTrading` Release 성공
+- [x] 증분 수집 + 하이브리드 재학습 사이클 구현.
+  - fetch core:
+    - `scripts/fetch_upbit_historical_candles.py`
+      - `--start-utc`, `--append-existing`, `--auto-start-from-output`
+      - 기존 CSV dedup 병합 + 마지막 캔들 이후 증분 추가
+  - bundle:
+    - `scripts/fetch_probabilistic_training_bundle.py`
+      - `--incremental-update`, `--incremental-overlap-bars`
+      - job별 마지막 ts 기준 증분 수집(중복 구간 overlap 허용)
+  - orchestrator:
+    - `scripts/run_probabilistic_hybrid_cycle.py`
+      - 증분 fetch -> feature build/validate -> split -> baseline -> global train -> export -> parity
+  - smoke:
+    - `build/Release/logs/probabilistic_hybrid_cycle_summary_smokehybrid3_20260221.json` (`status=pass`)
+    - `build/Release/logs/probabilistic_runtime_bundle_parity_smokehybrid3_20260221.json` (`status=pass`)
 
 ## Next (Strict Order)
+0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
+   - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
+     `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.
 1. `risk_adjusted_score` 잔여 실패 원인 분해:
    - 고손실 패턴 셀/레짐 분해(코인 하드코딩 금지)
    - 손실 꼬리(heavy-loss tail) 중심 리스크 후행 제어 강화
-2. 진입 품질 재균형:
+2. 라벨/학습 구조 고도화:
+   - optional triple-barrier 활성화 실험(기존 라벨과 병행)
+   - `P(win)` + `E[pnl]` 2-head 학습 파이프라인 추가
+3. 진입 품질 재균형:
    - 현재 저표본(`avg_total_trades=15.2`) 상태에서 품질 유지하며 표본을 점진 복구
    - 확률 우선 유지 + 안전게이트 고정
-3. 동일 5-set 재검증:
+4. 동일 5-set 재검증:
    - 목표: `risk_adjusted_score_guard_pass` 통과 + expectancy 추가 개선.
 
 ## Guardrails

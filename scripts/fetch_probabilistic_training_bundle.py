@@ -4,11 +4,12 @@ import csv
 import json
 import math
 import pathlib
+import shutil
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 from _script_common import dump_json, ensure_parent_directory, resolve_repo_path
 
@@ -42,10 +43,42 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument("--estimate-only", action="store_true")
     parser.add_argument("--skip-existing", action="store_true")
+    parser.add_argument(
+        "--incremental-update",
+        action="store_true",
+        help=(
+            "Incremental mode: append new candles to existing CSV using last timestamp "
+            "(with small overlap)."
+        ),
+    )
+    parser.add_argument(
+        "--incremental-overlap-bars",
+        type=int,
+        default=3,
+        help="Overlap bars per timeframe when incremental-update is enabled.",
+    )
     parser.add_argument("--max-jobs", type=int, default=0)
     parser.add_argument("--sleep-ms-between-jobs", type=int, default=350)
     parser.add_argument("--chunk-size", type=int, default=200)
     parser.add_argument("--sleep-ms-per-request", type=int, default=120)
+    parser.add_argument(
+        "--disk-budget-policy",
+        choices=("halt", "skip"),
+        default="halt",
+        help="When estimated next job exceeds storage guard, halt run or skip only that job.",
+    )
+    parser.add_argument(
+        "--max-output-gb",
+        type=float,
+        default=0.0,
+        help="Optional hard cap for output-dir total size (0 disables cap).",
+    )
+    parser.add_argument(
+        "--min-free-gb",
+        type=float,
+        default=20.0,
+        help="Keep at least this much free disk space while fetching.",
+    )
     parser.add_argument("--indicator-columns", type=int, default=30)
     parser.add_argument("--est-bytes-per-row-ohlcv", type=int, default=110)
     parser.add_argument("--est-bytes-per-indicator-col", type=int, default=15)
@@ -156,6 +189,65 @@ def human_size(byte_count: int) -> str:
     return f"{value:.2f} {units[idx]}"
 
 
+def bytes_from_gb(gb_value: float) -> int:
+    if not math.isfinite(float(gb_value)) or float(gb_value) <= 0.0:
+        return 0
+    return int(float(gb_value) * (1024.0 ** 3))
+
+
+def dir_size_bytes(path_value: pathlib.Path) -> int:
+    if not path_value.exists():
+        return 0
+    total = 0
+    for item in path_value.rglob("*"):
+        if not item.is_file():
+            continue
+        try:
+            total += int(item.stat().st_size)
+        except Exception:
+            continue
+    return int(total)
+
+
+def build_storage_guard_state(
+    output_dir: pathlib.Path,
+    current_output_bytes: int,
+    max_output_bytes: int,
+    min_free_bytes: int,
+) -> Dict[str, object]:
+    usage = shutil.disk_usage(output_dir)
+    free_bytes = int(max(0, usage.free))
+    required_headroom = int(max(0, min_free_bytes))
+    free_after_headroom = int(max(0, free_bytes - required_headroom))
+
+    output_cap_remaining = -1
+    if int(max_output_bytes) > 0:
+        output_cap_remaining = int(max(0, max_output_bytes - current_output_bytes))
+
+    if output_cap_remaining >= 0:
+        allowed_new_bytes = int(max(0, min(free_after_headroom, output_cap_remaining)))
+    else:
+        allowed_new_bytes = int(free_after_headroom)
+
+    return {
+        "output_dir": str(output_dir),
+        "current_output_bytes": int(current_output_bytes),
+        "current_output_human": human_size(int(current_output_bytes)),
+        "max_output_bytes": int(max_output_bytes),
+        "max_output_human": human_size(int(max_output_bytes)) if int(max_output_bytes) > 0 else "disabled",
+        "free_disk_bytes": int(free_bytes),
+        "free_disk_human": human_size(int(free_bytes)),
+        "min_free_bytes": int(required_headroom),
+        "min_free_human": human_size(int(required_headroom)),
+        "free_after_headroom_bytes": int(free_after_headroom),
+        "free_after_headroom_human": human_size(int(free_after_headroom)),
+        "output_cap_remaining_bytes": int(output_cap_remaining),
+        "output_cap_remaining_human": human_size(int(output_cap_remaining)) if output_cap_remaining >= 0 else "unbounded",
+        "allowed_new_bytes": int(allowed_new_bytes),
+        "allowed_new_human": human_size(int(allowed_new_bytes)),
+    }
+
+
 def classify_jobs(manifest_jobs: List[Dict[str, object]]) -> Tuple[List[Dict[str, object]], List[Dict[str, object]], List[Dict[str, object]]]:
     success_jobs = [x for x in manifest_jobs if str(x.get("status", "")).startswith("fetched")]
     failed_jobs = [x for x in manifest_jobs if str(x.get("status", "")) == "failed"]
@@ -175,11 +267,14 @@ def build_manifest_payload(
     timeframe_units: List[int],
     estimate_only: bool,
     skip_existing: bool,
+    incremental_update: bool,
+    incremental_overlap_bars: int,
     planned_job_count: int,
     total_estimated_rows: int,
     total_estimated_raw_bytes: int,
     total_estimated_enriched_bytes: int,
     indicator_columns: int,
+    storage_guard: Dict[str, object],
     manifest_jobs: List[Dict[str, object]],
     current_job: Dict[str, object] | None,
 ) -> Dict[str, object]:
@@ -208,6 +303,8 @@ def build_manifest_payload(
         "timeframes_min": timeframe_units,
         "estimate_only": bool(estimate_only),
         "skip_existing": bool(skip_existing),
+        "incremental_update": bool(incremental_update),
+        "incremental_overlap_bars": int(incremental_overlap_bars),
         "planned_job_count": int(planned_job_count),
         "completed_job_count": int(completed_job_count),
         "progress_pct": float(progress_pct),
@@ -228,12 +325,16 @@ def build_manifest_payload(
             "csv_bytes": int(actual_bytes),
             "csv_human": human_size(actual_bytes),
         },
+        "storage_guard": storage_guard,
         "current_job": current_job if isinstance(current_job, dict) else {},
         "jobs": manifest_jobs,
     }
 
 
 def build_summary_payload(manifest_json: pathlib.Path, manifest_payload: Dict[str, object]) -> Dict[str, object]:
+    storage_guard = manifest_payload.get("storage_guard", {})
+    if not isinstance(storage_guard, dict):
+        storage_guard = {}
     return {
         "generated_at_utc": manifest_payload["generated_at_utc"],
         "run_state": manifest_payload.get("run_state", ""),
@@ -248,6 +349,9 @@ def build_summary_payload(manifest_json: pathlib.Path, manifest_payload: Dict[st
         "estimated_raw_csv_human": manifest_payload["estimated_totals"]["raw_ohlcv_csv_human"],
         "estimated_enriched_csv_human": manifest_payload["estimated_totals"]["enriched_csv_human"],
         "actual_csv_human": manifest_payload["actual_totals"]["csv_human"],
+        "storage_guard_allowed_new_human": storage_guard.get("allowed_new_human", ""),
+        "storage_guard_current_output_human": storage_guard.get("current_output_human", ""),
+        "storage_guard_free_disk_human": storage_guard.get("free_disk_human", ""),
     }
 
 
@@ -287,6 +391,8 @@ def run_fetch_job(
     end_utc: datetime,
     chunk_size: int,
     sleep_ms_per_request: int,
+    start_utc: Optional[datetime] = None,
+    append_existing: bool = False,
 ) -> subprocess.CompletedProcess:
     cmd = [
         str(python_exe),
@@ -295,8 +401,6 @@ def run_fetch_job(
         str(market),
         "--unit",
         str(unit_min),
-        "--candles",
-        str(int(candles)),
         "--output-path",
         str(output_path),
         "--end-utc",
@@ -306,6 +410,12 @@ def run_fetch_job(
         "--sleep-ms",
         str(int(sleep_ms_per_request)),
     ]
+    if start_utc is not None:
+        cmd.extend(["--start-utc", start_utc.strftime("%Y-%m-%dT%H:%M:%SZ"), "--candles", "0"])
+    else:
+        cmd.extend(["--candles", str(int(candles))])
+    if bool(append_existing):
+        cmd.append("--append-existing")
     return subprocess.run(
         cmd,
         capture_output=True,
@@ -317,6 +427,13 @@ def run_fetch_job(
 
 def main(argv=None) -> int:
     args = parse_args(argv)
+    incremental_mode = bool(args.incremental_update)
+    incremental_overlap_bars = max(0, int(args.incremental_overlap_bars))
+    if incremental_mode and bool(args.skip_existing):
+        print(
+            "[FetchProbabilisticBundle] incremental-update enabled: ignoring --skip-existing behavior",
+            flush=True,
+        )
 
     start_utc = parse_utc(args.history_start_utc, default_to_now=False)
     end_utc = parse_utc(args.history_end_utc, default_to_now=True)
@@ -337,6 +454,17 @@ def main(argv=None) -> int:
     ensure_parent_directory(manifest_json)
     ensure_parent_directory(summary_json)
 
+    initial_output_bytes = dir_size_bytes(output_dir)
+    current_output_bytes = int(initial_output_bytes)
+    max_output_bytes = bytes_from_gb(float(args.max_output_gb))
+    min_free_bytes = bytes_from_gb(float(args.min_free_gb))
+    current_storage_guard = build_storage_guard_state(
+        output_dir=output_dir,
+        current_output_bytes=current_output_bytes,
+        max_output_bytes=max_output_bytes,
+        min_free_bytes=min_free_bytes,
+    )
+
     jobs = build_job_list(
         markets=all_markets,
         timeframe_units=timeframe_units,
@@ -353,8 +481,16 @@ def main(argv=None) -> int:
     total_estimated_raw_bytes = 0
     total_estimated_enriched_bytes = 0
     current_job: Dict[str, object] | None = None
+    stopped_due_to_budget = False
 
     def flush_progress(run_state: str) -> Dict[str, object]:
+        nonlocal current_storage_guard
+        current_storage_guard = build_storage_guard_state(
+            output_dir=output_dir,
+            current_output_bytes=current_output_bytes,
+            max_output_bytes=max_output_bytes,
+            min_free_bytes=min_free_bytes,
+        )
         payload = build_manifest_payload(
             generated_at_utc=datetime.now(tz=timezone.utc).isoformat(),
             run_state=run_state,
@@ -366,11 +502,14 @@ def main(argv=None) -> int:
             timeframe_units=timeframe_units,
             estimate_only=bool(args.estimate_only),
             skip_existing=bool(args.skip_existing),
+            incremental_update=bool(incremental_mode),
+            incremental_overlap_bars=int(incremental_overlap_bars),
             planned_job_count=planned_job_count,
             total_estimated_rows=total_estimated_rows,
             total_estimated_raw_bytes=total_estimated_raw_bytes,
             total_estimated_enriched_bytes=total_estimated_enriched_bytes,
             indicator_columns=int(args.indicator_columns),
+            storage_guard=current_storage_guard,
             manifest_jobs=manifest_jobs,
             current_job=current_job,
         )
@@ -412,6 +551,7 @@ def main(argv=None) -> int:
             "output_path": str(job["output_path"]),
             "estimated_candles": est_rows,
             "estimated_sizes": est_size,
+            "incremental_mode": bool(incremental_mode),
             "status": "planned",
             "rows": 0,
             "file_size_bytes": 0,
@@ -421,7 +561,7 @@ def main(argv=None) -> int:
         }
 
         output_path = pathlib.Path(str(job["output_path"]))
-        if bool(args.skip_existing) and output_path.exists():
+        if (not incremental_mode) and bool(args.skip_existing) and output_path.exists():
             rows, first_ts, last_ts = read_csv_window(output_path)
             file_size = output_path.stat().st_size if output_path.exists() else 0
             job_record["status"] = "skipped_existing"
@@ -439,8 +579,76 @@ def main(argv=None) -> int:
             )
             continue
 
+        fetch_start_utc: Optional[datetime] = None
+        if incremental_mode:
+            rows_existing, first_ts_existing, last_ts_existing = read_csv_window(output_path)
+            job_record["existing_rows_before"] = int(rows_existing)
+            job_record["existing_from_utc"] = utc_iso_from_ms(first_ts_existing)
+            job_record["existing_to_utc"] = utc_iso_from_ms(last_ts_existing)
+
+            if rows_existing > 0 and last_ts_existing > 0:
+                unit_ms = int(max(1, int(job["unit_min"])) * 60 * 1000)
+                overlap_ms = int(incremental_overlap_bars * unit_ms)
+                start_ms = int(max(int(start_utc.timestamp() * 1000), int(last_ts_existing - overlap_ms)))
+                fetch_start_utc = datetime.fromtimestamp(float(start_ms) / 1000.0, tz=timezone.utc)
+            else:
+                fetch_start_utc = start_utc
+            job_record["incremental_start_utc"] = fetch_start_utc.isoformat() if fetch_start_utc else ""
+
+        if incremental_mode and fetch_start_utc is not None:
+            est_rows_delta = estimate_candle_count(
+                fetch_start_utc,
+                end_utc,
+                int(job["unit_min"]),
+            )
+            est_size_delta = estimate_size_bytes(
+                rows=est_rows_delta,
+                indicator_columns=int(args.indicator_columns),
+                bytes_per_row_ohlcv=int(args.est_bytes_per_row_ohlcv),
+                bytes_per_indicator_col=int(args.est_bytes_per_indicator_col),
+            )
+            job_record["estimated_incremental_candles"] = int(est_rows_delta)
+            job_record["estimated_incremental_sizes"] = est_size_delta
+            estimated_next_bytes = int(est_size_delta["raw_ohlcv_csv_bytes"])
+        else:
+            estimated_next_bytes = int(est_size["raw_ohlcv_csv_bytes"])
+
+        current_storage_guard = build_storage_guard_state(
+            output_dir=output_dir,
+            current_output_bytes=current_output_bytes,
+            max_output_bytes=max_output_bytes,
+            min_free_bytes=min_free_bytes,
+        )
+        allowed_new_bytes = int(current_storage_guard.get("allowed_new_bytes", 0))
+        if estimated_next_bytes > allowed_new_bytes:
+            job_record["status"] = "blocked_disk_budget"
+            job_record["stderr_tail"] = (
+                f"storage_guard_block estimated_next={human_size(estimated_next_bytes)} "
+                f"allowed_new={current_storage_guard.get('allowed_new_human', '')}"
+            )
+            manifest_jobs.append(job_record)
+            current_job = None
+            if str(args.disk_budget_policy) == "halt":
+                stopped_due_to_budget = True
+                flush_progress("stopped_disk_budget")
+                print(
+                    f"[FetchProbabilisticBundle] progress={idx}/{planned_job_count} "
+                    f"status=blocked_disk_budget policy=halt market={job_record['market']} unit={job_record['unit_min']}m "
+                    f"need={human_size(estimated_next_bytes)} allowed={current_storage_guard.get('allowed_new_human', '')}"
+                )
+                break
+
+            flush_progress("in_progress")
+            print(
+                f"[FetchProbabilisticBundle] progress={idx}/{planned_job_count} "
+                f"status=blocked_disk_budget policy=skip market={job_record['market']} unit={job_record['unit_min']}m "
+                f"need={human_size(estimated_next_bytes)} allowed={current_storage_guard.get('allowed_new_human', '')}"
+            )
+            continue
+
         if not bool(args.estimate_only):
             started = time.time()
+            before_bytes = int(output_path.stat().st_size) if output_path.exists() else 0
             current_job = {
                 "index": int(idx),
                 "total": int(planned_job_count),
@@ -461,10 +669,14 @@ def main(argv=None) -> int:
                 end_utc=end_utc,
                 chunk_size=int(args.chunk_size),
                 sleep_ms_per_request=int(args.sleep_ms_per_request),
+                start_utc=fetch_start_utc if incremental_mode else None,
+                append_existing=bool(incremental_mode),
             )
             elapsed = round(time.time() - started, 2)
             job_record["elapsed_sec"] = float(elapsed)
             if int(proc.returncode) != 0:
+                after_bytes = int(output_path.stat().st_size) if output_path.exists() else 0
+                current_output_bytes = max(0, int(current_output_bytes + (after_bytes - before_bytes)))
                 job_record["status"] = "failed"
                 stderr_lines = [x.strip() for x in (proc.stderr or "").splitlines() if x.strip()]
                 stdout_lines = [x.strip() for x in (proc.stdout or "").splitlines() if x.strip()]
@@ -481,6 +693,7 @@ def main(argv=None) -> int:
 
             rows, first_ts, last_ts = read_csv_window(output_path)
             file_size = output_path.stat().st_size if output_path.exists() else 0
+            current_output_bytes = max(0, int(current_output_bytes + (int(file_size) - before_bytes)))
             job_record["status"] = "fetched"
             job_record["rows"] = int(rows)
             job_record["file_size_bytes"] = int(file_size)
@@ -492,7 +705,8 @@ def main(argv=None) -> int:
             print(
                 f"[FetchProbabilisticBundle] progress={idx}/{planned_job_count} "
                 f"status=fetched market={job_record['market']} unit={job_record['unit_min']}m "
-                f"rows={job_record['rows']} size={human_size(int(job_record['file_size_bytes']))}"
+                f"rows={job_record['rows']} size={human_size(int(job_record['file_size_bytes']))} "
+                f"guard_remaining={current_storage_guard.get('allowed_new_human', '')}"
             )
 
             if int(args.sleep_ms_between_jobs) > 0:
@@ -508,6 +722,8 @@ def main(argv=None) -> int:
                 f"est_rows={job_record['estimated_candles']}"
             )
     manifest_payload = flush_progress("completed")
+    if stopped_due_to_budget:
+        manifest_payload = flush_progress("completed_with_budget_stop")
     success_jobs, failed_jobs, skipped_jobs = classify_jobs(manifest_jobs)
 
     print("[FetchProbabilisticBundle] Completed")
@@ -520,7 +736,12 @@ def main(argv=None) -> int:
     print(f"estimated_raw_csv={manifest_payload['estimated_totals']['raw_ohlcv_csv_human']}")
     print(f"estimated_enriched_csv={manifest_payload['estimated_totals']['enriched_csv_human']}")
     print(f"actual_csv={manifest_payload['actual_totals']['csv_human']}")
+    print(f"storage_guard_allowed_new={manifest_payload['storage_guard']['allowed_new_human']}")
+    print(f"storage_guard_free_disk={manifest_payload['storage_guard']['free_disk_human']}")
+    print(f"storage_guard_current_output={manifest_payload['storage_guard']['current_output_human']}")
 
+    if stopped_due_to_budget and str(args.disk_budget_policy) == "halt":
+        return 3
     return 0 if len(failed_jobs) == 0 else 2
 
 

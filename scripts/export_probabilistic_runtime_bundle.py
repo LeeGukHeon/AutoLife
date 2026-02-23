@@ -57,6 +57,36 @@ def extract_linear(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def extract_edge_regressor(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    node = payload.get("edge_regressor")
+    if not isinstance(node, dict):
+        return None
+    linear = node.get("linear")
+    if not isinstance(linear, dict):
+        return None
+    coef_raw = linear.get("coef")
+    if not isinstance(coef_raw, list) or not coef_raw:
+        return None
+    try:
+        coef = [float(x) for x in coef_raw]
+        intercept = float(linear.get("intercept", 0.0) or 0.0)
+        clip_abs_bps = float(node.get("clip_abs_bps", 250.0) or 250.0)
+    except Exception:
+        return None
+    if not np.isfinite(intercept):
+        return None
+    if not np.isfinite(clip_abs_bps):
+        clip_abs_bps = 250.0
+    clip_abs_bps = float(np.clip(clip_abs_bps, 10.0, 5000.0))
+    return {
+        "linear": {
+            "coef": coef,
+            "intercept": intercept,
+        },
+        "clip_abs_bps": clip_abs_bps,
+    }
+
+
 def pick_fold(folds: List[Dict[str, Any]], policy: str) -> Optional[Dict[str, Any]]:
     if not folds:
         return None
@@ -92,6 +122,7 @@ def make_runtime_entry(
 ) -> Dict[str, Any]:
     h1_lin = extract_linear(h1_payload)
     h5_lin = extract_linear(h5_payload)
+    h5_edge_regressor = extract_edge_regressor(h5_payload)
 
     h1_cal = chosen.get("calibration", {}).get("h1", {}) or {}
     h5_cal = chosen.get("calibration", {}).get("h5", {}) or {}
@@ -101,6 +132,9 @@ def make_runtime_entry(
         .get("threshold_selection", {})
         .get("threshold", 0.6)
     )
+    h5_edge_profile = h5_payload.get("edge_profile", {}) if isinstance(h5_payload, dict) else {}
+    if not isinstance(h5_edge_profile, dict):
+        h5_edge_profile = {}
     return {
         "selected_fold_id": int(chosen.get("fold_id", 0) or 0),
         "h1_model": {
@@ -117,6 +151,16 @@ def make_runtime_entry(
                 "b": float(h5_cal.get("b", 0.0) or 0.0),
             },
             "selection_threshold": float(h5_thr),
+            "edge_regressor": h5_edge_regressor if h5_edge_regressor is not None else None,
+            "edge_profile": {
+                "sample_count": int(h5_edge_profile.get("sample_count", 0) or 0),
+                "win_count": int(h5_edge_profile.get("win_count", 0) or 0),
+                "loss_count": int(h5_edge_profile.get("loss_count", 0) or 0),
+                "neutral_count": int(h5_edge_profile.get("neutral_count", 0) or 0),
+                "win_mean_edge_bps": float(h5_edge_profile.get("win_mean_edge_bps", 0.0) or 0.0),
+                "loss_mean_edge_bps": float(h5_edge_profile.get("loss_mean_edge_bps", 0.0) or 0.0),
+                "neutral_mean_edge_bps": float(h5_edge_profile.get("neutral_mean_edge_bps", 0.0) or 0.0),
+            },
         },
         "selected_fold_metrics": {
             "h5_test_calibrated_logloss": float(

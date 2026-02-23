@@ -46,8 +46,93 @@ Title: `Probabilistic Hybrid Foundation`
 7. Phase-2 진행/완료:
    - `scripts/build_probabilistic_feature_dataset.py` 추가
    - 1m anchor + 5/15/60/240 context + leakage-safe labels 생성 파이프라인 구축
-   - full build 완료(9 markets, `9,477,036` rows, `~3.48 GB`)
-   - 메이저+알트 혼합 데이터로 일반화 케이스 확보(코인별 과적합 방지 목적)
+  - full build 완료(9 markets, `9,477,036` rows, `~3.48 GB`)
+  - 메이저+알트 혼합 데이터로 일반화 케이스 확보(코인별 과적합 방지 목적)
+8. Storage safety guard 추가(2026-02-21):
+   - script: `scripts/fetch_probabilistic_training_bundle.py`
+   - options:
+     - `--min-free-gb` (최소 여유 디스크 유지)
+     - `--max-output-gb` (output-dir 용량 상한)
+     - `--disk-budget-policy {halt|skip}`
+   - 목적: 대용량 수집 중 디스크 고갈/중단 리스크를 사전 차단.
+9. Triple-barrier 라벨 옵션 추가(2026-02-21):
+   - script: `scripts/build_probabilistic_feature_dataset.py`
+   - options:
+     - `--enable-triple-barrier-labels`
+     - `--triple-barrier-horizon`
+     - `--triple-barrier-take-profit-bps`
+     - `--triple-barrier-stop-loss-bps`
+   - 기본값은 OFF(기존 라벨 계약 유지), 필요 시 단계적으로 활성화 가능.
+10. 학습 타깃 컬럼 선택 옵션 추가(2026-02-21):
+   - script: `scripts/train_probabilistic_pattern_model.py`
+   - options:
+     - `--h1-target-column`
+     - `--h5-target-column`
+     - `--edge-column`
+     - `--drop-neutral-target / --keep-neutral-target`
+   - 목적: 기존 `label_up_h5` 고정에서 벗어나 triple-barrier 기반 타깃 실험 가능.
+   - smoke:
+     - `build/Release/logs/probabilistic_model_train_summary_smoke_targetflex_20260221.json`
+     - `max-datasets=1`, status=`pass`
+11. EV 브리지(확률->기대값) 1차 연결(2026-02-21):
+   - `scripts/train_probabilistic_pattern_model.py`:
+     - fold metric에 `h5 valid/test edge_profile` 추가.
+     - joblib artifact(`h5`)에 `edge_profile` 저장.
+   - `scripts/export_probabilistic_runtime_bundle.py`:
+     - `h5_model.edge_profile` 출력.
+   - C++ runtime:
+     - `ProbabilisticInference.expected_edge_bps/pct` 계산 추가.
+     - live/backtest `applyProbabilisticRuntimeAdjustment`에서 expected-value blend 반영.
+   - smoke:
+     - train: `build/Release/logs/probabilistic_model_train_summary_smoke_evprofile_20260221.json` (`pass`)
+     - bundle: `build/Release/logs/probabilistic_runtime_bundle_smoke_evprofile_20260221.json` (`h5_model.edge_profile` 확인)
+     - parity: `build/Release/logs/probabilistic_runtime_bundle_parity_smoke_evprofile_20260221.json` (`status=pass`)
+12. EV 브리지 2차(회귀 헤드 우선 + profile fallback) 연결(2026-02-21):
+   - `scripts/train_probabilistic_pattern_model.py`:
+     - `--enable-edge-regressor`(default ON), `--edge-target-clip-bps` 옵션 반영.
+     - fold metric에 `h5 valid/test edge_regression(mae/rmse/corr)` 반영.
+     - `h5 artifact`에 `edge_regressor(linear coef/intercept + clip_abs_bps)` 저장.
+   - `scripts/export_probabilistic_runtime_bundle.py`:
+     - runtime bundle에 `h5_model.edge_regressor` 직렬화.
+   - C++ runtime:
+     - `ProbabilisticRuntimeModel`이 `edge_regressor`를 로드하면 EV 계산에 우선 사용.
+     - regressor 미존재/차원불일치 시 `edge_profile` 기반 계산으로 자동 fallback.
+   - smoke:
+     - train: `build/Release/logs/probabilistic_model_train_summary_smoke_evbridge2_20260221.json` (`pass`)
+     - bundle: `config/model/probabilistic_runtime_bundle_smoke_evbridge2_20260221.json` (`h5_model.edge_regressor` 확인)
+     - parity: `build/Release/logs/probabilistic_runtime_bundle_parity_smoke_evbridge2_20260221.json` (`status=pass`, `worst=0`, `edge_parity_mode=checked`, `edge_max_abs_diff_bps=0`)
+     - build: `AutoLifeTrading` Release 빌드 통과(절대경로 cmake 사용).
+13. 증분 갱신 + 하이브리드 재학습 사이클 추가(2026-02-21):
+   - `scripts/fetch_upbit_historical_candles.py`:
+     - `--start-utc`, `--append-existing`, `--auto-start-from-output` 지원.
+     - 기존 CSV 병합(중복 timestamp dedup) + 마지막 캔들 이후 증분 수집 가능.
+   - `scripts/fetch_probabilistic_training_bundle.py`:
+     - `--incremental-update`, `--incremental-overlap-bars` 지원.
+     - 번들 수집 시 job별 `last_ts` 기준 증분 시작점 계산 후 append 갱신.
+   - 신규 오케스트레이터:
+     - `scripts/run_probabilistic_hybrid_cycle.py`
+     - 단계: 증분 fetch -> feature build -> feature validate -> split manifest ->
+       baseline -> global train -> runtime bundle export -> parity validate
+   - smoke:
+     - `build/Release/logs/probabilistic_hybrid_cycle_summary_smokehybrid3_20260221.json` (`status=pass`)
+     - bundle parity: `build/Release/logs/probabilistic_runtime_bundle_parity_smokehybrid3_20260221.json` (`status=pass`)
+
+## Post-Fetch Canonical Order
+- 수집 완료 후 실행 순서는 `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
+  `Post-Fetch Canonical Order (Ideal)`을 단일 기준으로 사용.
+- 요약:
+  1. fetch 완료/실패건 고정
+  2. feature rebuild
+  3. strict validation
+  4. split 재생성
+  5. baseline 재생성
+  6. global 재학습
+  7. hybrid 확장(권장)
+  8. runtime bundle export
+  9. bundle parity
+  10. verification gate
+  11. paper/shadow
+  12. guarded live enable
 
 ## Current Snapshot (at document update)
 - Active batch: `none`

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 import argparse
 import csv
 import math
@@ -6,10 +7,26 @@ import pathlib
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-import joblib
-import numpy as np
-from sklearn.linear_model import LogisticRegression, SGDClassifier
-from sklearn.metrics import accuracy_score, brier_score_loss, log_loss
+try:
+    import joblib
+except Exception:  # pragma: no cover - optional dependency import guard
+    joblib = None
+
+try:
+    import numpy as np
+except Exception:  # pragma: no cover - optional dependency import guard
+    np = None
+
+try:
+    from sklearn.linear_model import LogisticRegression, SGDClassifier, SGDRegressor
+    from sklearn.metrics import accuracy_score, brier_score_loss, log_loss
+except Exception:  # pragma: no cover - optional dependency import guard
+    LogisticRegression = None
+    SGDClassifier = None
+    SGDRegressor = None
+    accuracy_score = None
+    brier_score_loss = None
+    log_loss = None
 
 from _script_common import dump_json, load_json_or_none, resolve_repo_path
 
@@ -83,6 +100,54 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--threshold-step", type=float, default=0.01)
     parser.add_argument("--threshold-min-coverage", type=float, default=0.02)
     parser.add_argument("--threshold-min-selected", type=int, default=100)
+    parser.add_argument(
+        "--h1-target-column",
+        default="label_up_h1",
+        help="Binary target column for h1 head.",
+    )
+    parser.add_argument(
+        "--h5-target-column",
+        default="label_up_h5",
+        help=(
+            "Target column for h5 head. Supports binary (0/1) or signed "
+            "values (e.g. -1/0/1 from triple-barrier dir)."
+        ),
+    )
+    parser.add_argument(
+        "--edge-column",
+        default="label_edge_bps_h5",
+        help="Edge/return column used for threshold optimization and selected-edge metrics.",
+    )
+    parser.add_argument(
+        "--drop-neutral-target",
+        action="store_true",
+        default=True,
+        help="Drop rows where signed target column equals 0.",
+    )
+    parser.add_argument(
+        "--keep-neutral-target",
+        dest="drop_neutral_target",
+        action="store_false",
+        help="Map signed target 0 to class 0 instead of dropping.",
+    )
+    parser.add_argument(
+        "--enable-edge-regressor",
+        action="store_true",
+        default=True,
+        help="Train an additional h5 edge regressor head (EV bridge).",
+    )
+    parser.add_argument(
+        "--disable-edge-regressor",
+        dest="enable_edge_regressor",
+        action="store_false",
+        help="Disable h5 edge regressor head.",
+    )
+    parser.add_argument(
+        "--edge-target-clip-bps",
+        type=float,
+        default=250.0,
+        help="Clip absolute edge target for regression stability.",
+    )
     parser.add_argument("--max-datasets", type=int, default=0)
     parser.add_argument("--random-state", type=int, default=42)
     return parser.parse_args(argv)
@@ -106,6 +171,27 @@ def safe_int01(raw: Any) -> Optional[int]:
     except Exception:
         return None
     return v if v in (0, 1) else None
+
+
+def safe_binary_target(raw: Any, *, drop_neutral: bool) -> Optional[int]:
+    """
+    Accept binary (0/1) and signed (-1/0/1) targets.
+    - positive -> 1
+    - negative -> 0
+    - zero -> None(drop) or 0(keep) by policy
+    """
+    direct = safe_int01(raw)
+    if direct is not None:
+        return direct
+
+    v = safe_float(raw)
+    if v is None:
+        return None
+    if v > 0.0:
+        return 1
+    if v < 0.0:
+        return 0
+    return None if bool(drop_neutral) else 0
 
 
 def safe_float(raw: Any) -> Optional[float]:
@@ -185,6 +271,33 @@ def classification_metrics(y: np.ndarray, p: np.ndarray, eps: float) -> Dict[str
         "brier": float(brier_score_loss(y2, p2)),
         "accuracy": float(accuracy_score(y2, pred)),
         "positive_rate": float(np.mean(y2)),
+    }
+
+
+def regression_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, Any]:
+    if y_true.size == 0 or y_pred.size == 0:
+        return {
+            "n": 0,
+            "mae_bps": math.nan,
+            "rmse_bps": math.nan,
+            "corr": math.nan,
+        }
+    yt = np.asarray(y_true, dtype=np.float64)
+    yp = np.asarray(y_pred, dtype=np.float64)
+    err = yp - yt
+    mae = float(np.mean(np.abs(err)))
+    rmse = float(np.sqrt(np.mean(np.square(err))))
+    corr = math.nan
+    if yt.size >= 2:
+        yt_std = float(np.std(yt))
+        yp_std = float(np.std(yp))
+        if yt_std > 1e-12 and yp_std > 1e-12:
+            corr = float(np.corrcoef(yt, yp)[0, 1])
+    return {
+        "n": int(yt.size),
+        "mae_bps": mae,
+        "rmse_bps": rmse,
+        "corr": corr,
     }
 
 
@@ -319,6 +432,40 @@ def threshold_metrics(prob_cal: np.ndarray, edge: np.ndarray, threshold: float) 
     }
 
 
+def edge_profile(y: np.ndarray, edge: np.ndarray) -> Dict[str, Any]:
+    if y.size == 0 or edge.size == 0:
+        return {
+            "sample_count": 0,
+            "win_count": 0,
+            "loss_count": 0,
+            "neutral_count": 0,
+            "win_mean_edge_bps": 0.0,
+            "loss_mean_edge_bps": 0.0,
+            "neutral_mean_edge_bps": 0.0,
+        }
+
+    yv = np.asarray(y, dtype=np.int64)
+    ev = np.asarray(edge, dtype=np.float64)
+    win_mask = yv == 1
+    loss_mask = yv == 0
+    neutral_mask = ~(win_mask | loss_mask)
+
+    def safe_mean(mask: np.ndarray) -> float:
+        if not np.any(mask):
+            return 0.0
+        return float(np.mean(ev[mask]))
+
+    return {
+        "sample_count": int(yv.size),
+        "win_count": int(np.sum(win_mask)),
+        "loss_count": int(np.sum(loss_mask)),
+        "neutral_count": int(np.sum(neutral_mask)),
+        "win_mean_edge_bps": safe_mean(win_mask),
+        "loss_mean_edge_bps": safe_mean(loss_mask),
+        "neutral_mean_edge_bps": safe_mean(neutral_mask),
+    }
+
+
 def make_sgd_classifier(alpha: float, l1_ratio: float, random_state: int) -> SGDClassifier:
     return SGDClassifier(
         loss="log_loss",
@@ -329,6 +476,23 @@ def make_sgd_classifier(alpha: float, l1_ratio: float, random_state: int) -> SGD
         max_iter=1,
         learning_rate="constant",
         eta0=0.005,
+        average=True,
+        random_state=int(random_state),
+        tol=None,
+        shuffle=False,
+    )
+
+
+def make_sgd_regressor(alpha: float, l1_ratio: float, random_state: int) -> SGDRegressor:
+    return SGDRegressor(
+        loss="huber",
+        penalty="elasticnet",
+        alpha=float(alpha),
+        l1_ratio=float(l1_ratio),
+        fit_intercept=True,
+        max_iter=1,
+        learning_rate="constant",
+        eta0=0.0015,
         average=True,
         random_state=int(random_state),
         tol=None,
@@ -352,6 +516,7 @@ def flush_train_buffer(state: Dict[str, Any]) -> None:
     x = np.asarray(state["train_x"], dtype=np.float64)
     y_h1 = np.asarray(state["train_y_h1"], dtype=np.int64)
     y_h5 = np.asarray(state["train_y_h5"], dtype=np.int64)
+    y_edge = np.asarray(state["train_edge"], dtype=np.float64)
 
     if not state["fitted_h1"]:
         state["model_h1"].partial_fit(x, y_h1, classes=np.array([0, 1], dtype=np.int64))
@@ -365,10 +530,20 @@ def flush_train_buffer(state: Dict[str, Any]) -> None:
     else:
         state["model_h5"].partial_fit(x, y_h5)
 
+    if state["model_edge"] is not None and y_edge.size == x.shape[0]:
+        y_edge_clip = np.clip(
+            y_edge,
+            -float(state["edge_target_clip_bps"]),
+            float(state["edge_target_clip_bps"]),
+        )
+        state["model_edge"].partial_fit(x, y_edge_clip)
+        state["fitted_edge"] = True
+
     state["train_count"] += int(x.shape[0])
     state["train_x"].clear()
     state["train_y_h1"].clear()
     state["train_y_h5"].clear()
+    state["train_edge"].clear()
 
 
 def flush_infer_buffer(state: Dict[str, Any], split_name: str, prob_eps: float) -> None:
@@ -388,15 +563,25 @@ def flush_infer_buffer(state: Dict[str, Any], split_name: str, prob_eps: float) 
         p_h5 = state["model_h5"].predict_proba(x)[:, 1]
     else:
         p_h5 = np.full(shape=(x.shape[0],), fill_value=0.5, dtype=np.float64)
+    if state["fitted_edge"] and state["model_edge"] is not None:
+        edge_pred = state["model_edge"].predict(x)
+    else:
+        edge_pred = np.full(shape=(x.shape[0],), fill_value=0.0, dtype=np.float64)
 
     p_h1 = clip_prob(p_h1, prob_eps)
     p_h5 = clip_prob(p_h5, prob_eps)
+    edge_pred = np.clip(
+        edge_pred,
+        -float(state["edge_target_clip_bps"]),
+        float(state["edge_target_clip_bps"]),
+    )
 
     state[f"{split_name}_h1_prob_raw"].append(p_h1)
     state[f"{split_name}_h1_y"].append(y_h1)
     state[f"{split_name}_h5_prob_raw"].append(p_h5)
     state[f"{split_name}_h5_y"].append(y_h5)
     state[f"{split_name}_h5_edge"].append(edge)
+    state[f"{split_name}_h5_edge_pred"].append(edge_pred)
     state[f"{split_name}_count"] += int(x.shape[0])
 
     buf["x"].clear()
@@ -405,7 +590,9 @@ def flush_infer_buffer(state: Dict[str, Any], split_name: str, prob_eps: float) 
     buf["edge"].clear()
 
 
-def concat_or_empty(chunks: List[np.ndarray], dtype: Any = np.float64) -> np.ndarray:
+def concat_or_empty(chunks: List[np.ndarray], dtype: Any = None) -> np.ndarray:
+    if dtype is None:
+        dtype = np.float64 if np is not None else float
     if not chunks:
         return np.empty((0,), dtype=dtype)
     return np.concatenate(chunks, axis=0)
@@ -454,9 +641,11 @@ def evaluate_fold_state(
     valid_h5_prob_raw = concat_or_empty(state["valid_h5_prob_raw"], dtype=np.float64)
     valid_h5_y = concat_or_empty(state["valid_h5_y"], dtype=np.int64)
     valid_h5_edge = concat_or_empty(state["valid_h5_edge"], dtype=np.float64)
+    valid_h5_edge_pred = concat_or_empty(state["valid_h5_edge_pred"], dtype=np.float64)
     test_h5_prob_raw = concat_or_empty(state["test_h5_prob_raw"], dtype=np.float64)
     test_h5_y = concat_or_empty(state["test_h5_y"], dtype=np.int64)
     test_h5_edge = concat_or_empty(state["test_h5_edge"], dtype=np.float64)
+    test_h5_edge_pred = concat_or_empty(state["test_h5_edge_pred"], dtype=np.float64)
 
     calib_h1 = fit_platt(valid_h1_prob_raw, valid_h1_y, int(args.calib_max_iter), float(args.prob_eps))
     calib_h5 = fit_platt(valid_h5_prob_raw, valid_h5_y, int(args.calib_max_iter), float(args.prob_eps))
@@ -481,6 +670,10 @@ def evaluate_fold_state(
         edge=test_h5_edge,
         threshold=float(h5_threshold["threshold"]),
     )
+    h5_valid_edge_reg = regression_metrics(valid_h5_edge, valid_h5_edge_pred)
+    h5_test_edge_reg = regression_metrics(test_h5_edge, test_h5_edge_pred)
+    h5_valid_edge_profile = edge_profile(valid_h5_y, valid_h5_edge)
+    h5_test_edge_profile = edge_profile(test_h5_y, test_h5_edge)
 
     return {
         "fold_id": int(state["fold_id"]),
@@ -505,6 +698,10 @@ def evaluate_fold_state(
                 "test_calibrated": classification_metrics(test_h5_y, test_h5_prob_cal, float(args.prob_eps)),
                 "threshold_selection": h5_threshold,
                 "test_trade_metrics": h5_test_trade_metrics,
+                "valid_edge_regression": h5_valid_edge_reg,
+                "test_edge_regression": h5_test_edge_reg,
+                "valid_edge_profile": h5_valid_edge_profile,
+                "test_edge_profile": h5_test_edge_profile,
             },
         },
         "artifacts": {
@@ -516,6 +713,7 @@ def evaluate_fold_state(
         "model_state": {
             "h1": state["model_h1"],
             "h5": state["model_h5"],
+            "h5_edge": state["model_edge"] if state["fitted_edge"] else None,
         },
     }
 
@@ -536,6 +734,7 @@ def save_fold_model_artifacts(
 
     h1_payload = {
         "target": "h1",
+        "target_column": str(args.h1_target_column),
         "market": market,
         "fold_id": fold_id,
         "feature_columns": FEATURE_COLUMNS,
@@ -550,6 +749,9 @@ def save_fold_model_artifacts(
     }
     h5_payload = {
         "target": "h5",
+        "target_column": str(args.h5_target_column),
+        "edge_column": str(args.edge_column),
+        "drop_neutral_target": bool(args.drop_neutral_target),
         "market": market,
         "fold_id": fold_id,
         "feature_columns": FEATURE_COLUMNS,
@@ -561,8 +763,21 @@ def save_fold_model_artifacts(
         },
         "calibration": fold_eval["calibration"]["h5"],
         "threshold_selection": fold_eval["metrics"]["h5"]["threshold_selection"],
+        "edge_profile": fold_eval["metrics"]["h5"]["test_edge_profile"],
+        "edge_regressor": None,
         "model": fold_eval["model_state"]["h5"],
     }
+    edge_model = fold_eval.get("model_state", {}).get("h5_edge")
+    if edge_model is not None:
+        coef = np.asarray(edge_model.coef_, dtype=np.float64).reshape(-1).tolist()
+        intercept = float(np.asarray(edge_model.intercept_, dtype=np.float64).reshape(-1)[0])
+        h5_payload["edge_regressor"] = {
+            "linear": {
+                "coef": [float(x) for x in coef],
+                "intercept": float(intercept),
+            },
+            "clip_abs_bps": float(max(10.0, args.edge_target_clip_bps)),
+        }
     joblib.dump(h1_payload, h1_path)
     joblib.dump(h5_payload, h5_path)
     return {
@@ -573,16 +788,24 @@ def save_fold_model_artifacts(
 
 def init_fold_state(fold: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any]:
     win = fold["win"]
+    edge_model_enabled = bool(args.enable_edge_regressor)
     return {
         "fold_id": int(fold["fold_id"]),
         "win": win,
         "model_h1": make_sgd_classifier(float(args.alpha), float(args.l1_ratio), int(args.random_state) + int(fold["fold_id"])),
         "model_h5": make_sgd_classifier(float(args.alpha), float(args.l1_ratio), int(args.random_state) + 100 + int(fold["fold_id"])),
+        "model_edge": (
+            make_sgd_regressor(float(args.alpha), float(args.l1_ratio), int(args.random_state) + 200 + int(fold["fold_id"]))
+            if edge_model_enabled else None
+        ),
+        "edge_target_clip_bps": float(max(10.0, args.edge_target_clip_bps)),
         "fitted_h1": False,
         "fitted_h5": False,
+        "fitted_edge": False,
         "train_x": [],
         "train_y_h1": [],
         "train_y_h5": [],
+        "train_edge": [],
         "infer": {
             "valid": {"x": [], "y_h1": [], "y_h5": [], "edge": []},
             "test": {"x": [], "y_h1": [], "y_h5": [], "edge": []},
@@ -597,9 +820,11 @@ def init_fold_state(fold: Dict[str, Any], args: argparse.Namespace) -> Dict[str,
         "valid_h5_prob_raw": [],
         "valid_h5_y": [],
         "valid_h5_edge": [],
+        "valid_h5_edge_pred": [],
         "test_h5_prob_raw": [],
         "test_h5_y": [],
         "test_h5_edge": [],
+        "test_h5_edge_pred": [],
     }
 
 
@@ -668,9 +893,17 @@ def run_dataset_training(
         for row in reader:
             rows_total += 1
             ts = safe_float(row.get("timestamp"))
-            y1 = safe_int01(row.get("label_up_h1"))
-            y5 = safe_int01(row.get("label_up_h5"))
-            edge = safe_float(row.get("label_edge_bps_h5"))
+            y1 = safe_binary_target(
+                row.get(str(args.h1_target_column)),
+                drop_neutral=bool(args.drop_neutral_target),
+            )
+            y5 = safe_binary_target(
+                row.get(str(args.h5_target_column)),
+                drop_neutral=bool(args.drop_neutral_target),
+            )
+            edge = safe_float(row.get(str(args.edge_column)))
+            if edge is None and str(args.edge_column) != "label_edge_bps_h5":
+                edge = safe_float(row.get("label_edge_bps_h5"))
             if ts is None or y1 is None or y5 is None or edge is None:
                 rows_skipped += 1
                 continue
@@ -689,6 +922,7 @@ def run_dataset_training(
                     state["train_x"].append(x)
                     state["train_y_h1"].append(int(y1))
                     state["train_y_h5"].append(int(y5))
+                    state["train_edge"].append(float(edge))
                     if len(state["train_x"]) >= int(args.batch_size):
                         flush_train_buffer(state)
                 else:
@@ -814,6 +1048,22 @@ def compare_with_baseline(
 
 def main(argv=None) -> int:
     args = parse_args(argv)
+
+    if joblib is None or np is None or LogisticRegression is None or SGDClassifier is None:
+        missing = []
+        if np is None:
+            missing.append("numpy")
+        if joblib is None:
+            missing.append("joblib")
+        if LogisticRegression is None or SGDClassifier is None:
+            missing.append("scikit-learn")
+        raise RuntimeError(
+            "Missing training dependencies: "
+            + ", ".join(missing)
+            + ". Install required packages before running training."
+        )
+    if bool(args.enable_edge_regressor) and SGDRegressor is None:
+        raise RuntimeError("Edge regressor enabled but SGDRegressor is unavailable in scikit-learn.")
     split_manifest_path = resolve_repo_path(args.split_manifest_json)
     baseline_json_path = resolve_repo_path(args.baseline_json)
     output_json_path = resolve_repo_path(args.output_json)
@@ -869,6 +1119,10 @@ def main(argv=None) -> int:
         "h5_test_calibrated_brier": weighted_from_folds(fold_pool, "h5", "test_calibrated", "brier"),
         "h5_test_raw_accuracy": weighted_from_folds(fold_pool, "h5", "test_raw", "accuracy"),
         "h5_test_calibrated_accuracy": weighted_from_folds(fold_pool, "h5", "test_calibrated", "accuracy"),
+        "h5_valid_edge_reg_mae_bps": weighted_from_folds(fold_pool, "h5", "valid_edge_regression", "mae_bps"),
+        "h5_valid_edge_reg_rmse_bps": weighted_from_folds(fold_pool, "h5", "valid_edge_regression", "rmse_bps"),
+        "h5_test_edge_reg_mae_bps": weighted_from_folds(fold_pool, "h5", "test_edge_regression", "mae_bps"),
+        "h5_test_edge_reg_rmse_bps": weighted_from_folds(fold_pool, "h5", "test_edge_regression", "rmse_bps"),
     }
 
     total_h5_test = 0
@@ -915,12 +1169,20 @@ def main(argv=None) -> int:
         "baseline_json": str(baseline_json_path),
         "model_dir": str(model_dir),
         "feature_columns": FEATURE_COLUMNS,
+        "target_columns": {
+            "h1": str(args.h1_target_column),
+            "h5": str(args.h5_target_column),
+            "edge": str(args.edge_column),
+            "drop_neutral_target": bool(args.drop_neutral_target),
+        },
         "sgd_config": {
             "alpha": float(args.alpha),
             "l1_ratio": float(args.l1_ratio),
             "batch_size": int(args.batch_size),
             "infer_batch_size": int(args.infer_batch_size),
             "random_state": int(args.random_state),
+            "enable_edge_regressor": bool(args.enable_edge_regressor),
+            "edge_target_clip_bps": float(max(10.0, args.edge_target_clip_bps)),
         },
         "calibration_config": {
             "method": "platt_logistic_regression",

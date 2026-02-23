@@ -65,6 +65,35 @@ bool parseHead(const nlohmann::json& node, ProbabilisticRuntimeModel::LinearHead
     out.calib_b = calib.value("b", 0.0);
     if (with_threshold) {
         out.threshold = node.value("selection_threshold", 0.6);
+        out.has_edge_regressor = false;
+        out.edge_coef.clear();
+        out.edge_intercept = 0.0;
+        out.edge_clip_abs_bps = 250.0;
+
+        const auto edge_reg = node.value("edge_regressor", nlohmann::json::object());
+        if (edge_reg.is_object()) {
+            const auto linear_reg = edge_reg.value("linear", nlohmann::json::object());
+            if (linear_reg.is_object() && linear_reg.contains("coef") && linear_reg["coef"].is_array()) {
+                for (const auto& v : linear_reg["coef"]) {
+                    out.edge_coef.push_back(v.get<double>());
+                }
+                if (!out.edge_coef.empty()) {
+                    out.has_edge_regressor = true;
+                    out.edge_intercept = linear_reg.value("intercept", 0.0);
+                    double clip_abs = edge_reg.value("clip_abs_bps", 250.0);
+                    if (!std::isfinite(clip_abs)) {
+                        clip_abs = 250.0;
+                    }
+                    out.edge_clip_abs_bps = std::clamp(clip_abs, 10.0, 5000.0);
+                } else {
+                    out.edge_coef.clear();
+                }
+            }
+        }
+        const auto edge_profile = node.value("edge_profile", nlohmann::json::object());
+        out.edge_win_mean_bps = edge_profile.value("win_mean_edge_bps", 0.0);
+        out.edge_loss_mean_bps = edge_profile.value("loss_mean_edge_bps", 0.0);
+        out.edge_neutral_mean_bps = edge_profile.value("neutral_mean_edge_bps", 0.0);
     }
     return !out.coef.empty();
 }
@@ -132,6 +161,10 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
             parseHead(default_model.value("h5_model", nlohmann::json::object()), entry.h5, true) &&
             entry.h1.coef.size() == feature_columns_.size() &&
             entry.h5.coef.size() == feature_columns_.size()) {
+            if (entry.h5.has_edge_regressor && entry.h5.edge_coef.size() != feature_columns_.size()) {
+                entry.h5.has_edge_regressor = false;
+                entry.h5.edge_coef.clear();
+            }
             default_entry_ = std::move(entry);
             has_default_entry_ = true;
         }
@@ -159,6 +192,10 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
             if (entry.h1.coef.size() != feature_columns_.size() ||
                 entry.h5.coef.size() != feature_columns_.size()) {
                 continue;
+            }
+            if (entry.h5.has_edge_regressor && entry.h5.edge_coef.size() != feature_columns_.size()) {
+                entry.h5.has_edge_regressor = false;
+                entry.h5.edge_coef.clear();
             }
             markets_.insert_or_assign(market, std::move(entry));
         }
@@ -213,6 +250,18 @@ bool ProbabilisticRuntimeModel::infer(
     out.prob_h5_raw = h5_raw;
     out.prob_h5_calibrated = h5_cal;
     out.selection_threshold_h5 = entry->h5.threshold;
+    const double fallback_expected_edge_bps =
+        (h5_cal * entry->h5.edge_win_mean_bps) +
+        ((1.0 - h5_cal) * entry->h5.edge_loss_mean_bps);
+    double expected_edge_bps = fallback_expected_edge_bps;
+    if (entry->h5.has_edge_regressor && entry->h5.edge_coef.size() == transformed_features.size()) {
+        const double reg_edge = linearScore(entry->h5.edge_coef, entry->h5.edge_intercept, transformed_features);
+        if (std::isfinite(reg_edge)) {
+            expected_edge_bps = std::clamp(reg_edge, -entry->h5.edge_clip_abs_bps, entry->h5.edge_clip_abs_bps);
+        }
+    }
+    out.expected_edge_bps = expected_edge_bps;
+    out.expected_edge_pct = out.expected_edge_bps / 10000.0;
     out.select_h5 = (h5_cal >= entry->h5.threshold);
     return true;
 }
