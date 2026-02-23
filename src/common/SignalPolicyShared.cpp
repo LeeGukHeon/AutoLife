@@ -255,6 +255,15 @@ bool rebalanceSignalRiskReward(strategy::Signal& signal, const engine::EngineCon
     if (constructive_uptrend_continuation_setup) {
         target_rr += 0.05;
     }
+    const bool weak_uptrend_continuation_setup =
+        signal.entry_archetype == "FOUNDATION_UPTREND_CONTINUATION" &&
+        signal.market_regime == analytics::MarketRegime::TRENDING_UP &&
+        signal.probabilistic_h5_calibrated < 0.406 &&
+        signal.probabilistic_h5_margin < -0.018;
+    if (weak_uptrend_continuation_setup) {
+        risk_price *= 0.90;
+        signal.stop_loss = signal.entry_price - risk_price;
+    }
     target_rr = std::min(target_rr, base_target_rr + 1.10);
     const double current_rr = (signal.take_profit_2 - signal.entry_price) / risk_price;
     if (current_rr + 1e-9 < target_rr) {
