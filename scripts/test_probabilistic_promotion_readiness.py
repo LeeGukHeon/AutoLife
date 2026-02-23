@@ -29,6 +29,9 @@ class ProbabilisticPromotionReadinessTest(unittest.TestCase):
                 {
                     "status": "pass",
                     "dataset_manifest_json": str(manifest),
+                    "pipeline_version": "v1",
+                    "gate_profile": "v1",
+                    "preflight_errors": [],
                 },
             )
             write_json(parity, {"status": "pass", "pipeline_version": "v1", "gate_profile": "v1"})
@@ -70,7 +73,13 @@ class ProbabilisticPromotionReadinessTest(unittest.TestCase):
             write_json(manifest, {"version": "prob_features_v2_draft", "pipeline_version": "v2"})
             write_json(
                 feature_validation,
-                {"status": "pass", "dataset_manifest_json": str(manifest)},
+                {
+                    "status": "pass",
+                    "dataset_manifest_json": str(manifest),
+                    "pipeline_version": "v2",
+                    "gate_profile": "v2_strict",
+                    "preflight_errors": [],
+                },
             )
             write_json(
                 parity,
@@ -117,7 +126,16 @@ class ProbabilisticPromotionReadinessTest(unittest.TestCase):
             out = root / "out_v2.json"
 
             write_json(manifest, {"version": "prob_features_v2_draft", "pipeline_version": "v2"})
-            write_json(feature_validation, {"status": "pass", "dataset_manifest_json": str(manifest)})
+            write_json(
+                feature_validation,
+                {
+                    "status": "pass",
+                    "dataset_manifest_json": str(manifest),
+                    "pipeline_version": "v2",
+                    "gate_profile": "v2_strict",
+                    "preflight_errors": [],
+                },
+            )
             write_json(parity, {"status": "pass", "pipeline_version": "v2", "gate_profile": "v2_strict"})
             write_json(
                 verification,

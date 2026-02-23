@@ -3,11 +3,13 @@ Last updated: 2026-02-23
 
 ## Repository
 - Branch: current working branch (check with `git branch --show-current`)
-- Commit (snapshot): `7d28827974b851e30788efff2d06bcb4e2e55872`
+- Commit (snapshot): `84b066f273e40dc73552cac24f0c4b6a10ce3144`
 
 ## Contract hashes
 - `config/model/probabilistic_feature_contract_v1.json`:
   - `c0c8f87df95be43ce6dd9526ed9c31b674e211bf187b365f2022439e68f1084e`
+- `config/model/probabilistic_feature_contract_v2.json`:
+  - `8dc014f9a52305dc26bce0b6c8cc7a10cb3047ddfeb725aad09f62a8140704f6`
 - `config/model/probabilistic_runtime_bundle_v1.json`:
   - `fddbfe3514e1e2d726c5c6cd58b6105fda50459c038ae283acb5af14aacdba84`
 - `data/backtest_probabilistic/probabilistic_bundle_manifest.json`:
@@ -24,11 +26,12 @@ Last updated: 2026-02-23
   - Ticket 4: explicit probabilistic regime spec + runtime actions (implemented in current working tree)
   - Ticket 5: uncertainty ensemble + confidence-aware sizing (implemented)
   - Ticket 6: event sampling (time|dollar|volatility) for training rows (implemented in current working tree)
+  - Optional Ticket 7 (MODE B): Phase 1 transitional contract freeze (`v2_draft` row schema explicit) implemented
   - Optional Ticket 7 (MODE B): v2 draft kickoff + Phase 2 pipeline branching (`v1|v2` switches) implemented
   - Optional Ticket 7 (MODE B): Phase 3 partial implemented (strict version/pipeline fail-closed checks)
-  - Optional Ticket 7 (MODE B): Phase 4 partial implemented (v2 parity/verification strict gate profile)
+  - Optional Ticket 7 (MODE B): Phase 4 expanded (Gate1 + Gate2 + Gate3 v2 strict profile alignment)
   - Optional Ticket 7 (MODE B): hybrid cycle optional verification-step wiring implemented
-  - Optional Ticket 7 (MODE B): Phase 5 partial implemented (promotion readiness evaluator + hybrid wiring)
+  - Optional Ticket 7 (MODE B): Phase 5 partial implemented (promotion readiness evaluator + hybrid wiring, includes Gate1 preflight/profile checks)
 
 ## Last known gate status
 - Strict feature validation: run required after any feature/build changes

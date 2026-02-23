@@ -12,6 +12,8 @@ DEFAULT_FEATURE_DIR = r".\data\model_input\probabilistic_features_v1_latest"
 DEFAULT_FEATURE_DIR_V2_DRAFT = r".\data\model_input\probabilistic_features_v2_draft_latest"
 DEFAULT_RUNTIME_BUNDLE_JSON = r".\config\model\probabilistic_runtime_bundle_v1.json"
 DEFAULT_RUNTIME_BUNDLE_JSON_V2_DRAFT = r".\config\model\probabilistic_runtime_bundle_v2.json"
+DEFAULT_FEATURE_CONTRACT_JSON = r".\config\model\probabilistic_feature_contract_v1.json"
+DEFAULT_FEATURE_CONTRACT_JSON_V2_DRAFT = r".\config\model\probabilistic_feature_contract_v2.json"
 
 
 def utc_now_iso() -> str:
@@ -317,6 +319,16 @@ def main(argv=None) -> int:
         str(resolve_repo_path(r".\scripts\validate_probabilistic_feature_dataset.py")),
         "--dataset-manifest-json",
         str(feature_manifest_json),
+        "--contract-json",
+        str(
+            resolve_repo_path(
+                DEFAULT_FEATURE_CONTRACT_JSON
+                if pipeline_version == "v1"
+                else DEFAULT_FEATURE_CONTRACT_JSON_V2_DRAFT
+            )
+        ),
+        "--pipeline-version",
+        str(pipeline_version),
         "--output-json",
         str(feature_validation_json),
         "--strict",

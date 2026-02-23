@@ -1,6 +1,6 @@
 # MODE B / v2 Restructure Plan (Optional)
 Last updated: 2026-02-23
-Status: Phase 2 implemented + Phase 3 partial + Phase 4 partial + Phase 5 partial
+Status: Phase 1 transitional + Phase 2 implemented + Phase 3 partial + Phase 4 expanded + Phase 5 partial
 
 ## Goal
 - Prepare optional MODE B migration with explicit v2 contracts.
@@ -36,6 +36,11 @@ Status: Phase 2 implemented + Phase 3 partial + Phase 4 partial + Phase 5 partia
 - v2 end-to-end pipeline passes strict validation/parity/verification.
 - v1 remains fully supported and reproducible.
 
+## Implemented in Phase 1 (transitional)
+- `config/model/probabilistic_feature_contract_v2.json`
+  - `version=v2_draft` with explicit 43-column row schema freeze.
+  - marked as transitional; baseline-equivalent row layout until full MODE B migration.
+
 ## Implemented in Phase 2
 - `scripts/build_probabilistic_feature_dataset.py`
   - `--pipeline-version v1|v2` (default `v1`)
@@ -64,6 +69,14 @@ Status: Phase 2 implemented + Phase 3 partial + Phase 4 partial + Phase 5 partia
   - parity output records `runtime_bundle_version` and `pipeline_version`
 
 ## Implemented in Phase 4 (partial)
+- `scripts/validate_probabilistic_feature_dataset.py`
+  - adds `--pipeline-version auto|v1|v2`.
+  - fail-closed preflight alignment checks:
+    - requested/manifest pipeline consistency
+    - manifest dataset version tag consistency
+    - manifest contract tag consistency
+    - contract version and row-schema consistency
+  - outputs `gate_profile` (`v1` or `v2_strict`) and `preflight_errors`.
 - `scripts/validate_runtime_bundle_parity.py`
   - v2 requires explicit draft contract tags:
     - `feature_contract_version=v2_draft`
@@ -81,6 +94,7 @@ Status: Phase 2 implemented + Phase 3 partial + Phase 4 partial + Phase 5 partia
 - `scripts/run_probabilistic_hybrid_cycle.py`
   - optional `--run-verification` step added
   - passes `--pipeline-version` through to verification gate
+  - passes pipeline-specific feature contract path to strict feature validation gate
   - allows v2 draft cycle to fail fast on strict verification gate failure
 
 ## Implemented in Phase 5 (partial)
@@ -92,7 +106,8 @@ Status: Phase 2 implemented + Phase 3 partial + Phase 4 partial + Phase 5 partia
     - Gate4 shadow (required for `target-stage=live_enable`)
     - Gate5 pre-live safety (`allow_live_orders=false` required before live enable)
   - v2 checks:
-    - strict gate-profile consistency
+    - feature/parity/verification `gate_profile` consistency (`v2_strict`)
+    - feature validation preflight errors must be empty
     - pipeline consistency across gate artifacts
 - `scripts/run_probabilistic_hybrid_cycle.py`
   - optional `--evaluate-promotion-readiness` step

@@ -5,7 +5,11 @@ Last updated: 2026-02-23
 - `config/model/probabilistic_feature_contract_v1.json`
 
 ## Optional draft (not active)
-- `config/model/probabilistic_feature_contract_v2.json` (MODE B kickoff draft)
+- `config/model/probabilistic_feature_contract_v2.json` (MODE B draft)
+- Current `v2_draft` is transitional:
+  - explicit `version=v2_draft`
+  - row schema is frozen (43 columns) for strict gate compatibility
+  - anchor migration to 5m is deferred to full MODE B migration
 
 ## Dataset builder
 - `scripts/build_probabilistic_feature_dataset.py`

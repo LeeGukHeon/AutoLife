@@ -78,6 +78,9 @@ def infer_pipeline_from_manifest_payload(payload: Dict[str, Any]) -> str:
 
 
 def infer_pipeline_from_feature_validation(feature_validation: Dict[str, Any]) -> str:
+    explicit = str(feature_validation.get("pipeline_version", "")).strip().lower()
+    if explicit in ("v1", "v2"):
+        return explicit
     manifest_path = str(feature_validation.get("dataset_manifest_json", "")).strip()
     if not manifest_path:
         return "v1"
@@ -155,6 +158,20 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
     }
     if not fv_ok:
         errors.append("gate1_feature_validation_failed_or_missing")
+    fv_preflight_errors = []
+    if isinstance(feature_validation, dict):
+        raw_preflight_errors = feature_validation.get("preflight_errors", [])
+        if isinstance(raw_preflight_errors, list):
+            fv_preflight_errors = [str(x).strip() for x in raw_preflight_errors if str(x).strip()]
+    fv_preflight_ok = len(fv_preflight_errors) == 0
+    checks["gate1_feature_validation_preflight"] = {
+        "pass": bool(fv_preflight_ok),
+        "path": str(feature_validation_path),
+        "preflight_error_count": len(fv_preflight_errors),
+        "preflight_errors": fv_preflight_errors,
+    }
+    if not fv_preflight_ok:
+        errors.append("gate1_feature_validation_preflight_failed")
 
     parity_ok = isinstance(parity, dict) and str(parity.get("status", "")).strip().lower() == "pass"
     checks["gate2_parity_pass"] = {
@@ -197,6 +214,7 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
         errors.append("pipeline_version_mismatch_across_gate_outputs")
 
     if resolved_pipeline == "v2":
+        feature_gate_profile = str(feature_validation.get("gate_profile", "")) if isinstance(feature_validation, dict) else ""
         parity_gate_profile = str(parity.get("gate_profile", "")) if isinstance(parity, dict) else ""
         verification_gate_profile = ""
         if isinstance(verification, dict):
@@ -204,11 +222,13 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
             if isinstance(gp, dict):
                 verification_gate_profile = str(gp.get("name", ""))
         v2_profile_ok = (
+            str(feature_gate_profile).strip().lower() == "v2_strict" and
             str(parity_gate_profile).strip().lower() == "v2_strict" and
             str(verification_gate_profile).strip().lower() == "v2_strict"
         )
         checks["v2_strict_gate_profiles"] = {
             "pass": bool(v2_profile_ok),
+            "feature_gate_profile": feature_gate_profile,
             "parity_gate_profile": parity_gate_profile,
             "verification_gate_profile": verification_gate_profile,
         }

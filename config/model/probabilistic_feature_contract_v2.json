@@ -1,28 +1,94 @@
 {
   "version": "v2_draft",
-  "status": "draft_not_active",
+  "status": "draft_transitional",
   "created_at_utc": "2026-02-23T00:00:00Z",
-  "description": "Optional MODE B draft contract. Baseline v1 remains active.",
-  "timeframe_anchor": "5m",
+  "updated_at_utc": "2026-02-23T00:00:00Z",
+  "description": "Optional MODE B draft contract. Transitional schema currently matches v1 row layout; anchor migration to 5m is deferred.",
+  "timeframe_anchor": "1m",
+  "target_timeframe_anchor": "5m",
   "micro_input_timeframe": "1m",
   "multi_tf_context": [
+    "5m",
     "15m",
     "60m",
     "240m"
   ],
   "row_schema": {
-    "column_count": 0,
-    "column_order": [],
-    "label_columns": []
+    "column_count": 43,
+    "column_order": [
+      "timestamp",
+      "timestamp_utc",
+      "market",
+      "close",
+      "ret_1m",
+      "ret_5m",
+      "ret_20m",
+      "ema_gap_12_26",
+      "rsi_14",
+      "atr_pct_14",
+      "bb_width_20",
+      "vol_ratio_20",
+      "notional_ratio_20",
+      "ctx_5m_age_min",
+      "ctx_5m_ret_3",
+      "ctx_5m_ret_12",
+      "ctx_5m_ema_gap_20",
+      "ctx_5m_rsi_14",
+      "ctx_5m_atr_pct_14",
+      "ctx_15m_age_min",
+      "ctx_15m_ret_3",
+      "ctx_15m_ret_12",
+      "ctx_15m_ema_gap_20",
+      "ctx_15m_rsi_14",
+      "ctx_15m_atr_pct_14",
+      "ctx_60m_age_min",
+      "ctx_60m_ret_3",
+      "ctx_60m_ret_12",
+      "ctx_60m_ema_gap_20",
+      "ctx_60m_rsi_14",
+      "ctx_60m_atr_pct_14",
+      "ctx_240m_age_min",
+      "ctx_240m_ret_3",
+      "ctx_240m_ret_12",
+      "ctx_240m_ema_gap_20",
+      "ctx_240m_rsi_14",
+      "ctx_240m_atr_pct_14",
+      "regime_trend_60_sign",
+      "regime_trend_240_sign",
+      "regime_vol_60_atr_pct",
+      "label_up_h1",
+      "label_up_h5",
+      "label_edge_bps_h5"
+    ],
+    "label_columns": [
+      "label_up_h1",
+      "label_up_h5",
+      "label_edge_bps_h5"
+    ]
   },
   "labels": {
     "h1_bars": 1,
     "h5_bars": 5,
     "edge_label": "label_edge_bps_h5"
   },
+  "leakage_rules": {
+    "feature_timestamp_rule": "Features at t must use only candles <= t.",
+    "label_timestamp_rule": "Labels must use candles in (t, t+h] only.",
+    "forbidden_fields": [
+      "future_high",
+      "future_low",
+      "future_close",
+      "future_volume",
+      "post_trade_pnl"
+    ]
+  },
   "compatibility": {
     "baseline_v1_unchanged": true,
     "active_by_default": false,
-    "migration_required": true
+    "migration_required": true,
+    "notes": [
+      "Contract v2_draft uses transitional v1-equivalent row schema.",
+      "Anchor timeframe migration (1m -> 5m) is deferred to full MODE B contract migration."
+    ]
   }
 }

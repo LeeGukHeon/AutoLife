@@ -16,6 +16,13 @@ Recommended:
 - NaN rate thresholds
 - monotonic timestamp checks per market
 
+v2 strict additions:
+- run with `--pipeline-version v2`
+- manifest `version` must be `prob_features_v2_draft`
+- feature contract `version` must be `v2_draft`
+- manifest/contract pipeline and contract tags must be mutually consistent
+- validation output `gate_profile` must be `v2_strict`
+
 ## Gate 2: Runtime bundle parity (strict)
 Command:
 ```powershell

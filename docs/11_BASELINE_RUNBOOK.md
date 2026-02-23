@@ -69,6 +69,15 @@ python scripts/build_probabilistic_feature_dataset.py `
 ```powershell
 python scripts/validate_probabilistic_feature_dataset.py `
   --dataset-manifest-json ".\data\model_input\probabilistic_features_v1_latest\feature_dataset_manifest.json" `
+  --contract-json ".\config\model\probabilistic_feature_contract_v1.json" `
+  --pipeline-version v1 `
+  --strict
+
+# Optional MODE B / v2 strict gate
+python scripts/validate_probabilistic_feature_dataset.py `
+  --dataset-manifest-json ".\data\model_input\probabilistic_features_v2_draft_latest\feature_dataset_manifest.json" `
+  --contract-json ".\config\model\probabilistic_feature_contract_v2.json" `
+  --pipeline-version v2 `
   --strict
 ```
 
