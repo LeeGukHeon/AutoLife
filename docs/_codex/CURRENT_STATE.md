@@ -1,5 +1,5 @@
 # Current State
-Last updated: 2026-02-23
+Last updated: 2026-02-24
 
 ## Repository
 - Branch: current working branch (check with `git branch --show-current`)
@@ -21,7 +21,7 @@ Last updated: 2026-02-23
 - Master spec baseline: `docs/_codex/MASTER_SPEC.md`
 - Execution mode target: Mode A (baseline-preserving), extensions behind flags
 - Current active ticket label:
-  - `Strict Order 3-2` (entry-quality/sample recovery follow-up)
+  - `Strict Order 3-3` (backtest clock alignment + sample recovery)
 - Current implementation focus:
   - Ticket 0: docs/bootstrap reliability pack (implemented in current working tree)
   - Ticket 1: dynamic universe + scope-aware 1m fetch/build strictness (implemented in current working tree)
@@ -91,6 +91,23 @@ Last updated: 2026-02-23
     - `avg_risk_adjusted_score=1.6001`
     - `avg_total_trades=8.2` (`gate_avg_trades_pass=false`, threshold=10)
     - `adaptive_verdict=inconclusive` (`failed_checks=["sample_size_guard_pass"]`)
+- Latest Step-3 follow-up extension (`Strict Order 3-3`, pipeline=`v1`):
+  - Runtime fix: RiskManager backtest clock alignment (candle-time override)
+    - `include/risk/RiskManager.h`
+    - `src/risk/RiskManager.cpp`
+    - `src/runtime/BacktestRuntime.cpp`
+  - Runtime tuning: probabilistic primary minimums rescue-quality gate widened (live/backtest isomorphic)
+    - `src/runtime/BacktestRuntime.cpp`
+    - `src/runtime/LiveTradingRuntime.cpp`
+  - verification:
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step4g_minimal_fixset.json`
+  - result:
+    - `overall_gate_pass=true`
+    - `adaptive_verdict=pass`
+    - `avg_profit_factor=2.6066`
+    - `avg_expectancy_krw=11.2459`
+    - `avg_risk_adjusted_score=0.0411`
+    - `avg_total_trades=11.4` (`gate_avg_trades_pass=true`, threshold=10)
 - Shadow/live staged enable: not active by default
 
 ## Known issues / watchpoints

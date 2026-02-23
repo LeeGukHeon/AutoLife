@@ -348,22 +348,42 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
     - `avg_risk_adjusted_score=1.6001`
     - `avg_total_trades=8.2`
     - 잔여 단일 실패: `sample_size_guard_pass` (`threshold avg_total_trades >= 10`)
+- [x] Strict Order 3 3차: 백테스트 시간축 정합성 복구 + primary minimums rescue 게이트 재균형.
+  - code:
+    - `include/risk/RiskManager.h`
+    - `src/risk/RiskManager.cpp`
+    - `src/runtime/BacktestRuntime.cpp`
+    - `src/runtime/LiveTradingRuntime.cpp`
+  - 핵심:
+    - `RiskManager`에 backtest candle-time override를 추가해
+      `entry_time/exit_time/holding_time`를 wall-clock이 아닌 캔들 시계로 정렬.
+    - non-hostile rescue 셀에서 과도 차단되던 primary minimums 품질 게이트를
+      "매우 약한 신호만 차단" 규칙으로 완화(라이브/백테스트 동형).
+  - 검증:
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step4g_minimal_fixset.json`
+  - 결과:
+    - `overall_gate_pass=true`
+    - `adaptive_verdict=pass`
+    - `avg_profit_factor=2.6066`
+    - `avg_expectancy_krw=11.2459`
+    - `avg_risk_adjusted_score=0.0411`
+    - `avg_total_trades=11.4` (`sample_size_guard_pass=true`)
 
 ## Next (Strict Order)
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
    - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.
-1. `sample_size_guard` 잔여 실패 원인 분해:
-   - `candidate_generation` 내 `no_signal_generated`/`filtered_out_by_manager` 분해 유지
-   - 코인 하드코딩 없이 패턴/레짐 기준으로 표본 회복
+1. 표본 유지 + 품질 보강(Strict Order 4):
+   - 현재 `avg_total_trades=11.4` 유지 조건에서 ETH/SOL 음수 expectancy 셀 우선 보정
+   - `candidate_generation`의 `no_signal_generated` 비중(`share=0.733`) 완화
 2. 라벨/학습 구조 고도화:
    - optional triple-barrier 활성화 실험(기존 라벨과 병행)
    - `P(win)` + `E[pnl]` 2-head 학습 파이프라인 추가
 3. 진입 품질 재균형:
-   - 현재 저표본(`avg_total_trades=8.2`) 상태에서 품질 유지하며 표본을 점진 복구
    - 확률 우선 유지 + 안전게이트 고정
+   - 레짐/아키타입 기준으로 loss-tail 셀(ETH/SOL) 품질 하한 재조정
 4. 동일 5-set 재검증:
-   - 목표: `sample_size_guard_pass` 통과(`avg_total_trades >= 10`) + expectancy 비열화.
+   - 목표: `overall_gate_pass` 유지 + expectancy/PF 추가 개선 + DD 비열화.
 
 ## Guardrails
 - Sequential only (`--max-workers 1` policy).

@@ -229,6 +229,8 @@ public:
     // Returns runtime-adaptive partial exit ratio for the current position.
     // Used by both live and backtest to keep post-entry de-risk cadence aligned.
     double getAdaptivePartialExitRatio(const std::string& market) const;
+    void setTimeOverrideMs(long long timestamp_ms);
+    void clearTimeOverride();
     
     // ===== 二쇰Ц ?湲??먮낯 愿由?=====
     // ?쒖텧?먯?留??꾩쭅 泥닿껐 ????二쇰Ц 湲덉븸??異붿쟻?섏뿬 以묐났 二쇰Ц 諛⑹?
@@ -420,6 +422,8 @@ private:
     // ?듦퀎
     mutable double max_capital_;      // <- mutable 異붽?
     mutable double total_fees_paid_;  // <- mutable 異붽?
+    bool has_time_override_ = false;
+    long long time_override_ms_ = 0;
 
     std::map<std::string, double> reserved_grid_capital_;
     std::map<std::string, GridInventory> grid_inventory_;

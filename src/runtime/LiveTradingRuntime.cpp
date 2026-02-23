@@ -592,7 +592,6 @@ void applyProbabilisticPrimaryDecisionProfile(
             rr_target += 0.18;
         }
         rr_target = std::clamp(rr_target, hostile_regime ? 1.05 : 1.10, hostile_regime ? 2.40 : 3.20);
-
         signal.stop_loss = signal.entry_price * (1.0 - blended_risk_pct);
         signal.take_profit_2 = signal.entry_price * (1.0 + (blended_risk_pct * rr_target));
         signal.take_profit_1 = signal.entry_price * (1.0 + (blended_risk_pct * std::max(1.0, rr_target * 0.55)));
@@ -989,10 +988,13 @@ bool passesProbabilisticPrimaryMinimums(
     const bool range_pullback_loss_tail_risk_cell =
         autolife::common::signal_policy::isRangePullbackLossTailRiskCell(signal, regime);
     if (!hostile_regime && rescue_archetype) {
-        if (signal.probabilistic_h5_calibrated < 0.55 ||
-            signal.probabilistic_h5_margin < 0.002 ||
-            signal.liquidity_score < 18.0 ||
-            signal.strength < 0.24) {
+        const bool weak_probabilistic_support =
+            signal.probabilistic_h5_calibrated < 0.46 &&
+            signal.probabilistic_h5_margin < -0.010;
+        const bool weak_execution_quality =
+            signal.liquidity_score < 12.0 ||
+            signal.strength < 0.14;
+        if (weak_probabilistic_support && weak_execution_quality) {
             if (reject_reason != nullptr) {
                 *reject_reason = "blocked_probabilistic_primary_rescue_quality";
             }
@@ -1014,15 +1016,15 @@ bool passesProbabilisticPrimaryMinimums(
             return false;
         }
     } else {
-        if (signal.probabilistic_h5_margin < -0.035 &&
-            signal.probabilistic_h5_calibrated < 0.42) {
+        if (signal.probabilistic_h5_margin < -0.045 &&
+            signal.probabilistic_h5_calibrated < 0.40) {
             if (reject_reason != nullptr) {
                 *reject_reason = "blocked_probabilistic_primary_margin";
             }
             return false;
         }
-        if (signal.probabilistic_h5_calibrated < 0.38 &&
-            signal.probabilistic_h5_margin < -0.025) {
+        if (signal.probabilistic_h5_calibrated < 0.35 &&
+            signal.probabilistic_h5_margin < -0.030) {
             if (reject_reason != nullptr) {
                 *reject_reason = "blocked_probabilistic_primary_calibrated";
             }
@@ -1065,9 +1067,9 @@ bool passesProbabilisticPrimaryMinimums(
     if (!(calibrated_fail || margin_fail || liquidity_fail || strength_fail)) {
         if (rescue_archetype &&
             !hostile_regime &&
-            (signal.probabilistic_h5_calibrated < 0.56 ||
-             signal.probabilistic_h5_margin < 0.004 ||
-             signal.strength < 0.26)) {
+            signal.probabilistic_h5_calibrated < 0.47 &&
+            signal.probabilistic_h5_margin < -0.008 &&
+            signal.strength < 0.14) {
             if (reject_reason != nullptr) {
                 *reject_reason = "blocked_probabilistic_primary_rescue_quality";
             }
@@ -1113,19 +1115,19 @@ bool passesProbabilisticPrimaryMinimums(
             return true;
         }
         if (range_pullback_loss_tail_risk_cell) {
-            if (signal.probabilistic_h5_calibrated >= 0.48 &&
-                signal.probabilistic_h5_margin >= -0.003 &&
-                signal.liquidity_score >= 16.0 &&
-                signal.strength >= 0.12 &&
-                signal.expected_value >= -0.00005) {
+            if (signal.probabilistic_h5_calibrated >= 0.46 &&
+                signal.probabilistic_h5_margin >= -0.007 &&
+                signal.liquidity_score >= 14.0 &&
+                signal.strength >= 0.10 &&
+                signal.expected_value >= -0.00010) {
                 return true;
             }
         } else {
-            if (signal.probabilistic_h5_calibrated >= 0.43 &&
-                signal.probabilistic_h5_margin >= -0.020 &&
-                signal.liquidity_score >= 15.0 &&
-                signal.strength >= 0.09 &&
-                signal.expected_value >= -0.00008) {
+            if (signal.probabilistic_h5_calibrated >= 0.40 &&
+                signal.probabilistic_h5_margin >= -0.028 &&
+                signal.liquidity_score >= 12.0 &&
+                signal.strength >= 0.07 &&
+                signal.expected_value >= -0.00014) {
                 return true;
             }
         }

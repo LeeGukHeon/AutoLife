@@ -57,6 +57,23 @@ RiskManager::RiskManager(double initial_capital)
     resetDailyLossIfNeeded();
 }
 
+void RiskManager::setTimeOverrideMs(long long timestamp_ms) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (timestamp_ms <= 0) {
+        has_time_override_ = false;
+        time_override_ms_ = 0;
+        return;
+    }
+    has_time_override_ = true;
+    time_override_ms_ = timestamp_ms;
+}
+
+void RiskManager::clearTimeOverride() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    has_time_override_ = false;
+    time_override_ms_ = 0;
+}
+
 // ===== Position Entry =====
 
 bool RiskManager::canEnterPosition(
@@ -665,6 +682,8 @@ void RiskManager::applyAdaptiveRiskControls(const std::string& market) {
     const double trailing_start = (pos.trailing_start > 0.0)
         ? pos.trailing_start
         : (entry * (1.0 + base_risk_pct * 1.20));
+    const long long now_ms = getCurrentTimestamp();
+    const double holding_seconds = std::max(0.0, static_cast<double>(now_ms - pos.entry_time) / 1000.0);
 
     double candidate_stop = pos.stop_loss;
     std::string reason = "hold";
@@ -728,8 +747,6 @@ void RiskManager::applyAdaptiveRiskControls(const std::string& market) {
     }
 
     // Step 3: if position is stagnant for long time, cut downside and recycle capital.
-    const long long now_ms = getCurrentTimestamp();
-    const double holding_seconds = std::max(0.0, static_cast<double>(now_ms - pos.entry_time) / 1000.0);
     double guard_time_scale = 1.0;
     if (probabilistic_active) {
         guard_time_scale += positive_prob_conf * 0.45;
@@ -1595,6 +1612,12 @@ void RiskManager::recordTrade(
 }
 
 long long RiskManager::getCurrentTimestamp() const {
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        if (has_time_override_ && time_override_ms_ > 0) {
+            return time_override_ms_;
+        }
+    }
     return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()
     ).count();
