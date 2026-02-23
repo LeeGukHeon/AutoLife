@@ -115,6 +115,25 @@ python scripts/run_probabilistic_hybrid_cycle.py `
   --universe-file ".\config\universe\runtime_universe.json"
 ```
 
+## 10) EXT-55 optional runtime regime policy (default OFF)
+Set in trading config JSON (used by live/backtest runtime):
+```json
+{
+  "probabilistic_regime_spec_enabled": true,
+  "probabilistic_regime_volatility_window": 48,
+  "probabilistic_regime_drawdown_window": 36,
+  "probabilistic_regime_volatile_zscore": 1.2,
+  "probabilistic_regime_hostile_zscore": 2.0,
+  "probabilistic_regime_volatile_drawdown_speed_bps": 3.0,
+  "probabilistic_regime_hostile_drawdown_speed_bps": 8.0,
+  "probabilistic_regime_hostile_block_new_entries": true,
+  "probabilistic_regime_volatile_threshold_add": 0.01,
+  "probabilistic_regime_hostile_threshold_add": 0.03,
+  "probabilistic_regime_volatile_size_multiplier": 0.5,
+  "probabilistic_regime_hostile_size_multiplier": 0.2
+}
+```
+
 ## Operational notes
 - Treat strict validation/parity/verification as fail-closed gates.
 - Do not enable live orders if any gate fails or produces unknown state.

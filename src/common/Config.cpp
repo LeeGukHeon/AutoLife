@@ -349,6 +349,72 @@ void Config::load(const std::string& path) {
                 0.0,
                 1.0
             );
+            engine_config_.probabilistic_regime_spec_enabled =
+                t.value("probabilistic_regime_spec_enabled", false);
+            engine_config_.probabilistic_regime_volatility_window = std::clamp(
+                t.value("probabilistic_regime_volatility_window", 48),
+                10,
+                720
+            );
+            engine_config_.probabilistic_regime_drawdown_window = std::clamp(
+                t.value("probabilistic_regime_drawdown_window", 36),
+                5,
+                720
+            );
+            engine_config_.probabilistic_regime_volatile_zscore = std::clamp(
+                t.value("probabilistic_regime_volatile_zscore", 1.20),
+                0.0,
+                20.0
+            );
+            engine_config_.probabilistic_regime_hostile_zscore = std::clamp(
+                t.value("probabilistic_regime_hostile_zscore", 2.00),
+                engine_config_.probabilistic_regime_volatile_zscore,
+                30.0
+            );
+            engine_config_.probabilistic_regime_volatile_drawdown_speed_bps = std::clamp(
+                t.value("probabilistic_regime_volatile_drawdown_speed_bps", 3.0),
+                0.0,
+                1000.0
+            );
+            engine_config_.probabilistic_regime_hostile_drawdown_speed_bps = std::clamp(
+                t.value("probabilistic_regime_hostile_drawdown_speed_bps", 8.0),
+                engine_config_.probabilistic_regime_volatile_drawdown_speed_bps,
+                1000.0
+            );
+            engine_config_.probabilistic_regime_enable_btc_correlation_shock =
+                t.value("probabilistic_regime_enable_btc_correlation_shock", false);
+            engine_config_.probabilistic_regime_correlation_window = std::clamp(
+                t.value("probabilistic_regime_correlation_window", 48),
+                10,
+                720
+            );
+            engine_config_.probabilistic_regime_correlation_shock_threshold = std::clamp(
+                t.value("probabilistic_regime_correlation_shock_threshold", 1.20),
+                0.0,
+                2.0
+            );
+            engine_config_.probabilistic_regime_hostile_block_new_entries =
+                t.value("probabilistic_regime_hostile_block_new_entries", true);
+            engine_config_.probabilistic_regime_volatile_threshold_add = std::clamp(
+                t.value("probabilistic_regime_volatile_threshold_add", 0.010),
+                0.0,
+                0.40
+            );
+            engine_config_.probabilistic_regime_hostile_threshold_add = std::clamp(
+                t.value("probabilistic_regime_hostile_threshold_add", 0.030),
+                engine_config_.probabilistic_regime_volatile_threshold_add,
+                0.60
+            );
+            engine_config_.probabilistic_regime_volatile_size_multiplier = std::clamp(
+                t.value("probabilistic_regime_volatile_size_multiplier", 0.50),
+                0.05,
+                1.0
+            );
+            engine_config_.probabilistic_regime_hostile_size_multiplier = std::clamp(
+                t.value("probabilistic_regime_hostile_size_multiplier", 0.20),
+                0.01,
+                engine_config_.probabilistic_regime_volatile_size_multiplier
+            );
             engine_config_.probabilistic_primary_promotion_min_margin = std::clamp(
                 t.value("probabilistic_primary_promotion_min_margin", -0.02),
                 -0.20,

@@ -80,6 +80,22 @@ struct EngineConfig {
     int probabilistic_runtime_online_learning_min_samples = 12;
     double probabilistic_runtime_online_learning_max_margin_bias = 0.02;
     double probabilistic_runtime_online_learning_strength_gain = 0.35;
+    // EXT-55 (default OFF): explicit probabilistic runtime regime policy.
+    bool probabilistic_regime_spec_enabled = false;
+    int probabilistic_regime_volatility_window = 48;
+    int probabilistic_regime_drawdown_window = 36;
+    double probabilistic_regime_volatile_zscore = 1.20;
+    double probabilistic_regime_hostile_zscore = 2.00;
+    double probabilistic_regime_volatile_drawdown_speed_bps = 3.0;
+    double probabilistic_regime_hostile_drawdown_speed_bps = 8.0;
+    bool probabilistic_regime_enable_btc_correlation_shock = false;
+    int probabilistic_regime_correlation_window = 48;
+    double probabilistic_regime_correlation_shock_threshold = 1.20;
+    bool probabilistic_regime_hostile_block_new_entries = true;
+    double probabilistic_regime_volatile_threshold_add = 0.010;
+    double probabilistic_regime_hostile_threshold_add = 0.030;
+    double probabilistic_regime_volatile_size_multiplier = 0.50;
+    double probabilistic_regime_hostile_size_multiplier = 0.20;
     double probabilistic_primary_promotion_min_margin = -0.02;
     double probabilistic_primary_promotion_min_calibrated = 0.47;
     double probabilistic_primary_promotion_max_strength_gap = 0.12;

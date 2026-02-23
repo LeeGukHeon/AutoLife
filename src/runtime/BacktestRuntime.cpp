@@ -6,6 +6,7 @@
 #include "common/SignalPolicyShared.h"
 #include "common/StrategyEdgeStatsShared.h"
 #include "common/ExecutionGuardPolicyShared.h"
+#include "common/ProbabilisticRegimeSpec.h"
 #include "analytics/OrderbookAnalyzer.h"
 #include "analytics/ProbabilisticRuntimeFeatures.h"
 #include "execution/OrderLifecycleStateMachine.h"
@@ -197,6 +198,14 @@ struct ProbabilisticRuntimeSnapshot {
     double expected_edge_pct = 0.0;
     double online_margin_bias = 0.0;
     double online_strength_gain = 1.0;
+    autolife::common::probabilistic_regime::State regime_state =
+        autolife::common::probabilistic_regime::State::NORMAL;
+    double regime_volatility_zscore = 0.0;
+    double regime_drawdown_speed_bps = 0.0;
+    double regime_correlation_shock = 0.0;
+    double regime_threshold_add = 0.0;
+    double regime_size_multiplier = 1.0;
+    bool regime_block_new_entries = false;
 };
 
 struct ProbabilisticOnlineLearningState {
@@ -390,11 +399,41 @@ bool inferProbabilisticRuntimeSnapshot(
         );
     }
 
+    const auto regime_ext = autolife::common::probabilistic_regime::analyze(
+        metrics.candles,
+        cfg,
+        nullptr
+    );
+    out_snapshot.regime_state = regime_ext.state;
+    out_snapshot.regime_volatility_zscore = regime_ext.volatility_zscore;
+    out_snapshot.regime_drawdown_speed_bps = regime_ext.drawdown_speed_bps;
+    out_snapshot.regime_correlation_shock = regime_ext.correlation_shock;
+    out_snapshot.regime_threshold_add = autolife::common::probabilistic_regime::thresholdAdd(
+        cfg,
+        regime_ext.state
+    );
+    out_snapshot.regime_size_multiplier = autolife::common::probabilistic_regime::sizeMultiplier(
+        cfg,
+        regime_ext.state
+    );
+    out_snapshot.regime_block_new_entries = autolife::common::probabilistic_regime::blockNewEntries(
+        cfg,
+        regime_ext.state
+    );
+
     if (cfg.probabilistic_runtime_scan_prefilter_enabled) {
-        const double gate_margin = effectiveProbabilisticScanPrefilterMargin(cfg, regime);
+        const double gate_margin = std::clamp(
+            effectiveProbabilisticScanPrefilterMargin(cfg, regime) + out_snapshot.regime_threshold_add,
+            -0.30,
+            0.30
+        );
         if (out_snapshot.margin_h5 < gate_margin) {
             if (reject_reason != nullptr) {
-                *reject_reason = "probabilistic_market_prefilter";
+                *reject_reason =
+                    (cfg.probabilistic_regime_spec_enabled &&
+                     out_snapshot.regime_state != autolife::common::probabilistic_regime::State::NORMAL)
+                    ? "probabilistic_regime_prefilter"
+                    : "probabilistic_market_prefilter";
             }
             return false;
         }
@@ -486,7 +525,8 @@ bool applyProbabilisticRuntimeAdjustment(
 
 double probabilisticPositionScaleForEntry(
     const autolife::engine::EngineConfig& cfg,
-    const autolife::strategy::Signal& signal
+    const autolife::strategy::Signal& signal,
+    const ProbabilisticRuntimeSnapshot* snapshot
 ) {
     if (!cfg.probabilistic_runtime_primary_mode || !signal.probabilistic_runtime_applied) {
         return 1.0;
@@ -501,6 +541,9 @@ double probabilisticPositionScaleForEntry(
          signal.market_regime == autolife::analytics::MarketRegime::HIGH_VOLATILITY) &&
         signal.probabilistic_h5_margin < 0.0) {
         scale *= 0.92;
+    }
+    if (snapshot != nullptr && cfg.probabilistic_regime_spec_enabled) {
+        scale *= std::clamp(snapshot->regime_size_multiplier, 0.01, 1.0);
     }
     return std::clamp(scale, 0.45, 1.45);
 }
@@ -686,11 +729,21 @@ bool shouldUseProbabilisticPrimaryFallback(
         !snapshot.applied) {
         return false;
     }
+    if (cfg.probabilistic_regime_spec_enabled && snapshot.regime_block_new_entries) {
+        return false;
+    }
     const bool hostile_regime =
         regime == autolife::analytics::MarketRegime::HIGH_VOLATILITY ||
         regime == autolife::analytics::MarketRegime::TRENDING_DOWN;
-    const double min_margin = hostile_regime ? 0.020 : -0.040;
-    const double min_prob = hostile_regime ? 0.56 : 0.42;
+    const double regime_threshold_add = cfg.probabilistic_regime_spec_enabled
+        ? std::max(0.0, snapshot.regime_threshold_add)
+        : 0.0;
+    const double min_margin = (hostile_regime ? 0.020 : -0.040) + regime_threshold_add;
+    const double min_prob = std::clamp(
+        (hostile_regime ? 0.56 : 0.42) + (regime_threshold_add * 1.4),
+        0.0,
+        1.0
+    );
     const double min_liquidity = hostile_regime ? 50.0 : 14.0;
     const double min_volume_surge = hostile_regime ? 0.72 : 0.14;
     const double max_spread = hostile_regime ? 0.0025 : 0.0065;
@@ -804,7 +857,8 @@ struct ProbabilisticPrimaryMinimums {
 
 ProbabilisticPrimaryMinimums effectiveProbabilisticPrimaryMinimums(
     const autolife::engine::EngineConfig& cfg,
-    autolife::analytics::MarketRegime regime
+    autolife::analytics::MarketRegime regime,
+    const ProbabilisticRuntimeSnapshot* snapshot
 ) {
     ProbabilisticPrimaryMinimums out;
     out.min_h5_calibrated = cfg.probabilistic_primary_min_h5_calibrated;
@@ -830,6 +884,18 @@ ProbabilisticPrimaryMinimums effectiveProbabilisticPrimaryMinimums(
         out.min_h5_margin -= 0.01;
         out.min_liquidity_score -= 5.0;
         out.min_signal_strength -= 0.03;
+    }
+
+    if (snapshot != nullptr && cfg.probabilistic_regime_spec_enabled) {
+        const double regime_add = std::max(0.0, snapshot->regime_threshold_add);
+        out.min_h5_margin += regime_add;
+        out.min_h5_calibrated += std::clamp(regime_add * 1.5, 0.0, 0.20);
+        if (snapshot->regime_state == autolife::common::probabilistic_regime::State::VOLATILE) {
+            out.min_signal_strength += 0.03;
+        } else if (snapshot->regime_state == autolife::common::probabilistic_regime::State::HOSTILE) {
+            out.min_liquidity_score += 8.0;
+            out.min_signal_strength += 0.08;
+        }
     }
 
     out.min_h5_calibrated = std::clamp(out.min_h5_calibrated, 0.0, 1.0);
@@ -916,6 +982,7 @@ bool passesProbabilisticPrimaryMinimums(
     const autolife::engine::EngineConfig& cfg,
     const autolife::strategy::Signal& signal,
     autolife::analytics::MarketRegime regime,
+    const ProbabilisticRuntimeSnapshot* snapshot,
     std::string* reject_reason
 ) {
     if (!cfg.probabilistic_runtime_primary_mode) {
@@ -927,9 +994,17 @@ bool passesProbabilisticPrimaryMinimums(
         }
         return false;
     }
+    if (snapshot != nullptr &&
+        cfg.probabilistic_regime_spec_enabled &&
+        snapshot->regime_block_new_entries) {
+        if (reject_reason != nullptr) {
+            *reject_reason = "blocked_probabilistic_regime_hostile";
+        }
+        return false;
+    }
 
     ProbabilisticPrimaryMinimums mins =
-        effectiveProbabilisticPrimaryMinimums(cfg, regime);
+        effectiveProbabilisticPrimaryMinimums(cfg, regime, snapshot);
     const bool hostile_regime =
         regime == autolife::analytics::MarketRegime::HIGH_VOLATILITY ||
         regime == autolife::analytics::MarketRegime::TRENDING_DOWN;
@@ -2210,6 +2285,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     engine_config_,
                     signal,
                     regime.regime,
+                    &probabilistic_snapshot,
                     &primary_reject_reason)) {
                 markEntryReject(
                     primary_reject_reason.empty()
@@ -2274,14 +2350,17 @@ void BacktestEngine::processCandle(const Candle& candle) {
             );
             best_signal = candidate_signals.front();
             LOG_INFO(
-                "{} probabilistic-primary best selected [{}]: p_h5={:.4f}, margin={:+.4f}, liq={:.1f}, strength={:.3f}, candidates={}",
+                "{} probabilistic-primary best selected [{}]: p_h5={:.4f}, margin={:+.4f}, liq={:.1f}, strength={:.3f}, candidates={}, regime_state={}, vol_z={:+.3f}, dd_speed_bps={:.2f}",
                 market_name_,
                 best_signal.strategy_name,
                 best_signal.probabilistic_h5_calibrated,
                 best_signal.probabilistic_h5_margin,
                 best_signal.liquidity_score,
                 best_signal.strength,
-                static_cast<int>(candidate_signals.size())
+                static_cast<int>(candidate_signals.size()),
+                autolife::common::probabilistic_regime::stateLabel(probabilistic_snapshot.regime_state),
+                probabilistic_snapshot.regime_volatility_zscore,
+                probabilistic_snapshot.regime_drawdown_speed_bps
             );
         }
         if (!candidate_signals.empty() && best_signal.type == strategy::SignalType::NONE) {
@@ -2331,37 +2410,41 @@ void BacktestEngine::processCandle(const Candle& candle) {
                             markEntryReject("blocked_risk_gate_entry_quality_invalid_levels");
                         } else {
                             const double probabilistic_position_scale =
-                    probabilisticPositionScaleForEntry(engine_config_, best_signal);
-                if (std::fabs(probabilistic_position_scale - 1.0) > 1e-6) {
-                    best_signal.position_size *= probabilistic_position_scale;
-                    LOG_INFO(
-                        "{} probabilistic entry size scale [{}]: margin={:+.4f}, scale={:.3f}, pos={:.4f}",
-                        market_name_,
-                        best_signal.strategy_name,
-                        best_signal.probabilistic_h5_margin,
-                        probabilistic_position_scale,
-                        best_signal.position_size
-                    );
-                }
-                const auto dynamic_buy_slippage = computeDynamicSlippageThresholds(
-                    engine_config_,
-                    market_hostility_ewma_,
-                    true,
-                    best_signal.market_regime,
-                    best_signal.strength,
-                    best_signal.liquidity_score,
-                    best_signal.expected_value
-                );
-                bool realtime_entry_veto_ok = true;
-                std::string realtime_entry_veto_reason;
-                if (engine_config_.enable_realtime_entry_veto) {
-                    const auto veto_thresholds = computeRealtimeEntryVetoThresholds(
-                        engine_config_,
-                        best_signal.market_regime,
-                        best_signal.strength,
-                        best_signal.liquidity_score,
-                        market_hostility_ewma_
-                    );
+                                probabilisticPositionScaleForEntry(
+                                    engine_config_,
+                                    best_signal,
+                                    &probabilistic_snapshot
+                                );
+                            if (std::fabs(probabilistic_position_scale - 1.0) > 1e-6) {
+                                best_signal.position_size *= probabilistic_position_scale;
+                                LOG_INFO(
+                                    "{} probabilistic entry size scale [{}]: margin={:+.4f}, scale={:.3f}, pos={:.4f}",
+                                    market_name_,
+                                    best_signal.strategy_name,
+                                    best_signal.probabilistic_h5_margin,
+                                    probabilistic_position_scale,
+                                    best_signal.position_size
+                                );
+                            }
+                            const auto dynamic_buy_slippage = computeDynamicSlippageThresholds(
+                                engine_config_,
+                                market_hostility_ewma_,
+                                true,
+                                best_signal.market_regime,
+                                best_signal.strength,
+                                best_signal.liquidity_score,
+                                best_signal.expected_value
+                            );
+                            bool realtime_entry_veto_ok = true;
+                            std::string realtime_entry_veto_reason;
+                            if (engine_config_.enable_realtime_entry_veto) {
+                                const auto veto_thresholds = computeRealtimeEntryVetoThresholds(
+                                    engine_config_,
+                                    best_signal.market_regime,
+                                    best_signal.strength,
+                                    best_signal.liquidity_score,
+                                    market_hostility_ewma_
+                                );
                     const auto& snapshot = metrics.orderbook_snapshot;
                     const long long now_ms = toMsTimestamp(candle.timestamp);
                     if (!snapshot.valid || snapshot.best_ask <= 0.0) {

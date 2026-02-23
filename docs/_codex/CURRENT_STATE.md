@@ -3,7 +3,7 @@ Last updated: 2026-02-23
 
 ## Repository
 - Branch: current working branch (check with `git branch --show-current`)
-- Commit (snapshot): `ff08a17f5ef4f2b84c7c398d2b04ef8ec9f42109`
+- Commit (snapshot): `7d28827974b851e30788efff2d06bcb4e2e55872`
 
 ## Contract hashes
 - `config/model/probabilistic_feature_contract_v1.json`:
@@ -21,6 +21,7 @@ Last updated: 2026-02-23
   - Ticket 1: dynamic universe + scope-aware 1m fetch/build strictness (implemented in current working tree)
   - Ticket 2: purged walk-forward + embargo split option (implemented)
   - Ticket 3: conditional cost model isomorphism (implemented in current working tree)
+  - Ticket 4: explicit probabilistic regime spec + runtime actions (implemented in current working tree)
 
 ## Last known gate status
 - Strict feature validation: run required after any feature/build changes
