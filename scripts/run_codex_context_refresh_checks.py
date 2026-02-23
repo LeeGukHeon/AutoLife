@@ -6,7 +6,7 @@ import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from _script_common import dump_json, ensure_parent_directory, resolve_repo_path
+from _script_common import dump_json, ensure_parent_directory, load_json_or_none, resolve_repo_path
 
 DEFAULT_FEATURE_DIR_V1 = r".\data\model_input\probabilistic_features_v1_latest"
 DEFAULT_FEATURE_DIR_V2 = r".\data\model_input\probabilistic_features_v2_draft_latest"
@@ -242,6 +242,34 @@ def run_step(step_name: str, cmd: List[str], dry_run: bool) -> Dict[str, Any]:
     }
 
 
+def to_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in ("1", "true", "yes", "y", "on")
+
+
+def evaluate_gate_output(step_name: str, output_json_path: pathlib.Path) -> Tuple[bool, str]:
+    payload = load_json_or_none(output_json_path)
+    if not isinstance(payload, dict):
+        return False, "missing_or_invalid_output_json"
+
+    if step_name == "validate_features":
+        status = str(payload.get("status", "")).strip().lower()
+        return (status == "pass"), f"feature_validation_status={status or 'missing'}"
+
+    if step_name == "validate_bundle_parity":
+        status = str(payload.get("status", "")).strip().lower()
+        return (status == "pass"), f"parity_status={status or 'missing'}"
+
+    if step_name == "run_verification":
+        overall = to_bool(payload.get("overall_gate_pass", False))
+        return overall, f"verification_overall_gate_pass={overall}"
+
+    return False, "unknown_step_gate_rule"
+
+
 def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
     touched = parse_touched_areas(args.touched_areas)
     pipeline_version = infer_pipeline_version(args)
@@ -291,7 +319,16 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
                 str(feature["output"]),
                 "--strict",
             ]
-            steps.append(run_step("validate_features", cmd, bool(args.dry_run)))
+            step = run_step("validate_features", cmd, bool(args.dry_run))
+            if step.get("ok", False) and not bool(step.get("dry_run", False)):
+                gate_ok, gate_note = evaluate_gate_output("validate_features", feature["output"])
+                step["gate_output_ok"] = bool(gate_ok)
+                step["gate_output_note"] = str(gate_note)
+                if not gate_ok:
+                    step["ok"] = False
+                    step["returncode"] = int(step.get("returncode", 0) or 2)
+                    errors.append("gate_output_failed:validate_features")
+            steps.append(step)
 
     if "model" in touched:
         parity = resolve_parity_inputs(args, pipeline_version)
@@ -330,7 +367,16 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
                 "--output-json",
                 str(parity["output"]),
             ]
-            steps.append(run_step("validate_bundle_parity", cmd, bool(args.dry_run)))
+            step = run_step("validate_bundle_parity", cmd, bool(args.dry_run))
+            if step.get("ok", False) and not bool(step.get("dry_run", False)):
+                gate_ok, gate_note = evaluate_gate_output("validate_bundle_parity", parity["output"])
+                step["gate_output_ok"] = bool(gate_ok)
+                step["gate_output_note"] = str(gate_note)
+                if not gate_ok:
+                    step["ok"] = False
+                    step["returncode"] = int(step.get("returncode", 0) or 2)
+                    errors.append("gate_output_failed:validate_bundle_parity")
+            steps.append(step)
 
     if "runtime" in touched:
         verification = resolve_verification_inputs(args)
@@ -391,7 +437,16 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
                 "--dataset-names",
                 *datasets,
             ]
-            steps.append(run_step("run_verification", cmd, bool(args.dry_run)))
+            step = run_step("run_verification", cmd, bool(args.dry_run))
+            if step.get("ok", False) and not bool(step.get("dry_run", False)):
+                gate_ok, gate_note = evaluate_gate_output("run_verification", verification["output"])
+                step["gate_output_ok"] = bool(gate_ok)
+                step["gate_output_note"] = str(gate_note)
+                if not gate_ok:
+                    step["ok"] = False
+                    step["returncode"] = int(step.get("returncode", 0) or 2)
+                    errors.append("gate_output_failed:run_verification")
+            steps.append(step)
 
     step_failures = [x for x in steps if not bool(x.get("ok", False))]
     status = "pass" if not errors and not step_failures else "fail"

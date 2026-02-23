@@ -44,11 +44,13 @@ Last updated: 2026-02-23
   - Optional Ticket 7 (MODE B): standalone Gate4 flow runner implemented (`scripts/run_probabilistic_shadow_gate_flow.py`) + regression tests
   - API policy hardening: `scripts/fetch_upbit_historical_candles.py` now enforces `Remaining-Req sec==0` boundary throttle+jitter, bounded 429/418 backoff cap, defensive Origin-header stripping, and richer compliance telemetry (endpoint/params/status/latency/retry).
   - Runtime API policy hardening: `src/execution/RateLimiter.cpp` + `src/network/UpbitHttpClient.cpp` now apply sec==0 throttle evidence, bounded 429 exponential backoff path, and defensive Origin-header stripping in request header assembly.
+  - Codex context refresh checks now enforce gate-output fail-closed semantics (`scripts/run_codex_context_refresh_checks.py`): feature/parity require `status=pass`, runtime verification requires `overall_gate_pass=true`.
 
 ## Last known gate status
 - Strict feature validation: run required after any feature/build changes
 - Bundle parity: run required after model/bundle/export changes
 - Verification: run required after decision/runtime logic changes
+- Latest runtime context-refresh verification check (`pipeline=v1`) executed and failed fail-closed (`overall_gate_pass=false` in `build/Release/logs/context_refresh_verification.json`).
 - Shadow/live staged enable: not active by default
 
 ## Known issues / watchpoints
