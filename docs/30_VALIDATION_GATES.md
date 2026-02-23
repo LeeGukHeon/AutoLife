@@ -116,3 +116,6 @@ Evaluator output:
 - Unknown state = fail.
 - Any mismatch = no-trade decision.
 - No gate bypass in regular operation.
+- Universe-scope 1m strictness is regression-tested:
+  - non-universe missing anchor => warning+skip
+  - universe market missing anchor => strict fail
