@@ -34,3 +34,9 @@ Last updated: 2026-02-23
 - Runtime prediction path must match training/export semantics.
 - Parity test is mandatory before any live consideration.
 - Bundle format changes require explicit versioning and migration notes.
+
+## Strict version gate
+- Runtime/parity must fail closed on:
+  - unknown runtime bundle `version`
+  - `version` and `pipeline_version` mismatch
+  - mixed pipeline versions across bundle/train/split inputs

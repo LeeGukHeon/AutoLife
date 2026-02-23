@@ -1,6 +1,6 @@
 # MODE B / v2 Restructure Plan (Optional)
 Last updated: 2026-02-23
-Status: Phase 2 implemented (pipeline branching added, v2 still draft)
+Status: Phase 2 implemented + Phase 3 partial (strict version checks added)
 
 ## Goal
 - Prepare optional MODE B migration with explicit v2 contracts.
@@ -23,7 +23,7 @@ Status: Phase 2 implemented (pipeline branching added, v2 still draft)
    - add explicit `v1|v2` switches in build/train/export scripts.
    - keep `v1` default.
    - fail closed on v1/v2 mixed inputs.
-3. Runtime compatibility:
+3. Runtime compatibility (partial implemented):
    - add safe v2 parsing with strict version checks.
    - fail closed on unknown/mixed contracts.
 4. Gate redefinition:
@@ -50,3 +50,15 @@ Status: Phase 2 implemented (pipeline branching added, v2 still draft)
 - `scripts/run_probabilistic_hybrid_cycle.py`
   - passes pipeline version to build/train/export.
   - when `v2` and defaults are used, output paths auto-switch to v2 draft paths.
+
+## Implemented in Phase 3 (partial)
+- `src/analytics/ProbabilisticRuntimeModel.cpp`
+  - strict bundle version validation:
+    - allowed: `probabilistic_runtime_bundle_v1`, `probabilistic_runtime_bundle_v2_draft`
+  - fail-closed on:
+    - unknown `version`
+    - `version` vs `pipeline_version` mismatch
+    - unsupported v2 draft contract tags
+- `scripts/validate_runtime_bundle_parity.py`
+  - fail-closed when bundle/train/split pipeline versions are mixed
+  - parity output records `runtime_bundle_version` and `pipeline_version`

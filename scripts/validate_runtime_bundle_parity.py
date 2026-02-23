@@ -50,6 +50,40 @@ def utc_now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
 
+def infer_pipeline_from_bundle(bundle: Dict[str, Any]) -> Dict[str, str]:
+    bundle_version = str(bundle.get("version", "")).strip()
+    if bundle_version == "probabilistic_runtime_bundle_v1":
+        expected = "v1"
+    elif bundle_version == "probabilistic_runtime_bundle_v2_draft":
+        expected = "v2"
+    else:
+        raise RuntimeError(f"unsupported runtime bundle version: {bundle_version}")
+    declared = str(bundle.get("pipeline_version", expected)).strip().lower() or expected
+    if declared != expected:
+        raise RuntimeError(f"bundle pipeline mismatch: expected={expected} declared={declared}")
+    return {"bundle_version": bundle_version, "pipeline_version": expected}
+
+
+def infer_pipeline_from_train_summary(summary: Dict[str, Any]) -> str:
+    explicit = str(summary.get("pipeline_version", "")).strip().lower()
+    if explicit in ("v1", "v2"):
+        return explicit
+    summary_version = str(summary.get("version", "")).strip().lower()
+    if "v2" in summary_version:
+        return "v2"
+    return "v1"
+
+
+def infer_pipeline_from_split_manifest(split_manifest: Dict[str, Any]) -> str:
+    explicit = str(split_manifest.get("pipeline_version", "")).strip().lower()
+    if explicit in ("v1", "v2"):
+        return explicit
+    source_manifest_version = str(split_manifest.get("source_manifest_version", "")).strip().lower()
+    if "v2" in source_manifest_version:
+        return "v2"
+    return "v1"
+
+
 def sigmoid(z: np.ndarray) -> np.ndarray:
     zz = np.clip(z, -40.0, 40.0)
     return 1.0 / (1.0 + np.exp(-zz))
@@ -116,6 +150,19 @@ def main(argv=None) -> int:
         raise RuntimeError(f"invalid train summary: {summary_path}")
     if not isinstance(split_manifest, dict):
         raise RuntimeError(f"invalid split manifest: {split_path}")
+    bundle_meta = infer_pipeline_from_bundle(bundle)
+    summary_pipeline_version = infer_pipeline_from_train_summary(summary)
+    split_pipeline_version = infer_pipeline_from_split_manifest(split_manifest)
+    if summary_pipeline_version != bundle_meta["pipeline_version"]:
+        raise RuntimeError(
+            "pipeline mismatch between runtime bundle and train summary: "
+            f"bundle={bundle_meta['pipeline_version']} summary={summary_pipeline_version}"
+        )
+    if split_pipeline_version != bundle_meta["pipeline_version"]:
+        raise RuntimeError(
+            "pipeline mismatch between runtime bundle and split manifest: "
+            f"bundle={bundle_meta['pipeline_version']} split={split_pipeline_version}"
+        )
 
     by_market_summary = {
         str(ds.get("market", "")).strip(): ds
@@ -376,6 +423,8 @@ def main(argv=None) -> int:
         "runtime_bundle_json": str(bundle_path),
         "train_summary_json": str(summary_path),
         "split_manifest_json": str(split_path),
+        "runtime_bundle_version": bundle_meta["bundle_version"],
+        "pipeline_version": bundle_meta["pipeline_version"],
         "comparison_count": len(results),
         "samples_per_market": int(args.samples_per_market),
         "abs_tolerance": float(args.abs_tol),
