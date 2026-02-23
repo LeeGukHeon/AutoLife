@@ -130,9 +130,20 @@ Status: Phase 1 transitional + Phase 2 implemented + Phase 3 expanded + Phase 4 
     - `same_candles`
     - `compared_decision_count > 0`
     - `mismatch_count == 0`
+- `scripts/generate_probabilistic_shadow_report.py`
+  - fail-closed shadow report generator from live/backtest policy decision logs
+  - emits required evidence fields for Gate4:
+    - `checks.decision_log_comparison_pass`
+    - `checks.same_bundle`
+    - `checks.same_candles`
+    - `metadata.compared_decision_count`
+    - `metadata.mismatch_count`
+- `src/runtime/BacktestRuntime.cpp`
+  - writes `logs/policy_decisions_backtest.jsonl` for deterministic shadow decision comparison
 - `scripts/run_probabilistic_hybrid_cycle.py`
   - optional `--evaluate-promotion-readiness` step
   - supports `--promotion-target-stage prelive|live_enable`
   - supports `--promotion-shadow-report-json` for live-enable readiness
+  - supports `--generate-shadow-report` with decision log inputs
   - supports integrated `--validate-shadow-report` step
   - in `v2 + live_enable`, shadow validation is automatically enforced fail-closed

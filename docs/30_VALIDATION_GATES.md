@@ -65,6 +65,17 @@ Requirements:
 - shadow report `pipeline_version` must match promotion target pipeline
 - if shadow report exposes `gate_profile` in v2 flow, it must be `v2_strict`
 
+Shadow report generation command:
+```powershell
+python scripts/generate_probabilistic_shadow_report.py `
+  --live-decision-log-jsonl ".\build\Release\logs\policy_decisions.jsonl" `
+  --backtest-decision-log-jsonl ".\build\Release\logs\policy_decisions_backtest.jsonl" `
+  --runtime-bundle-json ".\config\model\probabilistic_runtime_bundle_v2.json" `
+  --pipeline-version v2 `
+  --output-json ".\build\Release\logs\probabilistic_shadow_report_latest.json" `
+  --strict
+```
+
 Shadow report strict validation command:
 ```powershell
 python scripts/validate_probabilistic_shadow_report.py `
@@ -85,6 +96,10 @@ python scripts/evaluate_probabilistic_promotion_readiness.py `
   --shadow-validation-json ".\build\Release\logs\probabilistic_shadow_report_validation_latest.json" `
   --runtime-config-json ".\build\Release\config\config.json"
 ```
+
+Hybrid cycle integration:
+- `scripts/run_probabilistic_hybrid_cycle.py` supports `--generate-shadow-report`.
+- for `v2 + --promotion-target-stage live_enable`, shadow validation remains fail-closed and can be combined with generation in one run.
 
 ## Gate 5: Staged live enable
 Requirements:

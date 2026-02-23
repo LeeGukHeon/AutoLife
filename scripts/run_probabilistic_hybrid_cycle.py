@@ -4,7 +4,7 @@ import pathlib
 import subprocess
 import sys
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from _script_common import dump_json, ensure_parent_directory, resolve_repo_path
 
@@ -114,6 +114,29 @@ def parse_args(argv=None) -> argparse.Namespace:
         help="Required for promotion target live_enable.",
     )
     parser.add_argument(
+        "--generate-shadow-report",
+        action="store_true",
+        help="Generate shadow report from live/backtest decision logs before validation/readiness.",
+    )
+    parser.add_argument(
+        "--shadow-report-output-json",
+        default="",
+        help="Optional explicit output path for generated shadow report.",
+    )
+    parser.add_argument(
+        "--shadow-live-decision-log-jsonl",
+        default=r".\build\Release\logs\policy_decisions.jsonl",
+    )
+    parser.add_argument(
+        "--shadow-backtest-decision-log-jsonl",
+        default=r".\build\Release\logs\policy_decisions_backtest.jsonl",
+    )
+    parser.add_argument(
+        "--shadow-runtime-bundle-json",
+        default="",
+        help="Optional runtime bundle path for shadow report generation. Empty uses cycle runtime bundle.",
+    )
+    parser.add_argument(
         "--validate-shadow-report",
         action="store_true",
         help="Validate shadow report with strict schema/parity evidence before promotion readiness.",
@@ -183,8 +206,15 @@ def main(argv=None) -> int:
         raise ValueError("--sample-threshold must be > 0 when --sample-mode is dollar or volatility")
     if bool(args.evaluate_promotion_readiness) and not bool(args.run_verification):
         raise ValueError("--evaluate-promotion-readiness requires --run-verification")
-    if str(args.promotion_target_stage).strip().lower() == "live_enable" and not str(args.promotion_shadow_report_json).strip():
-        raise ValueError("--promotion-shadow-report-json is required when --promotion-target-stage live_enable")
+    if (
+        str(args.promotion_target_stage).strip().lower() == "live_enable" and
+        not str(args.promotion_shadow_report_json).strip() and
+        not bool(args.generate_shadow_report)
+    ):
+        raise ValueError(
+            "--promotion-shadow-report-json is required when --promotion-target-stage live_enable "
+            "(or enable --generate-shadow-report)"
+        )
     pipeline_version = str(args.pipeline_version).strip().lower()
     run_tag = str(args.run_tag).strip() or datetime.now().strftime("%Y%m%d_%H%M%S")
     py = str(args.python_exe)
@@ -483,9 +513,51 @@ def main(argv=None) -> int:
         if str(args.promotion_output_json).strip()
         else (log_dir / f"probabilistic_promotion_readiness_{run_tag}.json")
     )
+    shadow_report_json: Optional[pathlib.Path] = (
+        resolve_repo_path(args.promotion_shadow_report_json)
+        if str(args.promotion_shadow_report_json).strip()
+        else None
+    )
+    shadow_report_generated = False
     shadow_validation_json = pathlib.Path("")
     shadow_validation_enabled = False
     if bool(args.evaluate_promotion_readiness):
+        should_generate_shadow_report = bool(args.generate_shadow_report)
+        if str(args.promotion_target_stage).strip().lower() == "live_enable" and pipeline_version == "v2":
+            should_generate_shadow_report = True
+        if should_generate_shadow_report:
+            if shadow_report_json is None:
+                shadow_report_json = (
+                    resolve_repo_path(args.shadow_report_output_json)
+                    if str(args.shadow_report_output_json).strip()
+                    else (log_dir / f"probabilistic_shadow_report_{run_tag}.json")
+                )
+            shadow_bundle_json = (
+                resolve_repo_path(args.shadow_runtime_bundle_json)
+                if str(args.shadow_runtime_bundle_json).strip()
+                else runtime_bundle_json
+            )
+            shadow_generate_cmd = [
+                py,
+                str(resolve_repo_path(r".\scripts\generate_probabilistic_shadow_report.py")),
+                "--live-decision-log-jsonl",
+                str(resolve_repo_path(args.shadow_live_decision_log_jsonl)),
+                "--backtest-decision-log-jsonl",
+                str(resolve_repo_path(args.shadow_backtest_decision_log_jsonl)),
+                "--runtime-bundle-json",
+                str(shadow_bundle_json),
+                "--pipeline-version",
+                str(pipeline_version),
+                "--output-json",
+                str(shadow_report_json) if shadow_report_json is not None else "",
+                "--strict",
+            ]
+            steps.append(run_step("generate_shadow_report", shadow_generate_cmd))
+            if not steps[-1]["ok"]:
+                dump_json(cycle_summary_json, {"run_tag": run_tag, "status": "failed", "steps": steps})
+                return int(steps[-1]["returncode"] or 2)
+            shadow_report_generated = True
+
         shadow_validation_json = (
             resolve_repo_path(args.shadow_validation_output_json)
             if str(args.shadow_validation_output_json).strip()
@@ -495,14 +567,14 @@ def main(argv=None) -> int:
         if str(args.promotion_target_stage).strip().lower() == "live_enable" and pipeline_version == "v2":
             should_validate_shadow_report = True
         shadow_validation_enabled = bool(should_validate_shadow_report)
-        if should_validate_shadow_report and not str(args.promotion_shadow_report_json).strip():
-            raise ValueError("--validate-shadow-report requires --promotion-shadow-report-json")
+        if should_validate_shadow_report and shadow_report_json is None:
+            raise ValueError("--validate-shadow-report requires --promotion-shadow-report-json or --generate-shadow-report")
         if should_validate_shadow_report:
             shadow_validate_cmd = [
                 py,
                 str(resolve_repo_path(r".\scripts\validate_probabilistic_shadow_report.py")),
                 "--shadow-report-json",
-                str(resolve_repo_path(args.promotion_shadow_report_json)),
+                str(shadow_report_json) if shadow_report_json is not None else "",
                 "--pipeline-version",
                 str(pipeline_version),
                 "--output-json",
@@ -534,8 +606,8 @@ def main(argv=None) -> int:
         ]
         if should_validate_shadow_report:
             promotion_cmd.extend(["--shadow-validation-json", str(shadow_validation_json)])
-        if str(args.promotion_shadow_report_json).strip():
-            promotion_cmd.extend(["--shadow-report-json", str(resolve_repo_path(args.promotion_shadow_report_json))])
+        if shadow_report_json is not None:
+            promotion_cmd.extend(["--shadow-report-json", str(shadow_report_json)])
         steps.append(run_step("evaluate_promotion_readiness", promotion_cmd))
         if not steps[-1]["ok"]:
             dump_json(cycle_summary_json, {"run_tag": run_tag, "status": "failed", "steps": steps})
@@ -566,6 +638,13 @@ def main(argv=None) -> int:
             "train_summary_json": str(train_summary_json),
             "parity_json": str(parity_json),
             "verification_report_json": str(verification_report_json) if bool(args.run_verification) else "",
+            "shadow_report_json": (
+                str(shadow_report_json)
+                if bool(args.evaluate_promotion_readiness) and shadow_report_json is not None and (
+                    shadow_report_generated or str(args.promotion_shadow_report_json).strip()
+                )
+                else ""
+            ),
             "shadow_validation_json": (
                 str(shadow_validation_json)
                 if bool(args.evaluate_promotion_readiness) and shadow_validation_enabled

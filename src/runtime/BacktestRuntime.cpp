@@ -147,6 +147,66 @@ void appendExecutionUpdateArtifact(const autolife::core::ExecutionUpdate& update
     out << autolife::core::execution::toJson(update).dump() << "\n";
 }
 
+std::filesystem::path policyDecisionArtifactPath() {
+    return autolife::utils::PathUtils::resolveRelativePath("logs/policy_decisions_backtest.jsonl");
+}
+
+void resetPolicyDecisionArtifact() {
+    const auto path = policyDecisionArtifactPath();
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+}
+
+void appendPolicyDecisionAudit(
+    const std::vector<autolife::engine::PolicyDecisionRecord>& decisions,
+    autolife::analytics::MarketRegime dominant_regime,
+    bool small_seed_mode,
+    int max_new_orders_per_scan,
+    long long timestamp_ms
+) {
+    if (decisions.empty()) {
+        return;
+    }
+
+    nlohmann::json line;
+    line["ts"] = normalizeTimestampMs(timestamp_ms);
+    line["source"] = "backtest";
+    line["dominant_regime"] = autolife::common::runtime_diag::marketRegimeLabel(dominant_regime);
+    line["small_seed_mode"] = small_seed_mode;
+    line["max_new_orders_per_scan"] = max_new_orders_per_scan;
+    line["decisions"] = nlohmann::json::array();
+
+    for (const auto& d : decisions) {
+        nlohmann::json item;
+        item["market"] = d.market;
+        item["strategy"] = d.strategy_name;
+        item["selected"] = d.selected;
+        item["reason"] = d.reason;
+        item["base_score"] = d.base_score;
+        item["policy_score"] = d.policy_score;
+        item["strength"] = d.strength;
+        item["expected_value"] = d.expected_value;
+        item["liquidity"] = d.liquidity_score;
+        item["volatility"] = d.volatility;
+        item["trades"] = d.strategy_trades;
+        item["win_rate"] = d.strategy_win_rate;
+        item["profit_factor"] = d.strategy_profit_factor;
+        item["used_preloaded_tf_5m"] = d.used_preloaded_tf_5m;
+        item["used_preloaded_tf_1h"] = d.used_preloaded_tf_1h;
+        item["used_resampled_tf_fallback"] = d.used_resampled_tf_fallback;
+        line["decisions"].push_back(std::move(item));
+    }
+
+    const auto path = policyDecisionArtifactPath();
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream out(path.string(), std::ios::app);
+    if (!out.is_open()) {
+        LOG_WARN("Policy decision artifact open failed: {}", path.string());
+        return;
+    }
+    out << line.dump() << "\n";
+}
+
 bool passesRegimeGate(analytics::MarketRegime regime, const engine::EngineConfig& cfg) {
     if (cfg.avoid_high_volatility && regime == analytics::MarketRegime::HIGH_VOLATILITY) {
         return false;
@@ -1313,6 +1373,7 @@ void BacktestEngine::init(const Config& config) {
 
     engine_config_ = config.getEngineConfig();
     resetExecutionUpdateArtifact();
+    resetPolicyDecisionArtifact();
     balance_krw_ = config.getInitialCapital();
     balance_asset_ = 0.0;
     max_balance_ = balance_krw_;
@@ -2397,6 +2458,13 @@ void BacktestEngine::processCandle(const Candle& candle) {
             auto policy_output = policy_controller_->selectCandidates(policy_input);
             core_policy_decisions = policy_output.decisions;
             core_dropped_by_policy = policy_output.dropped_by_policy;
+            appendPolicyDecisionAudit(
+                core_policy_decisions,
+                regime.regime,
+                small_seed_mode,
+                policy_input.max_new_orders_per_scan,
+                candle.timestamp
+            );
             candidate_signals = std::move(policy_output.selected_candidates);
         }
         if (core_policy_enabled && !filtered_signals.empty() && candidate_signals.empty()) {

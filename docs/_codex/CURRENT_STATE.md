@@ -36,6 +36,7 @@ Last updated: 2026-02-23
   - Optional Ticket 7 (MODE B): Phase 5 expanded (promotion readiness evaluator + hybrid wiring, includes Gate1 preflight/profile checks and Gate4 shadow pipeline/profile checks)
   - Optional Ticket 7 (MODE B): runtime strictness regression test added (`AutoLifeProbBundleContractTest`)
   - Optional Ticket 7 (MODE B): shadow report strict validator + hybrid cycle integration (`validate_probabilistic_shadow_report.py`, `--validate-shadow-report`) implemented
+  - Optional Ticket 7 (MODE B): shadow report generator + decision-log evidence path implemented (`generate_probabilistic_shadow_report.py`, `--generate-shadow-report`, backtest policy decision artifact)
 
 ## Last known gate status
 - Strict feature validation: run required after any feature/build changes
