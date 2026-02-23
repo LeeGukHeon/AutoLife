@@ -2,12 +2,14 @@
 import argparse
 import csv
 import json
+import math
+import random
 import time
 import urllib.parse
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from _script_common import dump_json, ensure_parent_directory, resolve_repo_path
 
@@ -38,6 +40,18 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--max-retries-429", "-MaxRetries429", type=int, default=5)
     parser.add_argument("--max-retries-418", "-MaxRetries418", type=int, default=2)
     parser.add_argument("--retry-base-ms", "-RetryBaseMs", type=int, default=600)
+    parser.add_argument(
+        "--retry-max-backoff-ms",
+        "-RetryMaxBackoffMs",
+        type=int,
+        default=10000,
+    )
+    parser.add_argument(
+        "--sec-zero-jitter-max-ms",
+        "-SecZeroJitterMaxMs",
+        type=int,
+        default=50,
+    )
     return parser.parse_args(argv)
 
 
@@ -63,6 +77,79 @@ def parse_remaining_req(header_value: str) -> dict:
         k, v = token.split("=", 1)
         out[k.strip()] = v.strip()
     return out
+
+
+def parse_remaining_req_sec(header_value: str) -> Optional[int]:
+    tokens = parse_remaining_req(header_value)
+    raw = tokens.get("sec")
+    if raw is None:
+        return None
+    try:
+        sec = int(str(raw).strip())
+    except Exception:
+        return None
+    return sec if sec >= 0 else None
+
+
+def parse_retry_after_ms(header_value: str) -> int:
+    raw = str(header_value or "").strip()
+    if not raw:
+        return 0
+    try:
+        sec = float(raw)
+    except Exception:
+        return 0
+    if not math.isfinite(sec) or sec <= 0.0:
+        return 0
+    return int(sec * 1000.0)
+
+
+def bounded_exponential_backoff_ms(base_ms: int, attempt: int, max_backoff_ms: int) -> int:
+    base = max(0, int(base_ms))
+    exponent = min(max(0, int(attempt)), 10)
+    backoff = base * (2 ** exponent)
+    cap = max(0, int(max_backoff_ms))
+    if cap > 0:
+        backoff = min(backoff, cap)
+    return int(backoff)
+
+
+def compute_next_second_boundary_sleep_ms(now_epoch_sec: float, jitter_ms: int) -> int:
+    now_value = float(now_epoch_sec)
+    if not math.isfinite(now_value):
+        return max(0, int(jitter_ms))
+    next_boundary_sec = math.floor(now_value) + 1.0
+    base_ms = int(max(0.0, math.ceil((next_boundary_sec - now_value) * 1000.0)))
+    return int(base_ms + max(0, int(jitter_ms)))
+
+
+def compute_sec_zero_throttle_sleep_ms(
+    remaining_req_header: str,
+    jitter_max_ms: int,
+    now_epoch_sec: Optional[float] = None,
+    jitter_ms: Optional[int] = None,
+) -> int:
+    sec = parse_remaining_req_sec(remaining_req_header)
+    if sec is None or sec > 0:
+        return 0
+    if now_epoch_sec is None:
+        now_epoch_sec = time.time()
+    if jitter_ms is None:
+        jitter_ms = random.randint(0, max(0, int(jitter_max_ms)))
+    return compute_next_second_boundary_sleep_ms(now_epoch_sec, int(jitter_ms))
+
+
+def strip_origin_header(request: urllib.request.Request) -> bool:
+    removed = False
+    for container_name in ("headers", "unredirected_hdrs"):
+        container = getattr(request, container_name, None)
+        if not isinstance(container, dict):
+            continue
+        for key in list(container.keys()):
+            if str(key).strip().lower() == "origin":
+                container.pop(key, None)
+                removed = True
+    return removed
 
 
 def utc_now_iso() -> str:
@@ -109,6 +196,10 @@ def main(argv=None) -> int:
         raise RuntimeError("SleepMs must be >= 0.")
     if args.retry_base_ms < 0:
         raise RuntimeError("RetryBaseMs must be >= 0.")
+    if args.retry_max_backoff_ms < 0:
+        raise RuntimeError("RetryMaxBackoffMs must be >= 0.")
+    if args.sec_zero_jitter_max_ms < 0 or args.sec_zero_jitter_max_ms > 50:
+        raise RuntimeError("SecZeroJitterMaxMs must be between 0 and 50.")
 
     output_path_value = args.output_path.strip()
     if not output_path_value:
@@ -173,6 +264,10 @@ def main(argv=None) -> int:
     err_418_count = 0
     retry_count = 0
     backoff_sleep_ms_total = 0
+    remaining_req_missing_count = 0
+    remaining_req_sec0_throttle_count = 0
+    remaining_req_sec0_sleep_ms_total = 0
+    origin_header_stripped_count = 0
     throttle_events = []
     recover_events = []
 
@@ -191,14 +286,34 @@ def main(argv=None) -> int:
         query_string = urllib.parse.urlencode(query)
         url = f"{args.base_url.rstrip('/')}{endpoint}?{query_string}"
         request = urllib.request.Request(url=url, method="GET")
-        req_count += 1
+        request.add_header("Accept", "application/json")
+        if strip_origin_header(request):
+            origin_header_stripped_count += 1
+
+        request_meta = {
+            "endpoint": endpoint,
+            "params": {
+                "market": str(query.get("market", "")),
+                "count": str(query.get("count", "")),
+                "to": str(query.get("to", "")),
+            },
+        }
         batch = None
         recovered_this_request = False
-        for attempt in range(0, max(1, int(args.max_retries_429)) + max(1, int(args.max_retries_418)) + 1):
+        retry_429_for_request = 0
+        retry_418_for_request = 0
+        while True:
+            req_count += 1
+            started_perf = time.perf_counter()
             try:
                 with urllib.request.urlopen(request, timeout=30) as response:
                     payload = response.read().decode("utf-8")
-                    remaining_req = parse_remaining_req(response.headers.get("Remaining-Req", ""))
+                    remaining_req_raw = response.headers.get("Remaining-Req", "")
+                    remaining_req = parse_remaining_req(remaining_req_raw)
+                    remaining_req_sec = parse_remaining_req_sec(remaining_req_raw)
+                    if remaining_req_sec is None:
+                        remaining_req_missing_count += 1
+                latency_ms = int(round((time.perf_counter() - started_perf) * 1000.0))
                 batch = json.loads(payload)
                 ok_count += 1
                 append_jsonl(
@@ -208,11 +323,45 @@ def main(argv=None) -> int:
                         "event": "http_success",
                         "market": args.market,
                         "unit": args.unit,
+                        "request": request_meta,
                         "status_code": 200,
-                        "attempt": attempt,
+                        "latency_ms": latency_ms,
+                        "attempt": int(retry_429_for_request + retry_418_for_request),
+                        "remaining_req_raw": str(remaining_req_raw or ""),
                         "remaining_req": remaining_req,
+                        "remaining_req_sec": remaining_req_sec,
                     },
                 )
+                throttle_sleep_ms = compute_sec_zero_throttle_sleep_ms(
+                    str(remaining_req_raw or ""),
+                    int(args.sec_zero_jitter_max_ms),
+                )
+                if throttle_sleep_ms > 0:
+                    remaining_req_sec0_throttle_count += 1
+                    remaining_req_sec0_sleep_ms_total += int(throttle_sleep_ms)
+                    append_jsonl(
+                        compliance_telemetry_jsonl,
+                        {
+                            "ts_utc": utc_now_iso(),
+                            "event": "remaining_req_sec0_throttle",
+                            "market": args.market,
+                            "unit": args.unit,
+                            "request": request_meta,
+                            "remaining_req_raw": str(remaining_req_raw or ""),
+                            "remaining_req": remaining_req,
+                            "sleep_ms": int(throttle_sleep_ms),
+                        },
+                    )
+                    throttle_events.append(
+                        {
+                            "ts_utc": utc_now_iso(),
+                            "market": args.market,
+                            "unit": args.unit,
+                            "event": "remaining_req_sec0_throttle",
+                            "sleep_ms": int(throttle_sleep_ms),
+                        }
+                    )
+                    time.sleep(float(throttle_sleep_ms) / 1000.0)
                 if recovered_this_request:
                     recover_events.append(
                         {
@@ -224,19 +373,51 @@ def main(argv=None) -> int:
                     )
                 break
             except urllib.error.HTTPError as e:
+                latency_ms = int(round((time.perf_counter() - started_perf) * 1000.0))
                 status = int(getattr(e, "code", 0) or 0)
                 if status not in (429, 418):
                     raise
 
                 recovered_this_request = True
+                headers = getattr(e, "headers", None)
+                remaining_req_raw = ""
+                retry_after_raw = ""
+                if headers is not None:
+                    remaining_req_raw = str(headers.get("Remaining-Req", "") or "")
+                    retry_after_raw = str(headers.get("Retry-After", "") or "")
+                remaining_req = parse_remaining_req(remaining_req_raw)
+                remaining_req_sec = parse_remaining_req_sec(remaining_req_raw)
+                if remaining_req_sec is None:
+                    remaining_req_missing_count += 1
+                retry_after_ms = parse_retry_after_ms(retry_after_raw)
                 if status == 429:
                     err_429_count += 1
-                    retry_cap = max(1, int(args.max_retries_429))
-                    backoff_ms = int(max(0, int(args.retry_base_ms)) * (2 ** min(attempt, 5)))
+                    retry_cap = max(0, int(args.max_retries_429))
+                    if retry_429_for_request >= retry_cap:
+                        raise RuntimeError(
+                            f"Rate-limit retry exhausted: status={status}, retries={retry_429_for_request}, url={url}"
+                        )
+                    exp_backoff_ms = bounded_exponential_backoff_ms(
+                        base_ms=int(args.retry_base_ms),
+                        attempt=int(retry_429_for_request),
+                        max_backoff_ms=int(args.retry_max_backoff_ms),
+                    )
+                    backoff_ms = max(int(exp_backoff_ms), int(retry_after_ms))
+                    retry_429_for_request += 1
                 else:
                     err_418_count += 1
-                    retry_cap = max(1, int(args.max_retries_418))
-                    backoff_ms = int(max(1500, int(args.retry_base_ms) * 6) * (attempt + 1))
+                    retry_cap = max(0, int(args.max_retries_418))
+                    if retry_418_for_request >= retry_cap:
+                        raise RuntimeError(
+                            f"Rate-limit retry exhausted: status={status}, retries={retry_418_for_request}, url={url}"
+                        )
+                    step_base = max(1500, int(args.retry_base_ms) * 6)
+                    linear_backoff_ms = int(step_base * (retry_418_for_request + 1))
+                    cap_ms = max(0, int(args.retry_max_backoff_ms))
+                    if cap_ms > 0:
+                        linear_backoff_ms = min(linear_backoff_ms, cap_ms)
+                    backoff_ms = max(int(linear_backoff_ms), int(retry_after_ms))
+                    retry_418_for_request += 1
 
                 append_jsonl(
                     compliance_telemetry_jsonl,
@@ -245,9 +426,15 @@ def main(argv=None) -> int:
                         "event": "rate_limit_error",
                         "market": args.market,
                         "unit": args.unit,
+                        "request": request_meta,
                         "status_code": status,
-                        "attempt": attempt,
-                        "backoff_ms": backoff_ms,
+                        "latency_ms": latency_ms,
+                        "attempt": int(retry_429_for_request + retry_418_for_request),
+                        "remaining_req_raw": str(remaining_req_raw),
+                        "remaining_req": remaining_req,
+                        "remaining_req_sec": remaining_req_sec,
+                        "retry_after_ms": int(retry_after_ms),
+                        "backoff_ms": int(backoff_ms),
                     },
                 )
                 throttle_events.append(
@@ -256,20 +443,15 @@ def main(argv=None) -> int:
                         "market": args.market,
                         "unit": args.unit,
                         "status_code": status,
-                        "attempt": attempt,
-                        "backoff_ms": backoff_ms,
+                        "attempt": int(retry_429_for_request + retry_418_for_request),
+                        "backoff_ms": int(backoff_ms),
                     }
                 )
 
-                if attempt >= retry_cap:
-                    raise RuntimeError(
-                        f"Rate-limit retry exhausted: status={status}, attempt={attempt}, url={url}"
-                    )
-
                 retry_count += 1
-                backoff_sleep_ms_total += backoff_ms
+                backoff_sleep_ms_total += int(backoff_ms)
                 if backoff_ms > 0:
-                    time.sleep(backoff_ms / 1000.0)
+                    time.sleep(float(backoff_ms) / 1000.0)
 
         if batch is None:
             raise RuntimeError(f"Fetch failed: market={args.market}, unit={args.unit}, url={url}")
@@ -375,6 +557,10 @@ def main(argv=None) -> int:
         "rate_limit_429_count": err_429_count,
         "rate_limit_418_count": err_418_count,
         "retry_count": retry_count,
+        "remaining_req_missing_count": int(remaining_req_missing_count),
+        "remaining_req_sec0_throttle_count": int(remaining_req_sec0_throttle_count),
+        "remaining_req_sec0_sleep_ms_total": int(remaining_req_sec0_sleep_ms_total),
+        "origin_header_stripped_count": int(origin_header_stripped_count),
         "backoff_sleep_ms_total": backoff_sleep_ms_total,
         "throttle_event_count": len(throttle_events),
         "recover_event_count": len(recover_events),

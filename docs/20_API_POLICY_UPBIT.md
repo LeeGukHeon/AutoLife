@@ -50,6 +50,11 @@ This policy applies to all Upbit REST and public WebSocket usage in this reposit
 ## Current code touchpoints
 - Python historical fetcher:
   - `scripts/fetch_upbit_historical_candles.py`
+  - implementation notes:
+    - parses `Remaining-Req` on success and throttles when `sec==0` (next-second boundary + jitter <= 50ms)
+    - applies bounded backoff for `429/418` (`--retry-base-ms`, `--retry-max-backoff-ms`)
+    - strips `Origin` header defensively before sending server-side requests
+    - records endpoint/params/status/latency/retry decisions in compliance telemetry JSONL
 - C++ HTTP and rate limiter:
   - `src/network/UpbitHttpClient.cpp`
   - `src/execution/RateLimiter.cpp`

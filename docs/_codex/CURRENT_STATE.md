@@ -42,6 +42,7 @@ Last updated: 2026-02-23
   - Codex context refresh helper implemented (`scripts/run_codex_context_refresh_checks.py`) and wired into bootstrap/protocol docs
   - Ticket 1 universe-scope behavior regression tests added (`scripts/test_probabilistic_universe_scope.py`)
   - Optional Ticket 7 (MODE B): standalone Gate4 flow runner implemented (`scripts/run_probabilistic_shadow_gate_flow.py`) + regression tests
+  - API policy hardening: `scripts/fetch_upbit_historical_candles.py` now enforces `Remaining-Req sec==0` boundary throttle+jitter, bounded 429/418 backoff cap, defensive Origin-header stripping, and richer compliance telemetry (endpoint/params/status/latency/retry).
 
 ## Last known gate status
 - Strict feature validation: run required after any feature/build changes
