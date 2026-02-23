@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import pathlib
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import evaluate_probabilistic_promotion_readiness as promotion_readiness
 import generate_probabilistic_shadow_report as shadow_generate
@@ -11,6 +12,12 @@ from _script_common import dump_json, resolve_repo_path
 
 DEFAULT_RUNTIME_BUNDLE_V1 = r".\config\model\probabilistic_runtime_bundle_v1.json"
 DEFAULT_RUNTIME_BUNDLE_V2 = r".\config\model\probabilistic_runtime_bundle_v2.json"
+DEFAULT_LIVE_DECISION_LOG_JSONL = r".\build\Release\logs\policy_decisions.jsonl"
+DEFAULT_BACKTEST_DECISION_LOG_JSONL = r".\build\Release\logs\policy_decisions_backtest.jsonl"
+DEFAULT_FEATURE_VALIDATION_JSON = r".\build\Release\logs\probabilistic_feature_validation_summary.json"
+DEFAULT_PARITY_JSON = r".\build\Release\logs\probabilistic_runtime_bundle_parity.json"
+DEFAULT_VERIFICATION_JSON = r".\build\Release\logs\verification_report.json"
+DEFAULT_RUNTIME_CONFIG_JSON = r".\build\Release\config\config.json"
 
 
 def utc_now_iso() -> str:
@@ -41,27 +48,27 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--live-decision-log-jsonl",
-        default=r".\build\Release\logs\policy_decisions.jsonl",
+        default=DEFAULT_LIVE_DECISION_LOG_JSONL,
     )
     parser.add_argument(
         "--backtest-decision-log-jsonl",
-        default=r".\build\Release\logs\policy_decisions_backtest.jsonl",
+        default=DEFAULT_BACKTEST_DECISION_LOG_JSONL,
     )
     parser.add_argument(
         "--feature-validation-json",
-        default=r".\build\Release\logs\probabilistic_feature_validation_summary.json",
+        default=DEFAULT_FEATURE_VALIDATION_JSON,
     )
     parser.add_argument(
         "--parity-json",
-        default=r".\build\Release\logs\probabilistic_runtime_bundle_parity.json",
+        default=DEFAULT_PARITY_JSON,
     )
     parser.add_argument(
         "--verification-json",
-        default=r".\build\Release\logs\verification_report.json",
+        default=DEFAULT_VERIFICATION_JSON,
     )
     parser.add_argument(
         "--runtime-config-json",
-        default=r".\build\Release\config\config.json",
+        default=DEFAULT_RUNTIME_CONFIG_JSON,
     )
     parser.add_argument(
         "--shadow-report-json",
@@ -116,6 +123,34 @@ def check_required_inputs(required: Dict[str, str]) -> List[str]:
     return missing
 
 
+def latest_file_for_patterns(patterns: List[str]) -> Optional[pathlib.Path]:
+    root = resolve_repo_path(r".")
+    candidates: List[pathlib.Path] = []
+    for pattern in patterns:
+        candidates.extend([x for x in root.glob(pattern) if x.is_file()])
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p.stat().st_mtime)
+
+
+def resolve_input_path(
+    raw_path: str,
+    *,
+    default_path: str,
+    fallback_patterns: List[str],
+) -> Tuple[pathlib.Path, bool, str]:
+    requested_path = resolve_repo_path(raw_path)
+    if requested_path.exists():
+        return requested_path, False, str(requested_path)
+
+    is_default = str(raw_path).strip() == str(default_path).strip()
+    if is_default and fallback_patterns:
+        candidate = latest_file_for_patterns(fallback_patterns)
+        if candidate is not None and candidate.exists():
+            return candidate, True, str(requested_path)
+    return requested_path, False, str(requested_path)
+
+
 def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
     resolved_pipeline = infer_pipeline_version(args)
     runtime_bundle_json = (
@@ -128,17 +163,96 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
     promotion_output_json = str(resolve_repo_path(args.promotion_output_json))
     output_json = resolve_repo_path(args.output_json)
 
+    resolved_live_log, auto_live_log, requested_live_log = resolve_input_path(
+        str(args.live_decision_log_jsonl),
+        default_path=DEFAULT_LIVE_DECISION_LOG_JSONL,
+        fallback_patterns=[
+            r"build/Release/logs/policy_decisions*.jsonl",
+        ],
+    )
+    resolved_backtest_log, auto_backtest_log, requested_backtest_log = resolve_input_path(
+        str(args.backtest_decision_log_jsonl),
+        default_path=DEFAULT_BACKTEST_DECISION_LOG_JSONL,
+        fallback_patterns=[
+            r"build/Release/logs/policy_decisions_backtest*.jsonl",
+        ],
+    )
+    resolved_feature_validation, auto_feature_validation, requested_feature_validation = resolve_input_path(
+        str(args.feature_validation_json),
+        default_path=DEFAULT_FEATURE_VALIDATION_JSON,
+        fallback_patterns=[
+            r"build/Release/logs/probabilistic_feature_validation_summary_*.json",
+            r"build/Release/logs/context_refresh_feature_validation*.json",
+        ],
+    )
+    resolved_parity, auto_parity, requested_parity = resolve_input_path(
+        str(args.parity_json),
+        default_path=DEFAULT_PARITY_JSON,
+        fallback_patterns=[
+            r"build/Release/logs/probabilistic_runtime_bundle_parity_*.json",
+            r"build/Release/logs/context_refresh_runtime_bundle_parity*.json",
+        ],
+    )
+    resolved_verification, auto_verification, requested_verification = resolve_input_path(
+        str(args.verification_json),
+        default_path=DEFAULT_VERIFICATION_JSON,
+        fallback_patterns=[
+            r"build/Release/logs/verification_report_*.json",
+            r"build/Release/logs/context_refresh_verification*.json",
+        ],
+    )
+    resolved_runtime_config, auto_runtime_config, requested_runtime_config = resolve_input_path(
+        str(args.runtime_config_json),
+        default_path=DEFAULT_RUNTIME_CONFIG_JSON,
+        fallback_patterns=[
+            r"build/Release/config/config.json",
+            r"config/config.json",
+        ],
+    )
+
     required = {
-        "live_decision_log_jsonl": str(args.live_decision_log_jsonl),
-        "backtest_decision_log_jsonl": str(args.backtest_decision_log_jsonl),
+        "live_decision_log_jsonl": str(resolved_live_log),
+        "backtest_decision_log_jsonl": str(resolved_backtest_log),
         "runtime_bundle_json": runtime_bundle_json,
-        "feature_validation_json": str(args.feature_validation_json),
-        "parity_json": str(args.parity_json),
-        "verification_json": str(args.verification_json),
-        "runtime_config_json": str(args.runtime_config_json),
+        "feature_validation_json": str(resolved_feature_validation),
+        "parity_json": str(resolved_parity),
+        "verification_json": str(resolved_verification),
+        "runtime_config_json": str(resolved_runtime_config),
     }
     missing = check_required_inputs(required)
     if missing:
+        auto_resolution = {
+            "live_decision_log_jsonl": {
+                "requested_path": requested_live_log,
+                "resolved_path": str(resolved_live_log),
+                "auto_resolved": bool(auto_live_log),
+            },
+            "backtest_decision_log_jsonl": {
+                "requested_path": requested_backtest_log,
+                "resolved_path": str(resolved_backtest_log),
+                "auto_resolved": bool(auto_backtest_log),
+            },
+            "feature_validation_json": {
+                "requested_path": requested_feature_validation,
+                "resolved_path": str(resolved_feature_validation),
+                "auto_resolved": bool(auto_feature_validation),
+            },
+            "parity_json": {
+                "requested_path": requested_parity,
+                "resolved_path": str(resolved_parity),
+                "auto_resolved": bool(auto_parity),
+            },
+            "verification_json": {
+                "requested_path": requested_verification,
+                "resolved_path": str(resolved_verification),
+                "auto_resolved": bool(auto_verification),
+            },
+            "runtime_config_json": {
+                "requested_path": requested_runtime_config,
+                "resolved_path": str(resolved_runtime_config),
+                "auto_resolved": bool(auto_runtime_config),
+            },
+        }
         out = {
             "generated_at_utc": utc_now_iso(),
             "status": "fail",
@@ -146,6 +260,7 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
             "target_stage": str(args.target_stage),
             "steps": [],
             "errors": [f"missing_required:{x}" for x in missing],
+            "input_resolution": auto_resolution,
             "artifacts": {
                 "output_json": str(output_json),
             },
@@ -158,8 +273,8 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
 
     generated = shadow_generate.evaluate(
         argparse.Namespace(
-            live_decision_log_jsonl=str(args.live_decision_log_jsonl),
-            backtest_decision_log_jsonl=str(args.backtest_decision_log_jsonl),
+            live_decision_log_jsonl=str(resolved_live_log),
+            backtest_decision_log_jsonl=str(resolved_backtest_log),
             runtime_bundle_json=runtime_bundle_json,
             live_runtime_bundle_json="",
             backtest_runtime_bundle_json="",
@@ -204,11 +319,11 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
 
     promotion = promotion_readiness.evaluate(
         argparse.Namespace(
-            feature_validation_json=str(args.feature_validation_json),
-            parity_json=str(args.parity_json),
-            verification_json=str(args.verification_json),
+            feature_validation_json=str(resolved_feature_validation),
+            parity_json=str(resolved_parity),
+            verification_json=str(resolved_verification),
             shadow_report_json=shadow_report_json,
-            runtime_config_json=str(args.runtime_config_json),
+            runtime_config_json=str(resolved_runtime_config),
             shadow_validation_json=shadow_validation_json,
             target_stage=str(args.target_stage),
             pipeline_version=resolved_pipeline,
@@ -237,13 +352,45 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
         "steps": steps,
         "errors": errors,
         "inputs": {
-            "live_decision_log_jsonl": str(resolve_repo_path(args.live_decision_log_jsonl)),
-            "backtest_decision_log_jsonl": str(resolve_repo_path(args.backtest_decision_log_jsonl)),
+            "live_decision_log_jsonl": str(resolved_live_log),
+            "backtest_decision_log_jsonl": str(resolved_backtest_log),
             "runtime_bundle_json": runtime_bundle_json,
-            "feature_validation_json": str(resolve_repo_path(args.feature_validation_json)),
-            "parity_json": str(resolve_repo_path(args.parity_json)),
-            "verification_json": str(resolve_repo_path(args.verification_json)),
-            "runtime_config_json": str(resolve_repo_path(args.runtime_config_json)),
+            "feature_validation_json": str(resolved_feature_validation),
+            "parity_json": str(resolved_parity),
+            "verification_json": str(resolved_verification),
+            "runtime_config_json": str(resolved_runtime_config),
+        },
+        "input_resolution": {
+            "live_decision_log_jsonl": {
+                "requested_path": requested_live_log,
+                "resolved_path": str(resolved_live_log),
+                "auto_resolved": bool(auto_live_log),
+            },
+            "backtest_decision_log_jsonl": {
+                "requested_path": requested_backtest_log,
+                "resolved_path": str(resolved_backtest_log),
+                "auto_resolved": bool(auto_backtest_log),
+            },
+            "feature_validation_json": {
+                "requested_path": requested_feature_validation,
+                "resolved_path": str(resolved_feature_validation),
+                "auto_resolved": bool(auto_feature_validation),
+            },
+            "parity_json": {
+                "requested_path": requested_parity,
+                "resolved_path": str(resolved_parity),
+                "auto_resolved": bool(auto_parity),
+            },
+            "verification_json": {
+                "requested_path": requested_verification,
+                "resolved_path": str(resolved_verification),
+                "auto_resolved": bool(auto_verification),
+            },
+            "runtime_config_json": {
+                "requested_path": requested_runtime_config,
+                "resolved_path": str(resolved_runtime_config),
+                "auto_resolved": bool(auto_runtime_config),
+            },
         },
         "artifacts": {
             "shadow_report_json": shadow_report_json,

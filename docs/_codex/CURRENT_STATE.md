@@ -45,6 +45,7 @@ Last updated: 2026-02-23
   - API policy hardening: `scripts/fetch_upbit_historical_candles.py` now enforces `Remaining-Req sec==0` boundary throttle+jitter, bounded 429/418 backoff cap, defensive Origin-header stripping, and richer compliance telemetry (endpoint/params/status/latency/retry).
   - Runtime API policy hardening: `src/execution/RateLimiter.cpp` + `src/network/UpbitHttpClient.cpp` now apply sec==0 throttle evidence, bounded 429 exponential backoff path, and defensive Origin-header stripping in request header assembly.
   - Codex context refresh checks now enforce gate-output fail-closed semantics (`scripts/run_codex_context_refresh_checks.py`): feature/parity require `status=pass`, runtime verification requires `overall_gate_pass=true`.
+  - Standalone Gate4 flow runner now auto-resolves latest run-tagged inputs when default canonical files are absent (`scripts/run_probabilistic_shadow_gate_flow.py`) and records resolution metadata.
 
 ## Last known gate status
 - Strict feature validation: run required after any feature/build changes

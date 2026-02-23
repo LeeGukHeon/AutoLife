@@ -202,6 +202,8 @@ python scripts/run_probabilistic_hybrid_cycle.py `
   --validate-shadow-report
 
 # Optional: standalone Gate4 flow runner (existing artifacts + decision logs)
+# Note: when canonical default gate files are absent, the runner auto-resolves
+# latest run-tagged artifacts for feature/parity/verification and decision logs.
 python scripts/run_probabilistic_shadow_gate_flow.py `
   --pipeline-version v2 `
   --target-stage live_enable `

@@ -103,6 +103,7 @@ Hybrid cycle integration:
 - for `v2 + --promotion-target-stage live_enable`, shadow validation remains fail-closed and can be combined with generation in one run.
 - `--generate-shadow-report` and `--validate-shadow-report` are only valid with `--evaluate-promotion-readiness` (fail-closed arg guard).
 - standalone Gate4 flow helper: `scripts/run_probabilistic_shadow_gate_flow.py` (generate+validate+promotion-readiness chain)
+- Gate4 flow helper auto-resolves latest run-tagged feature/parity/verification artifacts and decision logs when canonical default paths are missing.
 
 ## Gate 5: Staged live enable
 Requirements:
