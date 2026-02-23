@@ -65,6 +65,14 @@ Requirements:
 - shadow report `pipeline_version` must match promotion target pipeline
 - if shadow report exposes `gate_profile` in v2 flow, it must be `v2_strict`
 
+Shadow report strict validation command:
+```powershell
+python scripts/validate_probabilistic_shadow_report.py `
+  --shadow-report-json ".\build\Release\logs\probabilistic_shadow_report_latest.json" `
+  --pipeline-version v2 `
+  --strict
+```
+
 Readiness evaluator command (live_enable target requires shadow report):
 ```powershell
 python scripts/evaluate_probabilistic_promotion_readiness.py `
@@ -74,6 +82,7 @@ python scripts/evaluate_probabilistic_promotion_readiness.py `
   --parity-json ".\build\Release\logs\probabilistic_runtime_bundle_parity.json" `
   --verification-json ".\build\Release\logs\verification_report.json" `
   --shadow-report-json ".\build\Release\logs\probabilistic_shadow_report_latest.json" `
+  --shadow-validation-json ".\build\Release\logs\probabilistic_shadow_report_validation_latest.json" `
   --runtime-config-json ".\build\Release\config\config.json"
 ```
 

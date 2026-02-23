@@ -41,6 +41,11 @@ def parse_args(argv=None) -> argparse.Namespace:
         help="Runtime config used to assert allow_live_orders=false before live enable.",
     )
     parser.add_argument(
+        "--shadow-validation-json",
+        default="",
+        help="Optional shadow report validation summary produced by validate_probabilistic_shadow_report.py.",
+    )
+    parser.add_argument(
         "--target-stage",
         choices=("prelive", "live_enable"),
         default="prelive",
@@ -160,12 +165,18 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
     runtime_config_path = resolve_repo_path(args.runtime_config_json)
     output_path = resolve_repo_path(args.output_json)
     shadow_report_path = resolve_repo_path(args.shadow_report_json) if str(args.shadow_report_json).strip() else None
+    shadow_validation_path = (
+        resolve_repo_path(args.shadow_validation_json) if str(args.shadow_validation_json).strip() else None
+    )
 
     feature_validation = load_json_or_none(feature_validation_path)
     parity = load_json_or_none(parity_path)
     verification = load_json_or_none(verification_path)
     runtime_config = load_json_or_none(runtime_config_path)
     shadow_payload = load_json_or_none(shadow_report_path) if shadow_report_path is not None else None
+    shadow_validation_payload = (
+        load_json_or_none(shadow_validation_path) if shadow_validation_path is not None else None
+    )
 
     checks: Dict[str, Dict[str, Any]] = {}
     errors = []
@@ -259,6 +270,41 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
     require_shadow = target_stage == "live_enable"
     require_live_disabled = target_stage == "live_enable"
 
+    shadow_validation_ok = True
+    shadow_validation_status = "not_checked"
+    shadow_validation_pipeline = ""
+    if shadow_validation_path is not None:
+        shadow_validation_ok = (
+            isinstance(shadow_validation_payload, dict) and
+            str(shadow_validation_payload.get("status", "")).strip().lower() == "pass"
+        )
+        shadow_validation_status = (
+            str(shadow_validation_payload.get("status", "")).strip()
+            if isinstance(shadow_validation_payload, dict)
+            else "missing"
+        )
+        shadow_validation_pipeline = (
+            str(shadow_validation_payload.get("pipeline_version", "")).strip().lower()
+            if isinstance(shadow_validation_payload, dict)
+            else ""
+        )
+    shadow_validation_pipeline_ok = (
+        shadow_validation_path is None or
+        (shadow_validation_pipeline in ("", resolved_pipeline))
+    )
+    checks["gate4_shadow_validation"] = {
+        "pass": bool(shadow_validation_ok and shadow_validation_pipeline_ok) if require_shadow else True,
+        "required": bool(require_shadow and shadow_validation_path is not None),
+        "path": str(shadow_validation_path) if shadow_validation_path is not None else "",
+        "status": shadow_validation_status,
+        "resolved_pipeline": resolved_pipeline,
+        "shadow_validation_pipeline": shadow_validation_pipeline,
+    }
+    if require_shadow and shadow_validation_path is not None and not bool(shadow_validation_ok):
+        errors.append("gate4_shadow_validation_failed_or_missing")
+    if require_shadow and shadow_validation_path is not None and not bool(shadow_validation_pipeline_ok):
+        errors.append("gate4_shadow_validation_pipeline_mismatch")
+
     shadow_pipeline = infer_pipeline_from_shadow(shadow_payload) if isinstance(shadow_payload, dict) else ""
     shadow_pipeline_ok = bool(isinstance(shadow_payload, dict) and shadow_pipeline == resolved_pipeline)
     checks["gate4_shadow_pipeline_consistency"] = {
@@ -291,6 +337,8 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
             shadow_report_pass(shadow_payload)
             and shadow_pipeline_ok
             and shadow_v2_gate_profile_ok
+            and shadow_validation_ok
+            and shadow_validation_pipeline_ok
         )
         checks["gate4_shadow_pass"] = {
             "pass": bool(shadow_ok),
@@ -352,6 +400,7 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
             "parity_json": str(parity_path),
             "verification_json": str(verification_path),
             "shadow_report_json": str(shadow_report_path) if shadow_report_path is not None else "",
+            "shadow_validation_json": str(shadow_validation_path) if shadow_validation_path is not None else "",
             "runtime_config_json": str(runtime_config_path),
         },
         "artifacts": {

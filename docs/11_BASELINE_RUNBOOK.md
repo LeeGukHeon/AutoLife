@@ -173,6 +173,14 @@ python scripts/run_probabilistic_hybrid_cycle.py `
   --promotion-target-stage prelive
 
 # Optional: promotion readiness evaluation (live enable; shadow report required)
+# Optional: validate shadow report first (recommended)
+python scripts/validate_probabilistic_shadow_report.py `
+  --shadow-report-json ".\build\Release\logs\probabilistic_shadow_report_latest.json" `
+  --pipeline-version v2 `
+  --output-json ".\build\Release\logs\probabilistic_shadow_report_validation_latest.json" `
+  --strict
+
+# Optional: run full cycle with integrated shadow validation + promotion readiness
 python scripts/run_probabilistic_hybrid_cycle.py `
   --pipeline-version v2 `
   --universe-file ".\config\universe\runtime_universe.json" `
@@ -180,6 +188,7 @@ python scripts/run_probabilistic_hybrid_cycle.py `
   --verification-datasets "upbit_KRW_BTC_1m_2024.csv,upbit_KRW_ETH_1m_2024.csv" `
   --evaluate-promotion-readiness `
   --promotion-target-stage live_enable `
+  --validate-shadow-report `
   --promotion-shadow-report-json ".\build\Release\logs\probabilistic_shadow_report_latest.json"
 ```
 

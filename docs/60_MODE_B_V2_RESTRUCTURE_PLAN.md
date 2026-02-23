@@ -23,14 +23,14 @@ Status: Phase 1 transitional + Phase 2 implemented + Phase 3 expanded + Phase 4 
    - add explicit `v1|v2` switches in build/train/export scripts.
    - keep `v1` default.
    - fail closed on v1/v2 mixed inputs.
-3. Runtime compatibility (partial implemented):
-   - add safe v2 parsing with strict version checks.
-   - fail closed on unknown/mixed contracts.
-4. Gate redefinition (partial implemented):
-   - define parity/verification criteria specifically for v2.
-   - keep v1 gate rules unchanged.
-5. Promotion (partial implemented):
-   - run shadow + staged live with v2 bundle only after v2 gates pass.
+3. Runtime compatibility (expanded):
+  - add safe v2 parsing with strict version checks.
+  - fail closed on unknown/mixed contracts.
+4. Gate redefinition (expanded):
+  - define parity/verification criteria specifically for v2.
+  - keep v1 gate rules unchanged.
+5. Promotion (expanded):
+  - run shadow + staged live with v2 bundle only after v2 gates pass.
 
 ## Exit criteria for full Ticket 7 completion
 - v2 end-to-end pipeline passes strict validation/parity/verification.
@@ -120,8 +120,19 @@ Status: Phase 1 transitional + Phase 2 implemented + Phase 3 expanded + Phase 4 
     - feature validation preflight errors must be empty
     - shadow report pipeline consistency with promotion target pipeline
     - if shadow report publishes gate profile, v2 requires `v2_strict`
+    - optional shadow validation summary can be wired as extra fail-closed evidence
     - pipeline consistency across gate artifacts
+- `scripts/validate_probabilistic_shadow_report.py`
+  - fail-closed validation for shadow report schema + decision parity evidence
+  - strict checks include:
+    - `decision_log_comparison_pass`
+    - `same_bundle`
+    - `same_candles`
+    - `compared_decision_count > 0`
+    - `mismatch_count == 0`
 - `scripts/run_probabilistic_hybrid_cycle.py`
   - optional `--evaluate-promotion-readiness` step
   - supports `--promotion-target-stage prelive|live_enable`
   - supports `--promotion-shadow-report-json` for live-enable readiness
+  - supports integrated `--validate-shadow-report` step
+  - in `v2 + live_enable`, shadow validation is automatically enforced fail-closed
