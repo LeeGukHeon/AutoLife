@@ -79,6 +79,18 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--sample-mode", "--sample_mode", choices=("time", "dollar", "volatility"), default="time")
     parser.add_argument("--sample-threshold", "--sample_threshold", type=float, default=0.0)
     parser.add_argument("--sample-lookback-minutes", "--sample_lookback_minutes", type=int, default=60)
+    parser.add_argument("--enable-triple-barrier-labels", action="store_true")
+    parser.add_argument("--triple-barrier-horizon", type=int, default=30)
+    parser.add_argument("--triple-barrier-take-profit-bps", type=float, default=45.0)
+    parser.add_argument("--triple-barrier-stop-loss-bps", type=float, default=35.0)
+    parser.add_argument("--h1-target-column", default="label_up_h1")
+    parser.add_argument("--h5-target-column", default="label_up_h5")
+    parser.add_argument("--edge-column", default="label_edge_bps_h5")
+    parser.add_argument("--drop-neutral-target", action="store_true", default=True)
+    parser.add_argument("--keep-neutral-target", dest="drop_neutral_target", action="store_false")
+    parser.add_argument("--enable-edge-regressor", action="store_true", default=True)
+    parser.add_argument("--disable-edge-regressor", dest="enable_edge_regressor", action="store_false")
+    parser.add_argument("--edge-target-clip-bps", type=float, default=250.0)
     parser.add_argument(
         "--pipeline-version",
         "--pipeline_version",
@@ -204,6 +216,24 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     if str(args.sample_mode) in ("dollar", "volatility") and float(args.sample_threshold) <= 0.0:
         raise ValueError("--sample-threshold must be > 0 when --sample-mode is dollar or volatility")
+    if bool(args.enable_triple_barrier_labels):
+        if int(args.triple_barrier_horizon) <= 0:
+            raise ValueError("--triple-barrier-horizon must be > 0 when --enable-triple-barrier-labels is enabled")
+        if float(args.triple_barrier_take_profit_bps) <= 0.0:
+            raise ValueError("--triple-barrier-take-profit-bps must be > 0 when --enable-triple-barrier-labels is enabled")
+        if float(args.triple_barrier_stop_loss_bps) <= 0.0:
+            raise ValueError("--triple-barrier-stop-loss-bps must be > 0 when --enable-triple-barrier-labels is enabled")
+    tb_column_selected = any(
+        str(x).strip().lower().startswith("label_tb_")
+        for x in [args.h1_target_column, args.h5_target_column, args.edge_column]
+    )
+    if tb_column_selected and not bool(args.enable_triple_barrier_labels):
+        raise ValueError(
+            "triple-barrier target/edge columns require --enable-triple-barrier-labels "
+            "to ensure feature-build/train schema alignment"
+        )
+    if float(args.edge_target_clip_bps) <= 0.0:
+        raise ValueError("--edge-target-clip-bps must be > 0")
     if (bool(args.generate_shadow_report) or bool(args.validate_shadow_report)) and not bool(args.evaluate_promotion_readiness):
         raise ValueError("--generate-shadow-report/--validate-shadow-report require --evaluate-promotion-readiness")
     if bool(args.evaluate_promotion_readiness) and not bool(args.run_verification):
@@ -351,6 +381,18 @@ def main(argv=None) -> int:
                 str(float(args.cost_cap_bps)),
             ]
         )
+    if bool(args.enable_triple_barrier_labels):
+        build_cmd.extend(
+            [
+                "--enable-triple-barrier-labels",
+                "--triple-barrier-horizon",
+                str(int(args.triple_barrier_horizon)),
+                "--triple-barrier-take-profit-bps",
+                str(float(args.triple_barrier_take_profit_bps)),
+                "--triple-barrier-stop-loss-bps",
+                str(float(args.triple_barrier_stop_loss_bps)),
+            ]
+        )
     steps.append(run_step("build_features", build_cmd))
     if not steps[-1]["ok"]:
         dump_json(cycle_summary_json, {"run_tag": run_tag, "status": "failed", "steps": steps})
@@ -435,7 +477,23 @@ def main(argv=None) -> int:
         str(train_model_dir),
         "--pipeline-version",
         str(pipeline_version),
+        "--h1-target-column",
+        str(args.h1_target_column),
+        "--h5-target-column",
+        str(args.h5_target_column),
+        "--edge-column",
+        str(args.edge_column),
+        "--edge-target-clip-bps",
+        str(float(args.edge_target_clip_bps)),
     ]
+    if bool(args.drop_neutral_target):
+        train_cmd.append("--drop-neutral-target")
+    else:
+        train_cmd.append("--keep-neutral-target")
+    if bool(args.enable_edge_regressor):
+        train_cmd.append("--enable-edge-regressor")
+    else:
+        train_cmd.append("--disable-edge-regressor")
     if int(args.ensemble_k) > 1:
         train_cmd.extend(["--ensemble-k", str(int(args.ensemble_k))])
         train_cmd.extend(["--ensemble-seed-step", str(int(args.ensemble_seed_step))])
@@ -627,6 +685,18 @@ def main(argv=None) -> int:
         "sample_mode": str(args.sample_mode),
         "sample_threshold": float(args.sample_threshold),
         "sample_lookback_minutes": int(args.sample_lookback_minutes),
+        "enable_triple_barrier_labels": bool(args.enable_triple_barrier_labels),
+        "triple_barrier_horizon": int(args.triple_barrier_horizon),
+        "triple_barrier_take_profit_bps": float(args.triple_barrier_take_profit_bps),
+        "triple_barrier_stop_loss_bps": float(args.triple_barrier_stop_loss_bps),
+        "target_columns": {
+            "h1": str(args.h1_target_column),
+            "h5": str(args.h5_target_column),
+            "edge": str(args.edge_column),
+            "drop_neutral_target": bool(args.drop_neutral_target),
+        },
+        "enable_edge_regressor": bool(args.enable_edge_regressor),
+        "edge_target_clip_bps": float(args.edge_target_clip_bps),
         "ensemble_k": int(args.ensemble_k),
         "run_verification": bool(args.run_verification),
         "evaluate_promotion_readiness": bool(args.evaluate_promotion_readiness),

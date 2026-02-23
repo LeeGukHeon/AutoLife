@@ -48,6 +48,7 @@ Last updated: 2026-02-23
   - Standalone Gate4 flow runner now auto-resolves latest run-tagged inputs when default canonical files are absent (`scripts/run_probabilistic_shadow_gate_flow.py`) and records resolution metadata.
   - Verification diagnostics hardened for TODO Step-1 decomposition: `scripts/run_verification.py` now emits risk-score component breakdown + heavy-loss tail decomposition (pattern/regime/archetype) via `adaptive_validation.risk_adjusted_failure_decomposition`.
   - Global trainer target-flex parity fix: `scripts/train_probabilistic_pattern_model_global.py` now actually consumes `--h1-target-column/--h5-target-column/--edge-column`, applies edge fallback parity, and feeds `train_edge` for the edge regressor head; regression tests added (`scripts/test_train_probabilistic_pattern_model_global.py`).
+  - Hybrid cycle now exposes strict-order Step-2 experiment switches end-to-end: triple-barrier build flags + global training target-column/head flags are wired in `scripts/run_probabilistic_hybrid_cycle.py` with fail-closed argument guards; regression tests updated (`scripts/test_probabilistic_hybrid_cycle_args.py`).
 
 ## Last known gate status
 - Strict feature validation: run required after any feature/build changes

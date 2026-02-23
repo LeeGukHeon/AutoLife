@@ -296,6 +296,15 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
     - `scripts/test_train_probabilistic_pattern_model_global.py`
   - smoke:
     - `build/Release/logs/probabilistic_model_train_summary_global_targetflex_smoke_20260223.json` (`status=pass`)
+- [x] hybrid cycle에 triple-barrier/target-flex 실험 플래그 배선 + fail-closed 가드 추가.
+  - script: `scripts/run_probabilistic_hybrid_cycle.py`
+  - 추가 배선:
+    - build: `--enable-triple-barrier-labels` + barrier 파라미터 전달
+    - train: `--h1-target-column/--h5-target-column/--edge-column`, neutral policy, edge regressor 옵션 전달
+  - 가드:
+    - `label_tb_*` 타깃/edge 선택 시 `--enable-triple-barrier-labels` 없으면 즉시 실패
+  - regression:
+    - `scripts/test_probabilistic_hybrid_cycle_args.py`
 
 ## Next (Strict Order)
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:

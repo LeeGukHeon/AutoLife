@@ -29,6 +29,14 @@ class ProbabilisticHybridCycleArgsTest(unittest.TestCase):
             ])
         self.assertIn("--promotion-shadow-report-json is required when --promotion-target-stage live_enable", str(cm.exception))
 
+    def test_tb_target_requires_tb_feature_build_flag(self):
+        with self.assertRaises(ValueError) as cm:
+            hybrid_cycle.main([
+                "--h5-target-column",
+                "label_tb_dir",
+            ])
+        self.assertIn("triple-barrier target/edge columns require --enable-triple-barrier-labels", str(cm.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
