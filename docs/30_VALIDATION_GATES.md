@@ -100,6 +100,7 @@ python scripts/evaluate_probabilistic_promotion_readiness.py `
 Hybrid cycle integration:
 - `scripts/run_probabilistic_hybrid_cycle.py` supports `--generate-shadow-report`.
 - for `v2 + --promotion-target-stage live_enable`, shadow validation remains fail-closed and can be combined with generation in one run.
+- `--generate-shadow-report` and `--validate-shadow-report` are only valid with `--evaluate-promotion-readiness` (fail-closed arg guard).
 
 ## Gate 5: Staged live enable
 Requirements:

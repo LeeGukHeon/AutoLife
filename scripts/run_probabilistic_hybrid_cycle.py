@@ -204,6 +204,8 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     if str(args.sample_mode) in ("dollar", "volatility") and float(args.sample_threshold) <= 0.0:
         raise ValueError("--sample-threshold must be > 0 when --sample-mode is dollar or volatility")
+    if (bool(args.generate_shadow_report) or bool(args.validate_shadow_report)) and not bool(args.evaluate_promotion_readiness):
+        raise ValueError("--generate-shadow-report/--validate-shadow-report require --evaluate-promotion-readiness")
     if bool(args.evaluate_promotion_readiness) and not bool(args.run_verification):
         raise ValueError("--evaluate-promotion-readiness requires --run-verification")
     if (

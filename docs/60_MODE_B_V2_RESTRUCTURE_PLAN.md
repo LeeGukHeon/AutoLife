@@ -147,3 +147,4 @@ Status: Phase 1 transitional + Phase 2 implemented + Phase 3 expanded + Phase 4 
   - supports `--generate-shadow-report` with decision log inputs
   - supports integrated `--validate-shadow-report` step
   - in `v2 + live_enable`, shadow validation is automatically enforced fail-closed
+  - fail-closed arg guard: shadow generate/validate flags require promotion-readiness evaluation mode

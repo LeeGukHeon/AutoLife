@@ -37,6 +37,7 @@ Last updated: 2026-02-23
   - Optional Ticket 7 (MODE B): runtime strictness regression test added (`AutoLifeProbBundleContractTest`)
   - Optional Ticket 7 (MODE B): shadow report strict validator + hybrid cycle integration (`validate_probabilistic_shadow_report.py`, `--validate-shadow-report`) implemented
   - Optional Ticket 7 (MODE B): shadow report generator + decision-log evidence path implemented (`generate_probabilistic_shadow_report.py`, `--generate-shadow-report`, backtest policy decision artifact)
+  - Optional Ticket 7 (MODE B): hybrid cycle arg guard hardened (shadow generate/validate flags are fail-closed outside promotion evaluation mode) + regression tests added
 
 ## Last known gate status
 - Strict feature validation: run required after any feature/build changes
