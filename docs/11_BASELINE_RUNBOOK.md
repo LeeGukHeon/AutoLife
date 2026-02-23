@@ -36,6 +36,23 @@ python scripts/build_probabilistic_feature_dataset.py `
   --output-dir ".\data\model_input\probabilistic_features_v1_latest" `
   --manifest-json ".\data\model_input\probabilistic_features_v1_latest\feature_dataset_manifest.json" `
   --universe-file ".\config\universe\runtime_universe.json"
+
+# EXT-54 optional (default OFF)
+python scripts/build_probabilistic_feature_dataset.py `
+  --input-dir ".\data\backtest_probabilistic" `
+  --output-dir ".\data\model_input\probabilistic_features_v1_latest" `
+  --manifest-json ".\data\model_input\probabilistic_features_v1_latest\feature_dataset_manifest.json" `
+  --universe-file ".\config\universe\runtime_universe.json" `
+  --enable-conditional-cost-model `
+  --cost-fee-floor-bps 6.0 `
+  --cost-volatility-weight 3.0 `
+  --cost-range-weight 1.5 `
+  --cost-liquidity-weight 2.5 `
+  --cost-volatility-norm-bps 50.0 `
+  --cost-range-norm-bps 80.0 `
+  --cost-liquidity-ref-ratio 1.0 `
+  --cost-liquidity-penalty-cap 8.0 `
+  --cost-cap-bps 200.0
 ```
 
 ## 3) Strict feature validation

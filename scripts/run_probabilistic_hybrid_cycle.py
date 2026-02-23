@@ -59,6 +59,16 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--h5-bars", type=int, default=5)
     parser.add_argument("--purge-bars", type=int, default=-1)
     parser.add_argument("--embargo-bars", type=int, default=-1)
+    parser.add_argument("--enable-conditional-cost-model", action="store_true")
+    parser.add_argument("--cost-fee-floor-bps", type=float, default=6.0)
+    parser.add_argument("--cost-volatility-weight", type=float, default=3.0)
+    parser.add_argument("--cost-range-weight", type=float, default=1.5)
+    parser.add_argument("--cost-liquidity-weight", type=float, default=2.5)
+    parser.add_argument("--cost-volatility-norm-bps", type=float, default=50.0)
+    parser.add_argument("--cost-range-norm-bps", type=float, default=80.0)
+    parser.add_argument("--cost-liquidity-ref-ratio", type=float, default=1.0)
+    parser.add_argument("--cost-liquidity-penalty-cap", type=float, default=8.0)
+    parser.add_argument("--cost-cap-bps", type=float, default=200.0)
     return parser.parse_args(argv)
 
 
@@ -186,6 +196,30 @@ def main(argv=None) -> int:
     ]
     if universe_file is not None:
         build_cmd.extend(["--universe-file", str(universe_file)])
+    if bool(args.enable_conditional_cost_model):
+        build_cmd.extend(
+            [
+                "--enable-conditional-cost-model",
+                "--cost-fee-floor-bps",
+                str(float(args.cost_fee_floor_bps)),
+                "--cost-volatility-weight",
+                str(float(args.cost_volatility_weight)),
+                "--cost-range-weight",
+                str(float(args.cost_range_weight)),
+                "--cost-liquidity-weight",
+                str(float(args.cost_liquidity_weight)),
+                "--cost-volatility-norm-bps",
+                str(float(args.cost_volatility_norm_bps)),
+                "--cost-range-norm-bps",
+                str(float(args.cost_range_norm_bps)),
+                "--cost-liquidity-ref-ratio",
+                str(float(args.cost_liquidity_ref_ratio)),
+                "--cost-liquidity-penalty-cap",
+                str(float(args.cost_liquidity_penalty_cap)),
+                "--cost-cap-bps",
+                str(float(args.cost_cap_bps)),
+            ]
+        )
     steps.append(run_step("build_features", build_cmd))
     if not steps[-1]["ok"]:
         dump_json(cycle_summary_json, {"run_tag": run_tag, "status": "failed", "steps": steps})
@@ -302,6 +336,7 @@ def main(argv=None) -> int:
         "status": status,
         "incremental_update": bool(args.incremental_update),
         "enable_purged_walk_forward": bool(args.enable_purged_walk_forward),
+        "enable_conditional_cost_model": bool(args.enable_conditional_cost_model),
         "paths": {
             "backtest_dir": str(backtest_dir),
             "feature_dir": str(feature_dir),

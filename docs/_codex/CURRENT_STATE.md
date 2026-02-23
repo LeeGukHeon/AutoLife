@@ -3,7 +3,7 @@ Last updated: 2026-02-23
 
 ## Repository
 - Branch: current working branch (check with `git branch --show-current`)
-- Commit (snapshot): `e6889d2a47d7ed0e3071c286a18701e7c93daa39`
+- Commit (snapshot): `ff08a17f5ef4f2b84c7c398d2b04ef8ec9f42109`
 
 ## Contract hashes
 - `config/model/probabilistic_feature_contract_v1.json`:
@@ -19,7 +19,8 @@ Last updated: 2026-02-23
 - Current implementation focus:
   - Ticket 0: docs/bootstrap reliability pack (implemented in current working tree)
   - Ticket 1: dynamic universe + scope-aware 1m fetch/build strictness (implemented in current working tree)
-  - Ticket 2: purged walk-forward + embargo split option (in progress in current working tree)
+  - Ticket 2: purged walk-forward + embargo split option (implemented)
+  - Ticket 3: conditional cost model isomorphism (implemented in current working tree)
 
 ## Last known gate status
 - Strict feature validation: run required after any feature/build changes

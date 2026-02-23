@@ -1076,6 +1076,9 @@ def main(argv=None) -> int:
     split_policy = split_manifest.get("split_policy", {})
     if not isinstance(split_policy, dict):
         split_policy = {}
+    split_cost_model = split_manifest.get("cost_model", {})
+    if not isinstance(split_cost_model, dict):
+        split_cost_model = {}
     datasets = split_manifest.get("datasets", [])
     if not isinstance(datasets, list) or not datasets:
         raise RuntimeError(f"empty datasets in split manifest: {split_manifest_path}")
@@ -1210,6 +1213,8 @@ def main(argv=None) -> int:
     purge_embargo_cfg = split_policy.get("purge_embargo", {})
     if isinstance(purge_embargo_cfg, dict) and bool(purge_embargo_cfg.get("enabled", False)):
         summary["purge_embargo"] = purge_embargo_cfg
+    if bool(split_cost_model.get("enabled", False)):
+        summary["cost_model"] = split_cost_model
     dump_json(output_json_path, summary)
 
     print("[TrainProbModel] completed", flush=True)

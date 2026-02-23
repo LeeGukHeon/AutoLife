@@ -399,6 +399,7 @@ def main(argv=None) -> int:
         "source_manifest_json": str(input_manifest),
         "source_manifest_kind": selected_kind,
         "source_manifest_version": str(payload.get("version", "")),
+        "cost_model": payload.get("cost_model", {}),
         "split_policy": {
             "mode": (
                 "walk_forward_time_ordered_purged_embargo"

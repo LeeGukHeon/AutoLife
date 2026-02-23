@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Tuple
 
 from _script_common import dump_json, ensure_parent_directory, load_json_or_none, resolve_repo_path
+from probabilistic_cost_model import DEFAULT_COST_MODEL_CONFIG, resolve_label_cost_bps
 
 
 ANCHOR_TF = 1
@@ -34,6 +35,48 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--max-rows-per-market", type=int, default=0)
     parser.add_argument("--skip-existing", action="store_true")
     parser.add_argument("--roundtrip-cost-bps", type=float, default=12.0)
+    parser.add_argument("--enable-conditional-cost-model", action="store_true")
+    parser.add_argument("--cost-fee-floor-bps", type=float, default=float(DEFAULT_COST_MODEL_CONFIG["fee_floor_bps"]))
+    parser.add_argument(
+        "--cost-volatility-weight",
+        type=float,
+        default=float(DEFAULT_COST_MODEL_CONFIG["volatility_weight"]),
+    )
+    parser.add_argument(
+        "--cost-range-weight",
+        type=float,
+        default=float(DEFAULT_COST_MODEL_CONFIG["range_weight"]),
+    )
+    parser.add_argument(
+        "--cost-liquidity-weight",
+        type=float,
+        default=float(DEFAULT_COST_MODEL_CONFIG["liquidity_weight"]),
+    )
+    parser.add_argument(
+        "--cost-volatility-norm-bps",
+        type=float,
+        default=float(DEFAULT_COST_MODEL_CONFIG["volatility_norm_bps"]),
+    )
+    parser.add_argument(
+        "--cost-range-norm-bps",
+        type=float,
+        default=float(DEFAULT_COST_MODEL_CONFIG["range_norm_bps"]),
+    )
+    parser.add_argument(
+        "--cost-liquidity-ref-ratio",
+        type=float,
+        default=float(DEFAULT_COST_MODEL_CONFIG["liquidity_ref_ratio"]),
+    )
+    parser.add_argument(
+        "--cost-liquidity-penalty-cap",
+        type=float,
+        default=float(DEFAULT_COST_MODEL_CONFIG["liquidity_penalty_cap"]),
+    )
+    parser.add_argument(
+        "--cost-cap-bps",
+        type=float,
+        default=float(DEFAULT_COST_MODEL_CONFIG["cost_cap_bps"]),
+    )
     parser.add_argument("--label-h1", type=int, default=1)
     parser.add_argument("--label-h5", type=int, default=5)
     parser.add_argument("--enable-triple-barrier-labels", action="store_true")
@@ -323,6 +366,7 @@ def build_market_dataset(
     triple_barrier_take_profit_bps: float,
     triple_barrier_stop_loss_bps: float,
     roundtrip_cost_bps: float,
+    cost_model_config: Dict[str, object],
     skip_existing: bool,
 ) -> Dict[str, object]:
     safe_market = market_to_safe(market)
@@ -564,7 +608,15 @@ def build_market_dataset(
             row["label_up_h1"] = 1 if close_h1 > c else 0
             row["label_up_h5"] = 1 if close_h5 > c else 0
             gross_bps_h5 = ((close_h5 / c) - 1.0) * 10000.0 if c > 0.0 else math.nan
-            row["label_edge_bps_h5"] = round6(gross_bps_h5 - float(roundtrip_cost_bps))
+            row_cost_bps = resolve_label_cost_bps(
+                roundtrip_cost_bps=float(roundtrip_cost_bps),
+                cost_model_config=cost_model_config,
+                atr_pct_14=float(atr14[i]) / c if c > 0.0 else math.nan,
+                bb_width_20=bb_width_20,
+                vol_ratio_20=vol_ratio_20,
+                notional_ratio_20=notional_ratio_20,
+            )
+            row["label_edge_bps_h5"] = round6(gross_bps_h5 - float(row_cost_bps))
             if bool(enable_triple_barrier_labels):
                 tb_dir, tb_hit_bars, tb_exit_bps, tb_event = compute_triple_barrier_label(
                     entry_price=c,
@@ -578,7 +630,7 @@ def build_market_dataset(
                 )
                 row["label_tb_dir"] = int(tb_dir)
                 row["label_tb_hit_bars"] = int(tb_hit_bars)
-                row["label_tb_exit_bps"] = round6(tb_exit_bps - float(roundtrip_cost_bps))
+                row["label_tb_exit_bps"] = round6(tb_exit_bps - float(row_cost_bps))
                 row["label_tb_event"] = str(tb_event)
 
             writer.writerow(row)
@@ -632,6 +684,18 @@ def main(argv=None) -> int:
             flush=True,
         )
     universe_final_1m_set = set(universe_final_1m_markets)
+    cost_model_config = {
+        "enabled": bool(args.enable_conditional_cost_model),
+        "fee_floor_bps": float(args.cost_fee_floor_bps),
+        "volatility_weight": float(args.cost_volatility_weight),
+        "range_weight": float(args.cost_range_weight),
+        "liquidity_weight": float(args.cost_liquidity_weight),
+        "volatility_norm_bps": float(args.cost_volatility_norm_bps),
+        "range_norm_bps": float(args.cost_range_norm_bps),
+        "liquidity_ref_ratio": float(args.cost_liquidity_ref_ratio),
+        "liquidity_penalty_cap": float(args.cost_liquidity_penalty_cap),
+        "cost_cap_bps": float(args.cost_cap_bps),
+    }
 
     requested_markets = parse_markets(args.markets)
     if requested_markets:
@@ -724,6 +788,7 @@ def main(argv=None) -> int:
                 triple_barrier_take_profit_bps=float(args.triple_barrier_take_profit_bps),
                 triple_barrier_stop_loss_bps=float(args.triple_barrier_stop_loss_bps),
                 roundtrip_cost_bps=float(args.roundtrip_cost_bps),
+                cost_model_config=cost_model_config,
                 skip_existing=bool(args.skip_existing),
             )
             jobs.append(job)
@@ -768,6 +833,7 @@ def main(argv=None) -> int:
         "universe_final_1m_markets": universe_final_1m_markets,
         "universe_final_1m_markets_count": len(universe_final_1m_markets),
         "roundtrip_cost_bps": float(args.roundtrip_cost_bps),
+        "cost_model": cost_model_config,
         "label_h1": int(args.label_h1),
         "label_h5": int(args.label_h5),
         "enable_triple_barrier_labels": bool(args.enable_triple_barrier_labels),

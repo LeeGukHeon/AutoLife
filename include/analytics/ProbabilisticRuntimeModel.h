@@ -13,6 +13,8 @@ struct ProbabilisticInference {
     double prob_h5_raw = 0.5;
     double prob_h5_calibrated = 0.5;
     double selection_threshold_h5 = 0.6;
+    double expected_edge_before_cost_bps = 0.0;
+    double cost_bps_estimate = 0.0;
     double expected_edge_bps = 0.0;
     double expected_edge_pct = 0.0;
     bool select_h5 = false;
@@ -55,9 +57,28 @@ public:
         LinearHead h5;
     };
 
+public:
+    struct RuntimeCostModel {
+        bool enabled = false;
+        double fee_floor_bps = 6.0;
+        double volatility_weight = 3.0;
+        double range_weight = 1.5;
+        double liquidity_weight = 2.5;
+        double volatility_norm_bps = 50.0;
+        double range_norm_bps = 80.0;
+        double liquidity_ref_ratio = 1.0;
+        double liquidity_penalty_cap = 8.0;
+        double cost_cap_bps = 200.0;
+        int atr_pct_idx = -1;
+        int bb_width_idx = -1;
+        int vol_ratio_idx = -1;
+        int notional_ratio_idx = -1;
+    };
+
 private:
     std::unordered_map<std::string, MarketEntry> markets_;
     MarketEntry default_entry_;
+    RuntimeCostModel cost_model_;
     bool has_default_entry_ = false;
     bool prefer_default_entry_ = false;
     std::vector<std::string> feature_columns_;

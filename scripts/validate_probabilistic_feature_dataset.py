@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple
 
 from _script_common import dump_json, load_json_or_none, resolve_repo_path
+from probabilistic_cost_model import resolve_label_cost_bps
 
 
 MANDATORY_COLUMNS = [
@@ -160,6 +161,7 @@ def validate_single_file(
     path_value: pathlib.Path,
     expected_market: str,
     roundtrip_cost_bps: float,
+    cost_model_config: Dict[str, object],
     forbidden_fields: List[str],
     edge_tolerance: float,
     expected_header: List[str],
@@ -250,6 +252,10 @@ def validate_single_file(
                     "label_h5": label_h5,
                     "ok_edge": ok_edge,
                     "edge": edge if ok_edge else math.nan,
+                    "atr_pct_14": read_float(row, "atr_pct_14")[1],
+                    "bb_width_20": read_float(row, "bb_width_20")[1],
+                    "vol_ratio_20": read_float(row, "vol_ratio_20")[1],
+                    "notional_ratio_20": read_float(row, "notional_ratio_20")[1],
                 }
             )
 
@@ -268,7 +274,15 @@ def validate_single_file(
                 if cur["ok_close"] and nxt5["ok_close"] and cur["ok_edge"]:
                     c0 = float(cur["close"])
                     c5 = float(nxt5["close"])
-                    expected_edge = round6((((c5 / c0) - 1.0) * 10000.0) - float(roundtrip_cost_bps))
+                    row_cost_bps = resolve_label_cost_bps(
+                        roundtrip_cost_bps=float(roundtrip_cost_bps),
+                        cost_model_config=cost_model_config,
+                        atr_pct_14=float(cur["atr_pct_14"]),
+                        bb_width_20=float(cur["bb_width_20"]),
+                        vol_ratio_20=float(cur["vol_ratio_20"]),
+                        notional_ratio_20=float(cur["notional_ratio_20"]),
+                    )
+                    expected_edge = round6((((c5 / c0) - 1.0) * 10000.0) - float(row_cost_bps))
                     if not math.isfinite(expected_edge) or abs(float(cur["edge"]) - expected_edge) > float(edge_tolerance):
                         edge_h5_mismatch += 1
                 window.popleft()
@@ -391,6 +405,9 @@ def main(argv=None) -> int:
         jobs = []
 
     roundtrip_cost_bps = float(manifest.get("roundtrip_cost_bps", 12.0) or 12.0)
+    cost_model_config = manifest.get("cost_model", {})
+    if not isinstance(cost_model_config, dict):
+        cost_model_config = {"enabled": False}
     expected_header = list(MANDATORY_COLUMNS)
     file_results: List[Dict[str, Any]] = []
     failed_files = []
@@ -417,6 +434,7 @@ def main(argv=None) -> int:
             path_value=file_path,
             expected_market=market,
             roundtrip_cost_bps=roundtrip_cost_bps,
+            cost_model_config=cost_model_config,
             forbidden_fields=forbidden_fields,
             edge_tolerance=float(args.edge_tolerance),
             expected_header=expected_header,
@@ -437,6 +455,7 @@ def main(argv=None) -> int:
         "dataset_manifest_json": str(dataset_manifest_path),
         "feature_contract_json": str(contract_path),
         "roundtrip_cost_bps": roundtrip_cost_bps,
+        "cost_model": cost_model_config,
         "file_count_checked": int(checks_total),
         "file_count_passed": int(checks_passed),
         "file_count_failed": int(max(0, checks_total - checks_passed)),
@@ -460,4 +479,3 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -98,6 +98,75 @@ bool parseHead(const nlohmann::json& node, ProbabilisticRuntimeModel::LinearHead
     return !out.coef.empty();
 }
 
+int findFeatureIndex(const std::vector<std::string>& cols, const std::string& key) {
+    for (std::size_t i = 0; i < cols.size(); ++i) {
+        if (cols[i] == key) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+double parseCostParam(
+    const nlohmann::json& node,
+    const char* key,
+    double fallback,
+    double min_v,
+    double max_v
+) {
+    double out = fallback;
+    if (node.is_object() && node.contains(key)) {
+        try {
+            out = node.at(key).get<double>();
+        } catch (...) {
+            out = fallback;
+        }
+    }
+    if (!std::isfinite(out)) {
+        out = fallback;
+    }
+    return std::clamp(out, min_v, max_v);
+}
+
+double estimateRuntimeCostBps(
+    const ProbabilisticRuntimeModel::RuntimeCostModel& cfg,
+    const std::vector<double>& transformed_features
+) {
+    if (!cfg.enabled) {
+        return 0.0;
+    }
+    if (cfg.atr_pct_idx < 0 || cfg.bb_width_idx < 0 || cfg.vol_ratio_idx < 0 || cfg.notional_ratio_idx < 0) {
+        return 0.0;
+    }
+    const auto idx_ok = [&transformed_features](int idx) {
+        return idx >= 0 && static_cast<std::size_t>(idx) < transformed_features.size();
+    };
+    if (!idx_ok(cfg.atr_pct_idx) || !idx_ok(cfg.bb_width_idx) || !idx_ok(cfg.vol_ratio_idx) || !idx_ok(cfg.notional_ratio_idx)) {
+        return 0.0;
+    }
+
+    // Runtime uses transformed features:
+    // atr_pct/bb_width were multiplied by 100 in transform, ratios were log-transformed.
+    const double atr_pct_raw = std::max(0.0, transformed_features[static_cast<std::size_t>(cfg.atr_pct_idx)] / 100.0);
+    const double bb_width_raw = std::max(0.0, transformed_features[static_cast<std::size_t>(cfg.bb_width_idx)] / 100.0);
+    const double vol_ratio = std::max(1e-9, std::exp(transformed_features[static_cast<std::size_t>(cfg.vol_ratio_idx)]));
+    const double notional_ratio = std::max(1e-9, std::exp(transformed_features[static_cast<std::size_t>(cfg.notional_ratio_idx)]));
+
+    const double atr_bps = atr_pct_raw * 10000.0;
+    const double range_bps = bb_width_raw * 10000.0;
+    const double vol_component = atr_bps / std::max(1e-9, cfg.volatility_norm_bps);
+    const double range_component = range_bps / std::max(1e-9, cfg.range_norm_bps);
+    const double liquidity_ratio = std::sqrt(std::max(1e-9, vol_ratio * notional_ratio));
+    const double illiquidity = std::min(cfg.liquidity_penalty_cap, cfg.liquidity_ref_ratio / liquidity_ratio);
+
+    const double cost_bps =
+        cfg.fee_floor_bps +
+        (cfg.volatility_weight * vol_component) +
+        (cfg.range_weight * range_component) +
+        (cfg.liquidity_weight * illiquidity);
+    return std::clamp(cost_bps, cfg.fee_floor_bps, cfg.cost_cap_bps);
+}
+
 } // namespace
 
 bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::string* error_message) {
@@ -107,6 +176,7 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
     has_default_entry_ = false;
     prefer_default_entry_ = false;
     feature_columns_.clear();
+    cost_model_ = RuntimeCostModel{};
 
     std::ifstream in(path, std::ios::binary);
     if (!in.is_open()) {
@@ -150,6 +220,30 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         }
         return false;
     }
+
+    const auto cost_model_node = root.value("cost_model", nlohmann::json::object());
+    if (cost_model_node.is_object()) {
+        cost_model_.enabled = cost_model_node.value("enabled", false);
+        cost_model_.fee_floor_bps = parseCostParam(cost_model_node, "fee_floor_bps", 6.0, 0.0, 2000.0);
+        cost_model_.volatility_weight = parseCostParam(cost_model_node, "volatility_weight", 3.0, 0.0, 100.0);
+        cost_model_.range_weight = parseCostParam(cost_model_node, "range_weight", 1.5, 0.0, 100.0);
+        cost_model_.liquidity_weight = parseCostParam(cost_model_node, "liquidity_weight", 2.5, 0.0, 100.0);
+        cost_model_.volatility_norm_bps = parseCostParam(cost_model_node, "volatility_norm_bps", 50.0, 1e-6, 100000.0);
+        cost_model_.range_norm_bps = parseCostParam(cost_model_node, "range_norm_bps", 80.0, 1e-6, 100000.0);
+        cost_model_.liquidity_ref_ratio = parseCostParam(cost_model_node, "liquidity_ref_ratio", 1.0, 1e-6, 100000.0);
+        cost_model_.liquidity_penalty_cap = parseCostParam(cost_model_node, "liquidity_penalty_cap", 8.0, 1.0, 100000.0);
+        cost_model_.cost_cap_bps = parseCostParam(
+            cost_model_node,
+            "cost_cap_bps",
+            200.0,
+            cost_model_.fee_floor_bps,
+            100000.0
+        );
+    }
+    cost_model_.atr_pct_idx = findFeatureIndex(feature_columns_, "atr_pct_14");
+    cost_model_.bb_width_idx = findFeatureIndex(feature_columns_, "bb_width_20");
+    cost_model_.vol_ratio_idx = findFeatureIndex(feature_columns_, "vol_ratio_20");
+    cost_model_.notional_ratio_idx = findFeatureIndex(feature_columns_, "notional_ratio_20");
 
     prefer_default_entry_ = root.value("prefer_default_model", false);
 
@@ -260,7 +354,9 @@ bool ProbabilisticRuntimeModel::infer(
             expected_edge_bps = std::clamp(reg_edge, -entry->h5.edge_clip_abs_bps, entry->h5.edge_clip_abs_bps);
         }
     }
-    out.expected_edge_bps = expected_edge_bps;
+    out.expected_edge_before_cost_bps = expected_edge_bps;
+    out.cost_bps_estimate = estimateRuntimeCostBps(cost_model_, transformed_features);
+    out.expected_edge_bps = expected_edge_bps - out.cost_bps_estimate;
     out.expected_edge_pct = out.expected_edge_bps / 10000.0;
     out.select_h5 = (h5_cal >= entry->h5.threshold);
     return true;

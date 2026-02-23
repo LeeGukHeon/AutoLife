@@ -286,6 +286,7 @@ def main(argv=None) -> int:
         "prefer_default_model": bool(prefer_default_model),
         "default_model": default_model if default_model is not None else None,
         "markets": markets_out,
+        "cost_model": summary.get("cost_model", {}),
     }
     dump_json(output_path, out)
 
