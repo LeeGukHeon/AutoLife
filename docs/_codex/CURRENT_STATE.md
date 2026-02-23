@@ -39,6 +39,7 @@ Last updated: 2026-02-23
   - Optional Ticket 7 (MODE B): shadow report generator + decision-log evidence path implemented (`generate_probabilistic_shadow_report.py`, `--generate-shadow-report`, backtest policy decision artifact)
   - Optional Ticket 7 (MODE B): hybrid cycle arg guard hardened (shadow generate/validate flags are fail-closed outside promotion evaluation mode) + regression tests added
   - Optional Ticket 7 (MODE B): live policy decision audit reset on engine start (stale shadow comparison contamination guard)
+  - Codex context refresh helper implemented (`scripts/run_codex_context_refresh_checks.py`) and wired into bootstrap/protocol docs
 
 ## Last known gate status
 - Strict feature validation: run required after any feature/build changes

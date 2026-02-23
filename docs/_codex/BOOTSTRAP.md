@@ -10,9 +10,10 @@ Last updated: 2026-02-23
 ## Immediate commands
 ```powershell
 git rev-parse HEAD
-python scripts/validate_probabilistic_feature_dataset.py --strict
-python scripts/validate_runtime_bundle_parity.py
-python scripts/run_verification.py
+python scripts/run_codex_context_refresh_checks.py `
+  --touched-areas feature,model,runtime `
+  --pipeline-version auto `
+  --skip-missing
 ```
 
 ## Baseline reminder

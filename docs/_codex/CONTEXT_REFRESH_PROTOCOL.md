@@ -13,6 +13,8 @@ Use this protocol whenever a Codex session starts fresh or after context reset.
    - feature/data changes: strict validation
    - model/bundle changes: parity
    - runtime decision changes: verification
+   - helper script:
+     - `python scripts/run_codex_context_refresh_checks.py --touched-areas feature,model,runtime --pipeline-version auto --skip-missing`
 6. Update `docs/_codex/CURRENT_STATE.md` in the same PR:
    - contract hashes
    - last gate status
