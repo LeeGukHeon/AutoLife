@@ -1,0 +1,28 @@
+{
+  "version": "v2_draft",
+  "status": "draft_not_active",
+  "created_at_utc": "2026-02-23T00:00:00Z",
+  "description": "Optional MODE B draft contract. Baseline v1 remains active.",
+  "timeframe_anchor": "5m",
+  "micro_input_timeframe": "1m",
+  "multi_tf_context": [
+    "15m",
+    "60m",
+    "240m"
+  ],
+  "row_schema": {
+    "column_count": 0,
+    "column_order": [],
+    "label_columns": []
+  },
+  "labels": {
+    "h1_bars": 1,
+    "h5_bars": 5,
+    "edge_label": "label_edge_bps_h5"
+  },
+  "compatibility": {
+    "baseline_v1_unchanged": true,
+    "active_by_default": false,
+    "migration_required": true
+  }
+}

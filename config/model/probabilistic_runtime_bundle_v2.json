@@ -1,0 +1,20 @@
+{
+  "version": "probabilistic_runtime_bundle_v2_draft",
+  "status": "draft_not_active",
+  "generated_at_utc": "2026-02-23T00:00:00Z",
+  "source_train_summary_json": "",
+  "selection_policy": "latest",
+  "export_mode": "global_only",
+  "feature_contract_version": "v2_draft",
+  "feature_columns": [],
+  "feature_transform_contract": {},
+  "global_fallback_enabled": true,
+  "prefer_default_model": true,
+  "default_model": null,
+  "markets": [],
+  "compatibility": {
+    "baseline_v1_unchanged": true,
+    "active_by_default": false,
+    "migration_required": true
+  }
+}

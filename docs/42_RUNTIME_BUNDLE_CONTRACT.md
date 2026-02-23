@@ -4,6 +4,9 @@ Last updated: 2026-02-23
 ## Canonical bundle
 - `config/model/probabilistic_runtime_bundle_v1.json`
 
+## Optional draft bundle (not active)
+- `config/model/probabilistic_runtime_bundle_v2.json` (MODE B kickoff draft)
+
 ## Export tool
 - `scripts/export_probabilistic_runtime_bundle.py`
 

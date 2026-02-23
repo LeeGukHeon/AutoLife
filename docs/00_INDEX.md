@@ -20,6 +20,9 @@ Last updated: 2026-02-23
 - `docs/54_EXT_CONDITIONAL_COST_MODEL.md`: Variable cost model in labels/runtime edge.
 - `docs/55_EXT_REGIME_SPEC.md`: Explicit regime detector and action rules.
 
+## Optional MODE B (v2)
+- `docs/60_MODE_B_V2_RESTRUCTURE_PLAN.md`: Optional full-restructure migration plan and guardrails.
+
 ## Security and compliance
 - `docs/90_SECURITY_COMPLIANCE.md`: Secrets, logging, ToS and live-safety requirements.
 
