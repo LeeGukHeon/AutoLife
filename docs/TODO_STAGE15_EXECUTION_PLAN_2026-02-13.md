@@ -388,14 +388,51 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
     - `avg_total_trades: 11.4 -> 11.0` (표본 기준 유지)
     - `candidate_generation.no_signal_generated share: 0.733 -> 0.709`
     - 잔여: ETH/SOL expectancy 음수 (`ETH=-1.3339`, `SOL=-7.5916`)
+- [x] Strict Order 4 2차: trade-level loss-tail 진단 계측 추가(전략 로직 불변).
+  - code:
+    - `include/runtime/BacktestRuntime.h`
+    - `src/runtime/BacktestRuntime.cpp`
+    - `src/app/BacktestCliHandler.cpp`
+    - `scripts/run_verification.py`
+    - `scripts/test_verification_risk_tail_decomposition.py`
+  - 핵심:
+    - 백테스트 JSON에 `trade_history_samples`를 추가해 거래 단위 진단 근거를 고정.
+    - verification 진단에 `top_loss_trade_samples`를 추가해 데이터셋별 손실 거래 상위 샘플을 표준 출력.
+  - 검증:
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step4t_diag_instrumentation_only.json`
+  - 결과:
+    - `overall_gate_pass=true`
+    - `avg_profit_factor=2.6923`
+    - `avg_expectancy_krw=12.1637`
+    - `avg_total_trades=11.0`
+    - 진단 근거: `top_loss_trade_samples`에서 ETH=4, SOL=10 손실 샘플 확인
+- [x] Strict Order 4 3차: low-quality fragility/uptrend-continuation 셀 리스크 폭 축소(진입 차단 없음, 라이브/백테스트 동형).
+  - code:
+    - `src/runtime/BacktestRuntime.cpp`
+    - `src/runtime/LiveTradingRuntime.cpp`
+  - 핵심:
+    - `applyProbabilisticPrimaryDecisionProfile`의 `target_risk_pct`에
+      비호전/저품질 셀 조건부 축소를 추가해 손실 tail을 축소.
+    - 표본 유지 목적상 entry gate 차단은 추가하지 않고 리스크 폭만 미세 조정.
+  - 검증:
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step4v_risk_tighten_v1.json`
+  - 결과(기준: `..._step4t_diag_instrumentation_only.json` 대비):
+    - `overall_gate_pass=true` 유지
+    - `avg_profit_factor: 2.6923 -> 3.0578`
+    - `avg_expectancy_krw: 12.1637 -> 18.0299`
+    - `avg_total_trades: 11.0 -> 10.0` (임계 충족 유지)
+    - `candidate_generation.no_signal_generated share: 0.709 -> 0.7079`
+    - ETH/SOL expectancy 개선:
+      - `ETH: -1.3339 -> +0.5113`
+      - `SOL: -7.5916 -> +5.1816`
 
 ## Next (Strict Order)
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
    - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.
 1. 표본 유지 + 품질 보강(Strict Order 4):
-   - 현재 `avg_total_trades=11.0` 유지 조건에서 ETH/SOL 음수 expectancy 셀 추가 보정
-   - `candidate_generation`의 `no_signal_generated` 비중(`share=0.709`) 추가 완화
+   - 현재 `avg_total_trades=10.0` 임계선 방어 상태에서 BTC 음수 expectancy 셀 추가 보정
+   - `candidate_generation`의 `no_signal_generated` 비중(`share=0.7079`) 추가 완화
 2. 라벨/학습 구조 고도화:
    - optional triple-barrier 활성화 실험(기존 라벨과 병행)
    - `P(win)` + `E[pnl]` 2-head 학습 파이프라인 추가

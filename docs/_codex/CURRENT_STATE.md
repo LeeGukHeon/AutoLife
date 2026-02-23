@@ -21,7 +21,7 @@ Last updated: 2026-02-24
 - Master spec baseline: `docs/_codex/MASTER_SPEC.md`
 - Execution mode target: Mode A (baseline-preserving), extensions behind flags
 - Current active ticket label:
-  - `Strict Order 4-2` (trade-level loss-tail diagnostics for ETH/SOL remediation planning)
+  - `Strict Order 4-3` (risk-width tightening for low-quality loss-tail cells with sample-size guard)
 - Current implementation focus:
   - Ticket 0: docs/bootstrap reliability pack (implemented in current working tree)
   - Ticket 1: dynamic universe + scope-aware 1m fetch/build strictness (implemented in current working tree)
@@ -59,6 +59,11 @@ Last updated: 2026-02-24
     - Backtest JSON now exports per-trade `trade_history_samples` (`include/runtime/BacktestRuntime.h`, `src/runtime/BacktestRuntime.cpp`, `src/app/BacktestCliHandler.cpp`)
     - verification diagnostics now exports `top_loss_trade_samples` per dataset (`scripts/run_verification.py`)
     - regression coverage added for new verification diagnostics (`scripts/test_verification_risk_tail_decomposition.py`)
+  - Strict Order 4-3 risk-width tightening applied (entry gate unchanged, live/backtest isomorphic):
+    - `applyProbabilisticPrimaryDecisionProfile` now tightens `target_risk_pct` for non-hostile low-quality fragility cells and low-quality uptrend-continuation cells
+    - code paths:
+      - `src/runtime/BacktestRuntime.cpp`
+      - `src/runtime/LiveTradingRuntime.cpp`
 
 ## Last known gate status
 - Strict feature validation: run required after any feature/build changes
@@ -142,6 +147,22 @@ Last updated: 2026-02-24
 - Step-4 experiment note (discarded):
   - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step4s_uptrend_cont_guard_v1.json`
   - failed fail-closed (`avg_total_trades=9.8`, `sample_size_guard_pass=false`, `risk_adjusted_score_guard_pass=false`), therefore not retained.
+- Latest Step-4 follow-up (`Strict Order 4-3`, pipeline=`v1`):
+  - runtime tuning: tighten target risk width for low-quality fragility/uptrend-continuation cells (entry gate unchanged)
+    - `src/runtime/BacktestRuntime.cpp`
+    - `src/runtime/LiveTradingRuntime.cpp`
+  - verification:
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step4v_risk_tighten_v1.json`
+  - result (vs `..._step4t_diag_instrumentation_only.json`):
+    - `overall_gate_pass=true` 유지
+    - `adaptive_verdict=pass`
+    - `avg_profit_factor: 2.6923 -> 3.0578`
+    - `avg_expectancy_krw: 12.1637 -> 18.0299`
+    - `avg_total_trades: 11.0 -> 10.0` (guard threshold 유지)
+    - `candidate_generation.no_signal_generated share: 0.709 -> 0.7079`
+    - ETH/SOL expectancy improved:
+      - `ETH: -1.3339 -> +0.5113`
+      - `SOL: -7.5916 -> +5.1816`
 - Shadow/live staged enable: not active by default
 
 ## Known issues / watchpoints

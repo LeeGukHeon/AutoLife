@@ -510,6 +510,8 @@ void applyProbabilisticPrimaryDecisionProfile(
         signal.market_regime == autolife::analytics::MarketRegime::TRENDING_DOWN;
     const bool rescue_archetype =
         signal.entry_archetype.find("CORE_RESCUE") != std::string::npos;
+    const bool uptrend_continuation_archetype =
+        signal.entry_archetype.find("FOUNDATION_UPTREND_CONTINUATION") != std::string::npos;
     const bool range_pullback_archetype =
         signal.entry_archetype.find("FOUNDATION_RANGE_PULLBACK") != std::string::npos;
     const bool fragility_archetype = rescue_archetype || range_pullback_archetype;
@@ -572,6 +574,17 @@ void applyProbabilisticPrimaryDecisionProfile(
             ? (0.0026 + ((1.0 - confidence) * 0.0036))
             : (0.0028 + ((1.0 - confidence) * 0.0048));
         if (!hostile_regime && fragility_archetype) {
+            target_risk_pct *= 0.78;
+        }
+        if (!hostile_regime && fragility_archetype && margin < -0.006) {
+            target_risk_pct *= 0.90;
+        }
+        if (!hostile_regime &&
+            signal.market_regime == autolife::analytics::MarketRegime::TRENDING_UP &&
+            uptrend_continuation_archetype &&
+            margin < -0.012 &&
+            signal.probabilistic_h5_calibrated < 0.412 &&
+            signal.liquidity_score < 70.0) {
             target_risk_pct *= 0.78;
         }
         target_risk_pct = std::clamp(
