@@ -14,7 +14,7 @@ from train_probabilistic_pattern_model import (
     init_fold_state,
     parse_iso_to_ts_ms,
     safe_float,
-    safe_int01,
+    safe_binary_target,
     save_fold_model_artifacts,
     split_name_for_ts,
     weighted_from_folds,
@@ -195,9 +195,17 @@ def stream_dataset_into_global_states(
         for row in reader:
             rows_total += 1
             ts = safe_float(row.get("timestamp"))
-            y1 = safe_int01(row.get("label_up_h1"))
-            y5 = safe_int01(row.get("label_up_h5"))
-            edge = safe_float(row.get("label_edge_bps_h5"))
+            y1 = safe_binary_target(
+                row.get(str(args.h1_target_column)),
+                drop_neutral=bool(args.drop_neutral_target),
+            )
+            y5 = safe_binary_target(
+                row.get(str(args.h5_target_column)),
+                drop_neutral=bool(args.drop_neutral_target),
+            )
+            edge = safe_float(row.get(str(args.edge_column)))
+            if edge is None and str(args.edge_column) != "label_edge_bps_h5":
+                edge = safe_float(row.get("label_edge_bps_h5"))
             if ts is None or y1 is None or y5 is None or edge is None:
                 rows_skipped += 1
                 continue
@@ -220,6 +228,7 @@ def stream_dataset_into_global_states(
                     state["train_x"].append(x)
                     state["train_y_h1"].append(int(y1))
                     state["train_y_h5"].append(int(y5))
+                    state["train_edge"].append(float(edge))
                     if len(state["train_x"]) >= int(args.batch_size):
                         flush_train_buffer(state)
                 else:
@@ -504,12 +513,20 @@ def main(argv=None) -> int:
         "baseline_json": str(baseline_json_path),
         "model_dir": str(model_dir),
         "feature_columns": FEATURE_COLUMNS,
+        "target_columns": {
+            "h1": str(args.h1_target_column),
+            "h5": str(args.h5_target_column),
+            "edge": str(args.edge_column),
+            "drop_neutral_target": bool(args.drop_neutral_target),
+        },
         "sgd_config": {
             "alpha": float(args.alpha),
             "l1_ratio": float(args.l1_ratio),
             "batch_size": int(args.batch_size),
             "infer_batch_size": int(args.infer_batch_size),
             "random_state": int(args.random_state),
+            "enable_edge_regressor": bool(args.enable_edge_regressor),
+            "edge_target_clip_bps": float(max(10.0, args.edge_target_clip_bps)),
         },
         "calibration_config": {
             "method": "platt_logistic_regression",

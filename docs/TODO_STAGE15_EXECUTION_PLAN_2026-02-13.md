@@ -278,6 +278,24 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
   - smoke:
     - `build/Release/logs/probabilistic_hybrid_cycle_summary_smokehybrid3_20260221.json` (`status=pass`)
     - `build/Release/logs/probabilistic_runtime_bundle_parity_smokehybrid3_20260221.json` (`status=pass`)
+- [x] verification 리스크 분해 진단(heavy-loss tail) 추가.
+  - script: `scripts/run_verification.py`
+  - 추가 출력:
+    - `adaptive_validation.aggregates.avg_risk_adjusted_score_components`
+    - `adaptive_validation.aggregates.loss_tail_aggregate`
+    - `adaptive_validation.risk_adjusted_failure_decomposition`
+  - smoke:
+    - `build/Release/logs/verification_report_risk_tail_smoke.json`
+- [x] global trainer 타깃/edge 컬럼 반영 누락 수정(2-head 실험 경로 정합성).
+  - script: `scripts/train_probabilistic_pattern_model_global.py`
+  - 변경:
+    - `--h1-target-column/--h5-target-column/--edge-column` 실제 반영
+    - edge fallback(`label_edge_bps_h5`) parity 반영
+    - edge regressor 학습용 `train_edge` 버퍼 적재 반영
+  - regression:
+    - `scripts/test_train_probabilistic_pattern_model_global.py`
+  - smoke:
+    - `build/Release/logs/probabilistic_model_train_summary_global_targetflex_smoke_20260223.json` (`status=pass`)
 
 ## Next (Strict Order)
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:

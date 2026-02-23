@@ -47,6 +47,7 @@ Last updated: 2026-02-23
   - Codex context refresh checks now enforce gate-output fail-closed semantics (`scripts/run_codex_context_refresh_checks.py`): feature/parity require `status=pass`, runtime verification requires `overall_gate_pass=true`.
   - Standalone Gate4 flow runner now auto-resolves latest run-tagged inputs when default canonical files are absent (`scripts/run_probabilistic_shadow_gate_flow.py`) and records resolution metadata.
   - Verification diagnostics hardened for TODO Step-1 decomposition: `scripts/run_verification.py` now emits risk-score component breakdown + heavy-loss tail decomposition (pattern/regime/archetype) via `adaptive_validation.risk_adjusted_failure_decomposition`.
+  - Global trainer target-flex parity fix: `scripts/train_probabilistic_pattern_model_global.py` now actually consumes `--h1-target-column/--h5-target-column/--edge-column`, applies edge fallback parity, and feeds `train_edge` for the edge regressor head; regression tests added (`scripts/test_train_probabilistic_pattern_model_global.py`).
 
 ## Last known gate status
 - Strict feature validation: run required after any feature/build changes
@@ -55,6 +56,8 @@ Last updated: 2026-02-23
 - Latest runtime context-refresh verification check (`pipeline=v1`) executed and failed fail-closed (`overall_gate_pass=false` in `build/Release/logs/context_refresh_verification.json`).
 - Latest verification smoke after decomposition changes:
   - `build/Release/logs/verification_report_risk_tail_smoke.json` generated successfully and includes risk-tail decomposition fields.
+- Latest global-train target-flex smoke:
+  - `build/Release/logs/probabilistic_model_train_summary_global_targetflex_smoke_20260223.json` status=`pass` (max_datasets=1).
 - Shadow/live staged enable: not active by default
 
 ## Known issues / watchpoints
