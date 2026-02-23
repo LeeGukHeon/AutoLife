@@ -6,12 +6,16 @@ Default: OFF
 Horizon labels overlap in time, so naive walk-forward may leak information and inflate evaluation.
 
 ## Implementation target
-- Split tool: `scripts/split_probabilistic_dataset.py` (or equivalent split generator evolution)
+- Split tool:
+  - `scripts/split_probabilistic_dataset.py`
+  - implemented via `scripts/generate_probabilistic_split_manifest.py`
 - Parameters:
   - `--h1_bars`
   - `--h5_bars`
   - `--purge_bars` (default `max(h1,h5)`)
   - `--embargo_bars` (default `ceil(purge*0.1)`)
+- Enable flag:
+  - `--enable-purged-walk-forward`
 
 ## Output
 - `split_plan.json` with exact time ranges

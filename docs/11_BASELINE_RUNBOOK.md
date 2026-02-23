@@ -52,6 +52,18 @@ python scripts/generate_probabilistic_split_manifest.py `
   --output-split-manifest-json ".\data\model_input\probabilistic_features_v1_latest\probabilistic_split_manifest_v1.json" `
   --dataset-kind feature
 
+# EXT-51 optional (default OFF)
+python scripts/generate_probabilistic_split_manifest.py `
+  --input-manifest-json ".\data\model_input\probabilistic_features_v1_latest\feature_dataset_manifest.json" `
+  --output-split-manifest-json ".\data\model_input\probabilistic_features_v1_latest\probabilistic_split_manifest_v1.json" `
+  --dataset-kind feature `
+  --enable-purged-walk-forward `
+  --h1-bars 1 `
+  --h5-bars 5 `
+  --purge-bars -1 `
+  --embargo-bars -1 `
+  --split-plan-json ".\data\model_input\probabilistic_features_v1_latest\split_plan.json"
+
 python scripts/generate_probabilistic_baseline.py `
   --split-manifest-json ".\data\model_input\probabilistic_features_v1_latest\probabilistic_split_manifest_v1.json"
 ```

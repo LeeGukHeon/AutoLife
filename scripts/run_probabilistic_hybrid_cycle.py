@@ -50,6 +50,15 @@ def parse_args(argv=None) -> argparse.Namespace:
         default="",
         help="Optional dynamic universe JSON for scope-aware 1m fetch/build behavior.",
     )
+    parser.add_argument(
+        "--enable-purged-walk-forward",
+        action="store_true",
+        help="Enable EXT-51 purge/embargo split mode in split manifest generation.",
+    )
+    parser.add_argument("--h1-bars", type=int, default=1)
+    parser.add_argument("--h5-bars", type=int, default=5)
+    parser.add_argument("--purge-bars", type=int, default=-1)
+    parser.add_argument("--embargo-bars", type=int, default=-1)
     return parser.parse_args(argv)
 
 
@@ -206,6 +215,20 @@ def main(argv=None) -> int:
         "--dataset-kind",
         "feature",
     ]
+    if bool(args.enable_purged_walk_forward):
+        split_cmd.extend(
+            [
+                "--enable-purged-walk-forward",
+                "--h1-bars",
+                str(int(args.h1_bars)),
+                "--h5-bars",
+                str(int(args.h5_bars)),
+                "--purge-bars",
+                str(int(args.purge_bars)),
+                "--embargo-bars",
+                str(int(args.embargo_bars)),
+            ]
+        )
     steps.append(run_step("generate_split_manifest", split_cmd))
     if not steps[-1]["ok"]:
         dump_json(cycle_summary_json, {"run_tag": run_tag, "status": "failed", "steps": steps})
@@ -278,6 +301,7 @@ def main(argv=None) -> int:
         "run_tag": run_tag,
         "status": status,
         "incremental_update": bool(args.incremental_update),
+        "enable_purged_walk_forward": bool(args.enable_purged_walk_forward),
         "paths": {
             "backtest_dir": str(backtest_dir),
             "feature_dir": str(feature_dir),

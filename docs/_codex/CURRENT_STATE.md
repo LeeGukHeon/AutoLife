@@ -19,6 +19,7 @@ Last updated: 2026-02-23
 - Current implementation focus:
   - Ticket 0: docs/bootstrap reliability pack (implemented in current working tree)
   - Ticket 1: dynamic universe + scope-aware 1m fetch/build strictness (implemented in current working tree)
+  - Ticket 2: purged walk-forward + embargo split option (in progress in current working tree)
 
 ## Last known gate status
 - Strict feature validation: run required after any feature/build changes

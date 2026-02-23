@@ -271,6 +271,9 @@ def main(argv=None) -> int:
     split_manifest = load_json_or_none(split_manifest_path)
     if not isinstance(split_manifest, dict):
         raise RuntimeError(f"invalid split manifest: {split_manifest_path}")
+    split_policy = split_manifest.get("split_policy", {})
+    if not isinstance(split_policy, dict):
+        split_policy = {}
     raw_datasets = split_manifest.get("datasets", [])
     if not isinstance(raw_datasets, list) or not raw_datasets:
         raise RuntimeError(f"empty datasets in split manifest: {split_manifest_path}")
@@ -436,6 +439,9 @@ def main(argv=None) -> int:
         "baseline_comparison": baseline_compare,
         "datasets": dataset_results,
     }
+    purge_embargo_cfg = split_policy.get("purge_embargo", {})
+    if isinstance(purge_embargo_cfg, dict) and bool(purge_embargo_cfg.get("enabled", False)):
+        out["purge_embargo"] = purge_embargo_cfg
     dump_json(output_json_path, out)
 
     print("[TrainProbModelGlobal] completed", flush=True)
