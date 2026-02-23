@@ -43,6 +43,7 @@ Last updated: 2026-02-23
   - Ticket 1 universe-scope behavior regression tests added (`scripts/test_probabilistic_universe_scope.py`)
   - Optional Ticket 7 (MODE B): standalone Gate4 flow runner implemented (`scripts/run_probabilistic_shadow_gate_flow.py`) + regression tests
   - API policy hardening: `scripts/fetch_upbit_historical_candles.py` now enforces `Remaining-Req sec==0` boundary throttle+jitter, bounded 429/418 backoff cap, defensive Origin-header stripping, and richer compliance telemetry (endpoint/params/status/latency/retry).
+  - Runtime API policy hardening: `src/execution/RateLimiter.cpp` + `src/network/UpbitHttpClient.cpp` now apply sec==0 throttle evidence, bounded 429 exponential backoff path, and defensive Origin-header stripping in request header assembly.
 
 ## Last known gate status
 - Strict feature validation: run required after any feature/build changes

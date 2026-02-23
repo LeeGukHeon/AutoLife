@@ -72,9 +72,16 @@ int main() {
         200,
         std::optional<std::string>("group=market; min=57; sec=8")
     );
+    limiter.updateFromHeader("group=market; min=57; sec=0");
+    limiter.recordHttpOutcome(
+        "market",
+        "/v1/market/all",
+        200,
+        std::optional<std::string>("group=market; min=57; sec=0")
+    );
 
     const std::uint64_t line_count_after = countNonEmptyLines(telemetry_path);
-    if (line_count_after < line_count_before + 2) {
+    if (line_count_after < line_count_before + 3) {
         std::cerr << "telemetry jsonl append check failed: before=" << line_count_before
                   << " after=" << line_count_after << "\n";
         return 1;
@@ -95,11 +102,11 @@ int main() {
     }
 
     std::string error;
-    if (!requireFieldEq(summary, "request_count", 2, error)
-        || !requireFieldEq(summary, "http_success_count", 1, error)
+    if (!requireFieldEq(summary, "request_count", 3, error)
+        || !requireFieldEq(summary, "http_success_count", 2, error)
         || !requireFieldEq(summary, "rate_limit_429_count", 1, error)
         || !requireFieldEq(summary, "rate_limit_418_count", 0, error)
-        || !requireFieldEq(summary, "throttle_event_count", 1, error)
+        || !requireFieldEq(summary, "throttle_event_count", 2, error)
         || !requireFieldEq(summary, "recover_event_count", 1, error)) {
         std::cerr << error << "\n";
         return 1;
@@ -109,6 +116,18 @@ int main() {
         || !summary["backoff_sleep_ms_total"].is_number_unsigned()
         || summary["backoff_sleep_ms_total"].get<std::uint64_t>() < 1000) {
         std::cerr << "invalid backoff_sleep_ms_total\n";
+        return 1;
+    }
+    if (!summary.contains("sec_zero_throttle_count")
+        || !summary["sec_zero_throttle_count"].is_number_unsigned()
+        || summary["sec_zero_throttle_count"].get<std::uint64_t>() < 1) {
+        std::cerr << "invalid sec_zero_throttle_count\n";
+        return 1;
+    }
+    if (!summary.contains("sec_zero_sleep_ms_total")
+        || !summary["sec_zero_sleep_ms_total"].is_number_unsigned()
+        || summary["sec_zero_sleep_ms_total"].get<std::uint64_t>() == 0) {
+        std::cerr << "invalid sec_zero_sleep_ms_total\n";
         return 1;
     }
 

@@ -72,9 +72,14 @@ private:
     std::uint64_t compliance_backoff_sleep_ms_total_;
     std::uint64_t compliance_throttle_event_count_;
     std::uint64_t compliance_recover_event_count_;
+    std::uint64_t compliance_sec_zero_throttle_count_;
+    std::uint64_t compliance_sec_zero_sleep_ms_total_;
     bool last_response_rate_limited_;
     std::string first_event_utc_;
     std::string last_event_utc_;
+    int rate_limit_429_streak_;
+    int last_applied_backoff_ms_;
+    int pending_sec_zero_throttle_ms_;
 
     bool is_blocked_;
     std::chrono::steady_clock::time_point block_end_time_;

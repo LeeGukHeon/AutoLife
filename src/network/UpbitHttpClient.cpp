@@ -110,11 +110,10 @@ HttpResponse UpbitHttpClient::get(
         rate_limiter_->updateFromHeader(remaining_it->second);
     }
 
-    rate_limiter_->recordHttpOutcome(group, endpoint, response.status_code, remaining_req_header);
-
     if (response.isRateLimited() || response.isBlocked()) {
         rate_limiter_->handleRateLimitError(response.status_code);
     }
+    rate_limiter_->recordHttpOutcome(group, endpoint, response.status_code, remaining_req_header);
     
     return response;
 }
@@ -161,11 +160,10 @@ HttpResponse UpbitHttpClient::post(
         rate_limiter_->updateFromHeader(remaining_it->second);
     }
 
-    rate_limiter_->recordHttpOutcome(group, endpoint, response.status_code, remaining_req_header);
-
     if (response.isRateLimited() || response.isBlocked()) {
         rate_limiter_->handleRateLimitError(response.status_code);
     }
+    rate_limiter_->recordHttpOutcome(group, endpoint, response.status_code, remaining_req_header);
 
     return response;
 }
@@ -196,11 +194,10 @@ HttpResponse UpbitHttpClient::del(
         rate_limiter_->updateFromHeader(remaining_it->second);
     }
 
-    rate_limiter_->recordHttpOutcome("order", endpoint, response.status_code, remaining_req_header);
-
     if (response.isRateLimited() || response.isBlocked()) {
         rate_limiter_->handleRateLimitError(response.status_code);
     }
+    rate_limiter_->recordHttpOutcome("order", endpoint, response.status_code, remaining_req_header);
     
     return response;
 }
@@ -446,6 +443,12 @@ HttpResponse UpbitHttpClient::performRequest(
     
     struct curl_slist* header_list = nullptr;
     for (const auto& [key, value] : headers) {
+        std::string lower_key = key;
+        std::transform(lower_key.begin(), lower_key.end(), lower_key.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (lower_key == "origin") {
+            continue;
+        }
         std::string header_line = key + ": " + value;
         header_list = curl_slist_append(header_list, header_line.c_str());
     }

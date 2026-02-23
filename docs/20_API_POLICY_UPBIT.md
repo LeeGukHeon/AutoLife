@@ -59,6 +59,10 @@ This policy applies to all Upbit REST and public WebSocket usage in this reposit
   - `src/network/UpbitHttpClient.cpp`
   - `src/execution/RateLimiter.cpp`
   - `src/risk/UpbitComplianceAdapter.cpp`
+  - implementation notes:
+    - runtime `RateLimiter` applies `Remaining-Req sec==0` boundary throttle with jitter and tracks throttle telemetry
+    - runtime 429 handling applies bounded exponential backoff (418 remains bounded hard block window)
+    - `UpbitHttpClient` strips any `Origin` header key before request send (defensive no-Origin policy)
 
 ## Official references
 - Rate limits:
