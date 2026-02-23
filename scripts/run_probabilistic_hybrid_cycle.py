@@ -86,6 +86,20 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument("--ensemble-k", type=int, default=1)
     parser.add_argument("--ensemble-seed-step", type=int, default=1000)
+    parser.add_argument("--run-verification", action="store_true")
+    parser.add_argument("--verification-exe-path", default=r".\build\Release\AutoLifeTrading.exe")
+    parser.add_argument("--verification-config-path", default=r".\build\Release\config\config.json")
+    parser.add_argument("--verification-source-config-path", default=r".\config\config.json")
+    parser.add_argument("--verification-data-dir", default=r".\data\backtest_real")
+    parser.add_argument(
+        "--verification-datasets",
+        default="",
+        help="Comma-separated dataset file names or paths for run_verification.py (required with --run-verification).",
+    )
+    parser.add_argument(
+        "--verification-baseline-report-path",
+        default=r".\build\Release\logs\verification_report_baseline_current.json",
+    )
     return parser.parse_args(argv)
 
 
@@ -99,6 +113,18 @@ def normalize_markets(major_raw: str, alt_raw: str) -> str:
         seen.add(market)
         ordered.append(market)
     return ",".join(ordered)
+
+
+def parse_csv_tokens(raw: str) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    for token in str(raw or "").split(","):
+        value = token.strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
 
 
 def run_step(name: str, cmd: List[str]) -> Dict[str, Any]:
@@ -372,7 +398,41 @@ def main(argv=None) -> int:
         str(parity_json),
     ]
     steps.append(run_step("validate_bundle_parity", parity_cmd))
-    status = "pass" if steps[-1]["ok"] else "failed"
+    if not steps[-1]["ok"]:
+        dump_json(cycle_summary_json, {"run_tag": run_tag, "status": "failed", "steps": steps})
+        return int(steps[-1]["returncode"] or 2)
+
+    verification_report_json = log_dir / f"verification_report_{run_tag}.json"
+    if bool(args.run_verification):
+        verification_datasets = parse_csv_tokens(str(args.verification_datasets))
+        if not verification_datasets:
+            raise ValueError("--verification-datasets is required when --run-verification is enabled")
+        verify_cmd = [
+            py,
+            str(resolve_repo_path(r".\scripts\run_verification.py")),
+            "--exe-path",
+            str(resolve_repo_path(args.verification_exe_path)),
+            "--config-path",
+            str(resolve_repo_path(args.verification_config_path)),
+            "--source-config-path",
+            str(resolve_repo_path(args.verification_source_config_path)),
+            "--data-dir",
+            str(resolve_repo_path(args.verification_data_dir)),
+            "--output-json",
+            str(verification_report_json),
+            "--baseline-report-path",
+            str(resolve_repo_path(args.verification_baseline_report_path)),
+            "--pipeline-version",
+            str(pipeline_version),
+            "--dataset-names",
+            *verification_datasets,
+        ]
+        steps.append(run_step("run_verification", verify_cmd))
+        if not steps[-1]["ok"]:
+            dump_json(cycle_summary_json, {"run_tag": run_tag, "status": "failed", "steps": steps})
+            return int(steps[-1]["returncode"] or 2)
+
+    status = "pass"
 
     summary = {
         "generated_at_utc": utc_now_iso(),
@@ -385,6 +445,7 @@ def main(argv=None) -> int:
         "sample_threshold": float(args.sample_threshold),
         "sample_lookback_minutes": int(args.sample_lookback_minutes),
         "ensemble_k": int(args.ensemble_k),
+        "run_verification": bool(args.run_verification),
         "paths": {
             "backtest_dir": str(backtest_dir),
             "feature_dir": str(feature_dir),
@@ -393,6 +454,7 @@ def main(argv=None) -> int:
             "split_manifest_json": str(split_manifest_json),
             "train_summary_json": str(train_summary_json),
             "parity_json": str(parity_json),
+            "verification_report_json": str(verification_report_json) if bool(args.run_verification) else "",
         },
         "steps": steps,
     }

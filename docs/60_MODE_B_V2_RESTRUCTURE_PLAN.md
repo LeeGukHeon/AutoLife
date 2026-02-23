@@ -78,3 +78,7 @@ Status: Phase 2 implemented + Phase 3 partial + Phase 4 partial (v2 gate profile
     - dataset-set comparability
     - baseline non-degradation contract pass
   - v2 gate fail returns non-zero exit code (fail-closed)
+- `scripts/run_probabilistic_hybrid_cycle.py`
+  - optional `--run-verification` step added
+  - passes `--pipeline-version` through to verification gate
+  - allows v2 draft cycle to fail fast on strict verification gate failure

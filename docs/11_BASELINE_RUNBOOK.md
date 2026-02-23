@@ -141,10 +141,18 @@ python scripts/run_probabilistic_hybrid_cycle.py `
   --sample-threshold 250000000 `
   --sample-lookback-minutes 60
 
+# Hybrid + verification gate (optional)
+python scripts/run_probabilistic_hybrid_cycle.py `
+  --universe-file ".\config\universe\runtime_universe.json" `
+  --run-verification `
+  --verification-datasets "upbit_KRW_BTC_1m_2024.csv,upbit_KRW_ETH_1m_2024.csv"
+
 # Optional MODE B draft path (explicit v2)
 python scripts/run_probabilistic_hybrid_cycle.py `
   --pipeline-version v2 `
-  --universe-file ".\config\universe\runtime_universe.json"
+  --universe-file ".\config\universe\runtime_universe.json" `
+  --run-verification `
+  --verification-datasets "upbit_KRW_BTC_1m_2024.csv,upbit_KRW_ETH_1m_2024.csv"
 ```
 
 ## 10) EXT-55 optional runtime regime policy (default OFF)
