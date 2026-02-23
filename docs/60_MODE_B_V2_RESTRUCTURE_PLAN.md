@@ -150,3 +150,8 @@ Status: Phase 1 transitional + Phase 2 implemented + Phase 3 expanded + Phase 4 
   - supports integrated `--validate-shadow-report` step
   - in `v2 + live_enable`, shadow validation is automatically enforced fail-closed
   - fail-closed arg guard: shadow generate/validate flags require promotion-readiness evaluation mode
+- `scripts/run_probabilistic_shadow_gate_flow.py`
+  - standalone fail-closed Gate4 chain runner:
+    - `generate_probabilistic_shadow_report.py`
+    - `validate_probabilistic_shadow_report.py`
+    - `evaluate_probabilistic_promotion_readiness.py --target-stage live_enable`

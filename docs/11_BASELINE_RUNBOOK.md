@@ -200,6 +200,18 @@ python scripts/run_probabilistic_hybrid_cycle.py `
   --promotion-target-stage live_enable `
   --generate-shadow-report `
   --validate-shadow-report
+
+# Optional: standalone Gate4 flow runner (existing artifacts + decision logs)
+python scripts/run_probabilistic_shadow_gate_flow.py `
+  --pipeline-version v2 `
+  --target-stage live_enable `
+  --runtime-bundle-json ".\config\model\probabilistic_runtime_bundle_v2.json" `
+  --live-decision-log-jsonl ".\build\Release\logs\policy_decisions.jsonl" `
+  --backtest-decision-log-jsonl ".\build\Release\logs\policy_decisions_backtest.jsonl" `
+  --feature-validation-json ".\build\Release\logs\probabilistic_feature_validation_summary.json" `
+  --parity-json ".\build\Release\logs\probabilistic_runtime_bundle_parity.json" `
+  --verification-json ".\build\Release\logs\verification_report.json" `
+  --runtime-config-json ".\build\Release\config\config.json"
 ```
 
 ## 10) EXT-55 optional runtime regime policy (default OFF)
