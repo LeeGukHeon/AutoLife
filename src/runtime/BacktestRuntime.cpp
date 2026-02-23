@@ -1225,10 +1225,10 @@ bool passesProbabilisticPrimaryMinimums(
         mins.min_signal_strength = std::max(0.0, mins.min_signal_strength - 0.04);
     }
     if (range_pullback_loss_tail_risk_cell) {
-        mins.min_h5_calibrated = std::max(mins.min_h5_calibrated, 0.50);
-        mins.min_h5_margin = std::max(mins.min_h5_margin, 0.001);
-        mins.min_liquidity_score = std::max(mins.min_liquidity_score, 16.0);
-        mins.min_signal_strength = std::max(mins.min_signal_strength, 0.13);
+        mins.min_h5_calibrated = std::max(mins.min_h5_calibrated, 0.51);
+        mins.min_h5_margin = std::max(mins.min_h5_margin, 0.002);
+        mins.min_liquidity_score = std::max(mins.min_liquidity_score, 18.0);
+        mins.min_signal_strength = std::max(mins.min_signal_strength, 0.15);
     }
     const bool calibrated_fail = signal.probabilistic_h5_calibrated < mins.min_h5_calibrated;
     const bool margin_fail = signal.probabilistic_h5_margin < mins.min_h5_margin;
@@ -1285,11 +1285,11 @@ bool passesProbabilisticPrimaryMinimums(
             return true;
         }
         if (range_pullback_loss_tail_risk_cell) {
-            if (signal.probabilistic_h5_calibrated >= 0.46 &&
-                signal.probabilistic_h5_margin >= -0.007 &&
-                signal.liquidity_score >= 14.0 &&
-                signal.strength >= 0.10 &&
-                signal.expected_value >= -0.00010) {
+            if (signal.probabilistic_h5_calibrated >= 0.48 &&
+                signal.probabilistic_h5_margin >= -0.004 &&
+                signal.liquidity_score >= 15.0 &&
+                signal.strength >= 0.13 &&
+                signal.expected_value >= -0.00002) {
                 return true;
             }
         } else {

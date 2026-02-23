@@ -21,7 +21,7 @@ Last updated: 2026-02-24
 - Master spec baseline: `docs/_codex/MASTER_SPEC.md`
 - Execution mode target: Mode A (baseline-preserving), extensions behind flags
 - Current active ticket label:
-  - `Strict Order 3-3` (backtest clock alignment + sample recovery)
+  - `Strict Order 4-1` (loss-tail minimums tightening for ranging range-pullback cells)
 - Current implementation focus:
   - Ticket 0: docs/bootstrap reliability pack (implemented in current working tree)
   - Ticket 1: dynamic universe + scope-aware 1m fetch/build strictness (implemented in current working tree)
@@ -108,9 +108,25 @@ Last updated: 2026-02-24
     - `avg_expectancy_krw=11.2459`
     - `avg_risk_adjusted_score=0.0411`
     - `avg_total_trades=11.4` (`gate_avg_trades_pass=true`, threshold=10)
+- Latest Step-4 follow-up (`Strict Order 4-1`, pipeline=`v1`):
+  - Runtime tuning: tighten range-pullback loss-tail quality floors in probabilistic primary minimums (live/backtest isomorphic)
+    - `src/runtime/BacktestRuntime.cpp`
+    - `src/runtime/LiveTradingRuntime.cpp`
+  - verification:
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step4q_repeat_check.json`
+  - result:
+    - `overall_gate_pass=true`
+    - `adaptive_verdict=pass`
+    - `avg_profit_factor=2.6923`
+    - `avg_expectancy_krw=12.1637`
+    - `avg_risk_adjusted_score=0.1490`
+    - `avg_total_trades=11.0` (`gate_avg_trades_pass=true`, threshold=10)
+    - `candidate_generation.no_signal_generated share: 0.733 -> 0.709`
+    - residual: ETH/SOL expectancy still negative (`ETH=-1.3339`, `SOL=-7.5916`)
 - Shadow/live staged enable: not active by default
 
 ## Known issues / watchpoints
 - 1m full-market fetch is expensive and operationally brittle for dynamic top-N usage.
 - Universe-scoped 1m handling is now available; keep manifest scope semantics explicit and reproducible.
 - Do not change baseline outputs when extension flags are OFF.
+- Keep verification workflow sequential (`build` first, then `run_verification.py`); parallel execution can mix stale binaries and produce unstable conclusions.

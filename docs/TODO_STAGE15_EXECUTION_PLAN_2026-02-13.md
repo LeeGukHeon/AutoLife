@@ -368,14 +368,34 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
     - `avg_expectancy_krw=11.2459`
     - `avg_risk_adjusted_score=0.0411`
     - `avg_total_trades=11.4` (`sample_size_guard_pass=true`)
+- [x] Strict Order 4 1차: range-pullback loss-tail 셀 품질 하한 강화(라이브/백테스트 동형).
+  - code:
+    - `src/runtime/BacktestRuntime.cpp`
+    - `src/runtime/LiveTradingRuntime.cpp`
+  - 핵심:
+    - `passesProbabilisticPrimaryMinimums`에서
+      `RANGING + FOUNDATION_RANGE_PULLBACK` 손실 집중 셀에 대해
+      `h5_calibrated / h5_margin / liquidity / strength` 하한을 상향.
+    - loss-tail 셀 전용 완화 fallback의 최소 기준도 상향해
+      저품질 통과를 줄임.
+  - 검증:
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step4q_repeat_check.json`
+  - 결과(기준: `..._step4g_minimal_fixset.json` 대비):
+    - `overall_gate_pass=true` 유지
+    - `avg_profit_factor: 2.6066 -> 2.6923`
+    - `avg_expectancy_krw: 11.2459 -> 12.1637`
+    - `avg_risk_adjusted_score: 0.0411 -> 0.1490`
+    - `avg_total_trades: 11.4 -> 11.0` (표본 기준 유지)
+    - `candidate_generation.no_signal_generated share: 0.733 -> 0.709`
+    - 잔여: ETH/SOL expectancy 음수 (`ETH=-1.3339`, `SOL=-7.5916`)
 
 ## Next (Strict Order)
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
    - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.
 1. 표본 유지 + 품질 보강(Strict Order 4):
-   - 현재 `avg_total_trades=11.4` 유지 조건에서 ETH/SOL 음수 expectancy 셀 우선 보정
-   - `candidate_generation`의 `no_signal_generated` 비중(`share=0.733`) 완화
+   - 현재 `avg_total_trades=11.0` 유지 조건에서 ETH/SOL 음수 expectancy 셀 추가 보정
+   - `candidate_generation`의 `no_signal_generated` 비중(`share=0.709`) 추가 완화
 2. 라벨/학습 구조 고도화:
    - optional triple-barrier 활성화 실험(기존 라벨과 병행)
    - `P(win)` + `E[pnl]` 2-head 학습 파이프라인 추가
