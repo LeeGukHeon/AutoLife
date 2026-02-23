@@ -425,13 +425,32 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
     - ETH/SOL expectancy 개선:
       - `ETH: -1.3339 -> +0.5113`
       - `SOL: -7.5916 -> +5.1816`
+- [x] Strict Order 4 4차: constructive setup RR 보강(공통 RR 리밸런서, 라이브/백테스트 동형).
+  - code:
+    - `src/common/SignalPolicyShared.cpp`
+  - 핵심:
+    - `rebalanceSignalRiskReward`에서
+      `CORE_RESCUE`의 건전 셋업(`calibrated/margin/strength` 조건 충족)과
+      `TRENDING_UP + FOUNDATION_UPTREND_CONTINUATION` 건전 셋업에
+      목표 RR을 소폭 가산해 손익비를 개선.
+    - 코인 하드코딩 없이 패턴/레짐/확률 품질 기준만 사용.
+  - 검증:
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step5f_constructive_rr_final.json`
+  - 결과(기준: `..._step4v_risk_tighten_v1.json` 대비):
+    - `overall_gate_pass=true` 유지
+    - `avg_profit_factor: 3.0578 -> 3.0744`
+    - `avg_expectancy_krw: 18.0299 -> 18.3844`
+    - `avg_total_trades: 10.0 -> 10.0` (임계 유지)
+    - BTC expectancy 개선:
+      - `BTC: -0.5089 -> +0.3158`
+    - `no_signal_generated share: 0.7079 -> 0.7079` (추가 완화는 미달성)
 
 ## Next (Strict Order)
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
    - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.
 1. 표본 유지 + 품질 보강(Strict Order 4):
-   - 현재 `avg_total_trades=10.0` 임계선 방어 상태에서 BTC 음수 expectancy 셀 추가 보정
+   - 현재 `avg_total_trades=10.0` 임계선 방어 상태에서 BTC/XRP 약한 셀(저품질 rescue/continuation) 추가 안정화
    - `candidate_generation`의 `no_signal_generated` 비중(`share=0.7079`) 추가 완화
 2. 라벨/학습 구조 고도화:
    - optional triple-barrier 활성화 실험(기존 라벨과 병행)

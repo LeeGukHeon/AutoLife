@@ -21,7 +21,7 @@ Last updated: 2026-02-24
 - Master spec baseline: `docs/_codex/MASTER_SPEC.md`
 - Execution mode target: Mode A (baseline-preserving), extensions behind flags
 - Current active ticket label:
-  - `Strict Order 4-3` (risk-width tightening for low-quality loss-tail cells with sample-size guard)
+  - `Strict Order 4-4` (constructive setup RR boost with fail-closed gate preservation)
 - Current implementation focus:
   - Ticket 0: docs/bootstrap reliability pack (implemented in current working tree)
   - Ticket 1: dynamic universe + scope-aware 1m fetch/build strictness (implemented in current working tree)
@@ -64,6 +64,10 @@ Last updated: 2026-02-24
     - code paths:
       - `src/runtime/BacktestRuntime.cpp`
       - `src/runtime/LiveTradingRuntime.cpp`
+  - Strict Order 4-4 constructive RR boost applied (live/backtest isomorphic via shared signal policy):
+    - `rebalanceSignalRiskReward` now adds small RR lift for constructive rescue/uptrend-continuation setups
+    - code path:
+      - `src/common/SignalPolicyShared.cpp`
 
 ## Last known gate status
 - Strict feature validation: run required after any feature/build changes
@@ -163,6 +167,21 @@ Last updated: 2026-02-24
     - ETH/SOL expectancy improved:
       - `ETH: -1.3339 -> +0.5113`
       - `SOL: -7.5916 -> +5.1816`
+- Latest Step-4 follow-up (`Strict Order 4-4`, pipeline=`v1`):
+  - runtime tuning: constructive setup RR boost in shared risk-reward rebalance path
+    - `src/common/SignalPolicyShared.cpp`
+  - verification:
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step5f_constructive_rr_final.json`
+  - result (vs `..._step4v_risk_tighten_v1.json`):
+    - `overall_gate_pass=true` 유지
+    - `adaptive_verdict=pass`
+    - `avg_profit_factor: 3.0578 -> 3.0744`
+    - `avg_expectancy_krw: 18.0299 -> 18.3844`
+    - `avg_total_trades: 10.0 -> 10.0` (guard threshold 유지)
+    - BTC expectancy improved:
+      - `BTC: -0.5089 -> +0.3158`
+    - residual:
+      - `candidate_generation.no_signal_generated share=0.7079` (추가 완화 필요)
 - Shadow/live staged enable: not active by default
 
 ## Known issues / watchpoints
