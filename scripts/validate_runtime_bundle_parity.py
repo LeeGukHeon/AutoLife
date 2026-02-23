@@ -61,6 +61,19 @@ def infer_pipeline_from_bundle(bundle: Dict[str, Any]) -> Dict[str, str]:
     declared = str(bundle.get("pipeline_version", expected)).strip().lower() or expected
     if declared != expected:
         raise RuntimeError(f"bundle pipeline mismatch: expected={expected} declared={declared}")
+    if expected == "v2":
+        feature_contract_version = str(bundle.get("feature_contract_version", "")).strip().lower()
+        runtime_bundle_contract_version = str(bundle.get("runtime_bundle_contract_version", "")).strip().lower()
+        if feature_contract_version != "v2_draft":
+            raise RuntimeError(
+                "v2 bundle requires feature_contract_version=v2_draft: "
+                f"got={feature_contract_version or 'missing'}"
+            )
+        if runtime_bundle_contract_version != "v2_draft":
+            raise RuntimeError(
+                "v2 bundle requires runtime_bundle_contract_version=v2_draft: "
+                f"got={runtime_bundle_contract_version or 'missing'}"
+            )
     return {"bundle_version": bundle_version, "pipeline_version": expected}
 
 
@@ -420,6 +433,7 @@ def main(argv=None) -> int:
         "generated_at_utc": utc_now_iso(),
         "status": status,
         "mode": mode,
+        "gate_profile": "v2_strict" if bundle_meta["pipeline_version"] == "v2" else "v1",
         "runtime_bundle_json": str(bundle_path),
         "train_summary_json": str(summary_path),
         "split_manifest_json": str(split_path),

@@ -26,6 +26,7 @@ Last updated: 2026-02-23
   - Ticket 6: event sampling (time|dollar|volatility) for training rows (implemented in current working tree)
   - Optional Ticket 7 (MODE B): v2 draft kickoff + Phase 2 pipeline branching (`v1|v2` switches) implemented
   - Optional Ticket 7 (MODE B): Phase 3 partial implemented (strict version/pipeline fail-closed checks)
+  - Optional Ticket 7 (MODE B): Phase 4 partial implemented (v2 parity/verification strict gate profile)
 
 ## Last known gate status
 - Strict feature validation: run required after any feature/build changes

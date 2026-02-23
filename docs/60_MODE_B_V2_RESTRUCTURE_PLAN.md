@@ -1,6 +1,6 @@
 # MODE B / v2 Restructure Plan (Optional)
 Last updated: 2026-02-23
-Status: Phase 2 implemented + Phase 3 partial (strict version checks added)
+Status: Phase 2 implemented + Phase 3 partial + Phase 4 partial (v2 gate profile)
 
 ## Goal
 - Prepare optional MODE B migration with explicit v2 contracts.
@@ -26,7 +26,7 @@ Status: Phase 2 implemented + Phase 3 partial (strict version checks added)
 3. Runtime compatibility (partial implemented):
    - add safe v2 parsing with strict version checks.
    - fail closed on unknown/mixed contracts.
-4. Gate redefinition:
+4. Gate redefinition (partial implemented):
    - define parity/verification criteria specifically for v2.
    - keep v1 gate rules unchanged.
 5. Promotion:
@@ -62,3 +62,19 @@ Status: Phase 2 implemented + Phase 3 partial (strict version checks added)
 - `scripts/validate_runtime_bundle_parity.py`
   - fail-closed when bundle/train/split pipeline versions are mixed
   - parity output records `runtime_bundle_version` and `pipeline_version`
+
+## Implemented in Phase 4 (partial)
+- `scripts/validate_runtime_bundle_parity.py`
+  - v2 requires explicit draft contract tags:
+    - `feature_contract_version=v2_draft`
+    - `runtime_bundle_contract_version=v2_draft`
+  - parity output includes `gate_profile` (`v1` or `v2_strict`)
+- `scripts/run_verification.py`
+  - adds `--pipeline-version auto|v1|v2`
+  - v2 strict contract requires all pass:
+    - threshold gate
+    - adaptive verdict
+    - baseline comparison available
+    - dataset-set comparability
+    - baseline non-degradation contract pass
+  - v2 gate fail returns non-zero exit code (fail-closed)

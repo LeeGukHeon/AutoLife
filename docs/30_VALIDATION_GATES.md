@@ -26,6 +26,12 @@ Must pass:
 - `max_abs_diff <= epsilon`
 - reproducibility metadata persisted (seed, row ids, summary)
 
+v2 strict additions:
+- runtime bundle `version` must be `probabilistic_runtime_bundle_v2_draft`
+- `pipeline_version` must match `v2`
+- `feature_contract_version` and `runtime_bundle_contract_version` must be `v2_draft`
+- train/split inputs must be same pipeline version (`v2`)
+
 ## Gate 3: Strategy verification (strict)
 Command:
 ```powershell
@@ -34,6 +40,16 @@ python scripts/run_verification.py
 Must pass:
 - no simultaneous degradation of PF + expectancy + DD vs baseline
 - OOS-focused evaluation
+
+v2 strict profile:
+- run with `--pipeline-version v2`
+- must satisfy all:
+  - threshold gate pass
+  - adaptive verdict pass
+  - baseline comparison available
+  - dataset set comparable with baseline
+  - non-degradation contract applied + pass
+- v2 gate fail returns non-zero exit code.
 
 ## Gate 4: Shadow run (live orders disabled)
 Requirements:

@@ -123,6 +123,10 @@ python scripts/validate_runtime_bundle_parity.py `
 ## 8) Verification gate
 ```powershell
 python scripts/run_verification.py
+
+# Optional MODE B / v2 strict gate
+python scripts/run_verification.py `
+  --pipeline-version v2
 ```
 
 ## 9) Optional all-in-one cycle

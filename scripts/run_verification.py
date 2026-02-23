@@ -55,6 +55,20 @@ def extract_upbit_market_from_dataset_name(dataset_name: str) -> str:
 def load_supported_markets_from_runtime_bundle(bundle_path: pathlib.Path) -> Dict[str, Any]:
     with bundle_path.open("r", encoding="utf-8") as fp:
         payload = json.load(fp)
+    bundle_version = str(payload.get("version", "")).strip()
+    expected_pipeline = "v1"
+    if bundle_version == "probabilistic_runtime_bundle_v1":
+        expected_pipeline = "v1"
+    elif bundle_version == "probabilistic_runtime_bundle_v2_draft":
+        expected_pipeline = "v2"
+    elif bundle_version:
+        raise RuntimeError(f"Unsupported runtime bundle version for verification: {bundle_version}")
+    declared_pipeline = str(payload.get("pipeline_version", expected_pipeline)).strip().lower() or expected_pipeline
+    if declared_pipeline != expected_pipeline:
+        raise RuntimeError(
+            "Runtime bundle pipeline mismatch: "
+            f"version={bundle_version or 'unknown'} pipeline_version={declared_pipeline}"
+        )
     markets_field = payload.get("markets", [])
     supported_markets: set[str] = set()
     if isinstance(markets_field, list):
@@ -70,10 +84,30 @@ def load_supported_markets_from_runtime_bundle(bundle_path: pathlib.Path) -> Dic
         global_fallback_enabled = True
     return {
         "bundle_path": str(bundle_path),
+        "bundle_version": bundle_version,
+        "pipeline_version": expected_pipeline,
         "supported_markets": sorted(list(supported_markets)),
         "global_fallback_enabled": bool(global_fallback_enabled),
         "export_mode": str(payload.get("export_mode", "")).strip(),
     }
+
+
+def resolve_verification_pipeline_version(
+    requested_pipeline_version: str,
+    bundle_meta: Dict[str, Any],
+) -> str:
+    requested = str(requested_pipeline_version or "auto").strip().lower()
+    bundle_pipeline = str(bundle_meta.get("pipeline_version", "")).strip().lower()
+    if requested in ("v1", "v2"):
+        if bundle_pipeline and bundle_pipeline != requested:
+            raise RuntimeError(
+                "Verification pipeline version mismatches runtime bundle: "
+                f"requested={requested} bundle={bundle_pipeline}"
+            )
+        return requested
+    if bundle_pipeline in ("v1", "v2"):
+        return bundle_pipeline
+    return "v1"
 
 
 def resolve_probabilistic_bundle_path(exe_path: pathlib.Path, config_payload: Dict[str, Any]) -> pathlib.Path:
@@ -1688,6 +1722,13 @@ def main(argv=None) -> int:
     parser.add_argument("--verification-lock-timeout-sec", type=int, default=1800)
     parser.add_argument("--verification-lock-stale-sec", type=int, default=14400)
     parser.add_argument("--skip-probabilistic-coverage-check", action="store_true")
+    parser.add_argument(
+        "--pipeline-version",
+        "--pipeline_version",
+        choices=("auto", "v1", "v2"),
+        default="auto",
+        help="Gate profile selector. auto infers from runtime bundle when available.",
+    )
     args = parser.parse_args(argv)
 
     exe_path = resolve_path(args.exe_path, "Executable")
@@ -1732,6 +1773,7 @@ def main(argv=None) -> int:
             + ",".join(duplicate_names)
         )
 
+    bundle_meta: Dict[str, Any] = {}
     if not bool(args.skip_probabilistic_coverage_check):
         config_payload: Dict[str, Any] = {}
         try:
@@ -1770,6 +1812,7 @@ def main(argv=None) -> int:
                         + ", ".join(sorted(unsupported_pairs))
                         + f" | bundle={bundle_meta.get('bundle_path', '')}"
                     )
+    pipeline_version = resolve_verification_pipeline_version(args.pipeline_version, bundle_meta)
 
     if bool(args.require_higher_tf_companions):
         for dataset_path in dataset_paths:
@@ -1878,11 +1921,13 @@ def main(argv=None) -> int:
         peak_max_drawdown_pct=peak_max_drawdown_pct,
         max_drawdown_pct_limit=float(args.max_drawdown_pct),
     )
-    overall_gate_pass = str(adaptive_verdict.get("verdict", "fail")) == "pass"
+    adaptive_pass = str(adaptive_verdict.get("verdict", "fail")) == "pass"
+    overall_gate_pass = adaptive_pass
 
     report = {
         "mode": "verification_adaptive",
         "validation_profile": str(args.validation_profile),
+        "pipeline_version": str(pipeline_version),
         "data_mode": str(args.data_mode),
         "sequential_only": True,
         "generated_at": __import__("datetime").datetime.now().astimezone().isoformat(),
@@ -1935,8 +1980,41 @@ def main(argv=None) -> int:
             "baseline_report_path": str(baseline_report_path),
             "config_path": str(config_path),
             "source_config_path": str(source_config_path),
+            "runtime_bundle_path": str(bundle_meta.get("bundle_path", "")) if bundle_meta else "",
+            "runtime_bundle_version": str(bundle_meta.get("bundle_version", "")) if bundle_meta else "",
         },
     }
+    baseline_comparison_for_gate = build_baseline_comparison(
+        current_report=report,
+        baseline_report_path=baseline_report_path,
+    )
+    if pipeline_version == "v2":
+        contract = baseline_comparison_for_gate.get("non_degradation_contract", {})
+        if not isinstance(contract, dict):
+            contract = {}
+        v2_checks = {
+            "threshold_gate_pass": bool(threshold_gate_pass),
+            "adaptive_verdict_pass": bool(adaptive_pass),
+            "baseline_available": bool(baseline_comparison_for_gate.get("available", False)),
+            "dataset_set_comparable": bool(baseline_comparison_for_gate.get("comparable_dataset_set", False)),
+            "non_degradation_contract_applied": bool(contract.get("applied", False)),
+            "non_degradation_contract_pass": bool(contract.get("all_pass", False)),
+        }
+        overall_gate_pass = all(bool(x) for x in v2_checks.values())
+        report["gate_profile"] = {
+            "name": "v2_strict",
+            "checks": v2_checks,
+            "all_pass": bool(overall_gate_pass),
+        }
+    else:
+        report["gate_profile"] = {
+            "name": "v1_legacy",
+            "checks": {
+                "adaptive_verdict_pass": bool(adaptive_pass),
+            },
+            "all_pass": bool(overall_gate_pass),
+        }
+    report["overall_gate_pass"] = bool(overall_gate_pass)
     report["baseline_comparison"] = build_baseline_comparison(
         current_report=report,
         baseline_report_path=baseline_report_path,
@@ -1949,6 +2027,7 @@ def main(argv=None) -> int:
     print(f"[Verification] dataset_count={len(rows)}")
     print(f"[Verification] data_mode={args.data_mode}")
     print(f"[Verification] validation_profile={args.validation_profile}")
+    print(f"[Verification] pipeline_version={pipeline_version}")
     print(f"[Verification] avg_profit_factor={avg_profit_factor}")
     print(f"[Verification] avg_expectancy_krw={avg_expectancy_krw}")
     print(f"[Verification] overall_gate_pass={overall_gate_pass}")
@@ -1993,6 +2072,8 @@ def main(argv=None) -> int:
             f"reason={reason or 'baseline_report_missing_or_invalid'}"
         )
     print(f"[Verification] report_json={output_json}")
+    if pipeline_version == "v2" and not bool(overall_gate_pass):
+        return 2
     return 0
 
 
