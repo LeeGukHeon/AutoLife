@@ -3087,6 +3087,34 @@ BacktestEngine::Result BacktestEngine::getResult() const {
                 pa.losing_trades++;
                 pa.gross_loss_abs += std::abs(trade.profit_loss);
             }
+
+            Result::TradeHistorySample sample;
+            sample.market = trade.market;
+            sample.strategy_name = strategy_name;
+            sample.entry_archetype = archetype_label;
+            sample.regime = regime_label;
+            sample.exit_reason = reason;
+            sample.entry_time = trade.entry_time;
+            sample.exit_time = trade.exit_time;
+            sample.entry_price = trade.entry_price;
+            sample.exit_price = trade.exit_price;
+            sample.quantity = trade.quantity;
+            sample.holding_minutes = (trade.exit_time > trade.entry_time)
+                ? (static_cast<double>(trade.exit_time - trade.entry_time) / 60000.0)
+                : 0.0;
+            sample.profit_loss_krw = trade.profit_loss;
+            sample.profit_loss_pct = trade.profit_loss_pct;
+            sample.fee_paid_krw = trade.fee_paid;
+            sample.signal_filter = trade.signal_filter;
+            sample.signal_strength = trade.signal_strength;
+            sample.liquidity_score = trade.liquidity_score;
+            sample.volatility = trade.volatility;
+            sample.expected_value = trade.expected_value;
+            sample.reward_risk_ratio = trade.reward_risk_ratio;
+            sample.probabilistic_runtime_applied = trade.probabilistic_runtime_applied;
+            sample.probabilistic_h5_calibrated = trade.probabilistic_h5_calibrated;
+            sample.probabilistic_h5_margin = trade.probabilistic_h5_margin;
+            result.trade_history_samples.push_back(std::move(sample));
         }
 
         for (auto& [_, ss] : strategy_map) {

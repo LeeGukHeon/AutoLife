@@ -318,6 +318,35 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
         });
     }
 
+    j["trade_history_samples"] = nlohmann::json::array();
+    for (const auto& t : result.trade_history_samples) {
+        j["trade_history_samples"].push_back({
+            {"market", t.market},
+            {"strategy_name", t.strategy_name},
+            {"entry_archetype", t.entry_archetype},
+            {"regime", t.regime},
+            {"exit_reason", t.exit_reason},
+            {"entry_time", t.entry_time},
+            {"exit_time", t.exit_time},
+            {"entry_price", t.entry_price},
+            {"exit_price", t.exit_price},
+            {"quantity", t.quantity},
+            {"holding_minutes", t.holding_minutes},
+            {"profit_loss_krw", t.profit_loss_krw},
+            {"profit_loss_pct", t.profit_loss_pct},
+            {"fee_paid_krw", t.fee_paid_krw},
+            {"signal_filter", t.signal_filter},
+            {"signal_strength", t.signal_strength},
+            {"liquidity_score", t.liquidity_score},
+            {"volatility", t.volatility},
+            {"expected_value", t.expected_value},
+            {"reward_risk_ratio", t.reward_risk_ratio},
+            {"probabilistic_runtime_applied", t.probabilistic_runtime_applied},
+            {"probabilistic_h5_calibrated", t.probabilistic_h5_calibrated},
+            {"probabilistic_h5_margin", t.probabilistic_h5_margin}
+        });
+    }
+
     return j;
 }
 

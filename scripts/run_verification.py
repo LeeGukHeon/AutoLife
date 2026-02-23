@@ -798,6 +798,42 @@ def build_strategy_collection_diagnostics(strategy_collection_summaries: Any) ->
     }
 
 
+def build_top_loss_trade_samples(trade_history_samples: Any, limit: int = 8) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    if not isinstance(trade_history_samples, list):
+        return rows
+    for raw in trade_history_samples:
+        if not isinstance(raw, dict):
+            continue
+        profit_loss_krw = to_float(raw.get("profit_loss_krw", 0.0))
+        if profit_loss_krw >= 0.0:
+            continue
+        row = {
+            "market": str(raw.get("market", "")).strip(),
+            "strategy_name": str(raw.get("strategy_name", "")).strip(),
+            "entry_archetype": str(raw.get("entry_archetype", "")).strip(),
+            "regime": str(raw.get("regime", "")).strip(),
+            "profit_loss_krw": round(profit_loss_krw, 4),
+            "profit_loss_pct": round(to_float(raw.get("profit_loss_pct", 0.0)), 8),
+            "holding_minutes": round(to_float(raw.get("holding_minutes", 0.0)), 4),
+            "signal_filter": round(to_float(raw.get("signal_filter", 0.0)), 6),
+            "signal_strength": round(to_float(raw.get("signal_strength", 0.0)), 6),
+            "liquidity_score": round(to_float(raw.get("liquidity_score", 0.0)), 6),
+            "volatility": round(to_float(raw.get("volatility", 0.0)), 6),
+            "expected_value": round(to_float(raw.get("expected_value", 0.0)), 8),
+            "reward_risk_ratio": round(to_float(raw.get("reward_risk_ratio", 0.0)), 6),
+            "probabilistic_h5_calibrated": round(
+                to_float(raw.get("probabilistic_h5_calibrated", 0.0)),
+                8,
+            ),
+            "probabilistic_h5_margin": round(to_float(raw.get("probabilistic_h5_margin", 0.0)), 8),
+            "exit_reason": str(raw.get("exit_reason", "")).strip(),
+        }
+        rows.append(row)
+    rows.sort(key=lambda item: (to_float(item.get("profit_loss_krw", 0.0)), item.get("entry_archetype", "")))
+    return rows[: max(0, int(limit))]
+
+
 def build_dataset_diagnostics(dataset_name: str, backtest_result: Dict[str, Any]) -> Dict[str, Any]:
     entry_funnel = backtest_result.get("entry_funnel", {})
     if not isinstance(entry_funnel, dict):
@@ -962,6 +998,10 @@ def build_dataset_diagnostics(dataset_name: str, backtest_result: Dict[str, Any]
         backtest_result.get("strategy_collection_summaries", [])
     )
     post_entry_telemetry = parse_post_entry_risk_telemetry(backtest_result)
+    top_loss_trade_samples = build_top_loss_trade_samples(
+        backtest_result.get("trade_history_samples", []),
+        limit=10,
+    )
 
     return {
         "dataset": dataset_name,
@@ -1006,6 +1046,7 @@ def build_dataset_diagnostics(dataset_name: str, backtest_result: Dict[str, Any]
         "top_entry_quality_edge_gap_buckets": top_pattern_rows(edge_gap_bucket_counts, limit=5),
         "pattern_cell_profit_map": pattern_profit_map,
         "top_loss_pattern_cells": top_loss_pattern_cells(pattern_profit_map, limit=6),
+        "top_loss_trade_samples": top_loss_trade_samples,
         "strategy_funnel": strategy_diag,
         "strategy_collection": strategy_collection_diag,
         "post_entry_risk_telemetry": post_entry_telemetry,

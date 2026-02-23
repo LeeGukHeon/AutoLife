@@ -21,7 +21,7 @@ Last updated: 2026-02-24
 - Master spec baseline: `docs/_codex/MASTER_SPEC.md`
 - Execution mode target: Mode A (baseline-preserving), extensions behind flags
 - Current active ticket label:
-  - `Strict Order 4-1` (loss-tail minimums tightening for ranging range-pullback cells)
+  - `Strict Order 4-2` (trade-level loss-tail diagnostics for ETH/SOL remediation planning)
 - Current implementation focus:
   - Ticket 0: docs/bootstrap reliability pack (implemented in current working tree)
   - Ticket 1: dynamic universe + scope-aware 1m fetch/build strictness (implemented in current working tree)
@@ -55,6 +55,10 @@ Last updated: 2026-02-24
     - shared regime/archetype helpers moved into `common::signal_policy` (`isHostileRegime`, `isRangePullbackLossTailRiskCell`)
     - `passesProbabilisticPrimaryMinimums` now applies explicit range-pullback quality floors in ranging regime (same logic in `src/runtime/BacktestRuntime.cpp` and `src/runtime/LiveTradingRuntime.cpp`)
     - legacy gate-profile labels normalized: verification/shadow `v1_legacy` -> `v1` (`scripts/run_verification.py`, `scripts/generate_probabilistic_shadow_report.py`)
+  - Strict Order 4-2 diagnostics instrumentation added:
+    - Backtest JSON now exports per-trade `trade_history_samples` (`include/runtime/BacktestRuntime.h`, `src/runtime/BacktestRuntime.cpp`, `src/app/BacktestCliHandler.cpp`)
+    - verification diagnostics now exports `top_loss_trade_samples` per dataset (`scripts/run_verification.py`)
+    - regression coverage added for new verification diagnostics (`scripts/test_verification_risk_tail_decomposition.py`)
 
 ## Last known gate status
 - Strict feature validation: run required after any feature/build changes
@@ -123,6 +127,21 @@ Last updated: 2026-02-24
     - `avg_total_trades=11.0` (`gate_avg_trades_pass=true`, threshold=10)
     - `candidate_generation.no_signal_generated share: 0.733 -> 0.709`
     - residual: ETH/SOL expectancy still negative (`ETH=-1.3339`, `SOL=-7.5916`)
+- Latest Step-4 diagnostics pass (`Strict Order 4-2`, pipeline=`v1`):
+  - instrumentation-only verification:
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step4t_diag_instrumentation_only.json`
+  - result (baseline-equivalent gate quality preserved):
+    - `overall_gate_pass=true`
+    - `adaptive_verdict=pass`
+    - `avg_profit_factor=2.6923`
+    - `avg_expectancy_krw=12.1637`
+    - `avg_total_trades=11.0`
+    - `candidate_generation.no_signal_generated share=0.709`
+  - new evidence path:
+    - `diagnostics.per_dataset[].top_loss_trade_samples` populated (ETH=4, SOL=10 in latest report)
+- Step-4 experiment note (discarded):
+  - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step4s_uptrend_cont_guard_v1.json`
+  - failed fail-closed (`avg_total_trades=9.8`, `sample_size_guard_pass=false`, `risk_adjusted_score_guard_pass=false`), therefore not retained.
 - Shadow/live staged enable: not active by default
 
 ## Known issues / watchpoints

@@ -2,7 +2,9 @@
 import unittest
 
 from run_verification import (
+    build_dataset_diagnostics,
     build_loss_tail_decomposition,
+    build_top_loss_trade_samples,
     build_risk_adjusted_failure_decomposition,
     compute_risk_adjusted_score_components,
 )
@@ -101,6 +103,93 @@ class VerificationRiskTailDecompositionTest(unittest.TestCase):
         self.assertGreater(float(out.get("score_gap_to_threshold", 0.0)), 0.0)
         self.assertTrue(list(out.get("dominant_penalties", [])))
         self.assertTrue(list(out.get("recommended_focus", [])))
+
+    def test_build_top_loss_trade_samples_filters_and_sorts_losses(self):
+        trade_history_samples = [
+            {
+                "market": "KRW-BTC",
+                "strategy_name": "s1",
+                "entry_archetype": "A1",
+                "regime": "RANGING",
+                "profit_loss_krw": -100.0,
+                "profit_loss_pct": -0.01,
+                "holding_minutes": 5.0,
+                "signal_filter": 0.7,
+                "signal_strength": 0.6,
+                "liquidity_score": 0.8,
+                "volatility": 0.2,
+                "expected_value": -0.3,
+                "reward_risk_ratio": 0.9,
+                "probabilistic_h5_calibrated": 0.55,
+                "probabilistic_h5_margin": 0.03,
+                "exit_reason": "StopLoss",
+            },
+            {
+                "market": "KRW-ETH",
+                "strategy_name": "s2",
+                "entry_archetype": "A2",
+                "regime": "RANGING",
+                "profit_loss_krw": -350.0,
+                "profit_loss_pct": -0.025,
+                "holding_minutes": 10.0,
+                "signal_filter": 0.5,
+                "signal_strength": 0.4,
+                "liquidity_score": 0.6,
+                "volatility": 0.3,
+                "expected_value": -0.5,
+                "reward_risk_ratio": 0.7,
+                "probabilistic_h5_calibrated": 0.51,
+                "probabilistic_h5_margin": 0.01,
+                "exit_reason": "TimeStop",
+            },
+            {
+                "market": "KRW-SOL",
+                "strategy_name": "s3",
+                "entry_archetype": "A3",
+                "regime": "TRENDING_UP",
+                "profit_loss_krw": 40.0,
+            },
+        ]
+        out = build_top_loss_trade_samples(trade_history_samples, limit=2)
+        self.assertEqual(2, len(out))
+        self.assertEqual("KRW-ETH", str(out[0].get("market", "")))
+        self.assertLess(float(out[0].get("profit_loss_krw", 0.0)), float(out[1].get("profit_loss_krw", 0.0)))
+        self.assertNotEqual("KRW-SOL", str(out[0].get("market", "")))
+
+    def test_build_dataset_diagnostics_includes_top_loss_trade_samples(self):
+        backtest_result = {
+            "entry_funnel": {},
+            "candidate_generation": {},
+            "sizing_diagnostics": {},
+            "strategy_summaries": [],
+            "pattern_summaries": [],
+            "strategy_signal_funnel": [],
+            "strategy_collection_summaries": [],
+            "risk_telemetry": {},
+            "trade_history_samples": [
+                {
+                    "market": "KRW-SOL",
+                    "strategy_name": "s1",
+                    "entry_archetype": "A1",
+                    "regime": "RANGING",
+                    "profit_loss_krw": -77.0,
+                    "profit_loss_pct": -0.01,
+                },
+                {
+                    "market": "KRW-BTC",
+                    "strategy_name": "s2",
+                    "entry_archetype": "A2",
+                    "regime": "TRENDING_UP",
+                    "profit_loss_krw": 11.0,
+                    "profit_loss_pct": 0.002,
+                },
+            ],
+        }
+        out = build_dataset_diagnostics("d.csv", backtest_result)
+        samples = list(out.get("top_loss_trade_samples", []))
+        self.assertEqual(1, len(samples))
+        self.assertEqual("KRW-SOL", str(samples[0].get("market", "")))
+        self.assertAlmostEqual(-77.0, float(samples[0].get("profit_loss_krw", 0.0)))
 
 
 if __name__ == "__main__":

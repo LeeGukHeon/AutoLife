@@ -62,6 +62,31 @@ public:
             double avg_profit_krw = 0.0;
             double profit_factor = 0.0;
         };
+        struct TradeHistorySample {
+            std::string market;
+            std::string strategy_name;
+            std::string entry_archetype;
+            std::string regime;
+            std::string exit_reason;
+            long long entry_time = 0;
+            long long exit_time = 0;
+            double entry_price = 0.0;
+            double exit_price = 0.0;
+            double quantity = 0.0;
+            double holding_minutes = 0.0;
+            double profit_loss_krw = 0.0;
+            double profit_loss_pct = 0.0;
+            double fee_paid_krw = 0.0;
+            double signal_filter = 0.0;
+            double signal_strength = 0.0;
+            double liquidity_score = 0.0;
+            double volatility = 0.0;
+            double expected_value = 0.0;
+            double reward_risk_ratio = 0.0;
+            bool probabilistic_runtime_applied = false;
+            double probabilistic_h5_calibrated = 0.0;
+            double probabilistic_h5_margin = 0.0;
+        };
         struct EntryFunnelSummary {
             int entry_rounds = 0;
             int skipped_due_to_open_position = 0;
@@ -213,6 +238,7 @@ public:
         std::map<std::string, int> intrabar_collision_by_strategy;
         std::vector<StrategySummary> strategy_summaries;
         std::vector<PatternSummary> pattern_summaries;
+        std::vector<TradeHistorySample> trade_history_samples;
         std::vector<StrategySignalFunnel> strategy_signal_funnel;
         std::vector<StrategyCollectionSummary> strategy_collection_summaries;
         int strategy_collect_exception_count = 0;
