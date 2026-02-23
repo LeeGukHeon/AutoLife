@@ -1,6 +1,6 @@
 # MODE B / v2 Restructure Plan (Optional)
 Last updated: 2026-02-23
-Status: Phase 2 implemented + Phase 3 partial + Phase 4 partial (v2 gate profile)
+Status: Phase 2 implemented + Phase 3 partial + Phase 4 partial + Phase 5 partial
 
 ## Goal
 - Prepare optional MODE B migration with explicit v2 contracts.
@@ -29,7 +29,7 @@ Status: Phase 2 implemented + Phase 3 partial + Phase 4 partial (v2 gate profile
 4. Gate redefinition (partial implemented):
    - define parity/verification criteria specifically for v2.
    - keep v1 gate rules unchanged.
-5. Promotion:
+5. Promotion (partial implemented):
    - run shadow + staged live with v2 bundle only after v2 gates pass.
 
 ## Exit criteria for full Ticket 7 completion
@@ -82,3 +82,19 @@ Status: Phase 2 implemented + Phase 3 partial + Phase 4 partial (v2 gate profile
   - optional `--run-verification` step added
   - passes `--pipeline-version` through to verification gate
   - allows v2 draft cycle to fail fast on strict verification gate failure
+
+## Implemented in Phase 5 (partial)
+- `scripts/evaluate_probabilistic_promotion_readiness.py`
+  - fail-closed promotion readiness evaluation for:
+    - Gate1 feature validation
+    - Gate2 parity
+    - Gate3 verification
+    - Gate4 shadow (required for `target-stage=live_enable`)
+    - Gate5 pre-live safety (`allow_live_orders=false` required before live enable)
+  - v2 checks:
+    - strict gate-profile consistency
+    - pipeline consistency across gate artifacts
+- `scripts/run_probabilistic_hybrid_cycle.py`
+  - optional `--evaluate-promotion-readiness` step
+  - supports `--promotion-target-stage prelive|live_enable`
+  - supports `--promotion-shadow-report-json` for live-enable readiness

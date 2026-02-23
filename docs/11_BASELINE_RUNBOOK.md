@@ -153,6 +153,25 @@ python scripts/run_probabilistic_hybrid_cycle.py `
   --universe-file ".\config\universe\runtime_universe.json" `
   --run-verification `
   --verification-datasets "upbit_KRW_BTC_1m_2024.csv,upbit_KRW_ETH_1m_2024.csv"
+
+# Optional: promotion readiness evaluation (prelive)
+python scripts/run_probabilistic_hybrid_cycle.py `
+  --pipeline-version v2 `
+  --universe-file ".\config\universe\runtime_universe.json" `
+  --run-verification `
+  --verification-datasets "upbit_KRW_BTC_1m_2024.csv,upbit_KRW_ETH_1m_2024.csv" `
+  --evaluate-promotion-readiness `
+  --promotion-target-stage prelive
+
+# Optional: promotion readiness evaluation (live enable; shadow report required)
+python scripts/run_probabilistic_hybrid_cycle.py `
+  --pipeline-version v2 `
+  --universe-file ".\config\universe\runtime_universe.json" `
+  --run-verification `
+  --verification-datasets "upbit_KRW_BTC_1m_2024.csv,upbit_KRW_ETH_1m_2024.csv" `
+  --evaluate-promotion-readiness `
+  --promotion-target-stage live_enable `
+  --promotion-shadow-report-json ".\build\Release\logs\probabilistic_shadow_report_latest.json"
 ```
 
 ## 10) EXT-55 optional runtime regime policy (default OFF)

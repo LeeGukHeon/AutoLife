@@ -100,6 +100,26 @@ def parse_args(argv=None) -> argparse.Namespace:
         "--verification-baseline-report-path",
         default=r".\build\Release\logs\verification_report_baseline_current.json",
     )
+    parser.add_argument("--evaluate-promotion-readiness", action="store_true")
+    parser.add_argument(
+        "--promotion-target-stage",
+        choices=("prelive", "live_enable"),
+        default="prelive",
+    )
+    parser.add_argument(
+        "--promotion-shadow-report-json",
+        default="",
+        help="Required for promotion target live_enable.",
+    )
+    parser.add_argument(
+        "--promotion-runtime-config-json",
+        default=r".\build\Release\config\config.json",
+    )
+    parser.add_argument(
+        "--promotion-output-json",
+        default="",
+        help="Optional explicit output path. Empty -> run-tag based log path.",
+    )
     return parser.parse_args(argv)
 
 
@@ -149,6 +169,10 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     if str(args.sample_mode) in ("dollar", "volatility") and float(args.sample_threshold) <= 0.0:
         raise ValueError("--sample-threshold must be > 0 when --sample-mode is dollar or volatility")
+    if bool(args.evaluate_promotion_readiness) and not bool(args.run_verification):
+        raise ValueError("--evaluate-promotion-readiness requires --run-verification")
+    if str(args.promotion_target_stage).strip().lower() == "live_enable" and not str(args.promotion_shadow_report_json).strip():
+        raise ValueError("--promotion-shadow-report-json is required when --promotion-target-stage live_enable")
     pipeline_version = str(args.pipeline_version).strip().lower()
     run_tag = str(args.run_tag).strip() or datetime.now().strftime("%Y%m%d_%H%M%S")
     py = str(args.python_exe)
@@ -432,6 +456,37 @@ def main(argv=None) -> int:
             dump_json(cycle_summary_json, {"run_tag": run_tag, "status": "failed", "steps": steps})
             return int(steps[-1]["returncode"] or 2)
 
+    promotion_readiness_json = (
+        resolve_repo_path(args.promotion_output_json)
+        if str(args.promotion_output_json).strip()
+        else (log_dir / f"probabilistic_promotion_readiness_{run_tag}.json")
+    )
+    if bool(args.evaluate_promotion_readiness):
+        promotion_cmd = [
+            py,
+            str(resolve_repo_path(r".\scripts\evaluate_probabilistic_promotion_readiness.py")),
+            "--feature-validation-json",
+            str(feature_validation_json),
+            "--parity-json",
+            str(parity_json),
+            "--verification-json",
+            str(verification_report_json),
+            "--runtime-config-json",
+            str(resolve_repo_path(args.promotion_runtime_config_json)),
+            "--target-stage",
+            str(args.promotion_target_stage),
+            "--pipeline-version",
+            str(pipeline_version),
+            "--output-json",
+            str(promotion_readiness_json),
+        ]
+        if str(args.promotion_shadow_report_json).strip():
+            promotion_cmd.extend(["--shadow-report-json", str(resolve_repo_path(args.promotion_shadow_report_json))])
+        steps.append(run_step("evaluate_promotion_readiness", promotion_cmd))
+        if not steps[-1]["ok"]:
+            dump_json(cycle_summary_json, {"run_tag": run_tag, "status": "failed", "steps": steps})
+            return int(steps[-1]["returncode"] or 2)
+
     status = "pass"
 
     summary = {
@@ -446,6 +501,8 @@ def main(argv=None) -> int:
         "sample_lookback_minutes": int(args.sample_lookback_minutes),
         "ensemble_k": int(args.ensemble_k),
         "run_verification": bool(args.run_verification),
+        "evaluate_promotion_readiness": bool(args.evaluate_promotion_readiness),
+        "promotion_target_stage": str(args.promotion_target_stage),
         "paths": {
             "backtest_dir": str(backtest_dir),
             "feature_dir": str(feature_dir),
@@ -455,6 +512,7 @@ def main(argv=None) -> int:
             "train_summary_json": str(train_summary_json),
             "parity_json": str(parity_json),
             "verification_report_json": str(verification_report_json) if bool(args.run_verification) else "",
+            "promotion_readiness_json": str(promotion_readiness_json) if bool(args.evaluate_promotion_readiness) else "",
         },
         "steps": steps,
     }

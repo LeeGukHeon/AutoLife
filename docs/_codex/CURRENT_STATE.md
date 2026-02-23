@@ -28,6 +28,7 @@ Last updated: 2026-02-23
   - Optional Ticket 7 (MODE B): Phase 3 partial implemented (strict version/pipeline fail-closed checks)
   - Optional Ticket 7 (MODE B): Phase 4 partial implemented (v2 parity/verification strict gate profile)
   - Optional Ticket 7 (MODE B): hybrid cycle optional verification-step wiring implemented
+  - Optional Ticket 7 (MODE B): Phase 5 partial implemented (promotion readiness evaluator + hybrid wiring)
 
 ## Last known gate status
 - Strict feature validation: run required after any feature/build changes

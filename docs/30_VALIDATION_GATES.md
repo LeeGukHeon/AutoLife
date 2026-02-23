@@ -56,11 +56,26 @@ Requirements:
 - `allow_live_orders=false`
 - compare decision logs against backtest using same bundle and same candles
 
+Readiness evaluator command (live_enable target requires shadow report):
+```powershell
+python scripts/evaluate_probabilistic_promotion_readiness.py `
+  --target-stage live_enable `
+  --pipeline-version v2 `
+  --feature-validation-json ".\build\Release\logs\probabilistic_feature_validation_summary.json" `
+  --parity-json ".\build\Release\logs\probabilistic_runtime_bundle_parity.json" `
+  --verification-json ".\build\Release\logs\verification_report.json" `
+  --shadow-report-json ".\build\Release\logs\probabilistic_shadow_report_latest.json" `
+  --runtime-config-json ".\build\Release\config\config.json"
+```
+
 ## Gate 5: Staged live enable
 Requirements:
 - only after Gate 4 pass
 - start with minimal tier/caps
 - increase caps gradually with monitoring and rollback path
+
+Evaluator output:
+- `status=pass` and `promotion_ready=true` are required before staged live enable.
 
 ## Global enforcement
 - Unknown state = fail.
