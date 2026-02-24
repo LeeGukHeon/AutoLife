@@ -1193,6 +1193,18 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
       - 즉시 코드 롤백 후 기준선 복구 확인:
         - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ad_rollback_seq.json`
         - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ad_rollback_seq.json`
+  - 기준선 고정(step8ad backtest risk-manager-exit bridge restore):
+    - 배경:
+      - `src/runtime/BacktestRuntime.cpp`의 `risk_manager_exit` bridge가 빠진 상태에서는
+        동일 코드 기준에서도 daily OOS가 `status=fail`로 드리프트됨을 확인.
+    - 조치:
+      - bridge 3줄(조건/이유 라벨)을 기준선으로 복구/유지.
+    - 복구 검증:
+      - verification:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_backtest_bridge_restore.json`
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_backtest_bridge_restore.json`
+        - `status=pass`, `nonpositive_day_ratio=0.3`, `total_profit_sum=246.968137`
 
 ## Next (Strict Order)
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:

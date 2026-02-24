@@ -2197,6 +2197,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 current_price,
                 (candle.timestamp - position->entry_time) / 1000.0 // holding seconds
             );
+            const bool risk_manager_exit = risk_manager_->shouldExitPosition(market_name_);
             
             // Check Stop Loss / Take Profit (RiskManager handled?)
             // RiskManager::managePositions usually checks SL/TP. 
@@ -2340,7 +2341,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
                         risk_manager_->exitPosition(market_name_, tp2_fill, "TakeProfit2");
                         notifyStrategyClosed(closed_position, tp2_fill);
                         position = nullptr;
-                    } else if (should_exit) {
+                    } else if (should_exit || risk_manager_exit) {
                         const risk::Position closed_position = *position;
                         const auto strategy_exit_slippage = computeDynamicSlippageThresholds(
                             engine_config_,
@@ -2364,7 +2365,8 @@ void BacktestEngine::processCandle(const Candle& candle) {
                         order.price = current_price * (1.0 - strategy_exit_fill_slippage);
                         order.strategy_name = position->strategy_name;
                         executeOrder(order, order.price);
-                        risk_manager_->exitPosition(market_name_, order.price, "StrategyExit");
+                        const std::string exit_reason = risk_manager_exit ? "RiskManagerExit" : "StrategyExit";
+                        risk_manager_->exitPosition(market_name_, order.price, exit_reason);
                         notifyStrategyClosed(closed_position, order.price);
                         position = nullptr;
                     }

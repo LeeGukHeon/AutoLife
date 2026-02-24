@@ -3,7 +3,7 @@ Last updated: 2026-02-24
 
 ## Repository
 - Branch: `main`
-- Commit snapshot (pushed): `d8f6656`
+- Commit snapshot (pushed): `9572bd6`
 
 ## Active ticket
 - Source of truth: `docs/_codex/ACTIVE_TICKET.md`
@@ -21,7 +21,7 @@ Last updated: 2026-02-24
 
 ## Latest gate snapshot (runtime tuning path)
 - Verification report:
-  - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ad_rollback_seq.json`
+  - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_backtest_bridge_restore.json`
 - Result:
   - `overall_gate_pass=true`
   - `adaptive_verdict=pass`
@@ -31,7 +31,7 @@ Last updated: 2026-02-24
 
 ## Daily OOS snapshot (Gate3 supplement)
 - Report:
-  - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ad_rollback_seq.json`
+  - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_backtest_bridge_restore.json`
 - Result:
   - `status=pass`
   - `evaluated_day_count=10`
@@ -159,6 +159,10 @@ Last updated: 2026-02-24
     - rollback:
       - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ad_rollback_seq.json`
       - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ad_rollback_seq.json`
+  - backtest risk-manager-exit bridge restore (retained baseline fix):
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_backtest_bridge_restore.json`
+    - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_backtest_bridge_restore.json`
+    - outcome: 기준선 복구 확인 (`nonpositive_day_ratio=0.3`, `total_profit_sum=246.968137`).
 
 ## Gate4 shadow flow snapshot
 - Flow report:

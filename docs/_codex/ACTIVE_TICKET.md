@@ -305,6 +305,16 @@ Last updated: 2026-02-24
       - discarded + rollback confirmed:
         - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ad_rollback_seq.json`
         - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ad_rollback_seq.json`
+  - baseline fix retained (`step8ad` backtest risk-manager-exit bridge restore):
+    - reports:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_backtest_bridge_restore.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_backtest_bridge_restore.json`
+    - outcome:
+      - verification/daily 기준선 재현:
+        `avg_profit_factor=2.9577`, `avg_expectancy_krw=14.7159`,
+        `nonpositive_day_ratio=0.3`, `total_profit_sum=246.968137`
+    - action:
+      - `src/runtime/BacktestRuntime.cpp` bridge 코드를 기준선으로 유지.
 
 ## DoD
 - [x] residual negative-day trade-level evidence captured.
