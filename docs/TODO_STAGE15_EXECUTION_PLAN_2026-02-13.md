@@ -561,6 +561,36 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
   - 폐기 실험(무변화):
     - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step6k_uptrend_relief_plus_v1.json`
     - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step6m_downtrend_rebound_imbalance_relax2_v1.json`
+- [x] Strict Order 4 12차: 일별 OOS 안정성 보조 게이트 추가(과최적화 방지 근거 경로).
+  - code:
+    - `scripts/run_daily_oos_stability.py`
+    - `scripts/test_daily_oos_stability.py`
+  - 핵심:
+    - `Gate3` 보조 검증으로 `day-sliced OOS` 리포트(JSON/CSV) 생성 경로 추가.
+    - fail-closed 체크:
+      - `min_evaluated_days`
+      - `max_nonpositive_day_ratio`
+      - `max_day_drawdown_pct`
+      - `positive_profit_sum`
+    - multi-day 실행 시 companion 파일 혼선 방지를 위해 `dataset/day` 단위 임시 디렉터리 격리 적용.
+    - loss-tail 근거 강화를 위해 `regime|archetype` 셀별 손익 분해(`aggregate_loss_cells`) 출력 추가.
+  - 문서 반영:
+    - `docs/30_VALIDATION_GATES.md`
+    - `docs/11_BASELINE_RUNBOOK.md`
+    - `docs/_codex/*` workflow 정렬 + active ticket 추적 보강
+  - 검증:
+    - `python scripts/test_daily_oos_stability.py` (`OK`)
+    - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_fix2.json`
+  - 결과(`BTC/ETH/XRP`, 7일, `warmup=-1`, `min_rows=720`):
+    - `status=fail` (fail-closed 정상)
+    - `evaluated_day_count=15` (`min_evaluated_days`는 통과)
+    - `nonpositive_day_ratio=1.0` (`threshold=0.45`, 실패)
+    - `total_profit_sum=-5118.106841` (`positive_profit_sum` 실패)
+    - `peak_day_drawdown_pct=5.483792` (`threshold=12.0`, 통과)
+    - heavy-loss cell:
+      - `RANGING|CORE_RESCUE_SHOULD_ENTER`
+      - `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER`
+      - `RANGING|PROBABILISTIC_PRIMARY_RUNTIME`
 
 ## Next (Strict Order)
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:

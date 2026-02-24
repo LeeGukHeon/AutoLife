@@ -136,6 +136,18 @@ python scripts/run_verification.py
 # Optional MODE B / v2 strict gate
 python scripts/run_verification.py `
   --pipeline-version v2
+
+# Recommended anti-overfit supplement (day-sliced OOS stability)
+python scripts/run_daily_oos_stability.py `
+  --datasets "upbit_KRW_BTC_1m_12000.csv,upbit_KRW_ETH_1m_12000.csv,upbit_KRW_XRP_1m_12000.csv" `
+  --days 7 `
+  --warmup-days -1 `
+  --min-rows-per-day 720 `
+  --min-trades-per-day 1 `
+  --gate-min-evaluated-days 10 `
+  --gate-max-nonpositive-ratio 0.45 `
+  --gate-max-day-dd-pct 12.0 `
+  --output-json ".\build\Release\logs\daily_oos_stability_report.json"
 ```
 
 ## 9) Optional all-in-one cycle

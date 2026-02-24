@@ -1,8 +1,9 @@
 # PR Checklist (Mandatory)
-Last updated: 2026-02-23
+Last updated: 2026-02-24
 
 ## Scope and baseline
 - [ ] Ticket scope is explicit and matches `TICKET_TEMPLATE`.
+- [ ] Active ticket snapshot exists and is current (`docs/_codex/ACTIVE_TICKET.md`).
 - [ ] Baseline behavior is unchanged unless explicitly versioned.
 - [ ] New functionality is behind flag(s) when required.
 

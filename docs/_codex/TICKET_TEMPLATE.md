@@ -1,11 +1,14 @@
 # Ticket Template (Mandatory)
-Last updated: 2026-02-23
+Last updated: 2026-02-24
 
 ## Header
 - Ticket ID:
+- Master Ticket Number (`0`-`7` or `N/A`):
+- Sub-ticket / Experiment ID:
 - Title:
 - Owner:
 - Date:
+- Status: `planned|in_progress|blocked|done`
 - Mode:
   - `A` baseline-preserving
   - `B` full restructure/v2

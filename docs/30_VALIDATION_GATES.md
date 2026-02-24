@@ -67,6 +67,28 @@ Risk-adjusted decomposition (diagnostic, fail-closed support):
   - `adaptive_validation.risk_adjusted_failure_decomposition`
 - use these fields to identify heavy-loss tail concentration by regime/archetype without market hardcoding.
 
+Daily OOS stability supplement (recommended before Gate4/Gate5 promotion):
+- Purpose:
+  - add day-sliced robustness evidence to reduce overfit risk from fixed-set-only verification.
+- Command:
+```powershell
+python scripts/run_daily_oos_stability.py `
+  --datasets "upbit_KRW_BTC_1m_12000.csv,upbit_KRW_ETH_1m_12000.csv,upbit_KRW_XRP_1m_12000.csv" `
+  --days 7 `
+  --warmup-days -1 `
+  --min-rows-per-day 720 `
+  --min-trades-per-day 1 `
+  --gate-min-evaluated-days 10 `
+  --gate-max-nonpositive-ratio 0.45 `
+  --gate-max-day-dd-pct 12.0 `
+  --output-json ".\build\Release\logs\daily_oos_stability_report.json"
+```
+- Pass criteria:
+  - `status=pass`
+  - `overall_pass=true`
+  - zero `gate_fail_reasons`
+  - keep strict `allow_live_orders=false` regardless until Gate4 and Gate5 pass.
+
 ## Gate 4: Shadow run (live orders disabled)
 Requirements:
 - `allow_live_orders=false`

@@ -29,6 +29,7 @@ Last updated: 2026-02-23
 ## Codex session reliability
 - `docs/_codex/BOOTSTRAP.md`
 - `docs/_codex/CURRENT_STATE.md`
+- `docs/_codex/ACTIVE_TICKET.md`
 - `docs/_codex/CONTEXT_REFRESH_PROTOCOL.md`
 - `docs/_codex/TICKET_TEMPLATE.md`
 - `docs/_codex/PR_CHECKLIST.md`

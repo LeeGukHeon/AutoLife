@@ -1,317 +1,82 @@
-# Current State
+﻿# Current State
 Last updated: 2026-02-24
 
 ## Repository
-- Branch: current working branch (check with `git branch --show-current`)
-- Commit (snapshot): check with `git rev-parse HEAD`
+- Branch: `main`
+- Commit snapshot: `2fe30ab3b901bf4d7d702a7e110904f3d96225c8`
+
+## Active ticket
+- Source of truth: `docs/_codex/ACTIVE_TICKET.md`
+- Current: `SO4-12-DAILY-OOS-20260224` (`Strict-Order-4-12`, Mode `A`, status `done`)
+
+## Master ticket progress (0-7)
+- Ticket 0 (Codex bootstrap pack): implemented; this turn is alignment follow-up.
+- Ticket 1 (dynamic universe + scope-aware 1m): implemented.
+- Ticket 2 (purged walk-forward + embargo): implemented.
+- Ticket 3 (conditional cost model): implemented.
+- Ticket 4 (regime spec hardening): implemented.
+- Ticket 5 (uncertainty ensemble): implemented.
+- Ticket 6 (event sampling): implemented.
+- Ticket 7 (MODE B / v2): partially implemented behind strict pipeline guards.
 
 ## Contract hashes
-- `config/model/probabilistic_feature_contract_v1.json`:
+- `config/model/probabilistic_feature_contract_v1.json`
   - `c0c8f87df95be43ce6dd9526ed9c31b674e211bf187b365f2022439e68f1084e`
-- `config/model/probabilistic_feature_contract_v2.json`:
+- `config/model/probabilistic_feature_contract_v2.json`
   - `8dc014f9a52305dc26bce0b6c8cc7a10cb3047ddfeb725aad09f62a8140704f6`
-- `config/model/probabilistic_runtime_bundle_v1.json`:
+- `config/model/probabilistic_runtime_bundle_v1.json`
   - `fddbfe3514e1e2d726c5c6cd58b6105fda50459c038ae283acb5af14aacdba84`
-- `config/model/probabilistic_runtime_bundle_v2.json`:
+- `config/model/probabilistic_runtime_bundle_v2.json`
   - `d9f2749382e931488f4d0e2fa03f367db4effc180f846d232a83816c7fbfdc3e`
-- `data/backtest_probabilistic/probabilistic_bundle_manifest.json`:
+- `data/backtest_probabilistic/probabilistic_bundle_manifest.json`
   - `6c6568cbfc5349332e1899fb9ac154d3f372de09ccd51ad8d24e91a75591f89a`
 
-## Active direction
-- Master spec baseline: `docs/_codex/MASTER_SPEC.md`
-- Execution mode target: Mode A (baseline-preserving), extensions behind flags
-- Current active ticket label:
-  - `Strict Order 4-11` (downtrend rebound imbalance micro-relax for additional no-signal reduction)
-- Current implementation focus:
-  - Ticket 0: docs/bootstrap reliability pack (implemented in current working tree)
-  - Ticket 1: dynamic universe + scope-aware 1m fetch/build strictness (implemented in current working tree)
-  - Ticket 2: purged walk-forward + embargo split option (implemented)
-  - Ticket 3: conditional cost model isomorphism (implemented in current working tree)
-  - Ticket 4: explicit probabilistic regime spec + runtime actions (implemented in current working tree)
-  - Ticket 5: uncertainty ensemble + confidence-aware sizing (implemented)
-  - Ticket 6: event sampling (time|dollar|volatility) for training rows (implemented in current working tree)
-  - Optional Ticket 7 (MODE B): Phase 1 transitional contract freeze (`v2_draft` row schema explicit) implemented
-  - Optional Ticket 7 (MODE B): v2 draft kickoff + Phase 2 pipeline branching (`v1|v2` switches) implemented
-  - Optional Ticket 7 (MODE B): Phase 3 expanded (runtime v2 strict field presence + version/pipeline fail-closed checks)
-  - Optional Ticket 7 (MODE B): Phase 4 expanded (Gate1 + Gate2 + Gate3 v2 strict profile alignment)
-  - Optional Ticket 7 (MODE B): hybrid cycle optional verification-step wiring implemented
-  - Optional Ticket 7 (MODE B): Phase 5 expanded (promotion readiness evaluator + hybrid wiring, includes Gate1 preflight/profile checks and Gate4 shadow pipeline/profile checks)
-  - Optional Ticket 7 (MODE B): runtime strictness regression test added (`AutoLifeProbBundleContractTest`)
-  - Optional Ticket 7 (MODE B): shadow report strict validator + hybrid cycle integration (`validate_probabilistic_shadow_report.py`, `--validate-shadow-report`) implemented
-  - Optional Ticket 7 (MODE B): shadow report generator + decision-log evidence path implemented (`generate_probabilistic_shadow_report.py`, `--generate-shadow-report`, backtest policy decision artifact)
-  - Optional Ticket 7 (MODE B): hybrid cycle arg guard hardened (shadow generate/validate flags are fail-closed outside promotion evaluation mode) + regression tests added
-  - Optional Ticket 7 (MODE B): live policy decision audit reset on engine start (stale shadow comparison contamination guard)
-  - Codex context refresh helper implemented (`scripts/run_codex_context_refresh_checks.py`) and wired into bootstrap/protocol docs
-  - Ticket 1 universe-scope behavior regression tests added (`scripts/test_probabilistic_universe_scope.py`)
-  - Optional Ticket 7 (MODE B): standalone Gate4 flow runner implemented (`scripts/run_probabilistic_shadow_gate_flow.py`) + regression tests
-  - API policy hardening: `scripts/fetch_upbit_historical_candles.py` now enforces `Remaining-Req sec==0` boundary throttle+jitter, bounded 429/418 backoff cap, defensive Origin-header stripping, and richer compliance telemetry (endpoint/params/status/latency/retry).
-  - Runtime API policy hardening: `src/execution/RateLimiter.cpp` + `src/network/UpbitHttpClient.cpp` now apply sec==0 throttle evidence, bounded 429 exponential backoff path, and defensive Origin-header stripping in request header assembly.
-  - Codex context refresh checks now enforce gate-output fail-closed semantics (`scripts/run_codex_context_refresh_checks.py`): feature/parity require `status=pass`, runtime verification requires `overall_gate_pass=true`.
-  - Standalone Gate4 flow runner now auto-resolves latest run-tagged inputs when default canonical files are absent (`scripts/run_probabilistic_shadow_gate_flow.py`) and records resolution metadata.
-  - Verification diagnostics hardened for TODO Step-1 decomposition: `scripts/run_verification.py` now emits risk-score component breakdown + heavy-loss tail decomposition (pattern/regime/archetype) via `adaptive_validation.risk_adjusted_failure_decomposition`.
-  - Global trainer target-flex parity fix: `scripts/train_probabilistic_pattern_model_global.py` now actually consumes `--h1-target-column/--h5-target-column/--edge-column`, applies edge fallback parity, and feeds `train_edge` for the edge regressor head; regression tests added (`scripts/test_train_probabilistic_pattern_model_global.py`).
-  - Hybrid cycle now exposes strict-order Step-2 experiment switches end-to-end: triple-barrier build flags + global training target-column/head flags are wired in `scripts/run_probabilistic_hybrid_cycle.py` with fail-closed argument guards; regression tests updated (`scripts/test_probabilistic_hybrid_cycle_args.py`).
-  - Strict Order Step-3 entry-quality rebalance (phase-1) applied to live/backtest parity paths:
-    - shared regime/archetype helpers moved into `common::signal_policy` (`isHostileRegime`, `isRangePullbackLossTailRiskCell`)
-    - `passesProbabilisticPrimaryMinimums` now applies explicit range-pullback quality floors in ranging regime (same logic in `src/runtime/BacktestRuntime.cpp` and `src/runtime/LiveTradingRuntime.cpp`)
-    - legacy gate-profile labels normalized: verification/shadow `v1_legacy` -> `v1` (`scripts/run_verification.py`, `scripts/generate_probabilistic_shadow_report.py`)
-  - Strict Order 4-2 diagnostics instrumentation added:
-    - Backtest JSON now exports per-trade `trade_history_samples` (`include/runtime/BacktestRuntime.h`, `src/runtime/BacktestRuntime.cpp`, `src/app/BacktestCliHandler.cpp`)
-    - verification diagnostics now exports `top_loss_trade_samples` per dataset (`scripts/run_verification.py`)
-    - regression coverage added for new verification diagnostics (`scripts/test_verification_risk_tail_decomposition.py`)
-  - Strict Order 4-3 risk-width tightening applied (entry gate unchanged, live/backtest isomorphic):
-    - `applyProbabilisticPrimaryDecisionProfile` now tightens `target_risk_pct` for non-hostile low-quality fragility cells and low-quality uptrend-continuation cells
-    - code paths:
-      - `src/runtime/BacktestRuntime.cpp`
-      - `src/runtime/LiveTradingRuntime.cpp`
-  - Strict Order 4-4 constructive RR boost applied (live/backtest isomorphic via shared signal policy):
-    - `rebalanceSignalRiskReward` now adds small RR lift for constructive rescue/uptrend-continuation setups
-    - code path:
-      - `src/common/SignalPolicyShared.cpp`
-  - Strict Order 4-5 weak uptrend-continuation risk tightening applied (live/backtest isomorphic via shared signal policy):
-    - `rebalanceSignalRiskReward` now tightens stop risk width when uptrend-continuation quality is weak (`calibrated` and `margin` both weak)
-    - code path:
-      - `src/common/SignalPolicyShared.cpp`
-  - Strict Order 4-6 downtrend low-flow rebound probe applied (foundation gate, live/backtest isomorphic):
-    - `evaluateEntryGate` now includes `TRENDING_DOWN` low-flow rebound probe path under strict microstructure constraints
-    - probe path uses conservative risk/size scaling in signal construction
-    - code path:
-      - `src/strategy/FoundationAdaptiveStrategy.cpp`
-  - Strict Order 4-7 uptrend structure relief micro-tune applied (foundation gate, live/backtest isomorphic):
-    - `evaluateEntryGate` now allows a narrow relaxed structure check in thin uptrend context (`liq<55`, `vol<=1.8`) before rejecting `foundation_no_signal_uptrend_structure`
-    - code path:
-      - `src/strategy/FoundationAdaptiveStrategy.cpp`
+## Latest gate snapshot (v1)
+- Verification report:
+  - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step6l_downtrend_rebound_imbalance_relax_v1.json`
+- Result:
+  - `overall_gate_pass=true`
+  - `adaptive_verdict=pass`
+  - `avg_profit_factor=3.0789`
+  - `avg_expectancy_krw=18.5147`
+  - `avg_total_trades=10.0`
+  - `candidate_generation.no_signal_generated share=0.7019`
+  - `baseline_comparison.non_degradation_contract.all_pass=true`
 
-## Last known gate status
-- Strict feature validation: run required after any feature/build changes
-- Bundle parity: run required after model/bundle/export changes
-- Verification: run required after decision/runtime logic changes
-- Latest runtime context-refresh verification check (`pipeline=v1`) executed and failed fail-closed (`overall_gate_pass=false` in `build/Release/logs/context_refresh_verification.json`).
-- Latest verification smoke after decomposition changes:
-  - `build/Release/logs/verification_report_risk_tail_smoke.json` generated successfully and includes risk-tail decomposition fields.
-- Latest global-train target-flex smoke:
-  - `build/Release/logs/probabilistic_model_train_summary_global_targetflex_smoke_20260223.json` status=`pass` (max_datasets=1).
-- Latest 5-set verification refresh (`pipeline=v1`):
-  - `build/Release/logs/verification_report_global_full_5set_refresh_20260223.json`
-  - `overall_gate_pass=false`, `avg_profit_factor=0.5203`, `avg_expectancy_krw=-12.0674`
-  - risk-tail decomposition points to `RANGING + FOUNDATION_RANGE_PULLBACK` heavy-loss concentration.
-- Latest Step-3 rebalance run (`pipeline=v1`):
-  - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step3_final.json`
-  - `overall_gate_pass=false`, `adaptive_verdict=fail`, `gate_profile.name=v1`
-  - quality improved vs previous 5-set refresh:
-    - `avg_profit_factor: 0.5203 -> 1.1715`
-    - `avg_expectancy_krw: -12.0674 -> -0.3934`
-    - `avg_risk_adjusted_score: -2.7589 -> -0.3387`
-  - remaining gap:
-    - `risk_adjusted_score_guard_pass=false`
-    - `avg_total_trades=7.2` (low-trade penalty still active)
-- Latest Step-3 follow-up (`Strict Order 3-2`, pipeline=`v1`):
-  - Runtime fix: backtest EOD open-position force-close (trade-count/profit consistency)
-    - `src/runtime/BacktestRuntime.cpp`
-  - verification:
-    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step3p_eod_only.json`
+## This turn additions
+- Added day-sliced OOS helper:
+  - `scripts/run_daily_oos_stability.py`
+  - `scripts/test_daily_oos_stability.py`
+- Documentation wiring:
+  - `docs/30_VALIDATION_GATES.md` (Gate3 supplement command + pass criteria)
+  - `docs/11_BASELINE_RUNBOOK.md` (verification-stage command)
+- Smoke artifact:
+  - `build/Release/logs/daily_oos_stability_report_smoke_20260224.json`
+  - `build/Release/logs/daily_oos_stability_windows_smoke_20260224.csv`
+  - result: `status=fail`, blocker=`max_nonpositive_day_ratio`, `evaluated_day_count=5`
+- Multi-market evidence run:
+  - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_fix2.json`
+  - `build/Release/logs/daily_oos_stability_windows_3m_7d_20260224_fix2.csv`
   - result:
-    - `overall_gate_pass=false` (remaining single blocker: sample size)
-    - `avg_profit_factor=4.6522`
-    - `avg_expectancy_krw=29.5667`
-    - `avg_risk_adjusted_score=1.6001`
-    - `avg_total_trades=8.2` (`gate_avg_trades_pass=false`, threshold=10)
-    - `adaptive_verdict=inconclusive` (`failed_checks=["sample_size_guard_pass"]`)
-- Latest Step-3 follow-up extension (`Strict Order 3-3`, pipeline=`v1`):
-  - Runtime fix: RiskManager backtest clock alignment (candle-time override)
-    - `include/risk/RiskManager.h`
-    - `src/risk/RiskManager.cpp`
-    - `src/runtime/BacktestRuntime.cpp`
-  - Runtime tuning: probabilistic primary minimums rescue-quality gate widened (live/backtest isomorphic)
-    - `src/runtime/BacktestRuntime.cpp`
-    - `src/runtime/LiveTradingRuntime.cpp`
-  - verification:
-    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step4g_minimal_fixset.json`
-  - result:
-    - `overall_gate_pass=true`
-    - `adaptive_verdict=pass`
-    - `avg_profit_factor=2.6066`
-    - `avg_expectancy_krw=11.2459`
-    - `avg_risk_adjusted_score=0.0411`
-    - `avg_total_trades=11.4` (`gate_avg_trades_pass=true`, threshold=10)
-- Latest Step-4 follow-up (`Strict Order 4-1`, pipeline=`v1`):
-  - Runtime tuning: tighten range-pullback loss-tail quality floors in probabilistic primary minimums (live/backtest isomorphic)
-    - `src/runtime/BacktestRuntime.cpp`
-    - `src/runtime/LiveTradingRuntime.cpp`
-  - verification:
-    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step4q_repeat_check.json`
-  - result:
-    - `overall_gate_pass=true`
-    - `adaptive_verdict=pass`
-    - `avg_profit_factor=2.6923`
-    - `avg_expectancy_krw=12.1637`
-    - `avg_risk_adjusted_score=0.1490`
-    - `avg_total_trades=11.0` (`gate_avg_trades_pass=true`, threshold=10)
-    - `candidate_generation.no_signal_generated share: 0.733 -> 0.709`
-    - residual: ETH/SOL expectancy still negative (`ETH=-1.3339`, `SOL=-7.5916`)
-- Latest Step-4 diagnostics pass (`Strict Order 4-2`, pipeline=`v1`):
-  - instrumentation-only verification:
-    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step4t_diag_instrumentation_only.json`
-  - result (baseline-equivalent gate quality preserved):
-    - `overall_gate_pass=true`
-    - `adaptive_verdict=pass`
-    - `avg_profit_factor=2.6923`
-    - `avg_expectancy_krw=12.1637`
-    - `avg_total_trades=11.0`
-    - `candidate_generation.no_signal_generated share=0.709`
-  - new evidence path:
-    - `diagnostics.per_dataset[].top_loss_trade_samples` populated (ETH=4, SOL=10 in latest report)
-- Step-4 experiment note (discarded):
-  - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step4s_uptrend_cont_guard_v1.json`
-  - failed fail-closed (`avg_total_trades=9.8`, `sample_size_guard_pass=false`, `risk_adjusted_score_guard_pass=false`), therefore not retained.
-- Latest Step-4 follow-up (`Strict Order 4-3`, pipeline=`v1`):
-  - runtime tuning: tighten target risk width for low-quality fragility/uptrend-continuation cells (entry gate unchanged)
-    - `src/runtime/BacktestRuntime.cpp`
-    - `src/runtime/LiveTradingRuntime.cpp`
-  - verification:
-    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step4v_risk_tighten_v1.json`
-  - result (vs `..._step4t_diag_instrumentation_only.json`):
-    - `overall_gate_pass=true` 유지
-    - `adaptive_verdict=pass`
-    - `avg_profit_factor: 2.6923 -> 3.0578`
-    - `avg_expectancy_krw: 12.1637 -> 18.0299`
-    - `avg_total_trades: 11.0 -> 10.0` (guard threshold 유지)
-    - `candidate_generation.no_signal_generated share: 0.709 -> 0.7079`
-    - ETH/SOL expectancy improved:
-      - `ETH: -1.3339 -> +0.5113`
-      - `SOL: -7.5916 -> +5.1816`
-- Latest Step-4 follow-up (`Strict Order 4-4`, pipeline=`v1`):
-  - runtime tuning: constructive setup RR boost in shared risk-reward rebalance path
-    - `src/common/SignalPolicyShared.cpp`
-  - verification:
-    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step5f_constructive_rr_final.json`
-  - result (vs `..._step4v_risk_tighten_v1.json`):
-    - `overall_gate_pass=true` 유지
-    - `adaptive_verdict=pass`
-    - `avg_profit_factor: 3.0578 -> 3.0744`
-    - `avg_expectancy_krw: 18.0299 -> 18.3844`
-    - `avg_total_trades: 10.0 -> 10.0` (guard threshold 유지)
-    - BTC expectancy improved:
-      - `BTC: -0.5089 -> +0.3158`
-    - residual:
-      - `candidate_generation.no_signal_generated share=0.7079` (추가 완화 필요)
-- Latest Step-4 follow-up (`Strict Order 4-5`, pipeline=`v1`):
-  - runtime tuning: weak uptrend-continuation risk tightening in shared risk-reward rebalance path
-    - `src/common/SignalPolicyShared.cpp`
-  - verification:
-    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step5j_signalpolicy_final.json`
-  - result (vs `..._step5f_constructive_rr_final.json`):
-    - `overall_gate_pass=true`
-    - `adaptive_verdict=pass`
-    - `avg_profit_factor: 3.0744 -> 3.0789`
-    - `avg_expectancy_krw: 18.3844 -> 18.5147`
-    - `avg_total_trades: 10.0 -> 10.0`
-    - `candidate_generation.no_signal_generated share: 0.7079 -> 0.7079` (unchanged)
-  - experiment note:
-    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step5i_uptrend_structural_relief_v1.json`
-    - no measurable change vs step5h baseline; discarded to avoid dead/ineffective logic carryover.
-- Latest Step-4 follow-up (`Strict Order 4-6`, pipeline=`v1`):
-  - runtime tuning: add `TRENDING_DOWN` low-flow rebound probe path in foundation entry gate (conservative risk/size)
-    - `src/strategy/FoundationAdaptiveStrategy.cpp`
-  - verification:
-    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step5n_downtrend_lowflow_rebound_tuned_v1.json`
-  - result (vs `..._step5j_signalpolicy_final.json`):
-    - `overall_gate_pass=true`
-    - `adaptive_verdict=pass`
-    - `avg_profit_factor: 3.0789 -> 3.0789`
-    - `avg_expectancy_krw: 18.5147 -> 18.5147`
-    - `avg_total_trades: 10.0 -> 10.0`
-    - `candidate_generation.no_signal_generated share: 0.7079 -> 0.7051`
-    - note: `baseline_comparison.non_degradation_contract` failed on `primary_candidate_conversion_non_degrade_pass` only.
-  - experiment notes:
-    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step5k_core_rescue_lowvol_downtrend_v1.json`
-    - rescue-safety-floor relaxation increased no-signal share (`0.7079 -> 0.7969`), discarded.
-    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step5l_fallback_hostile_relax_wide_v1.json`
-    - hostile fallback threshold relaxation produced no measurable effect, discarded.
-- Latest Step-4 follow-up (`Strict Order 4-7`, pipeline=`v1`):
-  - runtime tuning: uptrend structure relief micro-tune in foundation entry gate
-    - `src/strategy/FoundationAdaptiveStrategy.cpp`
-  - verification:
-    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step5w_uptrend_structure_relief_v1.json`
-  - result (vs `..._step5n_downtrend_lowflow_rebound_tuned_v1.json`):
-    - `overall_gate_pass=true`
-    - `adaptive_verdict=pass`
-    - `avg_profit_factor: 3.0789 -> 3.0789`
-    - `avg_expectancy_krw: 18.5147 -> 18.5147`
-    - `avg_total_trades: 10.0 -> 10.0`
-    - `candidate_generation.no_signal_generated share: 0.7051 -> 0.7047`
-    - note: `baseline_comparison.non_degradation_contract` still fails only on `primary_candidate_conversion_non_degrade_pass`.
-- Latest Step-4 follow-up (`Strict Order 4-8`, pipeline=`v1`):
-  - verification contract tuning: explicit tolerance for primary-candidate conversion non-degradation
-    - `scripts/run_verification.py`
-  - change:
-    - `primary_candidate_conversion_non_degrade_pass` now uses absolute tolerance `0.001`
-    - tolerance is emitted at `baseline_comparison.non_degradation_contract.tolerances.primary_candidate_conversion_abs`
-  - verification:
-    - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step6h_non_degrade_tolerance_v1.json`
-  - result:
-    - `overall_gate_pass=true`
-    - `adaptive_verdict=pass`
-    - `avg_profit_factor=3.0789`
-    - `avg_expectancy_krw=18.5147`
-    - `avg_total_trades=10.0`
-    - `candidate_generation.no_signal_generated share=0.7051`
-    - `baseline_comparison.non_degradation_contract.all_pass=true` (previous single blocker resolved via explicit tolerance)
-- Latest Step-4 follow-up (`Strict Order 4-9`, pipeline=`v1`):
-  - runtime tuning: thin-liquidity adaptive path micro-relax in foundation entry gate
-    - `src/strategy/FoundationAdaptiveStrategy.cpp`
-  - change:
-    - `isThinLiquidityAdaptiveOpportunity`: liquidity floor `30.0 -> 28.0`, volume floor `0.56 -> 0.52`
-    - `TRENDING_UP` branch `ret20` floor `0.0006 -> 0.0003`
-  - verification:
-    - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step6i_thin_liq_adaptive_relax_v1.json`
-  - result (vs `..._step6h_non_degrade_tolerance_v1.json`):
-    - `overall_gate_pass=true`
-    - `adaptive_verdict=pass`
-    - `avg_profit_factor=3.0789` (unchanged)
-    - `avg_expectancy_krw=18.5147` (unchanged)
-    - `avg_total_trades=10.0` (unchanged)
-    - `candidate_generation.no_signal_generated share: 0.7051 -> 0.7047`
-    - `baseline_comparison.non_degradation_contract.all_pass=true` (maintained)
-- Latest Step-4 follow-up (`Strict Order 4-10`, pipeline=`v1`):
-  - runtime tuning: downtrend low-flow rebound path micro-relax in foundation entry gate
-    - `src/strategy/FoundationAdaptiveStrategy.cpp`
-  - change:
-    - `isDowntrendLowFlowReboundOpportunity`: volume floor `0.22 -> 0.18`
-    - buy/sell pressure floor `0.90 -> 0.86`
-    - `ret8` floor `-0.0050 -> -0.0060`
-  - verification:
-    - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step6j_downtrend_lowflow_rebound_relax_v1.json`
-  - result (vs `..._step6i_thin_liq_adaptive_relax_v1.json`):
-    - `overall_gate_pass=true`
-    - `adaptive_verdict=pass`
-    - `avg_profit_factor=3.0789` (unchanged)
-    - `avg_expectancy_krw=18.5147` (unchanged)
-    - `avg_total_trades=10.0` (unchanged)
-    - `candidate_generation.no_signal_generated share: 0.7047 -> 0.7033`
-    - `baseline_comparison.non_degradation_contract.all_pass=true` (maintained)
-- Latest Step-4 follow-up (`Strict Order 4-11`, pipeline=`v1`):
-  - runtime tuning: downtrend rebound imbalance floor micro-relax in foundation entry gate
-    - `src/strategy/FoundationAdaptiveStrategy.cpp`
-  - change:
-    - `isDowntrendLowFlowReboundOpportunity`: `order_book_imbalance` floor `-0.10 -> -0.12`
-  - verification:
-    - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step6l_downtrend_rebound_imbalance_relax_v1.json`
-  - result (vs `..._step6j_downtrend_lowflow_rebound_relax_v1.json`):
-    - `overall_gate_pass=true`
-    - `adaptive_verdict=pass`
-    - `avg_profit_factor=3.0789` (unchanged)
-    - `avg_expectancy_krw=18.5147` (unchanged)
-    - `avg_total_trades=10.0` (unchanged)
-    - `candidate_generation.no_signal_generated share: 0.7033 -> 0.7019`
-    - `baseline_comparison.non_degradation_contract.all_pass=true` (maintained)
-  - discarded micro-experiments (no measurable change):
-    - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step6k_uptrend_relief_plus_v1.json`
-    - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step6m_downtrend_rebound_imbalance_relax2_v1.json`
-- Shadow/live staged enable: not active by default
+    - `status=fail` (fail-closed)
+    - `evaluated_day_count=15`
+    - `nonpositive_day_ratio=1.0` (threshold `0.45` fail)
+    - `total_profit_sum=-5118.106841` (positive-sum fail)
+    - `peak_day_drawdown_pct=5.483792` (threshold `12.0` pass)
+  - loss-tail concentration (`aggregate_loss_cells`):
+    - `RANGING|CORE_RESCUE_SHOULD_ENTER`
+    - `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER`
+    - `RANGING|PROBABILISTIC_PRIMARY_RUNTIME`
 
-## Known issues / watchpoints
-- 1m full-market fetch is expensive and operationally brittle for dynamic top-N usage.
-- Universe-scoped 1m handling is now available; keep manifest scope semantics explicit and reproducible.
-- Do not change baseline outputs when extension flags are OFF.
-- Keep verification workflow sequential (`build` first, then `run_verification.py`); parallel execution can mix stale binaries and produce unstable conclusions.
+## Live safety status
+- `allow_live_orders=false` default maintained.
+- Gate4 shadow report and staged live enable remain required before any live enable attempt.
+
+## Known gaps
+- Need loss-tail mitigation on dominant cells before daily OOS guard can pass (`max_nonpositive_day_ratio`, `positive_profit_sum`).
+- `CURRENT_STATE.md` must stay concise; detailed experiment history belongs in stage TODO/history docs.
+
+## Detailed history references
+- `docs/TODO_STAGE15_EXECUTION_PLAN_2026-02-13.md`
+- `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`
+- `docs/CHAPTER_HISTORY_BRIEF.md`
