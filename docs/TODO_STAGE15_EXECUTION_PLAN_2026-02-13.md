@@ -1160,6 +1160,39 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
       - 복구 확인(순차 재실행):
         - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ac_rollback_seq.json`
         - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ac_rollback_seq.json`
+  - 폐기 실험(step8ad shouldExit multiday recycle path):
+    - 코드 시도(v1/v2):
+      - `RiskManager::shouldExitPosition`에
+        `TRENDING_UP|PROBABILISTIC_PRIMARY_RUNTIME` 장기보유(>=72h) recycle exit 후보를 추가하고,
+        백테스트 strategy-exit 경로에 `risk_manager_exit` 브리지를 연결.
+    - 결과(v1/v2):
+      - verification:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ad_shouldexit_multiday_recycle_v1.json`
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ad_shouldexit_multiday_recycle_v2.json`
+        - baseline(step8ab) 대비 무변화(no-hit)
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ad_shouldexit_multiday_recycle_v1.json`
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ad_shouldexit_multiday_recycle_v2.json`
+        - baseline(step8ab) 대비 무변화(no-hit)
+    - 추가 시도(v3):
+      - 전략 객체 없는 포지션까지 `shouldExitPosition` fallback을 확장.
+      - verification 즉시 실패:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ad_shouldexit_multiday_recycle_v3.json`
+        - `avg_profit_factor=0.4231`, `avg_expectancy_krw=-13.9248`
+    - 조치:
+      - v1/v2 no-hit + v3 열화로 폐기.
+  - 폐기 실험(step8ae primary runtime stop-path fallback):
+    - 코드 시도:
+      - 전략 객체 없는 경우를 전면 허용하지 않고,
+        `entry_archetype=PROBABILISTIC_PRIMARY_RUNTIME`로 fallback 범위를 축소.
+    - 결과:
+      - verification 즉시 실패:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ae_primary_runtime_stop_path_v1.json`
+        - `avg_profit_factor=0.4370`, `avg_expectancy_krw=-13.8017`
+    - 조치:
+      - 즉시 코드 롤백 후 기준선 복구 확인:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ad_rollback_seq.json`
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ad_rollback_seq.json`
 
 ## Next (Strict Order)
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:

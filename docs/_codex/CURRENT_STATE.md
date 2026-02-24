@@ -3,7 +3,7 @@ Last updated: 2026-02-24
 
 ## Repository
 - Branch: `main`
-- Commit snapshot (pushed): `8ec3ac0`
+- Commit snapshot (pushed): `d8f6656`
 
 ## Active ticket
 - Source of truth: `docs/_codex/ACTIVE_TICKET.md`
@@ -21,7 +21,7 @@ Last updated: 2026-02-24
 
 ## Latest gate snapshot (runtime tuning path)
 - Verification report:
-  - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ac_rollback_seq.json`
+  - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ad_rollback_seq.json`
 - Result:
   - `overall_gate_pass=true`
   - `adaptive_verdict=pass`
@@ -31,7 +31,7 @@ Last updated: 2026-02-24
 
 ## Daily OOS snapshot (Gate3 supplement)
 - Report:
-  - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ac_rollback_seq.json`
+  - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ad_rollback_seq.json`
 - Result:
   - `status=pass`
   - `evaluated_day_count=10`
@@ -144,6 +144,21 @@ Last updated: 2026-02-24
     - rollback:
       - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ac_rollback_seq.json`
       - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ac_rollback_seq.json`
+  - shouldExit multiday recycle path (`step8ad`):
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ad_shouldexit_multiday_recycle_v1.json`
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ad_shouldexit_multiday_recycle_v2.json`
+    - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ad_shouldexit_multiday_recycle_v1.json`
+    - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ad_shouldexit_multiday_recycle_v2.json`
+    - outcome: v1/v2 모두 baseline(step8ab) 대비 무변화(no-hit).
+    - additional v3:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ad_shouldexit_multiday_recycle_v3.json`
+      - outcome: verification 급열화(`avg_profit_factor=0.4231`, `avg_expectancy_krw=-13.9248`), discarded.
+  - primary-runtime stop-path fallback (`step8ae`):
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ae_primary_runtime_stop_path_v1.json`
+    - outcome: verification 급열화(`avg_profit_factor=0.4370`, `avg_expectancy_krw=-13.8017`), discarded.
+    - rollback:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ad_rollback_seq.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ad_rollback_seq.json`
 
 ## Gate4 shadow flow snapshot
 - Flow report:

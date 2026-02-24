@@ -282,6 +282,29 @@ Last updated: 2026-02-24
       - discarded + rollback confirmed:
         - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ac_rollback_seq.json`
         - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ac_rollback_seq.json`
+  - `step8ad` shouldExit multiday recycle path:
+    - reports:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ad_shouldexit_multiday_recycle_v1.json`
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ad_shouldexit_multiday_recycle_v2.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ad_shouldexit_multiday_recycle_v1.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ad_shouldexit_multiday_recycle_v2.json`
+    - outcome:
+      - v1/v2 모두 baseline(step8ab) 대비 무변화(no-hit)
+    - additional attempt (v3):
+      - `shouldExitPosition` fallback을 strategy-missing 포지션으로 확장
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ad_shouldexit_multiday_recycle_v3.json`
+      - verification 급열화(`avg_profit_factor=0.4231`, `avg_expectancy_krw=-13.9248`)
+    - action:
+      - discarded.
+  - `step8ae` primary-runtime stop-path fallback:
+    - reports:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ae_primary_runtime_stop_path_v1.json`
+    - outcome:
+      - verification 급열화(`avg_profit_factor=0.4370`, `avg_expectancy_krw=-13.8017`)
+    - action:
+      - discarded + rollback confirmed:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ad_rollback_seq.json`
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ad_rollback_seq.json`
 
 ## DoD
 - [x] residual negative-day trade-level evidence captured.
