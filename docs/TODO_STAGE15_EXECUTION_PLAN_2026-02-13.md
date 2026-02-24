@@ -1876,11 +1876,37 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
             - v17 workflow: `status=pass` (`v16_fail_reasons=[]`)
           - 조치:
             - fail-closed rollback 완료(임시 v18 probe 코드/설정 제거, baseline 유지).
-        - 다음 국소 단계(v19):
-          - 후보 승격 조건을 2단계로 고정:
-            - (1) v17 workflow `status=pass`
-            - (2) ON/OFF delta에서 non-zero impact 존재
-          - 두 조건 동시 충족 후보만 Gate3 비교 단계로 승격.
+        - v19 non-zero-impact 프로브(기본 OFF, 미유지) 완료:
+          - 사전 후보 추출:
+            - baseline negative profile:
+              - `build/Release/logs/daily_oos_trade_profile_correctness_runtime_mapping_on_guard_v19_baseline_uptrend_rescue_negative_5set_20260224.json`
+            - ranked candidates:
+              - `build/Release/logs/v19_tu_core_rescue_guard_candidates_from_baseline_negative_5set_20260224.json`
+            - 선택 clause:
+              - `cal <= 0.406871` (`TRENDING_UP|CORE_RESCUE`)
+          - 검증 산출물:
+            - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v19_probe_off_5set_20260224.json`
+            - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v19_probe_on_5set_20260224.json`
+            - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v19_probe_off_5set_3m7d_20260224.json`
+            - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v19_probe_on_5set_3m7d_20260224.json`
+            - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v19_probe_on_vs_off_5set_20260224.json`
+            - `build/Release/logs/v19_probe_spillover_gate_correctness_runtime_mapping_on_guard_v19_probe_on_vs_off_5set_20260224_workflow.json`
+          - 결과:
+            - verification OFF/ON 동일
+            - daily OOS `pass -> fail`:
+              - `nonpositive_day_ratio: 0.368421 -> 0.529412`
+              - `total_profit_sum: 118.672413 -> -1212.605594`
+            - delta:
+              - `profit_sum_delta=-1331.278007`
+              - `nonpositive_day_count_delta=+4`
+            - v17 workflow:
+              - `status=fail`
+              - `v16_fail_reasons` 3개 재발
+          - 조치:
+            - fail-closed rollback 완료(임시 v19 probe 코드/설정 제거, baseline 유지).
+        - 다음 국소 단계(v20):
+          - 단일 target clause 재시도 중단.
+          - spillover lock을 만족하는 paired candidate(목표 셀 + non-target 보호 조건)만 프로브.
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
    - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.

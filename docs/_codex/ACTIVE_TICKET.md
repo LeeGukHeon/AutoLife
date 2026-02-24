@@ -379,6 +379,40 @@ Last updated: 2026-02-24
     - action:
       - fail-closed rollback complete (temporary v18 probe code/config removed).
       - next step is `v19`: lock-pass + non-zero impact 조건을 동시에 만족하는 후보만 probe.
+  - v19 non-zero-impact probe result (`2026-02-25`, not retained):
+    - pre-probe candidate extraction:
+      - baseline negative profile:
+        - `build/Release/logs/daily_oos_trade_profile_correctness_runtime_mapping_on_guard_v19_baseline_uptrend_rescue_negative_5set_20260224.json`
+      - ranked shortlist:
+        - `build/Release/logs/v19_tu_core_rescue_guard_candidates_from_baseline_negative_5set_20260224.json`
+      - selected clause:
+        - `cal <= 0.406871` on `TRENDING_UP|CORE_RESCUE`
+    - artifacts:
+      - verification:
+        - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v19_probe_off_5set_20260224.json`
+        - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v19_probe_on_5set_20260224.json`
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v19_probe_off_5set_3m7d_20260224.json`
+        - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v19_probe_on_5set_3m7d_20260224.json`
+      - delta:
+        - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v19_probe_on_vs_off_5set_20260224.json`
+      - v17 workflow:
+        - `build/Release/logs/v19_probe_spillover_gate_correctness_runtime_mapping_on_guard_v19_probe_on_vs_off_5set_20260224_workflow.json`
+    - result:
+      - verification: OFF/ON identical
+      - daily OOS: `pass -> fail`
+        - `nonpositive_day_ratio: 0.368421 -> 0.529412`
+        - `total_profit_sum: 118.672413 -> -1212.605594`
+      - delta:
+        - `profit_sum_delta=-1331.278007`
+        - `nonpositive_day_count_delta=+4`
+      - v17 workflow: `status=fail` (`v16_fail_reasons` 3개 모두 재발)
+    - interpretation:
+      - lock-pass + non-zero-impact를 동시에 만족하지 못함.
+      - `RANGING|CORE_RESCUE` spillover expansion이 재발.
+    - action:
+      - fail-closed rollback complete (temporary v19 probe code/config removed).
+      - next step is `v20`: spillover-locked paired candidate only.
 
 ## Current result snapshot
 - Baseline reference remains:
