@@ -481,6 +481,23 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
       - rescue safety floor 완화는 `no_signal share`를 `0.7079 -> 0.7969`로 악화시켜 폐기.
     - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step5l_fallback_hostile_relax_wide_v1.json`
       - hostile fallback 임계 완화는 측정치 변화가 없어 폐기.
+- [x] Strict Order 4 7차: uptrend structure 게이트 미세 완화(Foundation gate, 라이브/백테스트 동형).
+  - code:
+    - `src/strategy/FoundationAdaptiveStrategy.cpp`
+  - 핵심:
+    - `TRENDING_UP` 구조 체크에서 thin context(`liq<55`, `vol<=1.8`)에 한해
+      완화된 구조 조건을 추가 적용해 `foundation_no_signal_uptrend_structure` 과차단을 소폭 완화.
+    - 기존 과열 차단(`overextended_uptrend`)은 유지해 리스크 방어 고정.
+  - 검증:
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step5w_uptrend_structure_relief_v1.json`
+  - 결과(기준: `..._step5n_downtrend_lowflow_rebound_tuned_v1.json` 대비):
+    - `overall_gate_pass=true` 유지
+    - `avg_profit_factor: 3.0789 -> 3.0789`
+    - `avg_expectancy_krw: 18.5147 -> 18.5147`
+    - `avg_total_trades: 10.0 -> 10.0`
+    - `candidate_generation.no_signal_generated share: 0.7051 -> 0.7047`
+    - `foundation_no_signal_uptrend_structure count: 55 -> 54`
+    - 참고: baseline non-degradation subcheck에서 `primary_candidate_conversion_non_degrade_pass` 단일 실패는 지속.
 
 ## Next (Strict Order)
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
@@ -488,7 +505,7 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.
 1. 표본 유지 + 품질 보강(Strict Order 4):
    - 현재 `avg_total_trades=10.0` 임계선 방어 상태에서 BTC/XRP 약한 셀(저품질 rescue/continuation) 추가 안정화
-   - `candidate_generation`의 `no_signal_generated` 비중(`share=0.7051`) 추가 완화
+   - `candidate_generation`의 `no_signal_generated` 비중(`share=0.7047`) 추가 완화
 2. 라벨/학습 구조 고도화:
    - optional triple-barrier 활성화 실험(기존 라벨과 병행)
    - `P(win)` + `E[pnl]` 2-head 학습 파이프라인 추가

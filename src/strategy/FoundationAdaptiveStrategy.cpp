@@ -705,14 +705,28 @@ EntryGateDecision evaluateEntryGate(
             const double ret20 = rollingReturn(closes, 20);
             const double ret20_floor = (metrics.liquidity_score >= 60.0) ? 0.0008 : 0.0004;
             const bool overextended_uptrend = (rsi >= 68.0 && ret5 >= 0.0045);
-            if (!(current_price >= ema_fast * 0.9985 &&
-                  ema_fast >= ema_slow * 0.9980 &&
-                  rsi >= 42.0 && rsi <= 74.0 &&
-                  metrics.order_book_imbalance > -0.16 &&
-                  metrics.buy_pressure >= (metrics.sell_pressure * 0.86) &&
-                  ret5 >= -0.0016 &&
-                  ret20 >= (ret20_floor - 0.0008)) ||
-                overextended_uptrend) {
+            const bool base_structure_ok =
+                current_price >= ema_fast * 0.9985 &&
+                ema_fast >= ema_slow * 0.9980 &&
+                rsi >= 42.0 && rsi <= 74.0 &&
+                metrics.order_book_imbalance > -0.16 &&
+                metrics.buy_pressure >= (metrics.sell_pressure * 0.86) &&
+                ret5 >= -0.0016 &&
+                ret20 >= (ret20_floor - 0.0008);
+            const bool thin_uptrend_structure_relief_context =
+                metrics.liquidity_score < 55.0 &&
+                metrics.volatility > 0.0 &&
+                metrics.volatility <= 1.8;
+            const bool relaxed_structure_ok =
+                thin_uptrend_structure_relief_context &&
+                current_price >= ema_fast * 0.9978 &&
+                ema_fast >= ema_slow * 0.9972 &&
+                rsi >= 40.0 && rsi <= 75.0 &&
+                metrics.order_book_imbalance > -0.20 &&
+                metrics.buy_pressure >= (metrics.sell_pressure * 0.82) &&
+                ret5 >= -0.0022 &&
+                ret20 >= (ret20_floor - 0.0014);
+            if ((!base_structure_ok && !relaxed_structure_ok) || overextended_uptrend) {
                 decision.reject_reason = "foundation_no_signal_uptrend_structure";
                 return decision;
             }

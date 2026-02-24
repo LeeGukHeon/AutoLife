@@ -21,7 +21,7 @@ Last updated: 2026-02-24
 - Master spec baseline: `docs/_codex/MASTER_SPEC.md`
 - Execution mode target: Mode A (baseline-preserving), extensions behind flags
 - Current active ticket label:
-  - `Strict Order 4-6` (downtrend low-flow rebound probe for no-signal reduction with fail-closed gate preservation)
+  - `Strict Order 4-7` (uptrend structure relief micro-tune for no-signal reduction with fail-closed gate preservation)
 - Current implementation focus:
   - Ticket 0: docs/bootstrap reliability pack (implemented in current working tree)
   - Ticket 1: dynamic universe + scope-aware 1m fetch/build strictness (implemented in current working tree)
@@ -75,6 +75,10 @@ Last updated: 2026-02-24
   - Strict Order 4-6 downtrend low-flow rebound probe applied (foundation gate, live/backtest isomorphic):
     - `evaluateEntryGate` now includes `TRENDING_DOWN` low-flow rebound probe path under strict microstructure constraints
     - probe path uses conservative risk/size scaling in signal construction
+    - code path:
+      - `src/strategy/FoundationAdaptiveStrategy.cpp`
+  - Strict Order 4-7 uptrend structure relief micro-tune applied (foundation gate, live/backtest isomorphic):
+    - `evaluateEntryGate` now allows a narrow relaxed structure check in thin uptrend context (`liq<55`, `vol<=1.8`) before rejecting `foundation_no_signal_uptrend_structure`
     - code path:
       - `src/strategy/FoundationAdaptiveStrategy.cpp`
 
@@ -224,6 +228,19 @@ Last updated: 2026-02-24
     - rescue-safety-floor relaxation increased no-signal share (`0.7079 -> 0.7969`), discarded.
     - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step5l_fallback_hostile_relax_wide_v1.json`
     - hostile fallback threshold relaxation produced no measurable effect, discarded.
+- Latest Step-4 follow-up (`Strict Order 4-7`, pipeline=`v1`):
+  - runtime tuning: uptrend structure relief micro-tune in foundation entry gate
+    - `src/strategy/FoundationAdaptiveStrategy.cpp`
+  - verification:
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260223_step5w_uptrend_structure_relief_v1.json`
+  - result (vs `..._step5n_downtrend_lowflow_rebound_tuned_v1.json`):
+    - `overall_gate_pass=true`
+    - `adaptive_verdict=pass`
+    - `avg_profit_factor: 3.0789 -> 3.0789`
+    - `avg_expectancy_krw: 18.5147 -> 18.5147`
+    - `avg_total_trades: 10.0 -> 10.0`
+    - `candidate_generation.no_signal_generated share: 0.7051 -> 0.7047`
+    - note: `baseline_comparison.non_degradation_contract` still fails only on `primary_candidate_conversion_non_degrade_pass`.
 - Shadow/live staged enable: not active by default
 
 ## Known issues / watchpoints
