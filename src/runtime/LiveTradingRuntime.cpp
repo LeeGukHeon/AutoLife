@@ -700,15 +700,22 @@ bool shouldUseProbabilisticPrimaryFallback(
     const double regime_threshold_add = cfg.probabilistic_regime_spec_enabled
         ? std::max(0.0, snapshot.regime_threshold_add)
         : 0.0;
-    const double min_margin = (hostile_regime ? 0.020 : -0.040) + regime_threshold_add;
-    const double min_prob = std::clamp(
+    double min_margin = (hostile_regime ? 0.020 : -0.040) + regime_threshold_add;
+    double min_prob = std::clamp(
         (hostile_regime ? 0.56 : 0.42) + (regime_threshold_add * 1.4),
         0.0,
         1.0
     );
-    const double min_liquidity = hostile_regime ? 50.0 : 14.0;
-    const double min_volume_surge = hostile_regime ? 0.72 : 0.14;
-    const double max_spread = hostile_regime ? 0.0025 : 0.0065;
+    double min_liquidity = hostile_regime ? 50.0 : 14.0;
+    double min_volume_surge = hostile_regime ? 0.72 : 0.14;
+    double max_spread = hostile_regime ? 0.0025 : 0.0065;
+    if (!hostile_regime && regime == autolife::analytics::MarketRegime::RANGING) {
+        min_margin = std::max(min_margin, -0.010);
+        min_prob = std::max(min_prob, 0.46);
+        min_liquidity = std::max(min_liquidity, 22.0);
+        min_volume_surge = std::max(min_volume_surge, 0.20);
+        max_spread = std::min(max_spread, 0.0048);
+    }
 
     if (snapshot.margin_h5 < min_margin || snapshot.prob_h5_calibrated < min_prob) {
         return false;
@@ -998,6 +1005,10 @@ bool passesProbabilisticPrimaryMinimums(
         signal.liquidity_score >= 16.0;
     const bool rescue_archetype =
         signal.entry_archetype.find("CORE_RESCUE") != std::string::npos;
+    const bool uptrend_continuation_archetype =
+        signal.entry_archetype.find("FOUNDATION_UPTREND_CONTINUATION") != std::string::npos;
+    const bool probabilistic_primary_runtime_archetype =
+        signal.entry_archetype == "PROBABILISTIC_PRIMARY_RUNTIME";
     const bool range_pullback_loss_tail_risk_cell =
         autolife::common::signal_policy::isRangePullbackLossTailRiskCell(signal, regime);
     if (!hostile_regime && rescue_archetype) {
@@ -1010,6 +1021,62 @@ bool passesProbabilisticPrimaryMinimums(
         if (weak_probabilistic_support && weak_execution_quality) {
             if (reject_reason != nullptr) {
                 *reject_reason = "blocked_probabilistic_primary_rescue_quality";
+            }
+            return false;
+        }
+        if (regime == autolife::analytics::MarketRegime::RANGING) {
+            const bool weak_range_rescue_tail =
+                ((signal.probabilistic_h5_calibrated < 0.49 &&
+                  signal.probabilistic_h5_margin < -0.006) ||
+                 (signal.probabilistic_h5_calibrated < 0.46 &&
+                  signal.strength < 0.16) ||
+                 (signal.liquidity_score < 18.0 &&
+                  signal.probabilistic_h5_margin < 0.0));
+            if (weak_range_rescue_tail) {
+                if (reject_reason != nullptr) {
+                    *reject_reason = "blocked_probabilistic_primary_rescue_tail_guard";
+                }
+                return false;
+            }
+        }
+        if (regime == autolife::analytics::MarketRegime::TRENDING_UP &&
+            signal.probabilistic_h5_calibrated < 0.49 &&
+            signal.probabilistic_h5_margin < -0.006 &&
+            signal.strength < 0.20) {
+                if (reject_reason != nullptr) {
+                    *reject_reason = "blocked_probabilistic_primary_rescue_tail_guard";
+                }
+                return false;
+        }
+    }
+    if (!hostile_regime &&
+        regime == autolife::analytics::MarketRegime::TRENDING_UP &&
+        uptrend_continuation_archetype) {
+        const bool weak_uptrend_continuation_tail =
+            ((signal.probabilistic_h5_calibrated < 0.48 &&
+              signal.probabilistic_h5_margin < -0.006 &&
+              signal.strength < 0.24) ||
+             (signal.expected_value < -0.00015 &&
+              signal.probabilistic_h5_margin < -0.005 &&
+              signal.probabilistic_h5_calibrated < 0.50));
+        if (weak_uptrend_continuation_tail) {
+            if (reject_reason != nullptr) {
+                *reject_reason = "blocked_probabilistic_primary_uptrend_continuation_tail_guard";
+            }
+            return false;
+        }
+    }
+    if (!hostile_regime &&
+        regime == autolife::analytics::MarketRegime::RANGING &&
+        probabilistic_primary_runtime_archetype) {
+        const bool weak_runtime_quality =
+            signal.probabilistic_h5_margin < -0.010 ||
+            signal.probabilistic_h5_calibrated < 0.46 ||
+            signal.liquidity_score < 22.0 ||
+            signal.expected_value < -0.00022;
+        if (weak_runtime_quality) {
+            if (reject_reason != nullptr) {
+                *reject_reason = "blocked_probabilistic_primary_runtime_quality";
             }
             return false;
         }

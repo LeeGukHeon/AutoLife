@@ -2,67 +2,73 @@
 Last updated: 2026-02-24
 
 ## Header
-- Ticket ID: `SO4-12-DAILY-OOS-20260224`
+- Ticket ID: `SO4-13-UPTREND-TAIL-GUARD-20260224`
 - Master Ticket Number (`0`-`7` or `N/A`): `N/A`
-- Sub-ticket / Experiment ID: `Strict-Order-4-12`
-- Title: Day-sliced OOS stability guardrail (anti-overfit evidence)
+- Sub-ticket / Experiment ID: `Strict-Order-4-13`
+- Title: Loss-tail guard rebalance for dominant OOS failure cells
 - Owner: Codex
 - Date: 2026-02-24
-- Status: `done`
+- Status: `in_progress`
 - Mode: `A`
 
 ## Scope
 - In scope:
-  - Add reproducible day-sliced OOS verification helper script.
-  - Wire command into gate/runbook docs.
-  - Keep baseline logic unchanged.
+  - tighten non-coin-specific tail guards for dominant `regime|archetype` cells.
+  - keep live/backtest isomorphic logic.
+  - preserve baseline fail-closed behavior and rerun Gate3 artifacts.
 - Out of scope:
-  - Strategy/runtime threshold tuning.
-  - Live enable changes.
+  - model retraining/feature contract change.
+  - live enable progression.
 - Baseline impact:
-  - `none` (new verification helper only)
+  - `runtime decision policy updated` (documented strict-order iteration)
 
 ## Inputs
 - Relevant spec section(s):
-  - `docs/_codex/MASTER_SPEC.md` section 7 (Gate 3 OOS-focused evaluation)
+  - `docs/_codex/MASTER_SPEC.md` section 7
   - `docs/30_VALIDATION_GATES.md`
 - Contracts touched:
   - none
 - Flags added/changed:
-  - none (new script arguments only)
+  - none
 
 ## Implementation plan
-1. Add `scripts/run_daily_oos_stability.py` (daily slice backtests + fail-closed gate checks).
-2. Add unit tests for deterministic helper logic.
-3. Update gate/runbook docs with command and pass criteria.
+1. apply risk-cell quality guards in probabilistic primary minimums (runtime C++).
+2. run verification gate on fixed 5-set.
+3. run daily OOS stability on `BTC/ETH/XRP` 7-day window and compare deltas.
 
 ## Validation plan
 - Strict feature validation:
-  - N/A
+  - N/A (runtime logic only)
 - Parity:
-  - N/A
+  - N/A (bundle/schema unchanged)
 - Verification:
-  - run daily OOS script on a small dataset subset
+  - `verification_report_global_full_5set_refresh_20260224_step7f_tail_guard_balance2_v1.json`
 - Extra tests:
-  - `python scripts/test_daily_oos_stability.py`
+  - daily OOS report diff vs prior baseline (`..._fix2`)
+
+## Current result snapshot
+- Verification (`step7f`):
+  - `overall_gate_pass=true`
+  - `adaptive_verdict=pass`
+  - `avg_profit_factor=2.7085`
+  - `avg_expectancy_krw=9.9745`
+  - `avg_total_trades=11.0`
+- Daily OOS (`step7f`):
+  - `status=fail`
+  - `evaluated_day_count=15`
+  - `nonpositive_day_ratio=0.933333` (threshold 0.45 fail)
+  - `total_profit_sum=-2760.512552` (fail)
+  - `peak_day_drawdown_pct=2.593171` (pass)
+  - dominant loss cell: `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER`
 
 ## DoD
-- [x] Daily OOS report JSON/CSV generated with reproducible gate checks.
-- [x] Gate fail reasons emitted explicitly.
-- [x] Gate/Runbook docs include command and expected pass interpretation.
-- [x] Smoke run completed on target datasets and artifact path recorded.
-
-## Smoke artifact
-- `build/Release/logs/daily_oos_stability_report_smoke_20260224.json`
-- `build/Release/logs/daily_oos_stability_windows_smoke_20260224.csv`
-- Smoke verdict: `fail` (expected fail-closed; blocker=`max_nonpositive_day_ratio`)
-- Multi-market run:
-  - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_fix2.json`
-  - `build/Release/logs/daily_oos_stability_windows_3m_7d_20260224_fix2.csv`
-  - verdict: `fail` (blockers=`max_nonpositive_day_ratio`, `positive_profit_sum`)
+- [x] runtime guards are live/backtest isomorphic.
+- [x] verification gate rerun completed with artifact.
+- [x] daily OOS rerun completed with artifact.
+- [ ] daily OOS fail reasons reduced to within thresholds.
 
 ## Risks and rollback
 - Risks:
-  - Runtime cost increases when many datasets/days are requested.
+  - over-tightening can drop sample-size guard in verification.
 - Rollback strategy:
-  - Revert added script/docs and keep existing `run_verification.py` gate only.
+  - keep latest passing candidate (`step7f`) and iterate only guard thresholds incrementally.
