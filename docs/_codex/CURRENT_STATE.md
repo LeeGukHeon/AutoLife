@@ -167,6 +167,29 @@ Last updated: 2026-02-24
         - `policy_score 0.234999~0.435348`
     - interpretation:
       - mapping ON에서 runtime selection 자체가 늘어난 것이 아니라 TRENDING_UP foundation selection이 확장되고, 이 확장이 rescue self-loop로 연결되는 신호가 확인됨.
+  - v12 minimal guard/cooldown candidate design landed (analysis-only):
+    - new script:
+      - `scripts/analyze_v12_rescue_transition_guard_candidates.py`
+    - artifacts:
+      - `build/Release/logs/v12_rescue_transition_guard_candidates_eth_0216_0219_selfloop_top200.json`
+      - `build/Release/logs/v12_rescue_transition_guard_shortlist_eth_0216_0219.json`
+    - scope:
+      - `KRW-ETH`, `2026-02-16~2026-02-19`,
+        `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER` self-loop transitions
+    - top zero-win candidate:
+      - `signal_strength <= 0.431403`
+      - `blocked_loss=3`, `blocked_win=0`,
+        `blocked_net_improvement_krw=+180.502443`
+    - cooldown-like zero-win candidate:
+      - `reentry_gap_minutes >= 665.983133333 && reward_risk_ratio <= 1.956255`
+      - `blocked_loss=2`, `blocked_win=0`,
+        `blocked_net_improvement_krw=+139.713760`
+    - v11-boundary preset check:
+      - `prev_stoploss + gap<=360 + ss<=0.475509 + ev<=-0.000179`
+      - `blocked_loss=2`, `blocked_win=3` (win damage present)
+    - interpretation:
+      - pure cooldown preset is weak; loss cluster is concentrated in low-strength band.
+      - proceed to minimal scoped code probe behind default-OFF flag.
   - live execution update 로그 수집 선행조건은 충족됨
     (`execution_updates_live.jsonl` 생성 확인).
   - live parity path hardening landed:
@@ -421,6 +444,7 @@ Last updated: 2026-02-24
   - `build/Release/logs/correctness_runtime_mapping_occupancy_drift_eth_0216_0219_fullslice_cfgaligned_v9.json`
   - `build/Release/logs/correctness_runtime_mapping_rescue_selfloop_context_eth_0216_0219_v10.json`
   - `build/Release/logs/correctness_runtime_mapping_policy_selection_drift_eth_20260217_v11.json`
+  - `build/Release/logs/v12_rescue_transition_guard_shortlist_eth_0216_0219.json`
   - `build/Release/logs/strategyless_exit_audit_5set_20260224.json`
   - `build/Release/logs/execution_parity_report_strategyless_audit_20260224.json`
   - `build/Release/logs/execution_parity_report_strategyless_audit_strict_after_livepaper_patch_20260224.json`

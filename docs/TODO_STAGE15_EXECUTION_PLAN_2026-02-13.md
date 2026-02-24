@@ -1737,10 +1737,33 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
           - 해석:
             - mapping ON 확장은 runtime selection 증가가 아니라
               TRENDING_UP foundation selection widening에서 발생.
-        - 다음 국소 단계(v12):
-          - v10/v11 경계를 결합해
-            `TRENDING_UP foundation widening -> CORE_RESCUE self-loop` 전이를
-            최소 차단(또는 재진입 쿨다운)하는 후보를 동일 캔들 기준으로 설계.
+        - v12 후보 설계(최소 차단/쿨다운, 동일 캔들 기준) 완료:
+          - 신규 스크립트:
+            - `scripts/analyze_v12_rescue_transition_guard_candidates.py`
+          - 산출물:
+            - `build/Release/logs/v12_rescue_transition_guard_candidates_eth_0216_0219_selfloop_top200.json`
+            - `build/Release/logs/v12_rescue_transition_guard_shortlist_eth_0216_0219.json`
+          - 분석 슬라이스:
+            - `KRW-ETH`, `2026-02-16~2026-02-19`,
+              `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER` self-loop transitions
+          - 핵심 후보:
+            - zero-win top:
+              - `signal_strength <= 0.431403`
+              - `blocked_loss=3`, `blocked_win=0`,
+                `blocked_net_improvement_krw=+180.502443`
+            - cooldown-like zero-win:
+              - `reentry_gap_minutes >= 665.983133333 && reward_risk_ratio <= 1.956255`
+              - `blocked_loss=2`, `blocked_win=0`,
+                `blocked_net_improvement_krw=+139.713760`
+            - v11 경계 기본안(`prev_stoploss + gap<=360 + ss<=0.475509 + ev<=-0.000179`)은
+              `blocked_loss=2`, `blocked_win=3`로 win damage 존재.
+          - 해석:
+            - 단순 cooldown만으로는 win-damage가 남고,
+              low-strength 영역(`ss<=0.431403`)이 zero-win 손실 클러스터를 형성.
+        - 다음 국소 단계(v13):
+          - v12 후보 중 1개를 최소 범위(flag OFF 기본)로 코드 프로브하여
+            Gate3(verification + daily OOS) 비열화 여부를 확인하고,
+            fail 시 즉시 rollback.
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
    - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.

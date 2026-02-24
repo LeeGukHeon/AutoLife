@@ -210,6 +210,28 @@ Last updated: 2026-02-24
     - interpretation:
       - mapping ON expansion is driven by TRENDING_UP foundation selection widening, not runtime-selection growth.
       - this widening aligns with rescue self-loop expansion observed in v10.
+  - v12 candidate design refresh (minimal block/cooldown, no code patch yet):
+    - new script:
+      - `scripts/analyze_v12_rescue_transition_guard_candidates.py`
+    - artifacts:
+      - `build/Release/logs/v12_rescue_transition_guard_candidates_eth_0216_0219_selfloop_top200.json`
+      - `build/Release/logs/v12_rescue_transition_guard_shortlist_eth_0216_0219.json`
+    - scope:
+      - `KRW-ETH`, `2026-02-16~2026-02-19`,
+        `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER` self-loop transitions
+    - key candidates:
+      - zero-win top:
+        - `signal_strength <= 0.431403`
+        - `blocked_loss=3`, `blocked_win=0`, `blocked_net_improvement_krw=+180.502443`
+      - cooldown-like zero-win:
+        - `reentry_gap_minutes >= 665.983133333 && reward_risk_ratio <= 1.956255`
+        - `blocked_loss=2`, `blocked_win=0`, `blocked_net_improvement_krw=+139.713760`
+      - v11-boundary preset:
+        - `prev_stoploss + gap<=360 + ss<=0.475509 + ev<=-0.000179`
+        - `blocked_loss=2`, `blocked_win=3` (win-damage)
+    - interpretation:
+      - pure cooldown preset is insufficient; low-strength band (`ss<=0.431403`) forms the clean zero-win loss cluster.
+      - next step is minimal scoped code probe behind default-OFF flag.
 
 ## Current result snapshot
 - Baseline reference remains:
