@@ -105,6 +105,33 @@ Last updated: 2026-02-25
       - `status=fail`, `nonpositive_day_ratio=0.473684`, `total_profit_sum=-454.453357`
     - action:
       - keep flag OFF and continue fail-closed.
+  - config-aligned rerun (same 5-set, OFF vs ON):
+    - OFF:
+      - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_off_5set_3m7d_20260224.json`
+      - `status=pass`, `nonpositive_day_ratio=0.368421`, `total_profit_sum=118.672413`
+    - ON:
+      - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_5set_3m7d_20260224_rerun.json`
+      - `status=fail`, `nonpositive_day_ratio=0.473684`, `total_profit_sum=-454.453357`
+    - delta:
+      - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_vs_off_5set_20260224_full.json`
+      - `profit_sum_delta=-573.125770`, `nonpositive_day_count_delta=+2`
+      - concentrated distortion:
+        - `ETH 2026-02-16`: runtime -> `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER`, `trade_delta=+3`, `profit_delta=-289.287916`
+        - `ETH 2026-02-17`: runtime -> `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER`, `trade_delta=+5`, `profit_delta=-308.389098`
+        - `SOL 2026-02-19`: `RANGING|CORE_RESCUE_SHOULD_ENTER` expansion (`trade_delta=+11`)
+    - config-aligned profile replay artifacts:
+      - `build/Release/logs/daily_oos_trade_profile_correctness_runtime_mapping_off_5set_negative_focus_0216_0219_cfgaligned.json`
+      - `build/Release/logs/daily_oos_trade_profile_correctness_runtime_mapping_on_5set_negative_focus_0216_0219_cfgaligned.json`
+      - `build/Release/logs/correctness_runtime_mapping_on_vs_off_trade_profile_delta_0216_0219_cfgaligned.json`
+  - candidate mining from ON failure slices:
+    - TU|CORE_RESCUE (`ETH 2026-02-16/2026-02-17`):
+      - `build/Release/logs/step8b_input_correctness_on_tu_core_rescue_eth_0216_0217_cfgaligned.json`
+      - `build/Release/logs/step8b_guard_candidates_correctness_on_tu_core_rescue_eth_0216_0217_cfgaligned.json`
+      - zero-win-damage top: `cal <= 0.411591 && rr >= 1.947972`
+    - RANGING|CORE_RESCUE (`SOL 2026-02-19`):
+      - `build/Release/logs/step8b_input_correctness_on_ranging_core_rescue_sol_0219_cfgaligned.json`
+      - `build/Release/logs/step8b_guard_candidates_correctness_on_ranging_core_rescue_sol_0219_cfgaligned.json`
+      - zero-win-damage top: `signal_strength <= 0.477171`
 
 ## Current result snapshot
 - Baseline reference remains:

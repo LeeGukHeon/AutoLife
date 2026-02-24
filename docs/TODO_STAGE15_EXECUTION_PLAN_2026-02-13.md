@@ -1621,6 +1621,31 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
             - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_5set_3m7d_20260224.json`
             - `status=fail`, `nonpositive_day_ratio=0.473684`, `total_profit_sum=-454.453357`
           - 조치: fail-closed 유지(`backtest_strategyless_runtime_live_exit_mapping=false`).
+        - config 정렬 재실행(OFF vs ON 동일 5세트):
+          - OFF:
+            - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_off_5set_3m7d_20260224.json`
+            - `status=pass`, `nonpositive_day_ratio=0.368421`, `total_profit_sum=118.672413`
+          - ON:
+            - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_5set_3m7d_20260224_rerun.json`
+            - `status=fail`, `nonpositive_day_ratio=0.473684`, `total_profit_sum=-454.453357`
+          - delta:
+            - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_vs_off_5set_20260224_full.json`
+            - `profit_sum_delta=-573.125770`, `nonpositive_day_count_delta=+2`
+            - 집중 손실:
+              - `ETH 2026-02-16`: runtime -> `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER`, `trade_delta=+3`, `profit_delta=-289.287916`
+              - `ETH 2026-02-17`: runtime -> `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER`, `trade_delta=+5`, `profit_delta=-308.389098`
+              - `SOL 2026-02-19`: `RANGING|CORE_RESCUE_SHOULD_ENTER` expansion (`trade_delta=+11`)
+          - config-aligned trade profile:
+            - `build/Release/logs/daily_oos_trade_profile_correctness_runtime_mapping_off_5set_negative_focus_0216_0219_cfgaligned.json`
+            - `build/Release/logs/daily_oos_trade_profile_correctness_runtime_mapping_on_5set_negative_focus_0216_0219_cfgaligned.json`
+            - `build/Release/logs/correctness_runtime_mapping_on_vs_off_trade_profile_delta_0216_0219_cfgaligned.json`
+        - 국소 후보(ON 실패 슬라이스 기반):
+          - TU|CORE_RESCUE (`ETH 2026-02-16/2026-02-17`):
+            - `build/Release/logs/step8b_guard_candidates_correctness_on_tu_core_rescue_eth_0216_0217_cfgaligned.json`
+            - top: `cal <= 0.411591 && rr >= 1.947972` (`blocked_loss=5`, `blocked_win=0`)
+          - RANGING|CORE_RESCUE (`SOL 2026-02-19`):
+            - `build/Release/logs/step8b_guard_candidates_correctness_on_ranging_core_rescue_sol_0219_cfgaligned.json`
+            - top: `signal_strength <= 0.477171` (`blocked_loss=7`, `blocked_win=0`)
       - 다음은 `코드 패치 재시도`가 아니라, 포지션 점유/후속 진입 왜곡 원인(ETH 2/16~2/17) 계측을
         먼저 고정한 뒤 국소 프로브(v2) 범위를 재정의.
       - v2(runtime-only) + v3(rescue cooldown) 모두 실패 반영:
