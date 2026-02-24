@@ -108,6 +108,25 @@ Last updated: 2026-02-24
         - top: `signal_strength <= 0.472377` (`blocked_loss=6`, `blocked_win=0`)
     - action:
       - probe code reverted with `git restore` and baseline-safe state kept (`backtest_strategyless_runtime_live_exit_mapping=false`).
+  - v9 occupancy drift instrumentation landed:
+    - new script:
+      - `scripts/analyze_correctness_occupancy_drift.py`
+    - config-aligned full-slice profile refresh (`ETH 2026-02-16~2026-02-19`):
+      - OFF profile:
+        - `build/Release/logs/daily_oos_trade_profile_correctness_runtime_mapping_off_5set_0216_0219_fullslice_cfgaligned_v9.json`
+      - ON profile:
+        - `build/Release/logs/daily_oos_trade_profile_correctness_runtime_mapping_on_5set_0216_0219_fullslice_cfgaligned_v9.json`
+      - drift report:
+        - `build/Release/logs/correctness_runtime_mapping_occupancy_drift_eth_0216_0219_fullslice_cfgaligned_v9.json`
+      - key deltas:
+        - `trade_count_delta=+8`
+        - `profit_sum_delta_krw=-536.093965`
+        - `rescue_trade_share: 0.625 -> 1.0`
+        - `runtime_trade_share: 0.375 -> 0.0`
+        - top transition expansion:
+          - `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER -> TRENDING_UP|CORE_RESCUE_SHOULD_ENTER: +14`
+    - interpretation:
+      - mapping ON path shifts ETH slice into rescue-only repetitive occupancy; direct guard retries remain blocked until transition trigger context is isolated.
   - live execution update 로그 수집 선행조건은 충족됨
     (`execution_updates_live.jsonl` 생성 확인).
   - live parity path hardening landed:
@@ -359,6 +378,7 @@ Last updated: 2026-02-24
   - `build/Release/logs/verification_loss_tail_focus_step8e.json`
   - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8w_profile.json`
   - `build/Release/logs/so4_15_target_cell_trade_profile_step8w.json`
+  - `build/Release/logs/correctness_runtime_mapping_occupancy_drift_eth_0216_0219_fullslice_cfgaligned_v9.json`
   - `build/Release/logs/strategyless_exit_audit_5set_20260224.json`
   - `build/Release/logs/execution_parity_report_strategyless_audit_20260224.json`
   - `build/Release/logs/execution_parity_report_strategyless_audit_strict_after_livepaper_patch_20260224.json`

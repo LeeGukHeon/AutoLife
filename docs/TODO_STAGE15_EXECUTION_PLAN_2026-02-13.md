@@ -1678,9 +1678,28 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
             - `profit_sum_delta=-576.678996`, `nonpositive_day_count_delta=+1`
           - 조치:
             - fail-closed rollback.
-        - 다음 국소 단계(v9):
-          - 코드 패치 재시도 전에 `ETH 2026-02-16~2026-02-17` 점유시간/후속 진입 왜곡 계측을
-            추가 고정하고, 해당 계측 근거로 guard 범위를 재정의.
+        - v9 계측(점유/재진입 왜곡 고정, config-aligned) 완료:
+          - 신규 스크립트:
+            - `scripts/analyze_correctness_occupancy_drift.py`
+          - full-slice 프로파일(ETH `2026-02-16~2026-02-19`):
+            - OFF:
+              - `build/Release/logs/daily_oos_trade_profile_correctness_runtime_mapping_off_5set_0216_0219_fullslice_cfgaligned_v9.json`
+            - ON:
+              - `build/Release/logs/daily_oos_trade_profile_correctness_runtime_mapping_on_5set_0216_0219_fullslice_cfgaligned_v9.json`
+          - 계측 리포트:
+            - `build/Release/logs/correctness_runtime_mapping_occupancy_drift_eth_0216_0219_fullslice_cfgaligned_v9.json`
+          - 핵심:
+            - `trade_count_delta=+8`, `profit_sum_delta_krw=-536.093965`
+            - `runtime_trade_share: 0.375 -> 0.0`
+            - `rescue_trade_share: 0.625 -> 1.0`
+            - 전이 확장:
+              - `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER -> TRENDING_UP|CORE_RESCUE_SHOULD_ENTER: +14`
+          - 해석:
+            - mapping ON에서 ETH 구간이 rescue-only loop로 전환됨.
+            - 코드 가드 재시도 전, transition trigger context 계측을 먼저 고정해야 함.
+        - 다음 국소 단계(v10):
+          - `TRENDING_UP|CORE_RESCUE` self-loop 확대 원인(진입트리거/쿨다운 경계)을
+            동일 캔들 기준으로 계측하고, guard 범위를 재정의.
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
    - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.

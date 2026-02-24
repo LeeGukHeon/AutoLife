@@ -159,6 +159,21 @@ Last updated: 2026-02-24
     - action:
       - uncommitted probe code reverted (`git restore`), baseline-safe code restored.
       - next step is instrumentation-first on occupancy drift; no direct guard code retry until drift evidence is tightened.
+  - v9 instrumentation refresh (occupancy/re-entry drift, config-aligned):
+    - new script:
+      - `scripts/analyze_correctness_occupancy_drift.py`
+    - full-slice profile refresh (`ETH 2026-02-16~2026-02-19`, OFF vs ON):
+      - `build/Release/logs/daily_oos_trade_profile_correctness_runtime_mapping_off_5set_0216_0219_fullslice_cfgaligned_v9.json`
+      - `build/Release/logs/daily_oos_trade_profile_correctness_runtime_mapping_on_5set_0216_0219_fullslice_cfgaligned_v9.json`
+    - drift report:
+      - `build/Release/logs/correctness_runtime_mapping_occupancy_drift_eth_0216_0219_fullslice_cfgaligned_v9.json`
+      - `trade_count_delta=+8`, `profit_sum_delta_krw=-536.093965`
+      - `runtime_trade_share: 0.375 -> 0.0`
+      - `rescue_trade_share: 0.625 -> 1.0`
+      - top transition expansion:
+        - `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER -> TRENDING_UP|CORE_RESCUE_SHOULD_ENTER: +14`
+    - interpretation:
+      - ON mapping state shows rescue-only looping on ETH slice; keep fail-closed and prioritize transition-trigger instrumentation before any new guard patch.
 
 ## Current result snapshot
 - Baseline reference remains:
