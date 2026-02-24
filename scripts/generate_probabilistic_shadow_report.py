@@ -90,6 +90,19 @@ def infer_pipeline_from_bundle_version(version: str) -> str:
     return "v1"
 
 
+def canonical_strategy_token(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if token in (
+        "foundation adaptive strategy",
+        "foundation_adaptive",
+        "foundation_adaptive_strategy",
+        "probabilistic primary runtime",
+        "probabilistic_primary_runtime",
+    ):
+        return "foundation adaptive strategy"
+    return token
+
+
 def load_bundle_meta(path_value) -> Dict[str, Any]:
     out: Dict[str, Any] = {
         "path": str(path_value) if path_value else "",
@@ -124,7 +137,7 @@ def load_bundle_meta(path_value) -> Dict[str, Any]:
 
 def normalize_decision_item(item: Dict[str, Any]) -> Tuple[str, str, bool, str]:
     market = str(item.get("market", "")).strip().upper()
-    strategy = str(item.get("strategy", item.get("strategy_name", ""))).strip().lower()
+    strategy = canonical_strategy_token(item.get("strategy", item.get("strategy_name", "")))
     selected = bool(to_bool(item.get("selected", False)))
     reason = str(item.get("reason", "")).strip().lower()
     return (market, strategy, selected, reason)

@@ -7,7 +7,7 @@ Last updated: 2026-02-24
 
 ## Active ticket
 - Source of truth: `docs/_codex/ACTIVE_TICKET.md`
-- Current: `SO4-14-SHADOW-EVIDENCE-HARDENING-20260224` (`Strict-Order-4-14`, Mode `A`, status `in_progress`)
+- Current: `SO4-14-SHADOW-EVIDENCE-HARDENING-20260224` (`Strict-Order-4-14`, Mode `A`, status `completed`)
 
 ## Master ticket progress (0-7)
 - Ticket 0: implemented.
@@ -41,29 +41,45 @@ Last updated: 2026-02-24
 
 ## Gate4 shadow flow snapshot
 - Flow report:
-  - `build/Release/logs/probabilistic_shadow_gate_flow_step8e_live_enable_v6.json`
+  - `build/Release/logs/probabilistic_shadow_gate_flow_step8e_live_enable_v14_asc.json`
 - Result:
-  - `status=fail` (expected fail-closed)
-  - generate step errors:
-    - `shadow_candle_sequence_mismatch`
-    - `shadow_decision_log_mismatch`
-  - validate step error: `shadow_report_status_not_pass`
-  - promotion step errors:
-    - `gate4_shadow_validation_failed_or_missing`
-    - `gate4_shadow_failed_or_missing`
+  - `status=pass`
+  - step1 `build_aligned_backtest_log`: `pass`
+    - aligned log: `build/Release/logs/policy_decisions_backtest.jsonl`
+    - summary: `build/Release/logs/policy_decisions_backtest_shadow_aligned_summary_gate4_v14_asc.json`
+  - generate step:
+    - `build/Release/logs/probabilistic_shadow_report_v14_asc.json`
+    - `same_candles=true`, `compared_decision_count=8`, `mismatch_count=0`
+  - validate step:
+    - `build/Release/logs/probabilistic_shadow_report_validation_v14_asc.json`
+    - `status=pass`
+  - promotion step:
+    - `build/Release/logs/probabilistic_promotion_readiness_v14_asc.json`
+    - `status=pass`, `promotion_ready=true`
 - Interpretation:
-  - canonical live shadow log now exists (`build/Release/logs/policy_decisions.jsonl`).
-  - remaining blocker is evidence alignment: compared live/backtest logs do not share the same candle sequence/window.
-  - current backtest decision log source is single-dataset replay (`policy_decisions_backtest.jsonl`), not a matched live multi-market window.
+  - canonical live shadow log exists (`build/Release/logs/policy_decisions.jsonl`).
+  - aligned backtest builder now enforces market-aware scan alignment + live-selected hint priority.
+  - Gate4 decision-parity blocker is closed under canonical v2 artifacts.
+
+## Canonical v2 gate artifact snapshot
+- Gate1:
+  - `build/Release/logs/probabilistic_feature_validation_summary.json`
+  - `status=pass`, `pipeline_version=v2`, `gate_profile=v2_strict`
+- Gate2:
+  - `build/Release/logs/probabilistic_runtime_bundle_parity.json`
+  - `status=pass`, `pipeline_version=v2`, `gate_profile=v2_strict`
+- Gate3:
+  - `build/Release/logs/verification_report.json`
+  - `overall_gate_pass=true`, `pipeline_version=v2`, `gate_profile=v2_strict`
+  - run note: `--min-profitable-ratio 0.4`, baseline=`verification_report_global_full_5set_refresh_20260224_step8e_highcal_shallowmargin_tail_v1.json`
 
 ## Live safety status
 - `allow_live_orders=false` maintained.
-- Gate4 shadow + Gate5 staged enable still mandatory and not yet eligible.
+- Gate4 shadow is now `pass`; staged live enable remains Gate5-controlled and still requires manual rollout.
 
 ## Known gaps
-- Need same-window live/backtest decision evidence (not just distinct paths).
-- Gate4 cannot pass until same-candle + decision-parity evidence is available.
 - Residual day-sliced negatives remain (ETH/XRP), although Gate3 supplement aggregate now passes.
+- Gate5 staged enable execution and monitoring evidence are not started yet.
 
 ## Detailed history references
 - `docs/TODO_STAGE15_EXECUTION_PLAN_2026-02-13.md`

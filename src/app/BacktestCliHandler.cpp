@@ -361,6 +361,7 @@ bool tryRunCliBacktest(int argc, char* argv[], Config& config, int& out_exit_cod
     std::vector<std::string> cli_enabled_strategies;
     double cli_initial_capital = -1.0;
     bool cli_require_higher_tf_companions = false;
+    bool cli_shadow_policy_only = false;
 
     auto trim_copy = [](std::string s) {
         const auto first = s.find_first_not_of(" \t\r\n");
@@ -393,6 +394,10 @@ bool tryRunCliBacktest(int argc, char* argv[], Config& config, int& out_exit_cod
         }
         if (arg == "--require-higher-tf-companions") {
             cli_require_higher_tf_companions = true;
+            continue;
+        }
+        if (arg == "--shadow-policy-only") {
+            cli_shadow_policy_only = true;
             continue;
         }
         if (arg == "--strategies" && i + 1 < argc) {
@@ -428,6 +433,9 @@ bool tryRunCliBacktest(int argc, char* argv[], Config& config, int& out_exit_cod
     }
     if (!cli_enabled_strategies.empty()) {
         config.setEnabledStrategies(cli_enabled_strategies);
+    }
+    if (cli_shadow_policy_only) {
+        config.setBacktestShadowPolicyOnly(true);
     }
 
     std::cout << "백테스트 모드(CLI) 실행\n";

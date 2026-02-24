@@ -1623,11 +1623,12 @@ void BacktestEngine::init(const Config& config) {
     }
     
     LOG_INFO(
-        "BacktestEngine initialized (core_bridge={}, core_policy={}, core_risk={}, core_execution={})",
+        "BacktestEngine initialized (core_bridge={}, core_policy={}, core_risk={}, core_execution={}, shadow_policy_only={})",
         engine_config_.enable_core_plane_bridge ? "on" : "off",
         engine_config_.enable_core_policy_plane ? "on" : "off",
         engine_config_.enable_core_risk_plane ? "on" : "off",
-        engine_config_.enable_core_execution_plane ? "on" : "off"
+        engine_config_.enable_core_execution_plane ? "on" : "off",
+        engine_config_.backtest_shadow_policy_only ? "on" : "off"
     );
 }
 
@@ -2958,67 +2959,72 @@ void BacktestEngine::processCandle(const Candle& candle) {
                             quantity > 0.0 && available_cash >= (quantity * fill_price) + fee;
 
                         if (order_sizing_ok) {
-                            Order order;
-                            order.market = market_name_;
-                            order.side = OrderSide::BUY;
-                            order.price = fill_price;
-                            order.volume = quantity;
-                            order.strategy_name = best_signal.strategy_name;
+                            if (engine_config_.backtest_shadow_policy_only) {
+                                // Shadow evidence mode: keep decision stream deterministic
+                                // without mutating position state from entry execution.
+                            } else {
+                                Order order;
+                                order.market = market_name_;
+                                order.side = OrderSide::BUY;
+                                order.price = fill_price;
+                                order.volume = quantity;
+                                order.strategy_name = best_signal.strategy_name;
 
-                            executeOrder(order, fill_price);
+                                executeOrder(order, fill_price);
 
-                            // Register with Risk Manager
-                            risk_manager_->enterPosition(
-                                market_name_,
-                                fill_price,
-                                quantity,
-                                best_signal.stop_loss,
-                                best_signal.take_profit_1,
-                                best_signal.take_profit_2,
-                                best_signal.strategy_name,
-                                best_signal.breakeven_trigger,
-                                best_signal.trailing_start
-                            );
-                            if (auto* entered_position = risk_manager_->getPosition(market_name_)) {
-                                // Backtest holding-time logic must be candle-clock based.
-                                entered_position->entry_time = toMsTimestamp(candle.timestamp);
-                            }
-                            const double reward_pct = (best_signal.take_profit_2 - best_signal.entry_price) / std::max(1e-9, best_signal.entry_price);
-                            const double risk_pct = (best_signal.entry_price - best_signal.stop_loss) / std::max(1e-9, best_signal.entry_price);
-                            const double rr = (risk_pct > 1e-9) ? (reward_pct / risk_pct) : 0.0;
-                            const double round_trip_cost = computeEffectiveRoundTripCostPct(best_signal, engine_config_);
-                            const double net_edge = reward_pct - round_trip_cost;
-                            const double calibrated_edge = computeCalibratedExpectedEdgePct(best_signal, engine_config_);
-                            const double tracked_expected_edge =
-                                (std::isfinite(calibrated_edge))
-                                    ? calibrated_edge
-                                    : ((best_signal.expected_value != 0.0) ? best_signal.expected_value : net_edge);
-                            risk_manager_->setPositionSignalInfo(
-                                market_name_,
-                                best_signal.signal_filter,
-                                best_signal.strength,
-                                best_signal.market_regime,
-                                best_signal.liquidity_score,
-                                best_signal.volatility,
-                                tracked_expected_edge,
-                                rr,
-                                best_signal.entry_archetype,
-                                best_signal.probabilistic_runtime_applied,
-                                best_signal.probabilistic_h1_calibrated,
-                                best_signal.probabilistic_h5_calibrated,
-                                best_signal.probabilistic_h5_threshold,
-                                best_signal.probabilistic_h5_margin
-                            );
-                            auto selected_strategy = strategy_manager_->getStrategy(best_signal.strategy_name);
-                            if (selected_strategy &&
-                                !selected_strategy->onSignalAccepted(best_signal, order_amount)) {
-                                LOG_WARN("{} strategy accepted backtest entry but state registration was skipped: {}",
-                                         market_name_, best_signal.strategy_name);
-                            }
-                            entry_executed = true;
-                            entry_funnel_.entries_executed++;
-                            if (!best_signal.strategy_name.empty()) {
-                                strategy_entries_executed_counts_[best_signal.strategy_name]++;
+                                // Register with Risk Manager
+                                risk_manager_->enterPosition(
+                                    market_name_,
+                                    fill_price,
+                                    quantity,
+                                    best_signal.stop_loss,
+                                    best_signal.take_profit_1,
+                                    best_signal.take_profit_2,
+                                    best_signal.strategy_name,
+                                    best_signal.breakeven_trigger,
+                                    best_signal.trailing_start
+                                );
+                                if (auto* entered_position = risk_manager_->getPosition(market_name_)) {
+                                    // Backtest holding-time logic must be candle-clock based.
+                                    entered_position->entry_time = toMsTimestamp(candle.timestamp);
+                                }
+                                const double reward_pct = (best_signal.take_profit_2 - best_signal.entry_price) / std::max(1e-9, best_signal.entry_price);
+                                const double risk_pct = (best_signal.entry_price - best_signal.stop_loss) / std::max(1e-9, best_signal.entry_price);
+                                const double rr = (risk_pct > 1e-9) ? (reward_pct / risk_pct) : 0.0;
+                                const double round_trip_cost = computeEffectiveRoundTripCostPct(best_signal, engine_config_);
+                                const double net_edge = reward_pct - round_trip_cost;
+                                const double calibrated_edge = computeCalibratedExpectedEdgePct(best_signal, engine_config_);
+                                const double tracked_expected_edge =
+                                    (std::isfinite(calibrated_edge))
+                                        ? calibrated_edge
+                                        : ((best_signal.expected_value != 0.0) ? best_signal.expected_value : net_edge);
+                                risk_manager_->setPositionSignalInfo(
+                                    market_name_,
+                                    best_signal.signal_filter,
+                                    best_signal.strength,
+                                    best_signal.market_regime,
+                                    best_signal.liquidity_score,
+                                    best_signal.volatility,
+                                    tracked_expected_edge,
+                                    rr,
+                                    best_signal.entry_archetype,
+                                    best_signal.probabilistic_runtime_applied,
+                                    best_signal.probabilistic_h1_calibrated,
+                                    best_signal.probabilistic_h5_calibrated,
+                                    best_signal.probabilistic_h5_threshold,
+                                    best_signal.probabilistic_h5_margin
+                                );
+                                auto selected_strategy = strategy_manager_->getStrategy(best_signal.strategy_name);
+                                if (selected_strategy &&
+                                    !selected_strategy->onSignalAccepted(best_signal, order_amount)) {
+                                    LOG_WARN("{} strategy accepted backtest entry but state registration was skipped: {}",
+                                             market_name_, best_signal.strategy_name);
+                                }
+                                entry_executed = true;
+                                entry_funnel_.entries_executed++;
+                                if (!best_signal.strategy_name.empty()) {
+                                    strategy_entries_executed_counts_[best_signal.strategy_name]++;
+                                }
                             }
                         } else {
                             entry_funnel_.blocked_order_sizing++;
@@ -3129,6 +3135,12 @@ void BacktestEngine::checkOrders(const Candle& candle) {
 }
 
 void BacktestEngine::executeOrder(const Order& order, double price) {
+    if (engine_config_.backtest_shadow_policy_only) {
+        (void)order;
+        (void)price;
+        return;
+    }
+
     Order queued = order;
     if (queued.order_id.empty()) {
         queued.order_id = "bt-" + std::to_string(++backtest_order_seq_);
@@ -3529,6 +3541,3 @@ void BacktestEngine::updateDynamicFilter() {
 
 } // namespace backtest
 } // namespace autolife
-
-
-

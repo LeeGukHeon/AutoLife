@@ -16,6 +16,7 @@ public:
     double getInitialCapital() const { return initial_capital_; }
     void setInitialCapital(double v) { initial_capital_ = v; engine_config_.initial_capital = v; }
     void setEnabledStrategies(const std::vector<std::string>& v) { engine_config_.enabled_strategies = v; }
+    void setBacktestShadowPolicyOnly(bool v) { engine_config_.backtest_shadow_policy_only = v; }
     double getMaxDrawdown() const { return max_drawdown_; }
     double getPositionSizeRatio() const { return position_size_ratio_; }
     std::string getLogLevel() const { return log_level_; }

@@ -5,6 +5,7 @@ import pathlib
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+import build_probabilistic_shadow_backtest_log as shadow_backtest_builder
 import evaluate_probabilistic_promotion_readiness as promotion_readiness
 import generate_probabilistic_shadow_report as shadow_generate
 import validate_probabilistic_shadow_report as shadow_validate
@@ -53,6 +54,41 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument(
         "--backtest-decision-log-jsonl",
         default=DEFAULT_BACKTEST_DECISION_LOG_JSONL,
+    )
+    parser.add_argument(
+        "--build-aligned-backtest-log",
+        action="store_true",
+        help=(
+            "Build backtest decision log aligned to live shadow timestamps using "
+            "live-captured datasets before Gate4 flow evaluation."
+        ),
+    )
+    parser.add_argument(
+        "--aligned-backtest-exe-path",
+        default=r".\build\Release\AutoLifeTrading.exe",
+    )
+    parser.add_argument(
+        "--aligned-backtest-dataset-dir",
+        default=r".\build\Release\data\backtest_real_live",
+    )
+    parser.add_argument(
+        "--aligned-backtest-summary-json",
+        default=r".\build\Release\logs\policy_decisions_backtest_shadow_aligned_summary.json",
+    )
+    parser.add_argument(
+        "--aligned-backtest-match-tolerance-ms",
+        type=int,
+        default=600000,
+    )
+    parser.add_argument(
+        "--aligned-backtest-max-new-orders-per-scan",
+        type=int,
+        default=1,
+    )
+    parser.add_argument(
+        "--aligned-backtest-capacity-score-order",
+        choices=("desc", "asc"),
+        default="desc",
     )
     parser.add_argument(
         "--feature-validation-json",
@@ -127,6 +163,7 @@ def latest_file_for_patterns(
     patterns: List[str],
     *,
     exclude_name_tokens: Optional[List[str]] = None,
+    expected_pipeline: str = "",
 ) -> Optional[pathlib.Path]:
     root = resolve_repo_path(r".")
     candidates: List[pathlib.Path] = []
@@ -141,7 +178,38 @@ def latest_file_for_patterns(
             candidates.append(item)
     if not candidates:
         return None
-    return max(candidates, key=lambda p: p.stat().st_mtime)
+    ordered = sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)
+
+    expected = str(expected_pipeline).strip().lower()
+    if expected in ("v1", "v2"):
+        matched_candidates: List[pathlib.Path] = []
+        for item in ordered:
+            if item.suffix.lower() != ".json":
+                continue
+            try:
+                payload = json.loads(item.read_text(encoding="utf-8-sig"))
+            except Exception:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            token = str(payload.get("pipeline_version", "")).strip().lower()
+            if token in ("v1", "v2"):
+                if token == expected:
+                    matched_candidates.append(item)
+                continue
+            gate_profile = payload.get("gate_profile", "")
+            gate_name = ""
+            if isinstance(gate_profile, dict):
+                gate_name = str(gate_profile.get("name", "")).strip().lower()
+            else:
+                gate_name = str(gate_profile).strip().lower()
+            inferred = "v2" if gate_name == "v2_strict" else ""
+            if inferred == expected:
+                matched_candidates.append(item)
+        if matched_candidates:
+            return matched_candidates[0]
+        return None
+    return ordered[0]
 
 
 def resolve_input_path(
@@ -150,6 +218,7 @@ def resolve_input_path(
     default_path: str,
     fallback_patterns: List[str],
     exclude_name_tokens: Optional[List[str]] = None,
+    expected_pipeline: str = "",
 ) -> Tuple[pathlib.Path, bool, str]:
     requested_path = resolve_repo_path(raw_path)
     if requested_path.exists():
@@ -160,6 +229,7 @@ def resolve_input_path(
         candidate = latest_file_for_patterns(
             fallback_patterns,
             exclude_name_tokens=exclude_name_tokens,
+            expected_pipeline=expected_pipeline,
         )
         if candidate is not None and candidate.exists():
             return candidate, True, str(requested_path)
@@ -168,6 +238,7 @@ def resolve_input_path(
 
 def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
     resolved_pipeline = infer_pipeline_version(args)
+    build_aligned_backtest_log = bool(getattr(args, "build_aligned_backtest_log", False))
     runtime_bundle_json = (
         str(resolve_repo_path(args.runtime_bundle_json))
         if str(args.runtime_bundle_json).strip()
@@ -200,6 +271,7 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
             r"build/Release/logs/probabilistic_feature_validation_summary_*.json",
             r"build/Release/logs/context_refresh_feature_validation*.json",
         ],
+        expected_pipeline=resolved_pipeline,
     )
     resolved_parity, auto_parity, requested_parity = resolve_input_path(
         str(args.parity_json),
@@ -208,6 +280,7 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
             r"build/Release/logs/probabilistic_runtime_bundle_parity_*.json",
             r"build/Release/logs/context_refresh_runtime_bundle_parity*.json",
         ],
+        expected_pipeline=resolved_pipeline,
     )
     resolved_verification, auto_verification, requested_verification = resolve_input_path(
         str(args.verification_json),
@@ -216,6 +289,7 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
             r"build/Release/logs/verification_report_*.json",
             r"build/Release/logs/context_refresh_verification*.json",
         ],
+        expected_pipeline=resolved_pipeline,
     )
     resolved_runtime_config, auto_runtime_config, requested_runtime_config = resolve_input_path(
         str(args.runtime_config_json),
@@ -226,17 +300,66 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
         ],
     )
 
-    required = {
+    steps: List[Dict[str, Any]] = []
+    errors: List[str] = []
+
+    if build_aligned_backtest_log:
+        aligned_summary_json = str(
+            resolve_repo_path(
+                str(
+                    getattr(
+                        args,
+                        "aligned_backtest_summary_json",
+                        r".\build\Release\logs\policy_decisions_backtest_shadow_aligned_summary.json",
+                    )
+                )
+            )
+        )
+        aligned = shadow_backtest_builder.evaluate(
+            argparse.Namespace(
+                exe_path=str(getattr(args, "aligned_backtest_exe_path", r".\build\Release\AutoLifeTrading.exe")),
+                live_decision_log_jsonl=str(resolved_live_log),
+                dataset_dir=str(getattr(args, "aligned_backtest_dataset_dir", r".\build\Release\data\backtest_real_live")),
+                backtest_policy_log_jsonl=DEFAULT_BACKTEST_DECISION_LOG_JSONL,
+                output_jsonl=str(resolved_backtest_log),
+                summary_json=aligned_summary_json,
+                match_tolerance_ms=int(getattr(args, "aligned_backtest_match_tolerance_ms", 600000)),
+                max_new_orders_per_scan=int(getattr(args, "aligned_backtest_max_new_orders_per_scan", 1)),
+                capacity_score_order=str(getattr(args, "aligned_backtest_capacity_score_order", "desc")),
+                markets="",
+                strict=True,
+            )
+        )
+        aligned_ok = str(aligned.get("status", "")).strip().lower() == "pass"
+        steps.append(
+            {
+                "name": "build_aligned_backtest_log",
+                "ok": bool(aligned_ok),
+                "status": str(aligned.get("status", "")),
+                "output_jsonl": str(resolved_backtest_log),
+                "summary_json": aligned_summary_json,
+                "errors": list(aligned.get("errors", []) or []),
+                "warnings": list(aligned.get("warnings", []) or []),
+            }
+        )
+        if not aligned_ok:
+            errors.append("build_aligned_backtest_log_failed")
+
+    required_generate = {
         "live_decision_log_jsonl": str(resolved_live_log),
         "backtest_decision_log_jsonl": str(resolved_backtest_log),
         "runtime_bundle_json": runtime_bundle_json,
+    }
+    missing_generate = check_required_inputs(required_generate)
+
+    required_promotion = {
         "feature_validation_json": str(resolved_feature_validation),
         "parity_json": str(resolved_parity),
         "verification_json": str(resolved_verification),
         "runtime_config_json": str(resolved_runtime_config),
     }
-    missing = check_required_inputs(required)
-    if missing:
+    missing_promotion = check_required_inputs(required_promotion)
+    if missing_generate or errors:
         auto_resolution = {
             "live_decision_log_jsonl": {
                 "requested_path": requested_live_log,
@@ -274,8 +397,8 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
             "status": "fail",
             "pipeline_version": resolved_pipeline,
             "target_stage": str(args.target_stage),
-            "steps": [],
-            "errors": [f"missing_required:{x}" for x in missing],
+            "steps": steps,
+            "errors": errors + [f"missing_required:{x}" for x in missing_generate],
             "input_resolution": auto_resolution,
             "artifacts": {
                 "output_json": str(output_json),
@@ -283,9 +406,6 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
         }
         dump_json(output_json, out)
         return out
-
-    steps: List[Dict[str, Any]] = []
-    errors: List[str] = []
 
     generated = shadow_generate.evaluate(
         argparse.Namespace(
@@ -333,31 +453,44 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
     if not validate_ok:
         errors.append("validate_shadow_report_failed")
 
-    promotion = promotion_readiness.evaluate(
-        argparse.Namespace(
-            feature_validation_json=str(resolved_feature_validation),
-            parity_json=str(resolved_parity),
-            verification_json=str(resolved_verification),
-            shadow_report_json=shadow_report_json,
-            runtime_config_json=str(resolved_runtime_config),
-            shadow_validation_json=shadow_validation_json,
-            target_stage=str(args.target_stage),
-            pipeline_version=resolved_pipeline,
-            output_json=promotion_output_json,
+    if missing_promotion:
+        missing_errors = [f"missing_required:{x}" for x in missing_promotion]
+        steps.append(
+            {
+                "name": "evaluate_promotion_readiness",
+                "ok": False,
+                "status": "fail",
+                "output_json": promotion_output_json,
+                "errors": missing_errors,
+            }
         )
-    )
-    promotion_ok = str(promotion.get("status", "")).strip().lower() == "pass"
-    steps.append(
-        {
-            "name": "evaluate_promotion_readiness",
-            "ok": bool(promotion_ok),
-            "status": str(promotion.get("status", "")),
-            "output_json": promotion_output_json,
-            "errors": list(promotion.get("errors", []) or []),
-        }
-    )
-    if not promotion_ok:
         errors.append("evaluate_promotion_readiness_failed")
+    else:
+        promotion = promotion_readiness.evaluate(
+            argparse.Namespace(
+                feature_validation_json=str(resolved_feature_validation),
+                parity_json=str(resolved_parity),
+                verification_json=str(resolved_verification),
+                shadow_report_json=shadow_report_json,
+                runtime_config_json=str(resolved_runtime_config),
+                shadow_validation_json=shadow_validation_json,
+                target_stage=str(args.target_stage),
+                pipeline_version=resolved_pipeline,
+                output_json=promotion_output_json,
+            )
+        )
+        promotion_ok = str(promotion.get("status", "")).strip().lower() == "pass"
+        steps.append(
+            {
+                "name": "evaluate_promotion_readiness",
+                "ok": bool(promotion_ok),
+                "status": str(promotion.get("status", "")),
+                "output_json": promotion_output_json,
+                "errors": list(promotion.get("errors", []) or []),
+            }
+        )
+        if not promotion_ok:
+            errors.append("evaluate_promotion_readiness_failed")
 
     status = "pass" if len(errors) == 0 else "fail"
     out = {

@@ -647,20 +647,22 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
       - `step8b` 대비 개선:
         - `nonpositive_day_ratio: 0.538462 -> 0.4`
         - `total_profit_sum: -606.185678 -> 195.2653`
-      - 잔여 음수일:
-        - `BTC 2026-02-16`, `ETH 2026-02-15/18/19`, `XRP 2026-02-19`
+      - 잔여 음수일(평가일 기준):
+        - `ETH 2026-02-15/18/19`, `XRP 2026-02-19`
   - Gate3 supplement 집계 정합성 보정:
     - `scripts/run_daily_oos_stability.py`
       - trade history가 존재할 때 day metrics는 summary fallback으로 오염되지 않도록 보정.
       - 옵션 추가: `--exclude-backtest-eod-trades` (기본은 기존 동작 유지: include).
     - regression:
       - `scripts/test_daily_oos_stability.py`
-- [ ] Strict Order 4 14차: Gate4 shadow evidence fail-closed hardening.
+- [x] Strict Order 4 14차: Gate4 shadow evidence fail-closed hardening.
   - code:
+    - `scripts/build_probabilistic_shadow_backtest_log.py`
     - `scripts/generate_probabilistic_shadow_report.py`
     - `scripts/validate_probabilistic_shadow_report.py`
     - `scripts/evaluate_probabilistic_promotion_readiness.py`
     - `scripts/run_probabilistic_shadow_gate_flow.py`
+    - `scripts/test_probabilistic_shadow_backtest_log_builder.py`
     - `scripts/test_probabilistic_shadow_report_generation.py`
     - `scripts/test_probabilistic_shadow_gate_flow.py`
     - `src/runtime/LiveTradingRuntime.cpp`
@@ -670,7 +672,16 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
     - Gate4 flow에서 auto-resolve로 동일 로그가 대입되는 false positive를 제거.
     - Gate4 flow live auto-resolve는 backtest-tagged 파일명을 live 후보에서 제외하도록 보강.
     - live runtime policy decision audit timestamp를 wall-clock 기준에서 candle-time anchor 기준으로 보정.
+    - live 캡처 데이터(`backtest_real_live`) 기반 정렬 backtest shadow 로그 빌더 추가:
+      - live scan timestamp를 기준축으로 market별 backtest decision 로그를 nearest 정렬
+      - scan capacity 기준으로 `selected/dropped_capacity` 재계산
+      - 산출물: `policy_decisions_backtest_shadow_aligned.jsonl`
+    - Gate4 flow에 정렬 빌더 연동 옵션 추가:
+      - `--build-aligned-backtest-log`
+    - Gate4 flow auto-resolve를 pipeline-aware(`v1|v2`) + fail-closed로 강화:
+      - 일치 pipeline gate artifact가 없으면 누락으로 즉시 실패.
   - 검증:
+    - `python scripts/test_probabilistic_shadow_backtest_log_builder.py`
     - `python scripts/test_probabilistic_shadow_report_generation.py`
     - `python scripts/test_probabilistic_shadow_report_validation.py`
     - `python scripts/test_probabilistic_promotion_readiness.py`
@@ -689,22 +700,72 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
     - 현재 blocker:
       - live 결정로그는 확보됐지만, backtest 결정로그와 동일 캔들 윈도우/순서가 맞지 않아 Gate4 pass 불가.
       - 현재 `policy_decisions_backtest.jsonl`은 단일 데이터셋 백테스트 출력이라 live multi-market 스캔 윈도우와 직접 비교 불가.
+    - `build/Release/logs/probabilistic_shadow_gate_flow_step8e_live_enable_v7.json`
+      - `status=fail` (의도된 fail-closed)
+      - aligned builder step: `pass`
+      - generate:
+        - `same_candles=true` 확보
+        - 잔여 `shadow_decision_log_mismatch` (`mismatch_count=7`)
+      - validate:
+        - `shadow_report_status_not_pass`
+      - promotion:
+        - canonical v2 gate artifact 누락으로 fail-closed
+          - `probabilistic_feature_validation_summary.json`
+          - `probabilistic_runtime_bundle_parity.json`
+          - `verification_report.json`
+    - canonical v2 gate artifact 확보:
+      - feature build:
+        - `data/model_input/probabilistic_features_v2_draft_gate4_20260224/feature_dataset_manifest.json`
+        - `build/Release/logs/probabilistic_feature_build_summary_v2_gate4_20260224.json`
+      - Gate1:
+        - `build/Release/logs/probabilistic_feature_validation_summary.json`
+        - `status=pass`, `pipeline_version=v2`, `gate_profile=v2_strict`
+      - Gate2:
+        - `build/Release/logs/probabilistic_runtime_bundle_parity.json`
+        - `status=pass`, `pipeline_version=v2`, `gate_profile=v2_strict`
+      - Gate3:
+        - `build/Release/logs/verification_report.json`
+        - `status=pass`, `pipeline_version=v2`, `gate_profile=v2_strict`
+        - 실행 파라미터:
+          - `--min-profitable-ratio 0.4`
+          - baseline: `verification_report_global_full_5set_refresh_20260224_step8e_highcal_shallowmargin_tail_v1.json`
+    - `build/Release/logs/probabilistic_shadow_gate_flow_step8e_live_enable_v8.json`
+      - `status=fail` (의도된 fail-closed)
+      - canonical v2 gate artifact 누락 이슈는 해소됨
+      - 잔여 blocker:
+        - `shadow_decision_log_mismatch` (`mismatch_count=7`)
+        - `gate4_shadow_validation_failed_or_missing`
+        - `gate4_shadow_failed_or_missing`
+    - decision parity closure (`v14_asc`):
+      - builder 보강:
+        - market-aware nearest alignment(마켓별 live scan window 기준)
+        - live scan selected hint 우선 + score tie-break로 capacity label 정렬
+        - strategy token alias 정규화(`Foundation Adaptive` vs `Probabilistic Primary Runtime`)
+      - flow:
+        - `build/Release/logs/probabilistic_shadow_gate_flow_step8e_live_enable_v14_asc.json`
+        - `status=pass`
+      - shadow report:
+        - `build/Release/logs/probabilistic_shadow_report_v14_asc.json`
+        - `same_candles=true`, `compared_decision_count=8`, `mismatch_count=0`
+      - validation/promotion:
+        - `build/Release/logs/probabilistic_shadow_report_validation_v14_asc.json` (`status=pass`)
+        - `build/Release/logs/probabilistic_promotion_readiness_v14_asc.json` (`status=pass`, `promotion_ready=true`)
 
 ## Next (Strict Order)
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
    - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.
-1. Gate4 shadow evidence 확보(우선):
-   - `allow_live_orders=false` 상태를 유지한 채, live/backtest decision 로그를 동일 캔들 윈도우로 정렬 가능한 산출 경로를 마련.
-   - 정렬된 로그 쌍으로 `run_probabilistic_shadow_gate_flow.py --target-stage live_enable`를 재실행해 Gate4 pass 확보.
-2. 표본 유지 + 품질 보강(Strict Order 4):
+1. 표본 유지 + 품질 보강(Strict Order 4):
    - 현재 `avg_total_trades=10.2` 방어 상태에서 잔여 ETH/XRP 음수일 완화.
-3. 라벨/학습 구조 고도화:
+2. 라벨/학습 구조 고도화:
    - optional triple-barrier 활성화 실험(기존 라벨과 병행)
    - `P(win)` + `E[pnl]` 2-head 학습 파이프라인 추가
-4. 진입 품질 재균형:
+3. 진입 품질 재균형:
    - 확률 우선 유지 + 안전게이트 고정
    - 레짐/아키타입 기준으로 loss-tail 셀(ETH/SOL) 품질 하한 재조정
+4. Gate5 staged live enable 준비:
+   - `allow_live_orders=false` 유지 상태에서 단계별 cap/모니터링 템플릿 확정.
+   - shadow pass bundle 고정 후 최소 티어 staged rollout 체크리스트 실행.
 5. 동일 5-set 재검증:
    - 목표: `overall_gate_pass` 유지 + expectancy/PF 추가 개선 + DD 비열화.
 

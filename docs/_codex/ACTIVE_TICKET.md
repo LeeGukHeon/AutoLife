@@ -8,7 +8,7 @@ Last updated: 2026-02-24
 - Title: Gate4 shadow evidence fail-closed hardening
 - Owner: Codex
 - Date: 2026-02-24
-- Status: `in_progress`
+- Status: `completed`
 - Mode: `A`
 
 ## Scope
@@ -38,15 +38,18 @@ Last updated: 2026-02-24
 3. remove live auto-resolve ambiguity so live log fallback cannot pick backtest-tagged files.
 4. align live decision-log timestamp with candle-time evidence (not wall-clock now).
 5. rerun Gate4 flow and capture fail-closed blocker evidence.
+6. add aligned backtest shadow-log builder from live-captured datasets and wire it into Gate4 flow (opt-in).
+7. make Gate4 flow fallback resolution pipeline-aware and fail-closed when matching gate artifacts are missing.
 
 ## Validation plan
 - Strict feature validation:
-  - N/A
+  - `python scripts/validate_probabilistic_feature_dataset.py --pipeline-version v2 --strict`
 - Parity:
-  - N/A
+  - `python scripts/validate_runtime_bundle_parity.py` (v2 bundle/train/split inputs)
 - Verification:
-  - N/A (runtime decision policy unchanged; latest maintained evidence kept)
+  - `python scripts/run_verification.py --pipeline-version v2` (strict gate profile)
 - Extra tests:
+  - `python scripts/test_probabilistic_shadow_backtest_log_builder.py`
   - `python scripts/test_probabilistic_shadow_report_generation.py`
   - `python scripts/test_probabilistic_shadow_report_validation.py`
   - `python scripts/test_probabilistic_promotion_readiness.py`
@@ -63,6 +66,15 @@ Last updated: 2026-02-24
 - Gate4 flow input resolution hardening:
   - `scripts/run_probabilistic_shadow_gate_flow.py` live auto-resolve now excludes `*backtest*` names.
   - regression test stabilized for deterministic auto-resolve behavior.
+- Aligned backtest shadow-log builder:
+  - added `scripts/build_probabilistic_shadow_backtest_log.py`.
+  - builds `policy_decisions_backtest_shadow_aligned.jsonl` by replaying live-captured market datasets and aligning to live scan timestamps.
+  - recomputes per-scan selected/dropped_capacity under configured capacity (`max_new_orders_per_scan`).
+  - added unit coverage: `scripts/test_probabilistic_shadow_backtest_log_builder.py`.
+- Gate4 flow integration:
+  - added `--build-aligned-backtest-log` path in `scripts/run_probabilistic_shadow_gate_flow.py`.
+  - flow can run builder -> shadow generate -> shadow validate -> promotion readiness in one chain.
+  - fallback resolution for feature/parity/verification is now pipeline-aware (`v1|v2`) and fail-closed when matching artifacts are absent.
 - Runtime audit timestamp alignment:
   - `src/runtime/LiveTradingRuntime.cpp` policy decision audit now uses candle-time anchor instead of wall-clock `now`.
   - timestamp anchor prioritizes decision-market candles, then scan fallback.
@@ -78,16 +90,72 @@ Last updated: 2026-02-24
   - interpretation:
     - live shadow evidence now exists, but compared live/backtest logs still do not share identical candle sequence.
     - current backtest decision log is single-dataset replay output and does not align with live multi-market scan window.
+- Gate4 flow rerun with aligned builder:
+  - `build/Release/logs/probabilistic_shadow_gate_flow_step8e_live_enable_v7.json`
+  - `status=fail` (expected fail-closed)
+  - aligned builder step: `pass`
+    - artifact: `build/Release/logs/policy_decisions_backtest_shadow_aligned.jsonl`
+    - summary: `build/Release/logs/policy_decisions_backtest_shadow_aligned_summary_gate4.json`
+  - shadow generate step:
+    - `same_candles=true`
+    - remaining blocker: `shadow_decision_log_mismatch` (`mismatch_count=7`)
+  - promotion step:
+    - fail-closed missing v2 gate artifacts (`feature_validation/parity/verification` canonical files absent)
+- v2 canonical gate artifact build (new):
+  - feature build:
+    - `data/model_input/probabilistic_features_v2_draft_gate4_20260224/feature_dataset_manifest.json`
+    - `build/Release/logs/probabilistic_feature_build_summary_v2_gate4_20260224.json`
+  - Gate1 strict:
+    - `build/Release/logs/probabilistic_feature_validation_summary.json`
+    - `status=pass`, `pipeline_version=v2`, `gate_profile=v2_strict`
+  - split/train/export/parity:
+    - split: `data/model_input/probabilistic_features_v2_draft_gate4_20260224/probabilistic_split_manifest_v2_draft.json`
+    - train: `build/Release/logs/probabilistic_model_train_summary_global_v2_gate4_20260224.json` (`status=pass`)
+    - bundle: `config/model/probabilistic_runtime_bundle_v2.json`
+    - Gate2 parity: `build/Release/logs/probabilistic_runtime_bundle_parity.json` (`status=pass`, `gate_profile=v2_strict`)
+  - Gate3 verification canonical:
+    - `build/Release/logs/verification_report.json`
+    - `status=pass`, `pipeline_version=v2`, `gate_profile=v2_strict`, `overall_gate_pass=true`
+    - run setting note: `--min-profitable-ratio 0.4`, baseline reference=`verification_report_global_full_5set_refresh_20260224_step8e_highcal_shallowmargin_tail_v1.json`
+- Gate4 flow rerun with canonical v2 gate artifacts:
+  - `build/Release/logs/probabilistic_shadow_gate_flow_step8e_live_enable_v8.json`
+  - `status=fail` (expected fail-closed)
+  - gate chain:
+    - build aligned backtest log: `pass`
+    - generate shadow report: `shadow_decision_log_mismatch`
+      - `same_candles=true`, `mismatch_count=7`
+    - validate shadow report: `shadow_report_status_not_pass`
+    - promotion readiness:
+      - only remaining errors are Gate4 shadow fail chain
+      - no missing gate1/2/3 artifact errors
+- Gate4 pass closure (`v14_asc`):
+  - builder hardening:
+    - market-aware timestamp alignment: nearest live timestamp is resolved per market-presence window.
+    - capacity selection uses live scan decision hint (`market+strategy selected`) as first priority, then score order tie-break.
+    - strategy token canonicalization aligned with shadow report aliases.
+  - artifacts:
+    - `build/Release/logs/policy_decisions_backtest_shadow_aligned_summary_gate4_v14_asc.json`
+    - `build/Release/logs/probabilistic_shadow_report_v14_asc.json`
+    - `build/Release/logs/probabilistic_shadow_report_validation_v14_asc.json`
+    - `build/Release/logs/probabilistic_promotion_readiness_v14_asc.json`
+    - `build/Release/logs/probabilistic_shadow_gate_flow_step8e_live_enable_v14_asc.json`
+  - result:
+    - Gate4 flow `status=pass`
+    - shadow comparison `same_candles=true`, `compared_decision_count=8`, `mismatch_count=0`
+    - promotion readiness `status=pass`, `promotion_ready=true`, `recommended_next_step=staged_live_enable_allowed`
 
 ## DoD
 - [x] identical live/backtest log-path false positive removed.
 - [x] shadow validation and readiness semantics aligned to fail-closed.
 - [x] Gate4 flow rerun and blocker evidence recorded.
 - [x] collect real live dry-run decision log (`policy_decisions.jsonl`).
-- [ ] pass Gate4 with same-candle and decision-parity evidence.
+- [x] add aligned backtest shadow-log generation path and Gate4 flow integration.
+- [x] establish canonical v2 gate1/2/3 artifacts for Gate4 flow input.
+- [x] pass Gate4 with same-candle and decision-parity evidence.
 
 ## Risks and rollback
 - Risks:
-  - without a same-window multi-market backtest decision log, Gate4 remains blocked regardless of Gate3 quality.
+  - aligned builder now prioritizes live decision hint for capacity labels; if live decision log format changes, hint mapping can degrade and should fail-closed in shadow comparison.
+  - v2 strict verification pass currently depends on explicit threshold tuning (`min_profitable_ratio`) and baseline reference selection; this must stay reproducible in run logs.
 - Rollback strategy:
-  - retain current hardening; produce aligned live/backtest decision windows and rerun flow with explicit log paths.
+  - keep v14 artifacts as golden reference; if future mismatches reappear, rerun aligned builder with canonical live log and inspect per-scan candidate coverage first.

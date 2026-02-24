@@ -197,6 +197,16 @@ python scripts/generate_probabilistic_shadow_report.py `
   --output-json ".\build\Release\logs\probabilistic_shadow_report_latest.json" `
   --strict
 
+# Optional Step 1b) Build aligned backtest shadow log from live-captured datasets
+python scripts/build_probabilistic_shadow_backtest_log.py `
+  --live-decision-log-jsonl ".\build\Release\logs\policy_decisions.jsonl" `
+  --dataset-dir ".\build\Release\data\backtest_real_live" `
+  --output-jsonl ".\build\Release\logs\policy_decisions_backtest_shadow_aligned.jsonl" `
+  --summary-json ".\build\Release\logs\policy_decisions_backtest_shadow_aligned_summary.json" `
+  --match-tolerance-ms 600000 `
+  --max-new-orders-per-scan 1 `
+  --strict
+
 # Step 2) Validate shadow report (recommended)
 python scripts/validate_probabilistic_shadow_report.py `
   --shadow-report-json ".\build\Release\logs\probabilistic_shadow_report_latest.json" `
@@ -218,7 +228,10 @@ python scripts/run_probabilistic_hybrid_cycle.py `
 # Optional: standalone Gate4 flow runner (existing artifacts + decision logs)
 # Note: when canonical default gate files are absent, the runner auto-resolves
 # latest run-tagged artifacts for feature/parity/verification and decision logs.
+# Note: feature/parity/verification auto-resolve is pipeline-aware; when no
+# matching pipeline artifact exists, flow fails fail-closed.
 # Note: if auto-resolve maps live/backtest decision logs to the same file, flow fails fail-closed.
+# Note: current Gate4 pass baseline uses `--aligned-backtest-capacity-score-order asc`.
 python scripts/run_probabilistic_shadow_gate_flow.py `
   --pipeline-version v2 `
   --target-stage live_enable `
@@ -228,7 +241,9 @@ python scripts/run_probabilistic_shadow_gate_flow.py `
   --feature-validation-json ".\build\Release\logs\probabilistic_feature_validation_summary.json" `
   --parity-json ".\build\Release\logs\probabilistic_runtime_bundle_parity.json" `
   --verification-json ".\build\Release\logs\verification_report.json" `
-  --runtime-config-json ".\build\Release\config\config.json"
+  --runtime-config-json ".\build\Release\config\config.json" `
+  --build-aligned-backtest-log `
+  --aligned-backtest-capacity-score-order asc
 ```
 
 ## 10) EXT-55 optional runtime regime policy (default OFF)

@@ -79,6 +79,65 @@ class ProbabilisticShadowReportGenerationTest(unittest.TestCase):
             self.assertTrue(bool(checks.get("same_candles", False)))
             self.assertEqual(0, int(result.get("metadata", {}).get("mismatch_count", -1)))
 
+    def test_generate_shadow_report_strategy_alias_normalization(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            live_log = root / "live_alias.jsonl"
+            backtest_log = root / "backtest_alias.jsonl"
+            out = root / "shadow_report_alias.json"
+            bundle = root / "bundle_v2.json"
+
+            write_jsonl(
+                live_log,
+                [
+                    {
+                        "ts": 1700000000000,
+                        "dominant_regime": "RANGING",
+                        "small_seed_mode": False,
+                        "max_new_orders_per_scan": 1,
+                        "decisions": [
+                            {"market": "KRW-SOL", "strategy": "Probabilistic Primary Runtime", "selected": False, "reason": "dropped_capacity"},
+                        ],
+                    }
+                ],
+            )
+            write_jsonl(
+                backtest_log,
+                [
+                    {
+                        "ts": 1700000000000,
+                        "dominant_regime": "RANGING",
+                        "small_seed_mode": False,
+                        "max_new_orders_per_scan": 1,
+                        "decisions": [
+                            {"market": "KRW-SOL", "strategy": "Foundation Adaptive Strategy", "selected": False, "reason": "dropped_capacity"},
+                        ],
+                    }
+                ],
+            )
+            write_json(
+                bundle,
+                {
+                    "version": "probabilistic_runtime_bundle_v2_draft",
+                    "pipeline_version": "v2",
+                },
+            )
+
+            result = evaluate(
+                argparse.Namespace(
+                    live_decision_log_jsonl=str(live_log),
+                    backtest_decision_log_jsonl=str(backtest_log),
+                    runtime_bundle_json=str(bundle),
+                    live_runtime_bundle_json="",
+                    backtest_runtime_bundle_json="",
+                    pipeline_version="v2",
+                    output_json=str(out),
+                    strict=True,
+                )
+            )
+            self.assertEqual("pass", result.get("status"))
+            self.assertEqual(0, int(result.get("metadata", {}).get("mismatch_count", -1)))
+
     def test_generate_shadow_report_fail_on_decision_mismatch(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

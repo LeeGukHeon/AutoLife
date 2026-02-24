@@ -98,6 +98,9 @@ Requirements:
 - if shadow report exposes `gate_profile` in v2 flow, it must be `v2_strict`
 - live runtime resets `logs/policy_decisions.jsonl` on engine start to avoid stale-scan contamination
 - live decision-log `ts` is recorded with candle-time anchor (not wall-clock now)
+- optional aligned backtest evidence builder is available for live-captured datasets:
+  - `scripts/build_probabilistic_shadow_backtest_log.py`
+  - output: `logs/policy_decisions_backtest_shadow_aligned.jsonl`
 
 Shadow report generation command:
 ```powershell
@@ -107,6 +110,18 @@ python scripts/generate_probabilistic_shadow_report.py `
   --runtime-bundle-json ".\config\model\probabilistic_runtime_bundle_v2.json" `
   --pipeline-version v2 `
   --output-json ".\build\Release\logs\probabilistic_shadow_report_latest.json" `
+  --strict
+```
+
+Optional aligned backtest shadow-log build command:
+```powershell
+python scripts/build_probabilistic_shadow_backtest_log.py `
+  --live-decision-log-jsonl ".\build\Release\logs\policy_decisions.jsonl" `
+  --dataset-dir ".\build\Release\data\backtest_real_live" `
+  --output-jsonl ".\build\Release\logs\policy_decisions_backtest_shadow_aligned.jsonl" `
+  --summary-json ".\build\Release\logs\policy_decisions_backtest_shadow_aligned_summary.json" `
+  --match-tolerance-ms 600000 `
+  --max-new-orders-per-scan 1 `
   --strict
 ```
 
@@ -136,7 +151,10 @@ Hybrid cycle integration:
 - for `v2 + --promotion-target-stage live_enable`, shadow validation remains fail-closed and can be combined with generation in one run.
 - `--generate-shadow-report` and `--validate-shadow-report` are only valid with `--evaluate-promotion-readiness` (fail-closed arg guard).
 - standalone Gate4 flow helper: `scripts/run_probabilistic_shadow_gate_flow.py` (generate+validate+promotion-readiness chain)
+- Gate4 flow helper supports `--build-aligned-backtest-log` to generate aligned backtest decision evidence before shadow report generation.
+- aligned backtest builder now uses market-aware timestamp matching and live-selected hint priority for capacity labeling (fail-closed comparison still requires `mismatch_count=0`).
 - Gate4 flow helper auto-resolves latest run-tagged feature/parity/verification artifacts and decision logs when canonical default paths are missing.
+- for feature/parity/verification fallback, auto-resolve is pipeline-aware (`v1|v2`) and fail-closed when matching pipeline artifacts are not found.
 - if auto-resolution maps live/backtest decision logs to the same file, Gate4 now fails with `shadow_live_backtest_log_path_identical` (fail-closed).
 
 ## Gate 5: Staged live enable

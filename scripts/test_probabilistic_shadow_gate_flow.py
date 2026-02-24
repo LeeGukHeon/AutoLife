@@ -5,6 +5,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from run_probabilistic_shadow_gate_flow import (
     DEFAULT_BACKTEST_DECISION_LOG_JSONL,
@@ -329,6 +330,89 @@ class ProbabilisticShadowGateFlowTest(unittest.TestCase):
             self.assertTrue(bool(resolution.get("feature_validation_json", {}).get("auto_resolved", False)))
             self.assertTrue(bool(resolution.get("parity_json", {}).get("auto_resolved", False)))
             self.assertTrue(bool(resolution.get("verification_json", {}).get("auto_resolved", False)))
+
+    def test_gate_flow_pass_with_aligned_backtest_builder(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            live_log = root / "policy_decisions.jsonl"
+            backtest_log = root / "policy_decisions_backtest_shadow_aligned.jsonl"
+            runtime_bundle = root / "runtime_bundle_v2.json"
+            feature_validation = root / "feature_validation.json"
+            parity = root / "parity.json"
+            verification = root / "verification.json"
+            runtime_config = root / "config.json"
+
+            rows = [
+                {
+                    "ts": 1700000000000,
+                    "dominant_regime": "RANGING",
+                    "small_seed_mode": False,
+                    "max_new_orders_per_scan": 1,
+                    "decisions": [
+                        {"market": "KRW-BTC", "strategy": "foundation_adaptive", "selected": True, "reason": "selected"},
+                    ],
+                }
+            ]
+            write_jsonl(live_log, rows)
+            write_json(
+                runtime_bundle,
+                {
+                    "version": "probabilistic_runtime_bundle_v2_draft",
+                    "pipeline_version": "v2",
+                    "feature_contract_version": "v2_draft",
+                    "runtime_bundle_contract_version": "v2_draft",
+                },
+            )
+            write_json(feature_validation, {"status": "pass", "pipeline_version": "v2", "gate_profile": "v2_strict", "preflight_errors": []})
+            write_json(parity, {"status": "pass", "pipeline_version": "v2", "gate_profile": "v2_strict"})
+            write_json(
+                verification,
+                {
+                    "overall_gate_pass": True,
+                    "pipeline_version": "v2",
+                    "gate_profile": {"name": "v2_strict"},
+                },
+            )
+            write_json(runtime_config, {"trading": {"allow_live_orders": False}})
+
+            def fake_builder(namespace_args):
+                target = Path(str(namespace_args.output_jsonl))
+                target.parent.mkdir(parents=True, exist_ok=True)
+                write_jsonl(target, rows)
+                summary = Path(str(namespace_args.summary_json))
+                summary.parent.mkdir(parents=True, exist_ok=True)
+                write_json(summary, {"status": "pass", "errors": [], "warnings": []})
+                return {"status": "pass", "errors": [], "warnings": []}
+
+            with patch("run_probabilistic_shadow_gate_flow.shadow_backtest_builder.evaluate", side_effect=fake_builder):
+                out = evaluate(
+                    argparse.Namespace(
+                        pipeline_version="v2",
+                        target_stage="live_enable",
+                        runtime_bundle_json=str(runtime_bundle),
+                        live_decision_log_jsonl=str(live_log),
+                        backtest_decision_log_jsonl=str(backtest_log),
+                        build_aligned_backtest_log=True,
+                        aligned_backtest_exe_path=str(root / "AutoLifeTrading.exe"),
+                        aligned_backtest_dataset_dir=str(root / "data"),
+                        aligned_backtest_summary_json=str(root / "aligned_summary.json"),
+                        aligned_backtest_match_tolerance_ms=180000,
+                        aligned_backtest_max_new_orders_per_scan=1,
+                        feature_validation_json=str(feature_validation),
+                        parity_json=str(parity),
+                        verification_json=str(verification),
+                        runtime_config_json=str(runtime_config),
+                        shadow_report_json=str(root / "shadow_report.json"),
+                        shadow_validation_json=str(root / "shadow_validation.json"),
+                        promotion_output_json=str(root / "promotion.json"),
+                        output_json=str(root / "flow.json"),
+                    )
+                )
+
+            self.assertEqual("pass", out.get("status"))
+            step_names = [str(x.get("name", "")) for x in list(out.get("steps", []))]
+            self.assertEqual("build_aligned_backtest_log", step_names[0])
+            self.assertEqual(4, len(step_names))
 
 
 if __name__ == "__main__":

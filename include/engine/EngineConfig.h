@@ -228,6 +228,9 @@ struct EngineConfig {
     double hostility_pause_recent_win_rate = 0.40;
     int backtest_hostility_pause_candles = 36;
     int backtest_hostility_pause_candles_extreme = 60;
+    // Gate4 shadow evidence helper: keep policy decisions flowing without
+    // position-state side effects during backtest replays.
+    bool backtest_shadow_policy_only = false;
     std::vector<std::string> enabled_strategies;
 
     EngineConfig()
