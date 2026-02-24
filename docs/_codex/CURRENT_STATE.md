@@ -1,9 +1,9 @@
 ﻿# Current State
-Last updated: 2026-02-25
+Last updated: 2026-02-24
 
 ## Repository
 - Branch: `main`
-- Commit snapshot (pushed): `9572bd6`
+- Commit snapshot (pushed): `bf3645c`
 
 ## Active ticket
 - Source of truth: `docs/_codex/ACTIVE_TICKET.md`
@@ -82,6 +82,32 @@ Last updated: 2026-02-25
       - candidates: `build/Release/logs/step8b_guard_candidates_correctness_on_ranging_core_rescue_sol_0219_cfgaligned.json`
       - top zero-win-damage example:
         - `signal_strength <= 0.477171` (`blocked_loss=7`, `blocked_win=0`, `net_improvement=+279.221035`)
+  - correctness guard probes `v8`/`v8b` (not retained, rollback complete):
+    - `v8`:
+      - verification:
+        - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v8_5set_20260224.json`
+        - `overall_gate_pass=false`, `avg_profit_factor=0.3356`, `avg_expectancy_krw=-17.0666`
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v8_5set_3m7d_20260224.json`
+        - `status=fail`, `nonpositive_day_ratio=0.368421`, `total_profit_sum=-57.400048`
+      - delta vs ON:
+        - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v8_vs_on_5set_20260224.json`
+        - `profit_sum_delta=+397.053309` but remains negative total profit and gate-fail.
+    - `v8b`:
+      - verification (config-aligned):
+        - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v8b_5set_20260224_cfgaligned.json`
+        - `overall_gate_pass=false`, `avg_profit_factor=0.3172`, `avg_expectancy_krw=-17.6707`
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v8b_5set_3m7d_20260224.json`
+        - `status=fail`, `nonpositive_day_ratio=0.470588`, `total_profit_sum=-1031.132353`
+      - delta vs ON:
+        - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v8b_vs_on_5set_20260224.json`
+        - `profit_sum_delta=-576.678996`, `nonpositive_day_count_delta=+1`
+      - ON-failure TU slice candidate refresh:
+        - `build/Release/logs/step8b_guard_candidates_correctness_on_guard_v8_tu_core_rescue_eth_0216_0217_cfgaligned.json`
+        - top: `signal_strength <= 0.472377` (`blocked_loss=6`, `blocked_win=0`)
+    - action:
+      - probe code reverted with `git restore` and baseline-safe state kept (`backtest_strategyless_runtime_live_exit_mapping=false`).
   - live execution update 로그 수집 선행조건은 충족됨
     (`execution_updates_live.jsonl` 생성 확인).
   - live parity path hardening landed:
@@ -266,6 +292,14 @@ Last updated: 2026-02-25
   - `build/Release/logs/verification_report_global_full_5set_refresh_20260225_correctness_runtime_mapping_v3_rescuecooldown.json`
   - `overall_gate_pass=false`, `avg_profit_factor=0.4805`, `avg_expectancy_krw=-13.3735`
   - decision: fail-closed rollback and keep `backtest_bridge_restore` as active baseline.
+- Correctness probe v8 (not retained):
+  - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v8_5set_20260224.json`
+  - `overall_gate_pass=false`, `avg_profit_factor=0.3356`, `avg_expectancy_krw=-17.0666`
+  - decision: fail-closed rollback; keep scaffold flag default OFF.
+- Correctness probe v8b (not retained):
+  - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v8b_5set_20260224_cfgaligned.json`
+  - `overall_gate_pass=false`, `avg_profit_factor=0.3172`, `avg_expectancy_krw=-17.6707`
+  - decision: fail-closed rollback; keep scaffold flag default OFF.
 - Tuning probe `step8af` (not retained):
   - `build/Release/logs/verification_report_global_full_5set_refresh_20260225_step8af_uptrend_rescue_step8b_focus_tail_v1.json`
   - `overall_gate_pass=false`, `adaptive_verdict=inconclusive`, `avg_profit_factor=2.9145`, `avg_expectancy_krw=14.0552`
@@ -302,6 +336,12 @@ Last updated: 2026-02-25
 - Correctness probe v5 (not retained):
   - `build/Release/logs/daily_oos_stability_report_3m_7d_20260225_correctness_runtime_mapping_v3_rescuecooldown.json`
   - `status=fail`, `nonpositive_day_ratio=0.5`, `total_profit_sum=-137.473279`
+- Correctness probe v8 (not retained):
+  - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v8_5set_3m7d_20260224.json`
+  - `status=fail`, `nonpositive_day_ratio=0.368421`, `total_profit_sum=-57.400048`
+- Correctness probe v8b (not retained):
+  - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v8b_5set_3m7d_20260224.json`
+  - `status=fail`, `nonpositive_day_ratio=0.470588`, `total_profit_sum=-1031.132353`
 - Tuning probe `step8af` (not retained):
   - `build/Release/logs/daily_oos_stability_report_3m_7d_20260225_step8af_uptrend_rescue_step8b_focus_tail_v1_3set.json`
   - `status=fail`, `nonpositive_day_ratio=0.545455`, `total_profit_sum=-453.253435`

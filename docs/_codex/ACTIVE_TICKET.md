@@ -1,5 +1,5 @@
 ﻿# Active Ticket Snapshot
-Last updated: 2026-02-25
+Last updated: 2026-02-24
 
 ## Header
 - Ticket ID: `SO4-15-NEGATIVE-DAY-TAIL-ANALYSIS-20260224`
@@ -7,7 +7,7 @@ Last updated: 2026-02-25
 - Sub-ticket / Experiment ID: `Strict-Order-4-15`
 - Title: Residual negative-day tail analysis and non-degrade guard candidates
 - Owner: Codex
-- Date: 2026-02-25
+- Date: 2026-02-24
 - Status: `in_progress`
 - Mode: `A`
 
@@ -132,6 +132,33 @@ Last updated: 2026-02-25
       - `build/Release/logs/step8b_input_correctness_on_ranging_core_rescue_sol_0219_cfgaligned.json`
       - `build/Release/logs/step8b_guard_candidates_correctness_on_ranging_core_rescue_sol_0219_cfgaligned.json`
       - zero-win-damage top: `signal_strength <= 0.477171`
+  - guard probe replay (`v8`/`v8b`, not retained):
+    - `v8`:
+      - verification:
+        - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v8_5set_20260224.json`
+        - `overall_gate_pass=false`, `avg_profit_factor=0.3356`, `avg_expectancy_krw=-17.0666`
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v8_5set_3m7d_20260224.json`
+        - `status=fail`, `total_profit_sum=-57.400048` (`gate_fail_reasons=[positive_profit_sum]`)
+      - vs ON delta:
+        - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v8_vs_on_5set_20260224.json`
+        - `profit_sum_delta=+397.053309` (but still fail-closed).
+    - `v8b`:
+      - verification (config-aligned):
+        - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v8b_5set_20260224_cfgaligned.json`
+        - `overall_gate_pass=false`, `avg_profit_factor=0.3172`, `avg_expectancy_krw=-17.6707`
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v8b_5set_3m7d_20260224.json`
+        - `status=fail`, `nonpositive_day_ratio=0.470588`, `total_profit_sum=-1031.132353`
+      - vs ON delta:
+        - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v8b_vs_on_5set_20260224.json`
+        - `profit_sum_delta=-576.678996`, `nonpositive_day_count_delta=+1`
+      - TU slice candidate refresh:
+        - `build/Release/logs/step8b_guard_candidates_correctness_on_guard_v8_tu_core_rescue_eth_0216_0217_cfgaligned.json`
+        - top: `signal_strength <= 0.472377` (`blocked_loss=6`, `blocked_win=0`)
+    - action:
+      - uncommitted probe code reverted (`git restore`), baseline-safe code restored.
+      - next step is instrumentation-first on occupancy drift; no direct guard code retry until drift evidence is tightened.
 
 ## Current result snapshot
 - Baseline reference remains:

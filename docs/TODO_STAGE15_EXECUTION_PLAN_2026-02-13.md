@@ -1,6 +1,6 @@
 ﻿# Stage 15 Execution TODO (Active)
 
-Last updated: 2026-02-21
+Last updated: 2026-02-24
 Status: `PROBABILISTIC_TRANSITION_ACTIVE`
 
 ## Purpose
@@ -1654,9 +1654,33 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
         - v6(`step8ag`) no-hit 롤백 완료.
         - v7(`step8ai`) retained:
           - `runtime long-hold + BacktestEOD` 꼬리 억제에 효과 확인.
-        - 다음 국소 프로브(v8)는
-          잔여 음수일(`ETH 2026-02-18/2026-02-19`, `XRP 2026-02-19`)에서
-          `RANGING|CORE_RESCUE` 재확대 여부를 최소 범위로 점검.
+        - v8 프로브(`correctness_runtime_mapping_on_guard_v8`, not retained):
+          - verification:
+            - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v8_5set_20260224.json`
+            - `overall_gate_pass=false`, `avg_profit_factor=0.3356`, `avg_expectancy_krw=-17.0666`
+          - daily OOS:
+            - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v8_5set_3m7d_20260224.json`
+            - `status=fail`, `nonpositive_day_ratio=0.368421`, `total_profit_sum=-57.400048`
+          - delta vs ON:
+            - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v8_vs_on_5set_20260224.json`
+            - `profit_sum_delta=+397.053309` (개선은 있으나 gate-fail 유지)
+          - 조치:
+            - fail-closed rollback.
+        - v8b 프로브(`correctness_runtime_mapping_on_guard_v8b`, not retained):
+          - verification(config-aligned):
+            - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v8b_5set_20260224_cfgaligned.json`
+            - `overall_gate_pass=false`, `avg_profit_factor=0.3172`, `avg_expectancy_krw=-17.6707`
+          - daily OOS:
+            - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v8b_5set_3m7d_20260224.json`
+            - `status=fail`, `nonpositive_day_ratio=0.470588`, `total_profit_sum=-1031.132353`
+          - delta vs ON:
+            - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v8b_vs_on_5set_20260224.json`
+            - `profit_sum_delta=-576.678996`, `nonpositive_day_count_delta=+1`
+          - 조치:
+            - fail-closed rollback.
+        - 다음 국소 단계(v9):
+          - 코드 패치 재시도 전에 `ETH 2026-02-16~2026-02-17` 점유시간/후속 진입 왜곡 계측을
+            추가 고정하고, 해당 계측 근거로 guard 범위를 재정의.
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
    - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.
