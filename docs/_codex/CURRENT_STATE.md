@@ -3,7 +3,7 @@ Last updated: 2026-02-24
 
 ## Repository
 - Branch: `main`
-- Commit snapshot (pushed): `7166f39`
+- Commit snapshot (pushed): `8ec3ac0`
 
 ## Active ticket
 - Source of truth: `docs/_codex/ACTIVE_TICKET.md`
@@ -21,7 +21,7 @@ Last updated: 2026-02-24
 
 ## Latest gate snapshot (runtime tuning path)
 - Verification report:
-  - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8w_ranging_rescue_bimodal_tail_scale_v3.json`
+  - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ac_rollback_seq.json`
 - Result:
   - `overall_gate_pass=true`
   - `adaptive_verdict=pass`
@@ -31,12 +31,12 @@ Last updated: 2026-02-24
 
 ## Daily OOS snapshot (Gate3 supplement)
 - Report:
-  - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8w_ranging_rescue_bimodal_tail_scale_v3.json`
+  - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ac_rollback_seq.json`
 - Result:
   - `status=pass`
   - `evaluated_day_count=10`
   - `nonpositive_day_ratio=0.3`
-  - `total_profit_sum=204.380165`
+  - `total_profit_sum=246.968137`
   - `peak_day_drawdown_pct=1.225673`
 - Analysis artifacts:
   - `build/Release/logs/daily_oos_negative_day_cell_summary_step8e.json`
@@ -129,6 +129,21 @@ Last updated: 2026-02-24
     - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8z_riskmanager_uptrend_tail_guard_v1.json`
     - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8z_riskmanager_uptrend_tail_guard_v1.json`
     - outcome: baseline(step8w) 대비 무변화(no-hit), rolled back.
+  - riskmanager multiday tail guard v1 (`step8aa`):
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8aa_riskmanager_multiday_tail_guard_v1.json`
+    - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8aa_riskmanager_multiday_tail_guard_v1.json`
+    - outcome: nonpositive ratio 유지 + total profit 개선.
+  - riskmanager multiday tail guard v2 (`step8ab`):
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ab_riskmanager_multiday_tail_guard_v2.json`
+    - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ab_riskmanager_multiday_tail_guard_v2.json`
+    - outcome: 현재 유지 코드. `nonpositive_day_ratio=0.3` 유지, `total_profit_sum=246.968137`.
+  - riskmanager multiday tail guard v3 (`step8ac`):
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ac_riskmanager_multiday_tail_guard_v3.json`
+    - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ac_riskmanager_multiday_tail_guard_v3.json`
+    - outcome: step8ab 대비 열화로 rolled back.
+    - rollback:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ac_rollback_seq.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ac_rollback_seq.json`
 
 ## Gate4 shadow flow snapshot
 - Flow report:
@@ -171,7 +186,7 @@ Last updated: 2026-02-24
 ## Known gaps
 - Residual loss-tail focus remains on:
   - `TRENDING_UP|PROBABILISTIC_PRIMARY_RUNTIME` (ETH `2026-02-18/2026-02-19`, BacktestEOD exits)
-  - `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER` (XRP `2026-02-19`)
+  - `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER` (XRP `2026-02-19`, loss reduced to `-27.26890753867527`)
 - Gate5 staged enable execution and monitoring evidence are not started yet.
 
 ## Detailed history references

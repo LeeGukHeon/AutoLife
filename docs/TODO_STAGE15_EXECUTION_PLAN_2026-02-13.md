@@ -1111,6 +1111,55 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
         - baseline(step8w) 대비 무변화(no-hit)
     - 조치:
       - no-hit로 코드 롤백(유지 안 함).
+  - 유지 후보(step8aa riskmanager multiday tail guard v1):
+    - 코드 시도:
+      - `RiskManager::applyAdaptiveRiskControls` 공통 경로에
+        `TRENDING_UP|PROBABILISTIC_PRIMARY_RUNTIME` 멀티데이 tail guard +
+        `TRENDING_UP|CORE_RESCUE` quick-recycle guard 추가
+        (라이브/백테스트 동형).
+    - 결과:
+      - verification:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8aa_riskmanager_multiday_tail_guard_v1.json`
+        - baseline(step8w) 대비 비열화(동일)
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8aa_riskmanager_multiday_tail_guard_v1.json`
+        - `nonpositive_day_ratio=0.3` (동일)
+        - `total_profit_sum` 개선(`204.380165 -> 219.116552`)
+    - 조치:
+      - profit 개선 확인으로 추가 미세조정(step8ab) 진행.
+  - 채택 실험(step8ab riskmanager multiday tail guard v2):
+    - 코드 시도:
+      - step8aa에서 quick-recycle context 전용 stop 상한을 강화해
+        손실 축소 우선 튜닝.
+    - 결과:
+      - verification:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ab_riskmanager_multiday_tail_guard_v2.json`
+        - baseline(step8w) 대비 비열화(동일)
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ab_riskmanager_multiday_tail_guard_v2.json`
+        - `status=pass`, `nonpositive_day_ratio=0.3` (동일)
+        - `total_profit_sum` 개선(`204.380165 -> 246.968137`)
+        - `peak_day_drawdown_pct` 비열화(`1.225673`)
+      - day-level 변화:
+        - `XRP 2026-02-19`: `-69.85687989698229 -> -27.26890753867527`
+    - 조치:
+      - step8aa 대비 추가 개선으로 코드 유지(현재 기준점 상향).
+  - 폐기 실험(step8ac riskmanager multiday tail guard v3):
+    - 코드 시도:
+      - step8ab를 추가 공격적으로 완화(더 이른 recycle + 더 타이트한 stop 상한).
+    - 결과:
+      - verification:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ac_riskmanager_multiday_tail_guard_v3.json`
+        - 비열화(동일)
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ac_riskmanager_multiday_tail_guard_v3.json`
+        - `total_profit_sum=223.6117`로 step8ab(`246.968137`) 대비 악화
+        - `nonpositive_day_ratio=0.3` 동일
+    - 조치:
+      - step8ab 대비 열화로 폐기.
+      - 복구 확인(순차 재실행):
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ac_rollback_seq.json`
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ac_rollback_seq.json`
 
 ## Next (Strict Order)
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:

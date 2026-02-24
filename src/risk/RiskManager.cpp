@@ -684,6 +684,34 @@ void RiskManager::applyAdaptiveRiskControls(const std::string& market) {
         : (entry * (1.0 + base_risk_pct * 1.20));
     const long long now_ms = getCurrentTimestamp();
     const double holding_seconds = std::max(0.0, static_cast<double>(now_ms - pos.entry_time) / 1000.0);
+    const bool uptrend_primary_runtime_multiday_tail_context =
+        probabilistic_active &&
+        pos.market_regime == analytics::MarketRegime::TRENDING_UP &&
+        pos.entry_archetype.find("PROBABILISTIC_PRIMARY_RUNTIME") != std::string::npos &&
+        pos.probabilistic_h5_calibrated >= 0.4190 &&
+        pos.probabilistic_h5_calibrated < 0.4215 &&
+        probabilistic_margin < -0.0026 &&
+        probabilistic_margin > -0.0049 &&
+        pos.liquidity_score >= 50.0 &&
+        pos.liquidity_score < 57.0 &&
+        pos.volatility >= 0.12 &&
+        pos.volatility < 0.17 &&
+        pos.signal_strength >= 0.50 &&
+        pos.signal_strength < 0.522;
+    const bool uptrend_rescue_quick_recycle_context =
+        probabilistic_active &&
+        pos.market_regime == analytics::MarketRegime::TRENDING_UP &&
+        pos.entry_archetype.find("CORE_RESCUE") != std::string::npos &&
+        pos.probabilistic_h5_calibrated >= 0.4120 &&
+        pos.probabilistic_h5_calibrated < 0.4148 &&
+        probabilistic_margin <= -0.0155 &&
+        probabilistic_margin > -0.0200 &&
+        pos.liquidity_score >= 70.0 &&
+        pos.liquidity_score < 74.5 &&
+        pos.volatility >= 0.12 &&
+        pos.volatility < 0.17 &&
+        pos.signal_strength >= 0.462 &&
+        pos.signal_strength < 0.475;
 
     double candidate_stop = pos.stop_loss;
     std::string reason = "hold";
@@ -781,6 +809,22 @@ void RiskManager::applyAdaptiveRiskControls(const std::string& market) {
             reason = "capital_recycle_guard";
         }
     }
+    if (uptrend_primary_runtime_multiday_tail_context &&
+        holding_seconds >= 36.0 * 3600.0) {
+        const double multiday_tail_stop = current * 0.9992;
+        if (multiday_tail_stop > candidate_stop) {
+            candidate_stop = multiday_tail_stop;
+            reason = "uptrend_primary_multiday_tail_guard";
+        }
+    }
+    if (uptrend_rescue_quick_recycle_context &&
+        holding_seconds >= 8.0 * 60.0) {
+        const double rescue_recycle_stop = entry * 1.0001;
+        if (rescue_recycle_stop > candidate_stop) {
+            candidate_stop = rescue_recycle_stop;
+            reason = "uptrend_rescue_quick_recycle_guard";
+        }
+    }
 
     // Step 4: dynamic TP recalibration for post-entry regime adaptation.
     // This avoids entry-only gating and manages loss concentration context
@@ -852,7 +896,15 @@ void RiskManager::applyAdaptiveRiskControls(const std::string& market) {
     }
 
     // Keep stop strictly below current price to avoid immediate self-trigger.
-    const double max_allowed_stop = current * 0.9985;
+    double max_allowed_stop_multiplier = 0.9985;
+    if (uptrend_primary_runtime_multiday_tail_context &&
+        holding_seconds >= 36.0 * 3600.0) {
+        max_allowed_stop_multiplier = 0.9996;
+    } else if (uptrend_rescue_quick_recycle_context &&
+               holding_seconds >= 8.0 * 60.0) {
+        max_allowed_stop_multiplier = 0.9994;
+    }
+    const double max_allowed_stop = current * max_allowed_stop_multiplier;
     if (max_allowed_stop <= 0.0) return;
     candidate_stop = std::min(candidate_stop, max_allowed_stop);
     if (!std::isfinite(candidate_stop)) return;

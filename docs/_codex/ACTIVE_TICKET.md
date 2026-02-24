@@ -53,8 +53,8 @@ Last updated: 2026-02-24
   - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8e_highcal_shallowmargin_tail_v1.json`
   - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8e_highcal_shallowmargin_tail_v1.json`
 - Current retained candidate reference:
-  - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8w_ranging_rescue_bimodal_tail_scale_v3.json`
-  - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8w_ranging_rescue_bimodal_tail_scale_v3.json`
+  - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ab_riskmanager_multiday_tail_guard_v2.json`
+  - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ab_riskmanager_multiday_tail_guard_v2.json`
 - Analysis artifacts (new):
   - `build/Release/logs/daily_oos_negative_day_cell_summary_step8e.json`
   - `build/Release/logs/verification_loss_tail_focus_step8e.json`
@@ -246,6 +246,42 @@ Last updated: 2026-02-24
       - `RiskManager` post-entry guard 경로에서도 baseline(step8w) 대비 무변화(no-hit)
     - action:
       - discarded (code not retained).
+  - `step8aa` riskmanager multiday tail guard v1:
+    - reports:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8aa_riskmanager_multiday_tail_guard_v1.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8aa_riskmanager_multiday_tail_guard_v1.json`
+    - outcome:
+      - verification 비열화(동일)
+      - daily `nonpositive_day_ratio=0.3` 유지
+      - daily `total_profit_sum=219.116552`로 step8w(`204.380165`) 대비 개선
+    - action:
+      - retained as intermediate + follow-up tuning (`step8ab`) 진행.
+  - `step8ab` riskmanager multiday tail guard v2 (current):
+    - reports:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ab_riskmanager_multiday_tail_guard_v2.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ab_riskmanager_multiday_tail_guard_v2.json`
+    - outcome:
+      - verification 비열화(동일): `avg_profit_factor=2.9577`, `avg_expectancy_krw=14.7159`
+      - daily:
+        - `status=pass`
+        - `nonpositive_day_ratio=0.3` (유지)
+        - `total_profit_sum=246.968137` (step8w 대비 +42.587972)
+      - day-level delta:
+        - `upbit_KRW_XRP_1m_12000.csv` `2026-02-19`:
+          `-69.85687989698229 -> -27.26890753867527`
+    - action:
+      - 코드 유지(현재 기준점 `step8ab`).
+  - `step8ac` riskmanager multiday tail guard v3:
+    - reports:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ac_riskmanager_multiday_tail_guard_v3.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ac_riskmanager_multiday_tail_guard_v3.json`
+    - outcome:
+      - daily `total_profit_sum=223.6117`로 step8ab 대비 열화
+      - `nonpositive_day_ratio=0.3` 동일
+    - action:
+      - discarded + rollback confirmed:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8ac_rollback_seq.json`
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8ac_rollback_seq.json`
 
 ## DoD
 - [x] residual negative-day trade-level evidence captured.
