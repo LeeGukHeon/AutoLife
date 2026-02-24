@@ -1611,6 +1611,8 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
         - baseline 안전성 확인:
           - build: `AutoLifeTrading` 성공
           - `python scripts/run_ci_operational_gate.py --include-backtest --strict-execution-parity` pass
+          - flag ON smoke(`build/Release/config/config.json` 임시 override)에서도 동일 gate pass,
+            실행 후 config 원복 완료.
       - 다음은 `코드 패치 재시도`가 아니라, 포지션 점유/후속 진입 왜곡 원인(ETH 2/16~2/17) 계측을
         먼저 고정한 뒤 국소 프로브(v2) 범위를 재정의.
       - v2(runtime-only) + v3(rescue cooldown) 모두 실패 반영:

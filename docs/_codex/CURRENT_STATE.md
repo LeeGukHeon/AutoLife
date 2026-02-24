@@ -38,6 +38,11 @@ Last updated: 2026-02-25
     - gate:
       - `python scripts/run_ci_operational_gate.py --include-backtest --strict-execution-parity`
       - result: pass (`build/Release/logs/operational_readiness_report.json`)
+    - flag-ON smoke:
+      - temporary patch in `build/Release/config/config.json`:
+        - `trading.backtest_strategyless_runtime_live_exit_mapping=true`
+      - gate rerun: pass (`execution_parity_report.json`, `operational_readiness_report.json`)
+      - config restored after run.
   - live execution update 로그 수집 선행조건은 충족됨
     (`execution_updates_live.jsonl` 생성 확인).
   - live parity path hardening landed:

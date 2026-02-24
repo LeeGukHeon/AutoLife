@@ -91,6 +91,11 @@ Last updated: 2026-02-25
   - gate:
     - `python scripts/run_ci_operational_gate.py --include-backtest --strict-execution-parity`
     - result: pass (`build/Release/logs/operational_readiness_report.json`)
+  - flag-ON smoke:
+    - temporary `build/Release/config/config.json` override:
+      - `trading.backtest_strategyless_runtime_live_exit_mapping=true`
+    - gate rerun: pass (`build/Release/logs/execution_parity_report.json`)
+    - config restored after run.
 
 ## Current result snapshot
 - Baseline reference remains:
