@@ -253,6 +253,37 @@ Last updated: 2026-02-24
     - action:
       - fail-closed rollback complete (temporary v13 probe code/config removed).
       - next step is `v14` minimal probe on another shortlist clause (still default-OFF).
+  - v14 minimal scoped probe result (`2026-02-25`, not retained):
+    - probe intent:
+      - `TRENDING_UP|CORE_RESCUE` RR/strength 기반 tail guard를
+        default-OFF flag로 임시 주입 후 OFF/ON 5-set gate 비교.
+    - artifacts:
+      - verification:
+        - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v14_probe_off_5set_20260224.json`
+        - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v14_probe_on_5set_20260224.json`
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v14_probe_off_5set_3m7d_20260224.json`
+        - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v14_probe_on_5set_3m7d_20260224.json`
+      - delta:
+        - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v14_probe_on_vs_off_5set_20260224.json`
+    - result:
+      - verification 열화:
+        - `avg_profit_factor: 1.0229 -> 0.9292`
+        - `avg_expectancy_krw: -0.6964 -> -1.6714`
+        - `avg_total_trades: 14.0 -> 13.2`
+      - daily OOS fail:
+        - `status: pass -> fail`
+        - `nonpositive_day_ratio: 0.368421 -> 0.733333`
+        - `total_profit_sum: 118.672413 -> -1545.78735`
+      - delta:
+        - `profit_sum_delta=-1664.459763`
+        - `nonpositive_day_count_delta=+8`
+        - `negative_trade_expansion_count=6`
+    - interpretation:
+      - target tail 억제보다 `RANGING|CORE_RESCUE_SHOULD_ENTER` occupancy expansion 왜곡이 더 크게 발생.
+    - action:
+      - fail-closed rollback complete (temporary v14 probe code/config removed).
+      - next step is `v15` instrumentation-first (occupancy/transition distortion isolation) before any new guard patch.
 
 ## Current result snapshot
 - Baseline reference remains:

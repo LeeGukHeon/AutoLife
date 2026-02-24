@@ -1777,10 +1777,38 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
               - delta: `profit_sum_delta=0.0`, `nonpositive_day_count_delta=0`
           - 조치:
             - fail-closed rollback 완료(임시 v13 probe 코드 제거, baseline 유지).
-        - 다음 국소 단계(v14):
-          - v12 shortlist의 다른 clause(쿨다운 계열 포함)를 동일 원칙(default OFF + narrow scope)으로
-            1개씩 코드 프로브하고 Gate3(verification + daily OOS) 비열화 여부를 확인.
-          - fail 시 즉시 rollback, hit가 없으면 다음 후보로 순차 이동.
+        - v14 국소 코드 프로브(기본 OFF, 미유지) 완료:
+          - 임시 적용:
+            - `TRENDING_UP|CORE_RESCUE` RR/strength 기반 narrow tail guard를
+              default-OFF flag로 주입하여 OFF/ON 5-set 비교.
+          - 검증 산출물:
+            - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v14_probe_off_5set_20260224.json`
+            - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v14_probe_on_5set_20260224.json`
+            - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v14_probe_off_5set_3m7d_20260224.json`
+            - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v14_probe_on_5set_3m7d_20260224.json`
+            - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v14_probe_on_vs_off_5set_20260224.json`
+          - 결과:
+            - verification 열화:
+              - `avg_profit_factor: 1.0229 -> 0.9292`
+              - `avg_expectancy_krw: -0.6964 -> -1.6714`
+              - `avg_total_trades: 14.0 -> 13.2`
+            - daily OOS fail:
+              - `status: pass -> fail`
+              - `nonpositive_day_ratio: 0.368421 -> 0.733333`
+              - `total_profit_sum: 118.672413 -> -1545.78735`
+            - delta:
+              - `profit_sum_delta=-1664.459763`
+              - `nonpositive_day_count_delta=+8`
+              - `negative_trade_expansion_count=6`
+          - 해석:
+            - target tail 억제보다 `RANGING|CORE_RESCUE_SHOULD_ENTER` 점유 왜곡이 커져
+              fail-closed 조건을 즉시 위반.
+          - 조치:
+            - fail-closed rollback 완료(임시 v14 probe 코드/설정 제거, baseline 유지).
+        - 다음 국소 단계(v15):
+          - guard 재시도 전에 occupancy/transition distortion 계측을 먼저 고정하고,
+            `RANGING|CORE_RESCUE` 확장 경로를 분리 진단.
+          - 원인 축이 분리된 뒤에만 default OFF + narrow scope 후보를 재주입.
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
    - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.

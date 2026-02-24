@@ -3,7 +3,7 @@ Last updated: 2026-02-24
 
 ## Repository
 - Branch: `main`
-- Commit snapshot (pushed): `bf3645c`
+- Commit snapshot (pushed): `ed105ca`
 
 ## Active ticket
 - Source of truth: `docs/_codex/ACTIVE_TICKET.md`
@@ -211,6 +211,33 @@ Last updated: 2026-02-24
     - action:
       - no-hit로 판정하고 fail-closed rollback 완료(코드/설정 변경 미유지).
       - next probe는 `v14`로 넘어가되 default-OFF + narrow scope 원칙 유지.
+  - v14 minimal scoped code probe completed (default-OFF, not retained):
+    - probe intent:
+      - `TRENDING_UP|CORE_RESCUE`에 RR/strength 기반 국소 tail guard를 default-OFF 플래그로 주입해 OFF/ON 5-set 비교.
+    - artifacts:
+      - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v14_probe_off_5set_20260224.json`
+      - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v14_probe_on_5set_20260224.json`
+      - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v14_probe_off_5set_3m7d_20260224.json`
+      - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v14_probe_on_5set_3m7d_20260224.json`
+      - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v14_probe_on_vs_off_5set_20260224.json`
+    - gate snapshot:
+      - verification OFF -> ON:
+        - `avg_profit_factor: 1.0229 -> 0.9292`
+        - `avg_expectancy_krw: -0.6964 -> -1.6714`
+        - `avg_total_trades: 14.0 -> 13.2`
+      - daily OOS OFF -> ON:
+        - `status: pass -> fail`
+        - `nonpositive_day_ratio: 0.368421 -> 0.733333`
+        - `total_profit_sum: 118.672413 -> -1545.78735`
+      - delta:
+        - `profit_sum_delta=-1664.459763`
+        - `nonpositive_day_count_delta=+8`
+        - `negative_trade_expansion_count=6`
+    - interpretation:
+      - narrow guard가 기대한 손실 셀 축소가 아니라 `RANGING|CORE_RESCUE_SHOULD_ENTER` 점유 왜곡을 유발.
+    - action:
+      - fail-closed rollback 완료(코드/설정 미유지).
+      - next probe는 `v15`에서 guard 재주입 전에 점유/전이 왜곡 계측을 먼저 고정.
   - live execution update 로그 수집 선행조건은 충족됨
     (`execution_updates_live.jsonl` 생성 확인).
   - live parity path hardening landed:
