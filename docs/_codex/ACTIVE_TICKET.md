@@ -284,6 +284,32 @@ Last updated: 2026-02-24
     - action:
       - fail-closed rollback complete (temporary v14 probe code/config removed).
       - next step is `v15` instrumentation-first (occupancy/transition distortion isolation) before any new guard patch.
+  - v15 instrumentation-first distortion isolation (`2026-02-25`):
+    - new script:
+      - `scripts/analyze_v15_occupancy_distortion.py`
+    - artifacts:
+      - `build/Release/logs/v15_occupancy_distortion_correctness_runtime_mapping_on_guard_v14_probe_on_vs_off_5set_20260224.json`
+      - sanity:
+        - `build/Release/logs/v15_occupancy_distortion_correctness_runtime_mapping_on_guard_v13_probe_on_vs_off_5set_20260224.json`
+    - key results:
+      - dominant adverse expansion cell:
+        - `RANGING|CORE_RESCUE_SHOULD_ENTER`
+        - `positive_trade_delta=+53`, `adverse_expansion_profit_delta=-1475.369780`
+      - regime-level concentration:
+        - `RANGING` adverse expansion
+          `trade_delta=+56`, `profit_delta=-1515.661983`
+      - top day-cell shocks:
+        - `upbit_KRW_SOL_1m_12000.csv / 2026-02-19`
+          `RANGING|CORE_RESCUE trade_delta=+24, profit_delta=-720.579010`
+        - `upbit_KRW_XRP_1m_12000.csv / 2026-02-19`
+          `RANGING|CORE_RESCUE trade_delta=+18, profit_delta=-399.766364`
+    - interpretation:
+      - v14 실패의 1차 축은 target uptrend-tail miss가 아니라
+        ranging-rescue occupancy spillover expansion.
+    - action:
+      - next step is `v16`:
+        - instrumentation-locked spillover constraints를 정의/고정하고,
+          그 기준을 통과한 후보만 default-OFF narrow probe 재시도.
 
 ## Current result snapshot
 - Baseline reference remains:

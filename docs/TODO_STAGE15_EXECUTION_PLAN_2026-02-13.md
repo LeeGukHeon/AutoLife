@@ -1805,10 +1805,32 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
               fail-closed 조건을 즉시 위반.
           - 조치:
             - fail-closed rollback 완료(임시 v14 probe 코드/설정 제거, baseline 유지).
-        - 다음 국소 단계(v15):
-          - guard 재시도 전에 occupancy/transition distortion 계측을 먼저 고정하고,
-            `RANGING|CORE_RESCUE` 확장 경로를 분리 진단.
-          - 원인 축이 분리된 뒤에만 default OFF + narrow scope 후보를 재주입.
+        - v15 계측 우선(distortion isolation) 완료:
+          - 신규 스크립트:
+            - `scripts/analyze_v15_occupancy_distortion.py`
+          - 산출물:
+            - `build/Release/logs/v15_occupancy_distortion_correctness_runtime_mapping_on_guard_v14_probe_on_vs_off_5set_20260224.json`
+            - sanity:
+              - `build/Release/logs/v15_occupancy_distortion_correctness_runtime_mapping_on_guard_v13_probe_on_vs_off_5set_20260224.json`
+          - 핵심:
+            - 지배적 adverse expansion 셀:
+              - `RANGING|CORE_RESCUE_SHOULD_ENTER`
+              - `positive_trade_delta=+53`
+              - `adverse_expansion_profit_delta=-1475.369780`
+            - 레짐 집계:
+              - `RANGING` adverse expansion:
+                `trade_delta=+56`, `profit_delta=-1515.661983`
+            - top shock day-cells:
+              - `SOL 2026-02-19`: `RANGING|CORE_RESCUE`, `trade_delta=+24`, `profit_delta=-720.579010`
+              - `XRP 2026-02-19`: `RANGING|CORE_RESCUE`, `trade_delta=+18`, `profit_delta=-399.766364`
+          - 해석:
+            - v14 실패는 목표 `TRENDING_UP` tail 셀보다
+              `RANGING|CORE_RESCUE` 점유 spillover 확장이 주원인.
+        - 다음 국소 단계(v16):
+          - guard 재주입 전에 spillover lock 기준을 먼저 문서/검증 스크립트에 고정:
+            - non-target adverse expansion 금지
+              (`RANGING|CORE_RESCUE`의 `positive_trade_delta <= 0` as hard constraint).
+            - 기준 통과 후보만 default OFF + narrow scope로 재시도.
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
    - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.

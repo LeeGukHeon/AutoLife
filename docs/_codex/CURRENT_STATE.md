@@ -238,6 +238,28 @@ Last updated: 2026-02-24
     - action:
       - fail-closed rollback 완료(코드/설정 미유지).
       - next probe는 `v15`에서 guard 재주입 전에 점유/전이 왜곡 계측을 먼저 고정.
+  - v15 instrumentation-first distortion isolation completed:
+    - new script:
+      - `scripts/analyze_v15_occupancy_distortion.py`
+    - artifacts:
+      - `build/Release/logs/v15_occupancy_distortion_correctness_runtime_mapping_on_guard_v14_probe_on_vs_off_5set_20260224.json`
+      - sanity check:
+        - `build/Release/logs/v15_occupancy_distortion_correctness_runtime_mapping_on_guard_v13_probe_on_vs_off_5set_20260224.json`
+    - key findings (v14 ON vs OFF):
+      - adverse expansion pivot:
+        - `RANGING|CORE_RESCUE_SHOULD_ENTER`
+        - `positive_trade_delta=+53`
+        - `adverse_expansion_profit_delta=-1475.369780`
+      - regime-level adverse concentration:
+        - `RANGING`: `adverse_expansion_trade_delta=+56`,
+          `adverse_expansion_profit_delta=-1515.661983`
+      - top day-cells:
+        - `SOL 2026-02-19`: `RANGING|CORE_RESCUE`, `trade_delta=+24`, `profit_delta=-720.579010`
+        - `XRP 2026-02-19`: `RANGING|CORE_RESCUE`, `trade_delta=+18`, `profit_delta=-399.766364`
+    - interpretation:
+      - v14 열화는 target `TRENDING_UP` tail 완화 실패보다
+        `RANGING|CORE_RESCUE` occupancy spillover expansion이 지배.
+      - next probe는 guard 재주입 전에 spillover lock 기준을 먼저 강제해야 함.
   - live execution update 로그 수집 선행조건은 충족됨
     (`execution_updates_live.jsonl` 생성 확인).
   - live parity path hardening landed:
