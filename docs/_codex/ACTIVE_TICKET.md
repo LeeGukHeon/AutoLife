@@ -310,6 +310,31 @@ Last updated: 2026-02-24
       - next step is `v16`:
         - instrumentation-locked spillover constraints를 정의/고정하고,
           그 기준을 통과한 후보만 default-OFF narrow probe 재시도.
+  - v16 spillover lock evaluation (`2026-02-25`):
+    - new script:
+      - `scripts/evaluate_v16_spillover_lock.py`
+    - lock criteria (hard):
+      - `nontarget_positive_trade_delta <= 0`
+      - `nontarget_adverse_profit_delta >= 0`
+      - `nonpositive_day_count_delta <= 0`
+    - artifacts:
+      - v14 case:
+        - `build/Release/logs/v16_spillover_lock_correctness_runtime_mapping_on_guard_v14_probe_on_vs_off_5set_20260224.json`
+      - v13 sanity case:
+        - `build/Release/logs/v16_spillover_lock_correctness_runtime_mapping_on_guard_v13_probe_on_vs_off_5set_20260224.json`
+    - results:
+      - v14: `status=fail`
+        - fail_reasons:
+          - `nontarget_positive_trade_delta`
+          - `nontarget_adverse_profit_delta`
+          - `nonpositive_day_count_delta`
+        - primary offender:
+          - `RANGING|CORE_RESCUE_SHOULD_ENTER`
+      - v13 sanity: `status=pass` (all lock checks pass)
+    - action:
+      - next step is `v17`:
+        - lock precheck를 probe 워크플로 앞단에 고정하고,
+          lock 통과 후보만 default-OFF narrow code probe로 재시도.
 
 ## Current result snapshot
 - Baseline reference remains:

@@ -1826,11 +1826,27 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
           - 해석:
             - v14 실패는 목표 `TRENDING_UP` tail 셀보다
               `RANGING|CORE_RESCUE` 점유 spillover 확장이 주원인.
-        - 다음 국소 단계(v16):
-          - guard 재주입 전에 spillover lock 기준을 먼저 문서/검증 스크립트에 고정:
-            - non-target adverse expansion 금지
-              (`RANGING|CORE_RESCUE`의 `positive_trade_delta <= 0` as hard constraint).
-            - 기준 통과 후보만 default OFF + narrow scope로 재시도.
+        - v16 spillover lock 기준 고정 및 평가 완료:
+          - 신규 스크립트:
+            - `scripts/evaluate_v16_spillover_lock.py`
+          - hard criteria:
+            - `nontarget_positive_trade_delta <= 0`
+            - `nontarget_adverse_profit_delta >= 0`
+            - `nonpositive_day_count_delta <= 0`
+          - 산출물:
+            - v14 case:
+              - `build/Release/logs/v16_spillover_lock_correctness_runtime_mapping_on_guard_v14_probe_on_vs_off_5set_20260224.json`
+            - v13 sanity:
+              - `build/Release/logs/v16_spillover_lock_correctness_runtime_mapping_on_guard_v13_probe_on_vs_off_5set_20260224.json`
+          - 결과:
+            - v14: `status=fail` (3/3 check fail)
+              - `nontarget_positive_trade_delta=64`
+              - `nontarget_adverse_profit_delta=-1515.661983`
+              - `nonpositive_day_count_delta=8`
+            - v13 sanity: `status=pass`
+        - 다음 국소 단계(v17):
+          - lock precheck를 probe 워크플로 선행 게이트로 고정하고,
+            lock 통과 후보만 default OFF + narrow scope 코드 프로브로 재시도.
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
    - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.

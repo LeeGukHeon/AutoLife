@@ -260,6 +260,26 @@ Last updated: 2026-02-24
       - v14 열화는 target `TRENDING_UP` tail 완화 실패보다
         `RANGING|CORE_RESCUE` occupancy spillover expansion이 지배.
       - next probe는 guard 재주입 전에 spillover lock 기준을 먼저 강제해야 함.
+  - v16 spillover lock criteria landed and validated:
+    - new script:
+      - `scripts/evaluate_v16_spillover_lock.py`
+    - artifacts:
+      - v14 probe evaluation:
+        - `build/Release/logs/v16_spillover_lock_correctness_runtime_mapping_on_guard_v14_probe_on_vs_off_5set_20260224.json`
+      - v13 sanity evaluation:
+        - `build/Release/logs/v16_spillover_lock_correctness_runtime_mapping_on_guard_v13_probe_on_vs_off_5set_20260224.json`
+    - lock criteria (hard):
+      - `nontarget_positive_trade_delta <= 0`
+      - `nontarget_adverse_profit_delta >= 0`
+      - `nonpositive_day_count_delta <= 0`
+    - results:
+      - v14: `status=fail`
+        - `nontarget_positive_trade_delta=64`
+        - `nontarget_adverse_profit_delta=-1515.661983`
+        - `nonpositive_day_count_delta=8`
+      - v13 sanity: `status=pass` (all zero deltas)
+    - action:
+      - v17부터는 이 lock을 선행 통과하지 못하는 후보를 즉시 폐기.
   - live execution update 로그 수집 선행조건은 충족됨
     (`execution_updates_live.jsonl` 생성 확인).
   - live parity path hardening landed:
