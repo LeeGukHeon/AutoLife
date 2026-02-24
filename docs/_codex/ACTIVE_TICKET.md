@@ -42,27 +42,33 @@ Last updated: 2026-02-24
 - Parity:
   - N/A (bundle/schema unchanged)
 - Verification:
-  - `verification_report_global_full_5set_refresh_20260224_step7r_final_v1.json`
+  - `verification_report_global_full_5set_refresh_20260224_step7u_uptrend_deepneg_scale_v1.json`
 - Extra tests:
-  - daily OOS report diff vs prior maintained candidate (`step7f`)
+  - daily OOS report diff vs prior maintained candidate (`step7r_final`)
 
 ## Current result snapshot
-- Verification (`step7r_final`):
+- Verification (`step7u`):
   - `overall_gate_pass=true`
   - `adaptive_verdict=pass`
   - `avg_profit_factor=2.9577`
   - `avg_expectancy_krw=14.7159`
   - `avg_total_trades=10.2`
   - `candidate_generation.no_signal_generated share=0.6374`
-- Daily OOS (`step7r_final`):
+- Daily OOS (`step7u`):
   - `status=fail`
-  - `evaluated_day_count=15`
-  - `nonpositive_day_ratio=0.8` (threshold 0.45 fail)
-  - `total_profit_sum=-1369.08985` (fail)
-  - `peak_day_drawdown_pct=2.092465` (pass)
+  - `evaluated_day_count=14`
+  - `nonpositive_day_ratio=0.785714` (threshold 0.45 fail)
+  - `total_profit_sum=-1180.672555` (fail)
+  - `peak_day_drawdown_pct=2.043726` (pass)
   - dominant loss cell: `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER`
-  - delta vs `step7f`: `nonpositive_day_ratio 0.933333 -> 0.8`, `total_profit_sum -2760.512552 -> -1369.08985`
-  - delta vs `step7i_final`: `total_profit_sum -1850.427359 -> -1369.08985`
+  - delta vs `step7r_final`: `total_profit_sum -1369.08985 -> -1180.672555`
+  - delta vs `step7f`: `total_profit_sum -2760.512552 -> -1180.672555`
+  - note: daily OOS aggregation bugfix applied in script.
+    - trade-history day metrics now avoid summary fallback contamination.
+    - `--exclude-backtest-eod-trades` added (default keeps legacy include behavior).
+  - discarded follow-up probe (`step7v`):
+    - verification improved (`avg_profit_factor=2.9795`, `avg_expectancy_krw=15.3616`)
+    - daily OOS worsened (`total_profit_sum=-1505.699592`, `peak_day_drawdown_pct=2.80857`)
 
 ## DoD
 - [x] runtime guards are live/backtest isomorphic.
@@ -74,4 +80,4 @@ Last updated: 2026-02-24
 - Risks:
   - over-tightening can drop sample-size guard in verification.
 - Rollback strategy:
-  - keep latest passing candidate (`step7r_final`) and iterate only guard thresholds incrementally.
+  - keep latest passing candidate (`step7u`) and iterate only guard thresholds incrementally.

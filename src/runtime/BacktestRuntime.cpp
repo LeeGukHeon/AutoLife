@@ -695,6 +695,12 @@ void applyProbabilisticPrimaryDecisionProfile(
         signal.probabilistic_h5_calibrated < 0.413 &&
         margin < -0.014 &&
         signal.liquidity_score < 58.0;
+    const bool uptrend_rescue_deep_negative_context =
+        uptrend_rescue_loss_tail_context &&
+        signal.expected_value < -0.00230 &&
+        signal.strength < 0.446 &&
+        signal.liquidity_score < 52.0 &&
+        margin < -0.013;
     const double confidence = std::clamp(
         (std::clamp((prob - 0.50) / 0.20, 0.0, 1.0) * 0.65) +
         (std::clamp((margin + 0.01) / 0.08, 0.0, 1.0) * 0.35),
@@ -759,6 +765,9 @@ void applyProbabilisticPrimaryDecisionProfile(
         if (uptrend_rescue_loss_tail_context) {
             target_risk_pct *= 0.72;
         }
+        if (uptrend_rescue_deep_negative_context) {
+            target_risk_pct *= 0.82;
+        }
         if (!hostile_regime &&
             signal.market_regime == autolife::analytics::MarketRegime::TRENDING_UP &&
             uptrend_continuation_archetype &&
@@ -810,6 +819,9 @@ void applyProbabilisticPrimaryDecisionProfile(
         }
         if (uptrend_rescue_loss_tail_context) {
             size_scale *= 0.78;
+        }
+        if (uptrend_rescue_deep_negative_context) {
+            size_scale *= 0.84;
         }
         signal.position_size *= std::clamp(size_scale, 0.30, 1.35);
     }

@@ -616,27 +616,36 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
     - `step7o`: uptrend loss-tail context 리스크/사이즈 축소(1차)로 OOS 추가 개선.
     - `step7p`: uptrend loss-tail context 리스크/사이즈 축소(2차)로 OOS 소폭 추가 개선.
     - `step7q`: ranging narrow-tail guard(`expected_value` 포함) 미히트/무변화(폐기).
-    - `step7r`: ranging narrow-tail guard(`expected_value` 제외)로 OOS 추가 개선(현재 유지 후보).
+    - `step7r`: ranging narrow-tail guard(`expected_value` 제외)로 OOS 추가 개선.
     - `step7s`: uptrend scaling 과강화로 OOS 악화(폐기).
-  - 현재 유지 후보 (`step7r_final`):
+    - `step7t`: uptrend 조기 breakeven/trailing 강화로 OOS 악화(폐기).
+    - `step7u`: uptrend deep-negative context 추가 스케일링으로 OOS 소폭 추가 개선(현재 유지 후보).
+    - `step7v`: uptrend ultra-tail 추가 스케일링 시도, verification 소폭 개선 대비 daily OOS 악화로 폐기.
+      - verification: `avg_profit_factor=2.9795`, `avg_expectancy_krw=15.3616`, `adaptive_verdict=pass`
+      - daily OOS: `nonpositive_day_ratio=0.785714`, `total_profit_sum=-1505.699592`, `peak_day_drawdown_pct=2.80857`
+  - 현재 유지 후보 (`step7u`):
     - verification:
-      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step7r_final_v1.json`
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step7u_uptrend_deepneg_scale_v1.json`
       - `overall_gate_pass=true`, `adaptive_verdict=pass`
       - `avg_profit_factor=2.9577`, `avg_expectancy_krw=14.7159`, `avg_total_trades=10.2`
       - `candidate_generation.no_signal_generated share=0.6374`
     - daily OOS:
-      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step7r_final.json`
-      - `status=fail`, `evaluated_day_count=15`
-      - `nonpositive_day_ratio=0.8` (threshold `0.45` fail)
-      - `total_profit_sum=-1369.08985` (fail)
-      - `peak_day_drawdown_pct=2.092465` (pass)
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step7u.json`
+      - `status=fail`, `evaluated_day_count=14`
+      - `nonpositive_day_ratio=0.785714` (threshold `0.45` fail)
+      - `total_profit_sum=-1180.672555` (fail)
+      - `peak_day_drawdown_pct=2.043726` (pass)
+      - `step7r_final` 대비 개선:
+        - `total_profit_sum: -1369.08985 -> -1180.672555`
       - `step7f` 대비 개선:
-        - `nonpositive_day_ratio: 0.933333 -> 0.8`
-        - `total_profit_sum: -2760.512552 -> -1369.08985`
-      - `step7i_final` 대비 개선:
-        - `total_profit_sum: -1850.427359 -> -1369.08985`
-        - `peak_day_drawdown_pct: 2.598311 -> 2.092465`
+        - `total_profit_sum: -2760.512552 -> -1180.672555`
       - dominant loss cell: `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER`
+  - Gate3 supplement 집계 정합성 보정:
+    - `scripts/run_daily_oos_stability.py`
+      - trade history가 존재할 때 day metrics는 summary fallback으로 오염되지 않도록 보정.
+      - 옵션 추가: `--exclude-backtest-eod-trades` (기본은 기존 동작 유지: include).
+    - regression:
+      - `scripts/test_daily_oos_stability.py`
 
 ## Next (Strict Order)
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:

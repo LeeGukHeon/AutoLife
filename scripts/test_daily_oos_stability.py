@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 import unittest
 
-from run_daily_oos_stability import compute_gate_checks, select_recent_days, utc_day_from_timestamp_ms
+from run_daily_oos_stability import (
+    build_target_day_cell_breakdown,
+    compute_gate_checks,
+    extract_target_day_metrics_from_trade_history,
+    select_recent_days,
+    utc_day_from_timestamp_ms,
+)
 
 
 class DailyOosStabilityTest(unittest.TestCase):
@@ -48,6 +54,126 @@ class DailyOosStabilityTest(unittest.TestCase):
         self.assertFalse(checks["max_nonpositive_day_ratio"]["pass"])
         self.assertFalse(checks["max_day_drawdown_pct"]["pass"])
         self.assertFalse(checks["positive_profit_sum"]["pass"])
+
+    def test_trade_history_metrics_includes_backtest_eod_by_default(self):
+        payload = {
+            "trade_history_samples": [
+                {
+                    "exit_time": 1771200000000,  # 2026-02-16 UTC
+                    "exit_reason": "BacktestEOD",
+                    "profit_loss_krw": -100.0,
+                },
+                {
+                    "exit_time": 1771200300000,  # 2026-02-16 UTC
+                    "exit_reason": "TakeProfit1",
+                    "profit_loss_krw": 40.0,
+                },
+            ]
+        }
+        metrics = extract_target_day_metrics_from_trade_history(payload, "2026-02-16")
+        self.assertIsNotNone(metrics)
+        assert metrics is not None
+        self.assertEqual(metrics["total_trades"], 2)
+        self.assertEqual(metrics["winning_trades"], 1)
+        self.assertEqual(metrics["total_profit"], -60.0)
+
+    def test_trade_history_metrics_can_exclude_backtest_eod(self):
+        payload = {
+            "trade_history_samples": [
+                {
+                    "exit_time": 1771200000000,  # 2026-02-16 UTC
+                    "exit_reason": "BacktestEOD",
+                    "profit_loss_krw": -100.0,
+                },
+                {
+                    "exit_time": 1771200300000,  # 2026-02-16 UTC
+                    "exit_reason": "TakeProfit1",
+                    "profit_loss_krw": 40.0,
+                },
+            ]
+        }
+        metrics = extract_target_day_metrics_from_trade_history(
+            payload,
+            "2026-02-16",
+            include_backtest_eod_trades=False,
+        )
+        self.assertIsNotNone(metrics)
+        assert metrics is not None
+        self.assertEqual(metrics["total_trades"], 1)
+        self.assertEqual(metrics["winning_trades"], 1)
+        self.assertEqual(metrics["total_profit"], 40.0)
+
+    def test_trade_history_metrics_returns_zero_when_only_excluded(self):
+        payload = {
+            "trade_history_samples": [
+                {
+                    "exit_time": 1771200000000,  # 2026-02-16 UTC
+                    "exit_reason": "BacktestEOD",
+                    "profit_loss_krw": -100.0,
+                }
+            ]
+        }
+        metrics = extract_target_day_metrics_from_trade_history(
+            payload,
+            "2026-02-16",
+            include_backtest_eod_trades=False,
+        )
+        self.assertIsNotNone(metrics)
+        assert metrics is not None
+        self.assertEqual(metrics["total_trades"], 0)
+        self.assertEqual(metrics["total_profit"], 0.0)
+
+    def test_cell_breakdown_includes_backtest_eod_by_default(self):
+        payload = {
+            "trade_history_samples": [
+                {
+                    "exit_time": 1771200000000,
+                    "exit_reason": "BacktestEOD",
+                    "profit_loss_krw": -100.0,
+                    "regime": "TRENDING_UP",
+                    "entry_archetype": "CORE_RESCUE_SHOULD_ENTER",
+                },
+                {
+                    "exit_time": 1771200300000,
+                    "exit_reason": "TakeProfit1",
+                    "profit_loss_krw": 40.0,
+                    "regime": "TRENDING_UP",
+                    "entry_archetype": "CORE_RESCUE_SHOULD_ENTER",
+                },
+            ]
+        }
+        cells = build_target_day_cell_breakdown(payload, "2026-02-16")
+        self.assertEqual(len(cells), 1)
+        self.assertEqual(cells[0]["trade_count"], 2)
+        self.assertEqual(cells[0]["profit_sum"], -60.0)
+
+    def test_cell_breakdown_can_exclude_backtest_eod(self):
+        payload = {
+            "trade_history_samples": [
+                {
+                    "exit_time": 1771200000000,
+                    "exit_reason": "BacktestEOD",
+                    "profit_loss_krw": -100.0,
+                    "regime": "TRENDING_UP",
+                    "entry_archetype": "CORE_RESCUE_SHOULD_ENTER",
+                },
+                {
+                    "exit_time": 1771200300000,
+                    "exit_reason": "TakeProfit1",
+                    "profit_loss_krw": 40.0,
+                    "regime": "TRENDING_UP",
+                    "entry_archetype": "CORE_RESCUE_SHOULD_ENTER",
+                },
+            ]
+        }
+        cells = build_target_day_cell_breakdown(
+            payload,
+            "2026-02-16",
+            include_backtest_eod_trades=False,
+        )
+        self.assertEqual(len(cells), 1)
+        self.assertEqual(cells[0]["trade_count"], 1)
+        self.assertEqual(cells[0]["profit_sum"], 40.0)
 
 
 if __name__ == "__main__":

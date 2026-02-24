@@ -41,6 +41,14 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--require-higher-tf-companions", action="store_true")
     parser.add_argument("--allow-missing-higher-tf-companions", dest="require_higher_tf_companions", action="store_false")
     parser.set_defaults(require_higher_tf_companions=True)
+    parser.add_argument(
+        "--exclude-backtest-eod-trades",
+        action="store_true",
+        help=(
+            "Exclude synthetic BacktestEOD exits from daily attribution. "
+            "Default keeps historical behavior (include BacktestEOD)."
+        ),
+    )
     parser.add_argument("--temp-dir", default=r".\build\Release\logs\daily_oos_tmp")
     parser.add_argument("--keep-temp", action="store_true")
     parser.add_argument("--output-csv", default=r".\build\Release\logs\daily_oos_stability_windows.csv")
@@ -262,7 +270,12 @@ def extract_day_metrics(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def extract_target_day_metrics_from_trade_history(payload: Dict[str, Any], target_day: str) -> Optional[Dict[str, Any]]:
+def extract_target_day_metrics_from_trade_history(
+    payload: Dict[str, Any],
+    target_day: str,
+    *,
+    include_backtest_eod_trades: bool = True,
+) -> Optional[Dict[str, Any]]:
     trades = payload.get("trade_history_samples", [])
     if not isinstance(trades, list) or not trades:
         return None
@@ -270,6 +283,8 @@ def extract_target_day_metrics_from_trade_history(payload: Dict[str, Any], targe
     day_pnls: List[float] = []
     for item in trades:
         if not isinstance(item, dict):
+            continue
+        if (not include_backtest_eod_trades) and str(item.get("exit_reason", "")).strip() == "BacktestEOD":
             continue
         exit_time = item.get("exit_time", item.get("entry_time", 0))
         day = utc_day_from_timestamp_ms(str(exit_time))
@@ -279,7 +294,14 @@ def extract_target_day_metrics_from_trade_history(payload: Dict[str, Any], targe
 
     total_trades = len(day_pnls)
     if total_trades <= 0:
-        return None
+        return {
+            "total_trades": 0,
+            "winning_trades": 0,
+            "win_rate": 0.0,
+            "total_profit": 0.0,
+            "profit_factor": 0.0,
+            "expectancy_krw": 0.0,
+        }
     wins = len([x for x in day_pnls if x > 0.0])
     losses = len([x for x in day_pnls if x < 0.0])
     total_profit = sum(day_pnls)
@@ -301,13 +323,20 @@ def extract_target_day_metrics_from_trade_history(payload: Dict[str, Any], targe
     }
 
 
-def build_target_day_cell_breakdown(payload: Dict[str, Any], target_day: str) -> List[Dict[str, Any]]:
+def build_target_day_cell_breakdown(
+    payload: Dict[str, Any],
+    target_day: str,
+    *,
+    include_backtest_eod_trades: bool = True,
+) -> List[Dict[str, Any]]:
     trades = payload.get("trade_history_samples", [])
     if not isinstance(trades, list) or not trades:
         return []
     cells: Dict[str, Dict[str, Any]] = {}
     for item in trades:
         if not isinstance(item, dict):
+            continue
+        if (not include_backtest_eod_trades) and str(item.get("exit_reason", "")).strip() == "BacktestEOD":
             continue
         exit_time = item.get("exit_time", item.get("entry_time", 0))
         day = utc_day_from_timestamp_ms(str(exit_time))
@@ -502,7 +531,11 @@ def main(argv=None) -> int:
                     require_higher_tf_companions=bool(args.require_higher_tf_companions),
                 )
                 metrics = extract_day_metrics(payload)
-                day_metrics = extract_target_day_metrics_from_trade_history(payload, day)
+                day_metrics = extract_target_day_metrics_from_trade_history(
+                    payload,
+                    day,
+                    include_backtest_eod_trades=(not bool(args.exclude_backtest_eod_trades)),
+                )
                 if isinstance(day_metrics, dict):
                     metrics["total_trades"] = int(day_metrics.get("total_trades", 0))
                     metrics["winning_trades"] = int(day_metrics.get("winning_trades", 0))
@@ -513,7 +546,11 @@ def main(argv=None) -> int:
                     metrics["metric_source"] = "trade_history_day"
                 else:
                     metrics["metric_source"] = "summary_fallback"
-                cell_breakdown = build_target_day_cell_breakdown(payload, day)
+                cell_breakdown = build_target_day_cell_breakdown(
+                    payload,
+                    day,
+                    include_backtest_eod_trades=(not bool(args.exclude_backtest_eod_trades)),
+                )
                 metrics["cell_breakdown"] = cell_breakdown
                 record.update(metrics)
                 record["evaluated"] = bool(metrics["total_trades"] >= int(args.min_trades_per_day))
@@ -646,6 +683,7 @@ def main(argv=None) -> int:
             "min_rows_per_day": int(args.min_rows_per_day),
             "min_trades_per_day": int(args.min_trades_per_day),
             "require_higher_tf_companions": bool(args.require_higher_tf_companions),
+            "exclude_backtest_eod_trades": bool(args.exclude_backtest_eod_trades),
             "gate_min_evaluated_days": int(args.gate_min_evaluated_days),
             "gate_max_nonpositive_ratio": float(args.gate_max_nonpositive_ratio),
             "gate_max_day_dd_pct": float(args.gate_max_day_dd_pct),
