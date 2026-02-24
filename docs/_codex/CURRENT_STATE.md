@@ -3,11 +3,11 @@ Last updated: 2026-02-24
 
 ## Repository
 - Branch: `main`
-- Commit snapshot (pushed): `667237d`
+- Commit snapshot (pushed): `d6390bf`
 
 ## Active ticket
 - Source of truth: `docs/_codex/ACTIVE_TICKET.md`
-- Current: `SO4-14-SHADOW-EVIDENCE-HARDENING-20260224` (`Strict-Order-4-14`, Mode `A`, status `completed`)
+- Current: `SO4-15-NEGATIVE-DAY-TAIL-ANALYSIS-20260224` (`Strict-Order-4-15`, Mode `A`, status `in_progress`)
 
 ## Master ticket progress (0-7)
 - Ticket 0: implemented.
@@ -31,13 +31,20 @@ Last updated: 2026-02-24
 
 ## Daily OOS snapshot (Gate3 supplement)
 - Report:
-  - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8e_highcal_shallowmargin_tail_v1.json`
+  - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8f_runtime_tail_guard_rollback.json`
 - Result:
   - `status=pass`
   - `evaluated_day_count=10`
   - `nonpositive_day_ratio=0.4`
   - `total_profit_sum=195.2653`
   - `peak_day_drawdown_pct=1.225896`
+- Analysis artifacts:
+  - `build/Release/logs/daily_oos_negative_day_cell_summary_step8e.json`
+  - `build/Release/logs/daily_oos_negative_trade_detail_step8e_postgate4_targetday.json`
+  - `build/Release/logs/verification_loss_tail_focus_step8e.json`
+- Failed experiment (rolled back):
+  - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8f_runtime_tail_guard_v2.json`
+  - outcome: `status=fail`, `nonpositive_day_ratio=0.6`, `total_profit_sum=-271.050584`
 
 ## Gate4 shadow flow snapshot
 - Flow report:
@@ -78,7 +85,10 @@ Last updated: 2026-02-24
 - Gate4 shadow is now `pass`; staged live enable remains Gate5-controlled and still requires manual rollout.
 
 ## Known gaps
-- Residual day-sliced negatives remain (ETH/XRP), although Gate3 supplement aggregate now passes.
+- Residual loss-tail focus remains on:
+  - `TRENDING_UP|PROBABILISTIC_PRIMARY_RUNTIME` (ETH, BacktestEOD exits)
+  - `RANGING|CORE_RESCUE_SHOULD_ENTER` (ETH)
+  - `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER` (XRP)
 - Gate5 staged enable execution and monitoring evidence are not started yet.
 
 ## Detailed history references

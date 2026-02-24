@@ -750,6 +750,39 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
       - validation/promotion:
         - `build/Release/logs/probabilistic_shadow_report_validation_v14_asc.json` (`status=pass`)
         - `build/Release/logs/probabilistic_promotion_readiness_v14_asc.json` (`status=pass`, `promotion_ready=true`)
+- [ ] Strict Order 4 15차: 잔여 음수일(ETH/XRP) tail 분석 + 비열화 후보 도출.
+  - 분석 산출물:
+    - `build/Release/logs/daily_oos_negative_day_cell_summary_step8e.json`
+    - `build/Release/logs/verification_loss_tail_focus_step8e.json`
+    - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8e_postgate4.json`
+    - `build/Release/logs/daily_oos_negative_trade_detail_step8e_postgate4_targetday.json`
+  - 핵심 관찰(target-day 기준):
+    - 음수 평가일 4일, 음수 트레이드 5건.
+    - dominant loss cell:
+      - `TRENDING_UP|PROBABILISTIC_PRIMARY_RUNTIME`
+      - `trade_count=2`, `profit_sum=-235.2360749483776` (ETH 2/18, 2/19)
+      - 공통 프로파일:
+        - `expected_value=-0.0006343170715427818`
+        - `prob_h5_calibrated=0.4202275070419632`
+        - `prob_h5_margin=-0.0034782854616839387`
+        - `strength=0.507171403555295`
+        - `liquidity=53.463441730831796`
+        - `volatility=0.14200025326696833`
+        - `exit_reason=BacktestEOD`
+    - 보조 loss cell:
+      - `RANGING|CORE_RESCUE_SHOULD_ENTER` (ETH 2/15, stoploss 2건)
+      - `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER` (XRP 2/19, stoploss 1건)
+  - 폐기 실험(step8f runtime tail guard):
+    - 코드 시도:
+      - `TRENDING_UP + PROBABILISTIC_PRIMARY_RUNTIME`에 약한 runtime tail guard 추가(라이브/백테스트 동형)
+    - 결과:
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8f_runtime_tail_guard_v2.json`
+      - `status=fail`, `nonpositive_day_ratio=0.6`, `total_profit_sum=-271.050584`
+    - 조치:
+      - 실험 코드 즉시 롤백.
+      - 복구 확인:
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8f_runtime_tail_guard_rollback.json`
+        - `status=pass`, `nonpositive_day_ratio=0.4`, `total_profit_sum=195.2653`
 
 ## Next (Strict Order)
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
