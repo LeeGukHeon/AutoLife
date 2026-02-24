@@ -544,6 +544,23 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
     - `avg_profit_factor=3.0789`, `avg_expectancy_krw=18.5147`, `avg_total_trades=10.0` (동일 유지)
     - `candidate_generation.no_signal_generated share: 0.7047 -> 0.7033`
     - `baseline_comparison.non_degradation_contract.all_pass=true` 유지
+- [x] Strict Order 4 11차: downtrend rebound imbalance 바닥 미세 완화(Foundation gate, 라이브/백테스트 동형).
+  - code:
+    - `src/strategy/FoundationAdaptiveStrategy.cpp`
+  - 핵심:
+    - `isDowntrendLowFlowReboundOpportunity`에서 호가 불균형 하한을
+      `-0.10 -> -0.12`로 한 단계 완화해 downtrend 저유동 구간의 신호 공급을 미세 확장.
+    - 기존 리스크 축소(`risk_pct`, `position_size`)는 그대로 유지.
+  - 검증:
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step6l_downtrend_rebound_imbalance_relax_v1.json`
+  - 결과(기준: `..._step6j_downtrend_lowflow_rebound_relax_v1.json` 대비):
+    - `overall_gate_pass=true` 유지
+    - `avg_profit_factor=3.0789`, `avg_expectancy_krw=18.5147`, `avg_total_trades=10.0` (동일 유지)
+    - `candidate_generation.no_signal_generated share: 0.7033 -> 0.7019`
+    - `baseline_comparison.non_degradation_contract.all_pass=true` 유지
+  - 폐기 실험(무변화):
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step6k_uptrend_relief_plus_v1.json`
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step6m_downtrend_rebound_imbalance_relax2_v1.json`
 
 ## Next (Strict Order)
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
@@ -551,7 +568,7 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.
 1. 표본 유지 + 품질 보강(Strict Order 4):
    - 현재 `avg_total_trades=10.0` 임계선 방어 상태에서 BTC/XRP 약한 셀(저품질 rescue/continuation) 추가 안정화
-   - `candidate_generation`의 `no_signal_generated` 비중(`share=0.7033`) 추가 완화
+   - `candidate_generation`의 `no_signal_generated` 비중(`share=0.7019`) 추가 완화
 2. 라벨/학습 구조 고도화:
    - optional triple-barrier 활성화 실험(기존 라벨과 병행)
    - `P(win)` + `E[pnl]` 2-head 학습 파이프라인 추가

@@ -21,7 +21,7 @@ Last updated: 2026-02-24
 - Master spec baseline: `docs/_codex/MASTER_SPEC.md`
 - Execution mode target: Mode A (baseline-preserving), extensions behind flags
 - Current active ticket label:
-  - `Strict Order 4-10` (downtrend low-flow rebound path micro-relax for additional no-signal reduction)
+  - `Strict Order 4-11` (downtrend rebound imbalance micro-relax for additional no-signal reduction)
 - Current implementation focus:
   - Ticket 0: docs/bootstrap reliability pack (implemented in current working tree)
   - Ticket 1: dynamic universe + scope-aware 1m fetch/build strictness (implemented in current working tree)
@@ -290,6 +290,24 @@ Last updated: 2026-02-24
     - `avg_total_trades=10.0` (unchanged)
     - `candidate_generation.no_signal_generated share: 0.7047 -> 0.7033`
     - `baseline_comparison.non_degradation_contract.all_pass=true` (maintained)
+- Latest Step-4 follow-up (`Strict Order 4-11`, pipeline=`v1`):
+  - runtime tuning: downtrend rebound imbalance floor micro-relax in foundation entry gate
+    - `src/strategy/FoundationAdaptiveStrategy.cpp`
+  - change:
+    - `isDowntrendLowFlowReboundOpportunity`: `order_book_imbalance` floor `-0.10 -> -0.12`
+  - verification:
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step6l_downtrend_rebound_imbalance_relax_v1.json`
+  - result (vs `..._step6j_downtrend_lowflow_rebound_relax_v1.json`):
+    - `overall_gate_pass=true`
+    - `adaptive_verdict=pass`
+    - `avg_profit_factor=3.0789` (unchanged)
+    - `avg_expectancy_krw=18.5147` (unchanged)
+    - `avg_total_trades=10.0` (unchanged)
+    - `candidate_generation.no_signal_generated share: 0.7033 -> 0.7019`
+    - `baseline_comparison.non_degradation_contract.all_pass=true` (maintained)
+  - discarded micro-experiments (no measurable change):
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step6k_uptrend_relief_plus_v1.json`
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step6m_downtrend_rebound_imbalance_relax2_v1.json`
 - Shadow/live staged enable: not active by default
 
 ## Known issues / watchpoints

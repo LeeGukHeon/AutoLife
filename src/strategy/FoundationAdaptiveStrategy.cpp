@@ -467,7 +467,7 @@ bool isDowntrendLowFlowReboundOpportunity(
     if (metrics.orderbook_snapshot.valid && metrics.orderbook_snapshot.spread_pct > 0.0032) {
         return false;
     }
-    if (metrics.order_book_imbalance < -0.10) {
+    if (metrics.order_book_imbalance < -0.12) {
         return false;
     }
     if (metrics.buy_pressure < (metrics.sell_pressure * 0.86)) {
