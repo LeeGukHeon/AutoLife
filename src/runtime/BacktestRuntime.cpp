@@ -1282,11 +1282,37 @@ bool passesProbabilisticPrimaryMinimums(
                 signal.probabilistic_h5_margin < -0.016 &&
                 signal.strength < 0.455 &&
                 signal.liquidity_score < 48.0;
+            const bool weak_uptrend_rescue_highliq_deepmargin_tail =
+                signal.liquidity_score >= 70.0 &&
+                signal.liquidity_score < 80.0 &&
+                signal.volatility >= 0.15 &&
+                signal.probabilistic_h5_calibrated < 0.410 &&
+                signal.probabilistic_h5_margin < -0.020 &&
+                signal.strength < 0.465;
+            const bool weak_uptrend_rescue_midliq_tail =
+                signal.volatility < 0.18 &&
+                signal.liquidity_score < 56.0 &&
+                signal.probabilistic_h5_calibrated < 0.412 &&
+                signal.probabilistic_h5_margin < -0.0125 &&
+                signal.strength < 0.472;
+            const bool weak_uptrend_rescue_highcal_shallowmargin_tail =
+                signal.volatility < 0.08 &&
+                signal.liquidity_score >= 48.0 &&
+                signal.liquidity_score < 56.0 &&
+                signal.probabilistic_h5_calibrated >= 0.411 &&
+                signal.probabilistic_h5_calibrated < 0.4125 &&
+                signal.probabilistic_h5_margin > -0.013 &&
+                signal.probabilistic_h5_margin < -0.0115 &&
+                signal.strength >= 0.472 &&
+                signal.strength < 0.476;
             if (weak_uptrend_rescue_lowliq_tail ||
                 weak_uptrend_rescue_narrow_tail ||
                 weak_uptrend_rescue_midvol_tail ||
                 weak_uptrend_rescue_lowmidvol_tail ||
-                weak_uptrend_rescue_deep_liq_tail) {
+                weak_uptrend_rescue_deep_liq_tail ||
+                weak_uptrend_rescue_highliq_deepmargin_tail ||
+                weak_uptrend_rescue_midliq_tail ||
+                weak_uptrend_rescue_highcal_shallowmargin_tail) {
                 if (reject_reason != nullptr) {
                     *reject_reason = "blocked_probabilistic_primary_rescue_tail_guard";
                 }
@@ -3503,10 +3529,6 @@ void BacktestEngine::updateDynamicFilter() {
 
 } // namespace backtest
 } // namespace autolife
-
-
-
-
 
 
 

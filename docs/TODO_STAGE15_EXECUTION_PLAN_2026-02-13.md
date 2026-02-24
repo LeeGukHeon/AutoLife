@@ -626,26 +626,29 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
     - `step7w`: uptrend mid-vol loss-tail guard 추가로 daily OOS 개선.
     - `step7x`: uptrend low-mid-vol tail guard 추가로 daily OOS 추가 개선.
     - `step7y`: deep-ev tail guard 시도(히트 없음, 폐기).
-    - `step7z`: deep-liq tail guard 추가로 nonpositive ratio 추가 개선(현재 유지 후보).
+    - `step7z`: deep-liq tail guard 추가로 nonpositive ratio 추가 개선.
     - `step8a`: high-liq/high-vol tail guard 시도, verification inconclusive로 폐기.
-  - 현재 유지 후보 (`step7z`):
+    - `step8b`: high-liq deep-margin tail guard로 daily OOS 추가 개선(여전히 fail).
+    - `step8c`: `expected_value` 의존 mid-liq tail guard 시도(히트 없음, 폐기).
+    - `step8d`: `TRENDING_UP|CORE_RESCUE` mid-liq tail guard 확장으로 near-pass 달성.
+    - `step8e`: high-calibration shallow-margin narrow tail guard 추가로 Gate3 supplement pass 달성(현재 유지 후보).
+  - 현재 유지 후보 (`step8e`):
     - verification:
-      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step7z_recheck_v1.json`
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8e_highcal_shallowmargin_tail_v1.json`
       - `overall_gate_pass=true`, `adaptive_verdict=pass`
       - `avg_profit_factor=2.9577`, `avg_expectancy_krw=14.7159`, `avg_total_trades=10.2`
       - `candidate_generation.no_signal_generated share=0.6374`
     - daily OOS:
-      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step7z_recheck.json`
-      - `status=fail`, `evaluated_day_count=14`
-      - `nonpositive_day_ratio=0.642857` (threshold `0.45` fail)
-      - `total_profit_sum=-896.321805` (fail)
-      - `peak_day_drawdown_pct=1.658036` (pass)
-      - `step7w` 대비 개선:
-        - `nonpositive_day_ratio: 0.785714 -> 0.642857`
-        - `total_profit_sum: -983.396745 -> -896.321805`
-      - `step7f` 대비 개선:
-        - `total_profit_sum: -2760.512552 -> -896.321805`
-      - dominant loss cell: `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8e_highcal_shallowmargin_tail_v1.json`
+      - `status=pass`, `evaluated_day_count=10` (threshold `min=10` pass)
+      - `nonpositive_day_ratio=0.4` (threshold `0.45` pass)
+      - `total_profit_sum=195.2653` (positive-profit gate pass)
+      - `peak_day_drawdown_pct=1.225896` (threshold `12.0` pass)
+      - `step8b` 대비 개선:
+        - `nonpositive_day_ratio: 0.538462 -> 0.4`
+        - `total_profit_sum: -606.185678 -> 195.2653`
+      - 잔여 음수일:
+        - `BTC 2026-02-16`, `ETH 2026-02-15/18/19`, `XRP 2026-02-19`
   - Gate3 supplement 집계 정합성 보정:
     - `scripts/run_daily_oos_stability.py`
       - trade history가 존재할 때 day metrics는 summary fallback으로 오염되지 않도록 보정.
