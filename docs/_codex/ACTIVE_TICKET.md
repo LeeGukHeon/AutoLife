@@ -174,6 +174,21 @@ Last updated: 2026-02-24
         - `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER -> TRENDING_UP|CORE_RESCUE_SHOULD_ENTER: +14`
     - interpretation:
       - ON mapping state shows rescue-only looping on ETH slice; keep fail-closed and prioritize transition-trigger instrumentation before any new guard patch.
+  - v10 instrumentation refresh (rescue self-loop trigger context):
+    - new script:
+      - `scripts/analyze_rescue_self_loop_context.py`
+    - report:
+      - `build/Release/logs/correctness_runtime_mapping_rescue_selfloop_context_eth_0216_0219_v10.json`
+    - key deltas:
+      - `self_loop_count_delta=+14` (`1 -> 15`)
+      - `self_loop_profit_sum_delta_krw=-206.319620`
+      - ON exit reason mix:
+        - `StopLoss=9`, `TakeProfit1=3`, `TakeProfit2=2`, `BacktestEOD=1`
+      - ON feature median (`self-loop next trade`):
+        - `signal_strength=0.442218`, `cal=0.410302`, `margin=-0.014992`, `rr=1.982152`
+    - interpretation:
+      - self-loop 증가는 단일 초단기 구간이 아닌 다중 재진입 버킷에서 발생.
+      - next step remains instrumentation-first (trigger/cooldown boundary) before guard patch retry.
 
 ## Current result snapshot
 - Baseline reference remains:

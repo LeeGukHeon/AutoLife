@@ -1697,9 +1697,26 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
           - 해석:
             - mapping ON에서 ETH 구간이 rescue-only loop로 전환됨.
             - 코드 가드 재시도 전, transition trigger context 계측을 먼저 고정해야 함.
-        - 다음 국소 단계(v10):
-          - `TRENDING_UP|CORE_RESCUE` self-loop 확대 원인(진입트리거/쿨다운 경계)을
-            동일 캔들 기준으로 계측하고, guard 범위를 재정의.
+        - v10 계측(`TRENDING_UP|CORE_RESCUE` self-loop context) 완료:
+          - 신규 스크립트:
+            - `scripts/analyze_rescue_self_loop_context.py`
+          - 산출물:
+            - `build/Release/logs/correctness_runtime_mapping_rescue_selfloop_context_eth_0216_0219_v10.json`
+          - 핵심:
+            - `self_loop_count: 1 -> 15` (`delta=+14`)
+            - `self_loop_profit_sum_delta_krw=-206.319620`
+            - ON 종료 사유 분포:
+              - `StopLoss=9`, `TakeProfit1=3`, `TakeProfit2=2`, `BacktestEOD=1`
+            - ON self-loop next-trade median:
+              - `signal_strength=0.442218`, `cal=0.410302`,
+                `margin=-0.014992`, `rr=1.982152`
+          - 해석:
+            - self-loop는 단일 시간대가 아니라 다중 재진입 bucket에서 확대됨.
+            - 단일 임계치 guard보다 trigger/cooldown 경계 계측이 우선.
+        - 다음 국소 단계(v11):
+          - self-loop 전후 `policy_decisions_backtest*.jsonl` 기준으로
+            rescue 진입 트리거/쿨다운 재활성 경계를 동일 캔들 단위로 추출하고,
+            그 경계만 최소 범위로 제어하는 후보를 설계.
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
    - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.

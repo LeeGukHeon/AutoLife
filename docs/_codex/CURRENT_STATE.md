@@ -127,6 +127,23 @@ Last updated: 2026-02-24
           - `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER -> TRENDING_UP|CORE_RESCUE_SHOULD_ENTER: +14`
     - interpretation:
       - mapping ON path shifts ETH slice into rescue-only repetitive occupancy; direct guard retries remain blocked until transition trigger context is isolated.
+  - v10 rescue self-loop context instrumentation landed:
+    - new script:
+      - `scripts/analyze_rescue_self_loop_context.py`
+    - report:
+      - `build/Release/logs/correctness_runtime_mapping_rescue_selfloop_context_eth_0216_0219_v10.json`
+    - key deltas:
+      - `self_loop_count_delta=+14` (`1 -> 15`)
+      - `self_loop_profit_sum_delta_krw=-206.319620`
+      - `next_exit_reason_counts(ON)`:
+        - `StopLoss=9`, `TakeProfit1=3`, `TakeProfit2=2`, `BacktestEOD=1`
+      - `candidate median features`:
+        - `signal_strength=0.442218`
+        - `probabilistic_h5_calibrated=0.410302`
+        - `probabilistic_h5_margin=-0.014992`
+        - `reward_risk_ratio=1.982152`
+    - interpretation:
+      - self-loop가 단순 저품질 단일 구간이 아니라 다중 re-entry bucket(0~60m, 60~360m, 6~24h)에서 발생하므로 단일 threshold guard보다 trigger/cooldown 경계 계측이 우선.
   - live execution update 로그 수집 선행조건은 충족됨
     (`execution_updates_live.jsonl` 생성 확인).
   - live parity path hardening landed:
@@ -379,6 +396,7 @@ Last updated: 2026-02-24
   - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8w_profile.json`
   - `build/Release/logs/so4_15_target_cell_trade_profile_step8w.json`
   - `build/Release/logs/correctness_runtime_mapping_occupancy_drift_eth_0216_0219_fullslice_cfgaligned_v9.json`
+  - `build/Release/logs/correctness_runtime_mapping_rescue_selfloop_context_eth_0216_0219_v10.json`
   - `build/Release/logs/strategyless_exit_audit_5set_20260224.json`
   - `build/Release/logs/execution_parity_report_strategyless_audit_20260224.json`
   - `build/Release/logs/execution_parity_report_strategyless_audit_strict_after_livepaper_patch_20260224.json`
