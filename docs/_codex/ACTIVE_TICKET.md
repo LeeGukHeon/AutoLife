@@ -2,25 +2,25 @@
 Last updated: 2026-02-24
 
 ## Header
-- Ticket ID: `SO4-13-UPTREND-TAIL-GUARD-20260224`
+- Ticket ID: `SO4-14-SHADOW-EVIDENCE-HARDENING-20260224`
 - Master Ticket Number (`0`-`7` or `N/A`): `N/A`
-- Sub-ticket / Experiment ID: `Strict-Order-4-13`
-- Title: Loss-tail guard rebalance for dominant OOS failure cells
+- Sub-ticket / Experiment ID: `Strict-Order-4-14`
+- Title: Gate4 shadow evidence fail-closed hardening
 - Owner: Codex
 - Date: 2026-02-24
-- Status: `completed`
+- Status: `in_progress`
 - Mode: `A`
 
 ## Scope
 - In scope:
-  - tighten non-coin-specific tail guards for dominant `regime|archetype` cells.
-  - keep live/backtest isomorphic logic.
-  - preserve baseline fail-closed behavior and rerun Gate3 artifacts.
+  - enforce distinct live/backtest decision-log evidence for Gate4.
+  - keep shadow validation and promotion readiness strictly fail-closed.
+  - verify Gate4 flow behavior against current artifact set.
 - Out of scope:
-  - model retraining/feature contract change.
-  - live enable progression.
+  - runtime model/feature retraining.
+  - actual live order enable.
 - Baseline impact:
-  - `runtime decision policy updated` (documented strict-order iteration)
+  - `no runtime policy change` (scripts + gate semantics only)
 
 ## Inputs
 - Relevant spec section(s):
@@ -32,56 +32,48 @@ Last updated: 2026-02-24
   - none
 
 ## Implementation plan
-1. apply risk-cell quality guards in probabilistic primary minimums (runtime C++).
-2. run verification gate on fixed 5-set.
-3. run daily OOS stability on `BTC/ETH/XRP` 7-day window and compare deltas.
+1. reject shadow report generation when live/backtest decision log paths are identical.
+2. tighten `shadow_report_pass` semantics in shadow validation/readiness evaluators.
+3. rerun Gate4 flow and capture fail-closed blocker evidence.
 
 ## Validation plan
 - Strict feature validation:
-  - N/A (runtime logic only)
+  - N/A
 - Parity:
-  - N/A (bundle/schema unchanged)
+  - N/A
 - Verification:
-  - `verification_report_global_full_5set_refresh_20260224_step8e_highcal_shallowmargin_tail_v1.json`
+  - N/A (runtime unchanged; latest maintained evidence kept)
 - Extra tests:
-  - `daily_oos_stability_report_3m_7d_20260224_step8e_highcal_shallowmargin_tail_v1.json`
+  - `python scripts/test_probabilistic_shadow_report_generation.py`
+  - `python scripts/test_probabilistic_shadow_report_validation.py`
+  - `python scripts/test_probabilistic_promotion_readiness.py`
+  - `python scripts/test_probabilistic_shadow_gate_flow.py`
+  - `build/Release/logs/probabilistic_shadow_gate_flow_step8e_live_enable_v3.json`
 
 ## Current result snapshot
-- Verification (`step8e`):
-  - `overall_gate_pass=true`
-  - `adaptive_verdict=pass`
-  - `avg_profit_factor=2.9577`
-  - `avg_expectancy_krw=14.7159`
-  - `avg_total_trades=10.2`
-  - `candidate_generation.no_signal_generated share=0.6374`
-- Daily OOS (`step8e`):
-  - `status=pass`
-  - `evaluated_day_count=10` (threshold `min=10` pass)
-  - `nonpositive_day_ratio=0.4` (threshold `0.45` pass)
-  - `total_profit_sum=195.2653` (positive-profit gate pass)
-  - `peak_day_drawdown_pct=1.225896` (threshold `12.0` pass)
-  - dominant residual negative cells:
-    - `TRENDING_UP|PROBABILISTIC_PRIMARY_RUNTIME` (ETH day-slice residual)
-    - `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER` (XRP tail residual)
-  - delta vs `step7z`:
-    - `nonpositive_day_ratio: 0.642857 -> 0.4`
-    - `total_profit_sum: -896.321805 -> 195.2653`
-  - delta vs `step8b`:
-    - `nonpositive_day_ratio: 0.538462 -> 0.4`
-    - `total_profit_sum: -606.185678 -> 195.2653`
-  - intermediate probe notes:
-    - `step8c`: `expected_value`-dependent guard was no-hit (metrics unchanged).
-    - `step8d`: mid-liquidity tail guard reached near-pass (`ratio=0.454545`, `profit_sum=180.271024`).
-    - `step8e`: narrow high-calibration shallow-margin tail guard converted gate to pass.
+- Shadow generation hardening:
+  - identical log-path input now emits `shadow_live_backtest_log_path_identical`.
+  - shadow `overall_gate_pass`/`shadow_pass` now require `distinct_log_paths=true`.
+- Shadow validation/readiness hardening:
+  - `shadow_report_pass` now requires `status=pass`, no report errors, and strict gate booleans.
+- Gate4 flow rerun (`step8e` artifacts):
+  - `build/Release/logs/probabilistic_shadow_gate_flow_step8e_live_enable_v3.json`
+  - `status=fail` (expected fail-closed)
+  - blocker chain:
+    - generate: `shadow_live_backtest_log_path_identical`
+    - validate: `shadow_report_status_not_pass`
+    - promotion: `gate4_shadow_validation_failed_or_missing`, `gate4_shadow_failed_or_missing`
+  - interpretation:
+    - true live shadow evidence is currently missing (`policy_decisions.jsonl` absent).
 
 ## DoD
-- [x] runtime guards are live/backtest isomorphic.
-- [x] verification gate rerun completed with artifact.
-- [x] daily OOS rerun completed with artifact.
-- [x] daily OOS fail reasons reduced to within thresholds.
+- [x] identical live/backtest log-path false positive removed.
+- [x] shadow validation and readiness semantics aligned to fail-closed.
+- [x] Gate4 flow rerun and blocker evidence recorded.
+- [ ] collect real live dry-run decision log and pass Gate4 with distinct paths.
 
 ## Risks and rollback
 - Risks:
-  - current daily OOS pass uses `evaluated_day_count=10` (gate floor), so further tightening may drop below floor.
+  - if no live decision log is produced, Gate4 remains blocked regardless of Gate3 quality.
 - Rollback strategy:
-  - keep latest passing candidate (`step8e`) and revert probes that reduce evaluated day count or break verification.
+  - retain script hardening; rerun flow with explicit `--live-decision-log-jsonl` once shadow log exists.

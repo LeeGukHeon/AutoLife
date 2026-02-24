@@ -93,6 +93,7 @@ python scripts/run_daily_oos_stability.py `
 Requirements:
 - `allow_live_orders=false`
 - compare decision logs against backtest using same bundle and same candles
+- live/backtest decision log paths must be distinct (`policy_decisions.jsonl` and `policy_decisions_backtest.jsonl` cannot be identical path)
 - shadow report `pipeline_version` must match promotion target pipeline
 - if shadow report exposes `gate_profile` in v2 flow, it must be `v2_strict`
 - live runtime resets `logs/policy_decisions.jsonl` on engine start to avoid stale-scan contamination
@@ -135,6 +136,7 @@ Hybrid cycle integration:
 - `--generate-shadow-report` and `--validate-shadow-report` are only valid with `--evaluate-promotion-readiness` (fail-closed arg guard).
 - standalone Gate4 flow helper: `scripts/run_probabilistic_shadow_gate_flow.py` (generate+validate+promotion-readiness chain)
 - Gate4 flow helper auto-resolves latest run-tagged feature/parity/verification artifacts and decision logs when canonical default paths are missing.
+- if auto-resolution maps live/backtest decision logs to the same file, Gate4 now fails with `shadow_live_backtest_log_path_identical` (fail-closed).
 
 ## Gate 5: Staged live enable
 Requirements:

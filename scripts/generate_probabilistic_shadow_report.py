@@ -277,6 +277,7 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
     output_path = resolve_repo_path(args.output_json)
     live_log_path = resolve_repo_path(args.live_decision_log_jsonl)
     backtest_log_path = resolve_repo_path(args.backtest_decision_log_jsonl)
+    same_log_path = bool(live_log_path.resolve() == backtest_log_path.resolve())
 
     shared_bundle = str(args.runtime_bundle_json).strip()
     live_bundle_raw = str(args.live_runtime_bundle_json).strip()
@@ -309,6 +310,8 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
         errors.append("shadow_live_decision_log_parse_or_empty")
     if backtest_exists and not backtest_parse_ok:
         errors.append("shadow_backtest_decision_log_parse_or_empty")
+    if same_log_path:
+        errors.append("shadow_live_backtest_log_path_identical")
 
     comparison = compare_logs(live_log, backtest_log) if (live_parse_ok and backtest_parse_ok) else {
         "same_candles": False,
@@ -344,11 +347,13 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
         "same_candles": bool(comparison.get("same_candles", False)),
         "live_log_ready": bool(live_exists and live_parse_ok),
         "backtest_log_ready": bool(backtest_exists and backtest_parse_ok),
+        "distinct_log_paths": bool(not same_log_path),
     }
     overall_pass = bool(
         checks["decision_log_comparison_pass"] and
         checks["same_bundle"] and
-        checks["same_candles"]
+        checks["same_candles"] and
+        checks["distinct_log_paths"]
     )
     gate_profile_name = "v2_strict" if resolved_pipeline == "v2" else "v1"
     status = "pass" if (overall_pass and len(errors) == 0) else "fail"
@@ -376,6 +381,7 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
                 "decision_log_comparison_pass": bool(checks["decision_log_comparison_pass"]),
                 "same_bundle": bool(checks["same_bundle"]),
                 "same_candles": bool(checks["same_candles"]),
+                "distinct_log_paths": bool(checks["distinct_log_paths"]),
             },
             "all_pass": bool(overall_pass),
         },

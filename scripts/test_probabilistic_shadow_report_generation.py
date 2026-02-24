@@ -176,6 +176,49 @@ class ProbabilisticShadowReportGenerationTest(unittest.TestCase):
             self.assertFalse(bool(result.get("checks", {}).get("same_bundle", True)))
             self.assertIn("shadow_runtime_bundle_missing_or_mismatch", list(result.get("errors", [])))
 
+    def test_generate_shadow_report_fail_when_live_and_backtest_paths_identical(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            shared_log = root / "shared.jsonl"
+            out = root / "shadow_report_fail_identical_paths.json"
+            bundle = root / "bundle_v1.json"
+
+            rows = [
+                {
+                    "ts": 1700000000000,
+                    "dominant_regime": "RANGING",
+                    "small_seed_mode": False,
+                    "max_new_orders_per_scan": 1,
+                    "decisions": [
+                        {"market": "KRW-BTC", "strategy": "foundation_adaptive", "selected": True, "reason": "selected"},
+                    ],
+                }
+            ]
+            write_jsonl(shared_log, rows)
+            write_json(
+                bundle,
+                {
+                    "version": "probabilistic_runtime_bundle_v1",
+                    "pipeline_version": "v1",
+                },
+            )
+
+            result = evaluate(
+                argparse.Namespace(
+                    live_decision_log_jsonl=str(shared_log),
+                    backtest_decision_log_jsonl=str(shared_log),
+                    runtime_bundle_json=str(bundle),
+                    live_runtime_bundle_json="",
+                    backtest_runtime_bundle_json="",
+                    pipeline_version="v1",
+                    output_json=str(out),
+                    strict=True,
+                )
+            )
+            self.assertEqual("fail", result.get("status"))
+            self.assertFalse(bool(result.get("checks", {}).get("distinct_log_paths", True)))
+            self.assertIn("shadow_live_backtest_log_path_identical", list(result.get("errors", [])))
+
 
 if __name__ == "__main__":
     unittest.main()

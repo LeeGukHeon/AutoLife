@@ -591,7 +591,7 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
       - `RANGING|CORE_RESCUE_SHOULD_ENTER`
       - `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER`
       - `RANGING|PROBABILISTIC_PRIMARY_RUNTIME`
-- [ ] Strict Order 4 13차: dominant loss-tail 셀(`TRENDING_UP`) 품질 가드 재균형.
+- [x] Strict Order 4 13차: dominant loss-tail 셀(`TRENDING_UP`) 품질 가드 재균형.
   - code:
     - `src/runtime/BacktestRuntime.cpp`
     - `src/runtime/LiveTradingRuntime.cpp`
@@ -655,21 +655,48 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
       - 옵션 추가: `--exclude-backtest-eod-trades` (기본은 기존 동작 유지: include).
     - regression:
       - `scripts/test_daily_oos_stability.py`
+- [ ] Strict Order 4 14차: Gate4 shadow evidence fail-closed hardening.
+  - code:
+    - `scripts/generate_probabilistic_shadow_report.py`
+    - `scripts/validate_probabilistic_shadow_report.py`
+    - `scripts/evaluate_probabilistic_promotion_readiness.py`
+    - `scripts/test_probabilistic_shadow_report_generation.py`
+  - 핵심:
+    - live/backtest decision log 경로가 동일하면 shadow 증거를 즉시 실패 처리(`shadow_live_backtest_log_path_identical`).
+    - shadow validation/readiness의 `shadow_report_pass`를 `status=pass + report errors 없음 + strict gate booleans` 기준으로 강화.
+    - Gate4 flow에서 auto-resolve로 동일 로그가 대입되는 false positive를 제거.
+  - 검증:
+    - `python scripts/test_probabilistic_shadow_report_generation.py`
+    - `python scripts/test_probabilistic_shadow_report_validation.py`
+    - `python scripts/test_probabilistic_promotion_readiness.py`
+    - `python scripts/test_probabilistic_shadow_gate_flow.py`
+  - 결과:
+    - `build/Release/logs/probabilistic_shadow_gate_flow_step8e_live_enable_v3.json`
+      - `status=fail` (의도된 fail-closed)
+      - generate fail: `shadow_live_backtest_log_path_identical`
+      - validate fail: `shadow_report_status_not_pass`
+      - promotion fail:
+        - `gate4_shadow_validation_failed_or_missing`
+        - `gate4_shadow_failed_or_missing`
+    - 현재 blocker:
+      - 실제 live dry-run 결정로그(`build/Release/logs/policy_decisions.jsonl`)가 없어 Gate4 pass 불가.
 
 ## Next (Strict Order)
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
    - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.
-1. 표본 유지 + 품질 보강(Strict Order 4):
-   - 현재 `avg_total_trades=10.2` 방어 상태에서 `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER` loss-tail 추가 완화
-   - `candidate_generation`의 `no_signal_generated` 비중(`share=0.6374`) 유지/추가 완화
-2. 라벨/학습 구조 고도화:
+1. Gate4 shadow evidence 확보(우선):
+   - `allow_live_orders=false` 상태로 live dry-run을 수행해 `policy_decisions.jsonl` 생성.
+   - `run_probabilistic_shadow_gate_flow.py --target-stage live_enable`를 distinct live/backtest logs로 재실행.
+2. 표본 유지 + 품질 보강(Strict Order 4):
+   - 현재 `avg_total_trades=10.2` 방어 상태에서 잔여 ETH/XRP 음수일 완화.
+3. 라벨/학습 구조 고도화:
    - optional triple-barrier 활성화 실험(기존 라벨과 병행)
    - `P(win)` + `E[pnl]` 2-head 학습 파이프라인 추가
-3. 진입 품질 재균형:
+4. 진입 품질 재균형:
    - 확률 우선 유지 + 안전게이트 고정
    - 레짐/아키타입 기준으로 loss-tail 셀(ETH/SOL) 품질 하한 재조정
-4. 동일 5-set 재검증:
+5. 동일 5-set 재검증:
    - 목표: `overall_gate_pass` 유지 + expectancy/PF 추가 개선 + DD 비열화.
 
 ## Guardrails

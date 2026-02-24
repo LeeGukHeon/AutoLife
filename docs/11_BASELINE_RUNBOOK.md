@@ -187,6 +187,7 @@ python scripts/run_probabilistic_hybrid_cycle.py `
 # Optional: promotion readiness evaluation (live enable; shadow report required)
 # Step 1) Generate shadow report from live/backtest decision logs
 # Note: live runtime resets `logs/policy_decisions.jsonl` at engine start.
+# Note: live/backtest decision log paths must be distinct; identical paths fail-closed.
 python scripts/generate_probabilistic_shadow_report.py `
   --live-decision-log-jsonl ".\build\Release\logs\policy_decisions.jsonl" `
   --backtest-decision-log-jsonl ".\build\Release\logs\policy_decisions_backtest.jsonl" `
@@ -216,6 +217,7 @@ python scripts/run_probabilistic_hybrid_cycle.py `
 # Optional: standalone Gate4 flow runner (existing artifacts + decision logs)
 # Note: when canonical default gate files are absent, the runner auto-resolves
 # latest run-tagged artifacts for feature/parity/verification and decision logs.
+# Note: if auto-resolve maps live/backtest decision logs to the same file, flow fails fail-closed.
 python scripts/run_probabilistic_shadow_gate_flow.py `
   --pipeline-version v2 `
   --target-stage live_enable `

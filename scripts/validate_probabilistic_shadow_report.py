@@ -62,19 +62,20 @@ def infer_pipeline_from_shadow(shadow_payload: Dict[str, Any]) -> str:
 
 def shadow_report_pass(shadow_payload: Dict[str, Any]) -> bool:
     status = str(shadow_payload.get("status", "")).strip().lower()
-    if status == "pass":
-        return True
+    if status != "pass":
+        return False
+    errors = shadow_payload.get("errors", [])
+    if isinstance(errors, list) and len(errors) > 0:
+        return False
     checks = shadow_payload.get("checks", {})
     if isinstance(checks, dict):
-        if to_bool(checks.get("shadow_pass")):
-            return True
-        if to_bool(checks.get("strict_gate_passed")):
-            return True
-    if to_bool(shadow_payload.get("overall_gate_pass")):
-        return True
-    if to_bool(shadow_payload.get("shadow_pass")):
-        return True
-    return False
+        if "distinct_log_paths" in checks and not to_bool(checks.get("distinct_log_paths")):
+            return False
+    if "overall_gate_pass" in shadow_payload and not to_bool(shadow_payload.get("overall_gate_pass")):
+        return False
+    if "shadow_pass" in shadow_payload and not to_bool(shadow_payload.get("shadow_pass")):
+        return False
+    return True
 
 
 def read_int_nested(payload: Dict[str, Any], keys: List[str]) -> int:
