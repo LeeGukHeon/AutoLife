@@ -518,6 +518,13 @@ void applyProbabilisticPrimaryDecisionProfile(
     const double prob = std::clamp(signal.probabilistic_h5_calibrated, 0.0, 1.0);
     const double threshold = std::clamp(signal.probabilistic_h5_threshold, 0.0, 1.0);
     const double margin = std::clamp(signal.probabilistic_h5_margin, -1.0, 1.0);
+    const bool uptrend_rescue_loss_tail_context =
+        !hostile_regime &&
+        signal.market_regime == autolife::analytics::MarketRegime::TRENDING_UP &&
+        rescue_archetype &&
+        signal.probabilistic_h5_calibrated < 0.413 &&
+        margin < -0.014 &&
+        signal.liquidity_score < 58.0;
     const double confidence = std::clamp(
         (std::clamp((prob - 0.50) / 0.20, 0.0, 1.0) * 0.65) +
         (std::clamp((margin + 0.01) / 0.08, 0.0, 1.0) * 0.35),
@@ -579,6 +586,9 @@ void applyProbabilisticPrimaryDecisionProfile(
         if (!hostile_regime && fragility_archetype && margin < -0.006) {
             target_risk_pct *= 0.90;
         }
+        if (uptrend_rescue_loss_tail_context) {
+            target_risk_pct *= 0.72;
+        }
         if (!hostile_regime &&
             signal.market_regime == autolife::analytics::MarketRegime::TRENDING_UP &&
             uptrend_continuation_archetype &&
@@ -627,6 +637,9 @@ void applyProbabilisticPrimaryDecisionProfile(
         }
         if (hostile_regime) {
             size_scale *= 0.88;
+        }
+        if (uptrend_rescue_loss_tail_context) {
+            size_scale *= 0.78;
         }
         signal.position_size *= std::clamp(size_scale, 0.30, 1.35);
     }
@@ -1032,7 +1045,15 @@ bool passesProbabilisticPrimaryMinimums(
                   signal.strength < 0.16) ||
                  (signal.liquidity_score < 18.0 &&
                   signal.probabilistic_h5_margin < 0.0));
-            if (weak_range_rescue_tail) {
+            const bool weak_range_rescue_narrow_tail =
+                signal.probabilistic_h5_calibrated >= 0.418 &&
+                signal.probabilistic_h5_calibrated < 0.422 &&
+                signal.probabilistic_h5_margin >= -0.0055 &&
+                signal.probabilistic_h5_margin < 0.0015 &&
+                signal.strength < 0.48 &&
+                signal.liquidity_score >= 55.0 &&
+                signal.liquidity_score < 69.0;
+            if (weak_range_rescue_tail || weak_range_rescue_narrow_tail) {
                 if (reject_reason != nullptr) {
                     *reject_reason = "blocked_probabilistic_primary_rescue_tail_guard";
                 }
@@ -1054,7 +1075,14 @@ bool passesProbabilisticPrimaryMinimums(
                 signal.probabilistic_h5_margin > -0.012 &&
                 signal.strength < 0.50 &&
                 signal.liquidity_score < 65.0;
-            if (weak_uptrend_rescue_lowliq_tail) {
+            const bool weak_uptrend_rescue_narrow_tail =
+                signal.probabilistic_h5_calibrated >= 0.410 &&
+                signal.probabilistic_h5_calibrated < 0.415 &&
+                signal.probabilistic_h5_margin >= -0.014 &&
+                signal.probabilistic_h5_margin < -0.012 &&
+                signal.strength < 0.45 &&
+                signal.liquidity_score < 55.0;
+            if (weak_uptrend_rescue_lowliq_tail || weak_uptrend_rescue_narrow_tail) {
                 if (reject_reason != nullptr) {
                     *reject_reason = "blocked_probabilistic_primary_rescue_tail_guard";
                 }
