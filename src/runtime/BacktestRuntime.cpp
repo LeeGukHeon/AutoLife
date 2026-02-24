@@ -2264,6 +2264,119 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 position = nullptr;
             }
         }
+        const bool strategyless_runtime_live_exit_mapping =
+            engine_config_.backtest_strategyless_runtime_live_exit_mapping &&
+            !strategy &&
+            position &&
+            position->entry_archetype.find("PROBABILISTIC_PRIMARY_RUNTIME") != std::string::npos;
+        if (strategyless_runtime_live_exit_mapping && position) {
+            bool partial_tp1_handled = false;
+            if (!position->half_closed && current_price >= position->take_profit_1) {
+                const auto tp1_slippage = computeDynamicSlippageThresholds(
+                    engine_config_,
+                    market_hostility_ewma_,
+                    false,
+                    position->market_regime,
+                    position->signal_strength,
+                    position->liquidity_score,
+                    position->expected_value,
+                    "take_profit_1"
+                );
+                const double tp1_fill_slippage = std::min(
+                    exitSlippagePct(engine_config_),
+                    tp1_slippage.max_slippage_pct
+                );
+                const double tp1_fill = current_price * (1.0 - tp1_fill_slippage);
+                const double partial_ratio = std::clamp(
+                    risk_manager_->getAdaptivePartialExitRatio(market_name_),
+                    0.35,
+                    0.80
+                );
+                adaptive_partial_ratio_samples_++;
+                adaptive_partial_ratio_sum_ += partial_ratio;
+                const int partial_ratio_hist_idx = adaptivePartialRatioHistogramIndex(partial_ratio);
+                if (partial_ratio_hist_idx >= 0 &&
+                    partial_ratio_hist_idx < static_cast<int>(adaptive_partial_ratio_histogram_.size())) {
+                    adaptive_partial_ratio_histogram_[static_cast<size_t>(partial_ratio_hist_idx)]++;
+                }
+                const double partial_qty = position->quantity * partial_ratio;
+                const double partial_notional = partial_qty * tp1_fill;
+                if (partial_qty <= 0.0 || partial_notional < engine_config_.min_order_krw) {
+                    const double full_notional = position->quantity * tp1_fill;
+                    if (full_notional >= engine_config_.min_order_krw) {
+                        const risk::Position closed_position = *position;
+                        Order tp_full_order;
+                        tp_full_order.market = market_name_;
+                        tp_full_order.side = OrderSide::SELL;
+                        tp_full_order.volume = position->quantity;
+                        tp_full_order.price = tp1_fill;
+                        tp_full_order.strategy_name = position->strategy_name;
+                        executeOrder(tp_full_order, tp1_fill);
+                        risk_manager_->exitPosition(market_name_, tp1_fill, "TakeProfitFullDueToMinOrder");
+                        notifyStrategyClosed(closed_position, tp1_fill);
+                        position = nullptr;
+                    }
+                } else {
+                    Order tp1_order;
+                    tp1_order.market = market_name_;
+                    tp1_order.side = OrderSide::SELL;
+                    tp1_order.volume = partial_qty;
+                    tp1_order.price = tp1_fill;
+                    tp1_order.strategy_name = position->strategy_name;
+                    executeOrder(tp1_order, tp1_fill);
+                    if (risk_manager_->applyPartialSellFill(market_name_, tp1_fill, partial_qty, "TakeProfit1")) {
+                        risk_manager_->setHalfClosed(market_name_, true);
+                        risk_manager_->moveStopToBreakeven(market_name_);
+                    } else {
+                        LOG_WARN("Backtest TP1 accounting failed: {} qty {:.8f} @ {:.0f}",
+                                 market_name_, partial_qty, tp1_fill);
+                    }
+                    position = risk_manager_->getPosition(market_name_);
+                }
+                // Live flow continues after TP1 handling and defers full exit checks.
+                partial_tp1_handled = true;
+            }
+
+            if (position && !partial_tp1_handled) {
+                const bool risk_manager_exit = risk_manager_->shouldExitPosition(market_name_);
+                if (risk_manager_exit) {
+                    const bool is_stop_loss = current_price <= position->stop_loss;
+                    const bool is_take_profit_2 = current_price >= position->take_profit_2;
+                    const char* slippage_reason = is_stop_loss
+                        ? "stop_loss"
+                        : (is_take_profit_2 ? "take_profit_2" : "strategy_exit");
+                    const auto rm_slippage = computeDynamicSlippageThresholds(
+                        engine_config_,
+                        market_hostility_ewma_,
+                        false,
+                        position->market_regime,
+                        position->signal_strength,
+                        position->liquidity_score,
+                        position->expected_value,
+                        slippage_reason
+                    );
+                    const double exit_fill_slippage = std::min(
+                        exitSlippagePct(engine_config_),
+                        rm_slippage.max_slippage_pct
+                    );
+                    const double exit_fill = current_price * (1.0 - exit_fill_slippage);
+                    const risk::Position closed_position = *position;
+                    Order order;
+                    order.market = market_name_;
+                    order.side = OrderSide::SELL;
+                    order.volume = position->quantity;
+                    order.price = exit_fill;
+                    order.strategy_name = position->strategy_name;
+                    executeOrder(order, order.price);
+                    const std::string exit_reason = is_stop_loss
+                        ? "StopLoss"
+                        : (is_take_profit_2 ? "TakeProfit2" : "RiskManagerExit");
+                    risk_manager_->exitPosition(market_name_, order.price, exit_reason);
+                    notifyStrategyClosed(closed_position, order.price);
+                    position = nullptr;
+                }
+            }
+        }
         if (strategy) {
             // Check Exit Condition
             bool should_exit = strategy->shouldExit(

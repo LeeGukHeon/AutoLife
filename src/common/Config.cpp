@@ -697,6 +697,8 @@ void Config::load(const std::string& path) {
             engine_config_.hostility_pause_recent_win_rate = t.value("hostility_pause_recent_win_rate", 0.40);
             engine_config_.backtest_hostility_pause_candles = t.value("backtest_hostility_pause_candles", 36);
             engine_config_.backtest_hostility_pause_candles_extreme = t.value("backtest_hostility_pause_candles_extreme", 60);
+            engine_config_.backtest_strategyless_runtime_live_exit_mapping =
+                t.value("backtest_strategyless_runtime_live_exit_mapping", false);
 
             if (t.contains("enabled_strategies")) {
                 engine_config_.enabled_strategies = t["enabled_strategies"].get<std::vector<std::string>>();

@@ -1603,6 +1603,14 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
       - exit 이벤트 라벨 분포(backtest vs live_paper) 비교 리포트도 고정 완료.
       - 공통 시장 overlap 기반으로 종료 reason 라벨 차이(`stop_loss|take_profit_full_due_to_min_order`
         vs `BacktestEOD`)의 runtime/backtest 매핑 경계(시장/전략 축) 상세 분석 완료.
+      - 재시도 준비(scaffold, default OFF):
+        - `backtest_strategyless_runtime_live_exit_mapping=false` 플래그 추가
+          (`include/engine/EngineConfig.h`, `src/common/Config.cpp`).
+        - ON 범위는 strategy-less `PROBABILISTIC_PRIMARY_RUNTIME`에 한정:
+          `TP1 partial(current-price)` -> `shouldExitPosition(current-price)` 순서로 live-like 매핑.
+        - baseline 안전성 확인:
+          - build: `AutoLifeTrading` 성공
+          - `python scripts/run_ci_operational_gate.py --include-backtest --strict-execution-parity` pass
       - 다음은 `코드 패치 재시도`가 아니라, 포지션 점유/후속 진입 왜곡 원인(ETH 2/16~2/17) 계측을
         먼저 고정한 뒤 국소 프로브(v2) 범위를 재정의.
       - v2(runtime-only) + v3(rescue cooldown) 모두 실패 반영:

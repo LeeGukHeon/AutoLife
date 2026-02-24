@@ -231,6 +231,9 @@ struct EngineConfig {
     // Gate4 shadow evidence helper: keep policy decisions flowing without
     // position-state side effects during backtest replays.
     bool backtest_shadow_policy_only = false;
+    // Correctness probe (default OFF): allow strategy-less runtime positions
+    // to use live-like RiskManager exit mapping in backtest.
+    bool backtest_strategyless_runtime_live_exit_mapping = false;
     std::vector<std::string> enabled_strategies;
 
     EngineConfig()

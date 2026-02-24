@@ -21,6 +21,23 @@ Last updated: 2026-02-25
   - `build/Release/logs/strategyless_exit_audit_5set_20260224.json`
 - Next action:
   - first decoupling patch probe failed hard; keep baseline restored.
+  - narrow correctness probe scaffolding landed (default OFF):
+    - `include/engine/EngineConfig.h`
+    - `src/common/Config.cpp`
+    - `src/runtime/BacktestRuntime.cpp`
+    - new flag:
+      - `backtest_strategyless_runtime_live_exit_mapping=false` (baseline-preserving default)
+    - ON behavior scope:
+      - strategy-less `PROBABILISTIC_PRIMARY_RUNTIME` positions only
+      - live-like order:
+        - TP1 partial handling first (current-price based)
+        - then `RiskManager::shouldExitPosition` mapping (current-price based, no intrabar high/low trigger)
+  - scaffold validation (baseline safety):
+    - build:
+      - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release --target AutoLifeTrading`
+    - gate:
+      - `python scripts/run_ci_operational_gate.py --include-backtest --strict-execution-parity`
+      - result: pass (`build/Release/logs/operational_readiness_report.json`)
   - live execution update 로그 수집 선행조건은 충족됨
     (`execution_updates_live.jsonl` 생성 확인).
   - live parity path hardening landed:

@@ -32,7 +32,7 @@ Last updated: 2026-02-25
 - Contracts touched:
   - none
 - Flags added/changed:
-  - none
+  - `backtest_strategyless_runtime_live_exit_mapping` (default `false`)
 
 ## Implementation plan
 1. audit `LiveTradingRuntime` exit/risk-control flow and confirm intended behavior.
@@ -72,6 +72,25 @@ Last updated: 2026-02-25
 - Gate safety invariants:
   - keep `allow_live_orders=false`
   - keep Gate4 pass artifacts intact (`v14_asc`)
+  - keep baseline behavior identical unless the new flag is explicitly enabled.
+
+## In-progress scaffold update (2026-02-24)
+- Code:
+  - `include/engine/EngineConfig.h`
+  - `src/common/Config.cpp`
+  - `src/runtime/BacktestRuntime.cpp`
+- Intent:
+  - isolate correctness re-probe behind explicit opt-in flag to avoid accidental baseline drift.
+  - ON scope is narrow:
+    - strategy-less `PROBABILISTIC_PRIMARY_RUNTIME` only
+    - live-like order: `TP1 partial(current-price)` then `shouldExitPosition(current-price)`
+    - no intrabar `high/low` trigger in this scoped path.
+- Baseline safety checks:
+  - build:
+    - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release --target AutoLifeTrading`
+  - gate:
+    - `python scripts/run_ci_operational_gate.py --include-backtest --strict-execution-parity`
+    - result: pass (`build/Release/logs/operational_readiness_report.json`)
 
 ## Current result snapshot
 - Baseline reference remains:
