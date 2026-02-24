@@ -56,6 +56,10 @@ class ProbabilisticShadowGateFlowTest(unittest.TestCase):
             ]
             write_jsonl(live_log, rows)
             write_jsonl(backtest_log, rows)
+            # Keep mtimes deterministic: live should remain discoverable even if
+            # backtest-tagged log is newer in the same directory.
+            os.utime(backtest_log, (2000000000, 2000000000))
+            os.utime(live_log, (2000000001, 2000000001))
             write_json(
                 runtime_bundle,
                 {

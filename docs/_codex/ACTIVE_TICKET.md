@@ -15,12 +15,13 @@ Last updated: 2026-02-24
 - In scope:
   - enforce distinct live/backtest decision-log evidence for Gate4.
   - keep shadow validation and promotion readiness strictly fail-closed.
+  - make live decision-log timestamp basis comparable to candle-time evidence.
   - verify Gate4 flow behavior against current artifact set.
 - Out of scope:
   - runtime model/feature retraining.
   - actual live order enable.
 - Baseline impact:
-  - `no runtime policy change` (scripts + gate semantics only)
+  - `no decision policy change` (runtime audit timestamp + scripts/gate semantics only)
 
 ## Inputs
 - Relevant spec section(s):
@@ -34,7 +35,9 @@ Last updated: 2026-02-24
 ## Implementation plan
 1. reject shadow report generation when live/backtest decision log paths are identical.
 2. tighten `shadow_report_pass` semantics in shadow validation/readiness evaluators.
-3. rerun Gate4 flow and capture fail-closed blocker evidence.
+3. remove live auto-resolve ambiguity so live log fallback cannot pick backtest-tagged files.
+4. align live decision-log timestamp with candle-time evidence (not wall-clock now).
+5. rerun Gate4 flow and capture fail-closed blocker evidence.
 
 ## Validation plan
 - Strict feature validation:
@@ -42,13 +45,14 @@ Last updated: 2026-02-24
 - Parity:
   - N/A
 - Verification:
-  - N/A (runtime unchanged; latest maintained evidence kept)
+  - N/A (runtime decision policy unchanged; latest maintained evidence kept)
 - Extra tests:
   - `python scripts/test_probabilistic_shadow_report_generation.py`
   - `python scripts/test_probabilistic_shadow_report_validation.py`
   - `python scripts/test_probabilistic_promotion_readiness.py`
   - `python scripts/test_probabilistic_shadow_gate_flow.py`
-  - `build/Release/logs/probabilistic_shadow_gate_flow_step8e_live_enable_v3.json`
+  - live dry-run (orders disabled) to regenerate `build/Release/logs/policy_decisions.jsonl`
+  - `build/Release/logs/probabilistic_shadow_gate_flow_step8e_live_enable_v6.json`
 
 ## Current result snapshot
 - Shadow generation hardening:
@@ -56,24 +60,34 @@ Last updated: 2026-02-24
   - shadow `overall_gate_pass`/`shadow_pass` now require `distinct_log_paths=true`.
 - Shadow validation/readiness hardening:
   - `shadow_report_pass` now requires `status=pass`, no report errors, and strict gate booleans.
+- Gate4 flow input resolution hardening:
+  - `scripts/run_probabilistic_shadow_gate_flow.py` live auto-resolve now excludes `*backtest*` names.
+  - regression test stabilized for deterministic auto-resolve behavior.
+- Runtime audit timestamp alignment:
+  - `src/runtime/LiveTradingRuntime.cpp` policy decision audit now uses candle-time anchor instead of wall-clock `now`.
+  - timestamp anchor prioritizes decision-market candles, then scan fallback.
+- Live dry-run evidence:
+  - `build/Release/logs/policy_decisions.jsonl` regenerated (orders remain disabled).
 - Gate4 flow rerun (`step8e` artifacts):
-  - `build/Release/logs/probabilistic_shadow_gate_flow_step8e_live_enable_v3.json`
+  - `build/Release/logs/probabilistic_shadow_gate_flow_step8e_live_enable_v6.json`
   - `status=fail` (expected fail-closed)
   - blocker chain:
-    - generate: `shadow_live_backtest_log_path_identical`
+    - generate: `shadow_candle_sequence_mismatch`, `shadow_decision_log_mismatch`
     - validate: `shadow_report_status_not_pass`
     - promotion: `gate4_shadow_validation_failed_or_missing`, `gate4_shadow_failed_or_missing`
   - interpretation:
-    - true live shadow evidence is currently missing (`policy_decisions.jsonl` absent).
+    - live shadow evidence now exists, but compared live/backtest logs still do not share identical candle sequence.
+    - current backtest decision log is single-dataset replay output and does not align with live multi-market scan window.
 
 ## DoD
 - [x] identical live/backtest log-path false positive removed.
 - [x] shadow validation and readiness semantics aligned to fail-closed.
 - [x] Gate4 flow rerun and blocker evidence recorded.
-- [ ] collect real live dry-run decision log and pass Gate4 with distinct paths.
+- [x] collect real live dry-run decision log (`policy_decisions.jsonl`).
+- [ ] pass Gate4 with same-candle and decision-parity evidence.
 
 ## Risks and rollback
 - Risks:
-  - if no live decision log is produced, Gate4 remains blocked regardless of Gate3 quality.
+  - without a same-window multi-market backtest decision log, Gate4 remains blocked regardless of Gate3 quality.
 - Rollback strategy:
-  - retain script hardening; rerun flow with explicit `--live-decision-log-jsonl` once shadow log exists.
+  - retain current hardening; produce aligned live/backtest decision windows and rerun flow with explicit log paths.

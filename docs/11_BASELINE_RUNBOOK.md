@@ -187,6 +187,7 @@ python scripts/run_probabilistic_hybrid_cycle.py `
 # Optional: promotion readiness evaluation (live enable; shadow report required)
 # Step 1) Generate shadow report from live/backtest decision logs
 # Note: live runtime resets `logs/policy_decisions.jsonl` at engine start.
+# Note: live decision-log `ts` uses candle-time anchor for shadow comparability.
 # Note: live/backtest decision log paths must be distinct; identical paths fail-closed.
 python scripts/generate_probabilistic_shadow_report.py `
   --live-decision-log-jsonl ".\build\Release\logs\policy_decisions.jsonl" `

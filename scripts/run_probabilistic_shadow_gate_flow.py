@@ -123,11 +123,22 @@ def check_required_inputs(required: Dict[str, str]) -> List[str]:
     return missing
 
 
-def latest_file_for_patterns(patterns: List[str]) -> Optional[pathlib.Path]:
+def latest_file_for_patterns(
+    patterns: List[str],
+    *,
+    exclude_name_tokens: Optional[List[str]] = None,
+) -> Optional[pathlib.Path]:
     root = resolve_repo_path(r".")
     candidates: List[pathlib.Path] = []
+    excluded = [str(x).strip().lower() for x in (exclude_name_tokens or []) if str(x).strip()]
     for pattern in patterns:
-        candidates.extend([x for x in root.glob(pattern) if x.is_file()])
+        for item in root.glob(pattern):
+            if not item.is_file():
+                continue
+            name_lc = item.name.lower()
+            if any(token in name_lc for token in excluded):
+                continue
+            candidates.append(item)
     if not candidates:
         return None
     return max(candidates, key=lambda p: p.stat().st_mtime)
@@ -138,6 +149,7 @@ def resolve_input_path(
     *,
     default_path: str,
     fallback_patterns: List[str],
+    exclude_name_tokens: Optional[List[str]] = None,
 ) -> Tuple[pathlib.Path, bool, str]:
     requested_path = resolve_repo_path(raw_path)
     if requested_path.exists():
@@ -145,7 +157,10 @@ def resolve_input_path(
 
     is_default = str(raw_path).strip() == str(default_path).strip()
     if is_default and fallback_patterns:
-        candidate = latest_file_for_patterns(fallback_patterns)
+        candidate = latest_file_for_patterns(
+            fallback_patterns,
+            exclude_name_tokens=exclude_name_tokens,
+        )
         if candidate is not None and candidate.exists():
             return candidate, True, str(requested_path)
     return requested_path, False, str(requested_path)
@@ -169,6 +184,7 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
         fallback_patterns=[
             r"build/Release/logs/policy_decisions*.jsonl",
         ],
+        exclude_name_tokens=["backtest"],
     )
     resolved_backtest_log, auto_backtest_log, requested_backtest_log = resolve_input_path(
         str(args.backtest_decision_log_jsonl),

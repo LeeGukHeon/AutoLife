@@ -660,34 +660,43 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
     - `scripts/generate_probabilistic_shadow_report.py`
     - `scripts/validate_probabilistic_shadow_report.py`
     - `scripts/evaluate_probabilistic_promotion_readiness.py`
+    - `scripts/run_probabilistic_shadow_gate_flow.py`
     - `scripts/test_probabilistic_shadow_report_generation.py`
+    - `scripts/test_probabilistic_shadow_gate_flow.py`
+    - `src/runtime/LiveTradingRuntime.cpp`
   - 핵심:
     - live/backtest decision log 경로가 동일하면 shadow 증거를 즉시 실패 처리(`shadow_live_backtest_log_path_identical`).
     - shadow validation/readiness의 `shadow_report_pass`를 `status=pass + report errors 없음 + strict gate booleans` 기준으로 강화.
     - Gate4 flow에서 auto-resolve로 동일 로그가 대입되는 false positive를 제거.
+    - Gate4 flow live auto-resolve는 backtest-tagged 파일명을 live 후보에서 제외하도록 보강.
+    - live runtime policy decision audit timestamp를 wall-clock 기준에서 candle-time anchor 기준으로 보정.
   - 검증:
     - `python scripts/test_probabilistic_shadow_report_generation.py`
     - `python scripts/test_probabilistic_shadow_report_validation.py`
     - `python scripts/test_probabilistic_promotion_readiness.py`
     - `python scripts/test_probabilistic_shadow_gate_flow.py`
+    - live dry-run (`allow_live_orders=false`)로 `build/Release/logs/policy_decisions.jsonl` 재생성
   - 결과:
-    - `build/Release/logs/probabilistic_shadow_gate_flow_step8e_live_enable_v3.json`
+    - `build/Release/logs/probabilistic_shadow_gate_flow_step8e_live_enable_v6.json`
       - `status=fail` (의도된 fail-closed)
-      - generate fail: `shadow_live_backtest_log_path_identical`
+      - generate fail:
+        - `shadow_candle_sequence_mismatch`
+        - `shadow_decision_log_mismatch`
       - validate fail: `shadow_report_status_not_pass`
       - promotion fail:
         - `gate4_shadow_validation_failed_or_missing`
         - `gate4_shadow_failed_or_missing`
     - 현재 blocker:
-      - 실제 live dry-run 결정로그(`build/Release/logs/policy_decisions.jsonl`)가 없어 Gate4 pass 불가.
+      - live 결정로그는 확보됐지만, backtest 결정로그와 동일 캔들 윈도우/순서가 맞지 않아 Gate4 pass 불가.
+      - 현재 `policy_decisions_backtest.jsonl`은 단일 데이터셋 백테스트 출력이라 live multi-market 스캔 윈도우와 직접 비교 불가.
 
 ## Next (Strict Order)
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
    - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.
 1. Gate4 shadow evidence 확보(우선):
-   - `allow_live_orders=false` 상태로 live dry-run을 수행해 `policy_decisions.jsonl` 생성.
-   - `run_probabilistic_shadow_gate_flow.py --target-stage live_enable`를 distinct live/backtest logs로 재실행.
+   - `allow_live_orders=false` 상태를 유지한 채, live/backtest decision 로그를 동일 캔들 윈도우로 정렬 가능한 산출 경로를 마련.
+   - 정렬된 로그 쌍으로 `run_probabilistic_shadow_gate_flow.py --target-stage live_enable`를 재실행해 Gate4 pass 확보.
 2. 표본 유지 + 품질 보강(Strict Order 4):
    - 현재 `avg_total_trades=10.2` 방어 상태에서 잔여 ETH/XRP 음수일 완화.
 3. 라벨/학습 구조 고도화:

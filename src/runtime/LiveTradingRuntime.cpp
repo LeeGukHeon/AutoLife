@@ -43,6 +43,13 @@ long long getCurrentTimestampMs() {
     ).count();
 }
 
+long long normalizeTimestampMs(long long ts) {
+    if (ts > 0 && ts < 1000000000000LL) {
+        return ts * 1000LL;
+    }
+    return ts;
+}
+
 const char* regimeToString(autolife::analytics::MarketRegime regime) {
     return autolife::common::runtime_diag::marketRegimeLabel(regime);
 }
@@ -1490,6 +1497,57 @@ std::string timeframeKeyToDatasetToken(const std::string& tf_key) {
     return tf_key;
 }
 
+long long latestCandleTimestampMs(const autolife::analytics::CoinMetrics& metrics) {
+    long long ts = 0;
+    auto tf_it = metrics.candles_by_tf.find("1m");
+    if (tf_it != metrics.candles_by_tf.end() && !tf_it->second.empty()) {
+        ts = normalizeTimestampMs(tf_it->second.back().timestamp);
+    } else if (!metrics.candles.empty()) {
+        ts = normalizeTimestampMs(metrics.candles.back().timestamp);
+    }
+    return ts > 0 ? ts : 0;
+}
+
+long long resolvePolicyAuditTimestampMs(
+    const std::vector<autolife::analytics::CoinMetrics>& scanned_markets,
+    const std::vector<autolife::engine::PolicyDecisionRecord>& policy_decisions,
+    const std::vector<autolife::strategy::Signal>& policy_input_signals
+) {
+    long long best_ts = 0;
+    if (!policy_decisions.empty()) {
+        std::set<std::string> decision_markets;
+        for (const auto& decision : policy_decisions) {
+            if (!decision.market.empty()) {
+                decision_markets.insert(decision.market);
+            }
+        }
+        for (const auto& metrics : scanned_markets) {
+            if (decision_markets.find(metrics.market) == decision_markets.end()) {
+                continue;
+            }
+            best_ts = std::max(best_ts, latestCandleTimestampMs(metrics));
+        }
+        if (best_ts > 0) {
+            return best_ts;
+        }
+    }
+
+    for (const auto& metrics : scanned_markets) {
+        best_ts = std::max(best_ts, latestCandleTimestampMs(metrics));
+    }
+    if (best_ts > 0) {
+        return best_ts;
+    }
+
+    for (const auto& signal : policy_input_signals) {
+        best_ts = std::max(best_ts, normalizeTimestampMs(signal.timestamp));
+    }
+    if (best_ts > 0) {
+        return best_ts;
+    }
+    return getCurrentTimestampMs();
+}
+
 std::string toDatasetMarketToken(const std::string& market) {
     std::string token = market;
     std::replace(token.begin(), token.end(), '-', '_');
@@ -1607,14 +1665,15 @@ void appendPolicyDecisionAudit(
     const std::vector<autolife::engine::PolicyDecisionRecord>& decisions,
     autolife::analytics::MarketRegime dominant_regime,
     bool small_seed_mode,
-    int max_new_orders_per_scan
+    int max_new_orders_per_scan,
+    long long decision_timestamp_ms
 ) {
     if (decisions.empty()) {
         return;
     }
 
     nlohmann::json line;
-    line["ts"] = getCurrentTimestampMs();
+    line["ts"] = normalizeTimestampMs(decision_timestamp_ms);
     line["dominant_regime"] = regimeToString(dominant_regime);
     line["small_seed_mode"] = small_seed_mode;
     line["max_new_orders_per_scan"] = max_new_orders_per_scan;
@@ -3275,7 +3334,12 @@ void TradingEngine::executeSignals() {
             decision_batch.decisions,
             dominant_regime,
             small_seed_mode,
-            per_scan_buy_limit
+            per_scan_buy_limit,
+            resolvePolicyAuditTimestampMs(
+                scanned_markets_,
+                decision_batch.decisions,
+                pending_signals_
+            )
         );
         if (!decision_batch.decisions.empty()) {
             nlohmann::json payload;
@@ -3313,7 +3377,12 @@ void TradingEngine::executeSignals() {
             policy_output.decisions,
             dominant_regime,
             small_seed_mode,
-            per_scan_buy_limit
+            per_scan_buy_limit,
+            resolvePolicyAuditTimestampMs(
+                scanned_markets_,
+                policy_output.decisions,
+                pending_signals_
+            )
         );
         if (!policy_output.decisions.empty()) {
             nlohmann::json payload;

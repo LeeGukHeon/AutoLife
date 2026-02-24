@@ -3,7 +3,7 @@ Last updated: 2026-02-24
 
 ## Repository
 - Branch: `main`
-- Commit snapshot (pushed): `41d6a6a`
+- Commit snapshot (pushed): `e3139a0`
 
 ## Active ticket
 - Source of truth: `docs/_codex/ACTIVE_TICKET.md`
@@ -41,25 +41,28 @@ Last updated: 2026-02-24
 
 ## Gate4 shadow flow snapshot
 - Flow report:
-  - `build/Release/logs/probabilistic_shadow_gate_flow_step8e_live_enable_v3.json`
+  - `build/Release/logs/probabilistic_shadow_gate_flow_step8e_live_enable_v6.json`
 - Result:
   - `status=fail` (expected fail-closed)
-  - generate step error: `shadow_live_backtest_log_path_identical`
+  - generate step errors:
+    - `shadow_candle_sequence_mismatch`
+    - `shadow_decision_log_mismatch`
   - validate step error: `shadow_report_status_not_pass`
   - promotion step errors:
     - `gate4_shadow_validation_failed_or_missing`
     - `gate4_shadow_failed_or_missing`
 - Interpretation:
-  - canonical live shadow log (`build/Release/logs/policy_decisions.jsonl`) is missing.
-  - auto-resolution substituted backtest log path and is now rejected by hardening checks.
+  - canonical live shadow log now exists (`build/Release/logs/policy_decisions.jsonl`).
+  - remaining blocker is evidence alignment: compared live/backtest logs do not share the same candle sequence/window.
+  - current backtest decision log source is single-dataset replay (`policy_decisions_backtest.jsonl`), not a matched live multi-market window.
 
 ## Live safety status
 - `allow_live_orders=false` maintained.
 - Gate4 shadow + Gate5 staged enable still mandatory and not yet eligible.
 
 ## Known gaps
-- Need real live dry-run decision log (`policy_decisions.jsonl`) distinct from backtest log.
-- Gate4 cannot pass until distinct live/backtest decision evidence is available.
+- Need same-window live/backtest decision evidence (not just distinct paths).
+- Gate4 cannot pass until same-candle + decision-parity evidence is available.
 - Residual day-sliced negatives remain (ETH/XRP), although Gate3 supplement aggregate now passes.
 
 ## Detailed history references
