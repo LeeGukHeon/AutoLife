@@ -19,6 +19,7 @@
 #include "common/StrategyEdgeStatsShared.h"
 #include "common/ExecutionGuardPolicyShared.h"
 #include "common/ProbabilisticRegimeSpec.h"
+#include "execution/ExecutionUpdateSchema.h"
 #include <chrono>
 #include <thread>
 #include <algorithm>
@@ -37,6 +38,8 @@
 #include <nlohmann/json.hpp>
 
 namespace {
+std::atomic<unsigned long long> g_live_execution_local_seq{0};
+
 long long getCurrentTimestampMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()
@@ -74,6 +77,71 @@ using autolife::common::execution_guard::computeLiveScanPrefilterThresholds;
 using autolife::common::execution_guard::computeRealtimeEntryVetoThresholds;
 using autolife::common::execution_guard::computeDynamicSlippageThresholds;
 using autolife::common::runtime_diag::classifySignalRejectionGroup;
+
+std::filesystem::path resolveLiveExecutionArtifactPath() {
+    return autolife::utils::PathUtils::resolveRelativePath("logs/execution_updates_live.jsonl");
+}
+
+void appendLiveExecutionUpdateArtifact(const autolife::core::ExecutionUpdate& update) {
+    static std::mutex file_mutex;
+    const auto path = resolveLiveExecutionArtifactPath();
+    std::lock_guard<std::mutex> lock(file_mutex);
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream out(path, std::ios::app | std::ios::binary);
+    if (!out.is_open()) {
+        LOG_WARN("Live execution update artifact open failed: {}", path.string());
+        return;
+    }
+    out << autolife::core::execution::toJson(update).dump() << "\n";
+}
+
+std::string buildSyntheticLiveOrderId(const std::string& market, const std::string& tag) {
+    const auto seq = ++g_live_execution_local_seq;
+    return "live-sim-" + tag + "-" + market + "-" + std::to_string(getCurrentTimestampMs()) + "-" + std::to_string(seq);
+}
+
+void recordLiveExecutionLifecycle(
+    const std::string& source,
+    const std::string& event,
+    const std::string& order_id,
+    const std::string& market,
+    autolife::OrderSide side,
+    autolife::OrderStatus status,
+    double filled_volume,
+    double order_volume,
+    double avg_price,
+    const std::string& strategy_name,
+    bool terminal
+) {
+    LOG_INFO(
+        "Execution lifecycle: source={}, event={}, order_id={}, market={}, side={}, status={}, filled={:.8f}, volume={:.8f}, terminal={}",
+        source,
+        event,
+        order_id,
+        market,
+        autolife::core::execution::orderSideToString(side),
+        autolife::core::execution::orderStatusToString(status),
+        filled_volume,
+        order_volume,
+        terminal ? "true" : "false"
+    );
+    appendLiveExecutionUpdateArtifact(
+        autolife::core::execution::makeExecutionUpdate(
+            source,
+            event,
+            order_id,
+            market,
+            side,
+            status,
+            filled_volume,
+            order_volume,
+            avg_price,
+            strategy_name,
+            terminal,
+            getCurrentTimestampMs()
+        )
+    );
+}
 
 struct ProbabilisticRuntimeSnapshot {
     bool enabled = false;
@@ -3614,7 +3682,10 @@ void TradingEngine::executeSignals() {
             signal.expected_value
         );
         const double slippage_guard_pct = dynamic_buy_slippage.guard_slippage_pct;
-        const double stop_guard_pct = std::clamp((risk_pct > 1e-9) ? risk_pct : 0.03, 0.01, 0.20);
+        // Align with RiskManager entry survivability check (BASE_STOP_LOSS_PCT=3%)
+        // to avoid internal gate mismatch where runtime "safe minimum" passes but
+        // RiskManager rejects the same order as non-survivable at stop-loss exit.
+        const double stop_guard_pct = std::clamp((risk_pct > 1e-9) ? risk_pct : 0.03, 0.03, 0.20);
         const double exit_retention = std::max(0.50, 1.0 - stop_guard_pct - slippage_guard_pct - fee_rate);
         const double min_required_krw = std::max(config_.min_order_krw, config_.min_order_krw / exit_retention);
 
@@ -3883,7 +3954,8 @@ bool TradingEngine::executeBuyOrder(
             signal_risk_pct = (signal.entry_price - signal.stop_loss) / signal.entry_price;
         }
         signal_risk_pct = std::clamp(signal_risk_pct, 0.0, 0.25);
-        const double stop_guard_pct = std::clamp((signal_risk_pct > 1e-9) ? signal_risk_pct : 0.03, 0.01, 0.20);
+        // Keep stop-loss survivability floor aligned with RiskManager (3% baseline).
+        const double stop_guard_pct = std::clamp((signal_risk_pct > 1e-9) ? signal_risk_pct : 0.03, 0.03, 0.20);
         const double slippage_guard_pct = dynamic_buy_slippage.guard_slippage_pct;
         const double exit_retention = std::max(0.50, 1.0 - stop_guard_pct - slippage_guard_pct - fee_rate);
         const double MIN_ORDER_BUFFER = std::max(config_.min_order_krw, config_.min_order_krw / exit_retention);
@@ -4074,7 +4146,7 @@ bool TradingEngine::executeBuyOrder(
              double tp1 = signal.take_profit_1 > 0 ? signal.take_profit_1 : best_ask_price * 1.020;
              double tp2 = signal.take_profit_2 > 0 ? signal.take_profit_2 : best_ask_price * 1.030;
 
-             risk_manager_->enterPosition(
+            risk_manager_->enterPosition(
                 market,
                 best_ask_price,
                 quantity,
@@ -4084,6 +4156,34 @@ bool TradingEngine::executeBuyOrder(
                 signal.strategy_name,
                 signal.breakeven_trigger,
                 signal.trailing_start
+            );
+
+            const std::string paper_buy_order_id = buildSyntheticLiveOrderId(market, "buy");
+            recordLiveExecutionLifecycle(
+                "live_paper",
+                "submitted",
+                paper_buy_order_id,
+                market,
+                OrderSide::BUY,
+                OrderStatus::SUBMITTED,
+                0.0,
+                quantity,
+                best_ask_price,
+                signal.strategy_name,
+                false
+            );
+            recordLiveExecutionLifecycle(
+                "live_paper",
+                "filled",
+                paper_buy_order_id,
+                market,
+                OrderSide::BUY,
+                OrderStatus::FILLED,
+                quantity,
+                quantity,
+                best_ask_price,
+                signal.strategy_name,
+                true
             );
 
             nlohmann::json paper_fill_payload;
@@ -4259,6 +4359,39 @@ void TradingEngine::monitorPositions() {
         if (!updated_pos) continue;
 
         // --- ?????占쎈Ŧ????????????釉랁닑???????????????遺븍き?????(???????占쎄끽維뽳쭩?占쎌땡???占쏀맪??????????????????????????????) ---
+
+        if (!strategy &&
+            updated_pos->entry_archetype.find("PROBABILISTIC_PRIMARY_RUNTIME") != std::string::npos) {
+            long long now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()
+            ).count();
+            const double holding_minutes = std::max(
+                0.0,
+                static_cast<double>(now_ms - updated_pos->entry_time) / 60000.0
+            );
+            const bool runtime_long_hold_tail_guard =
+                updated_pos->market_regime == analytics::MarketRegime::TRENDING_UP &&
+                holding_minutes >= (72.0 * 60.0) &&
+                updated_pos->probabilistic_h5_calibrated >= 0.418 &&
+                updated_pos->probabilistic_h5_calibrated < 0.423 &&
+                updated_pos->probabilistic_h5_margin > -0.006 &&
+                updated_pos->probabilistic_h5_margin < -0.002 &&
+                updated_pos->liquidity_score >= 50.0 &&
+                updated_pos->liquidity_score < 57.0 &&
+                updated_pos->signal_strength >= 0.49 &&
+                updated_pos->signal_strength < 0.53 &&
+                current_price <= (updated_pos->entry_price * 0.9995);
+            if (runtime_long_hold_tail_guard) {
+                LOG_INFO(
+                    "{} runtime long-hold tail guard triggered (hold {:.1f} min, pnl {:+.2f}%)",
+                    pos.market,
+                    holding_minutes,
+                    updated_pos->unrealized_pnl_pct * 100.0
+                );
+                executeSellOrder(pos.market, *updated_pos, "runtime_long_hold_tail_guard", current_price);
+                continue;
+            }
+        }
 
         // ???????占쎄끽維뽳쭩?占쎌땡???占쏀맪??????????????????????????(?????????????????
         if (strategy) {
@@ -4470,6 +4603,7 @@ bool TradingEngine::executeSellOrder(
 
     // 2. ???????占??占?占??關?占썲첎????????????袁⑸즴占????占쎈뗀援?????????占쎌굡占?????????? (?????占쎈Ŧ?????????? ????????? ??????袁⑸즴占?占쏙옙占???占쏙옙???????
     double executed_price = current_price;
+    std::string execution_order_id;
     if (config_.mode == TradingMode::LIVE) {
         if (config_.dry_run || !config_.allow_live_orders) {
             if (!config_.dry_run && !config_.allow_live_orders) {
@@ -4491,6 +4625,7 @@ bool TradingEngine::executeSellOrder(
             }
 
             executed_price = order_result.executed_price;
+            execution_order_id = order_result.order_uuid;
             sell_quantity = order_result.executed_volume;  // [Phase 3] ???????占??占?占??關?占썲첎??????????占쎈Ŧ?????????????????袁⑸즴占?占쏙옙占???占쏙옙???????
             
             // [Phase 3] ???????繹먮끍??????????占쎈Ŧ??????????????????????
@@ -4506,6 +4641,38 @@ bool TradingEngine::executeSellOrder(
     }
     
     // 3. ????????占쎈뮛?????????????????????
+    if (execution_order_id.empty()) {
+        execution_order_id = buildSyntheticLiveOrderId(market, "sell");
+    }
+    const bool real_live_sell = (config_.mode == TradingMode::LIVE && !config_.dry_run && config_.allow_live_orders);
+    const std::string sell_source = real_live_sell ? "live" : "live_paper";
+    recordLiveExecutionLifecycle(
+        sell_source,
+        "submitted",
+        execution_order_id,
+        market,
+        OrderSide::SELL,
+        OrderStatus::SUBMITTED,
+        0.0,
+        sell_quantity,
+        executed_price,
+        position.strategy_name,
+        false
+    );
+    recordLiveExecutionLifecycle(
+        sell_source,
+        "filled",
+        execution_order_id,
+        market,
+        OrderSide::SELL,
+        OrderStatus::FILLED,
+        sell_quantity,
+        sell_quantity,
+        executed_price,
+        position.strategy_name,
+        true
+    );
+
     double realized_qty = sell_quantity;
     
     // 4. [Phase 3] ???????繹먮끍??????????占쎈Ŧ??????????vs ???????占쎄끽維뽳쭩?占쎌땡???占쏀맪???????占쎈Ŧ????????????????????????
@@ -4682,6 +4849,38 @@ bool TradingEngine::executePartialSell(const std::string& market, const risk::Po
         risk_manager_->moveStopToBreakeven(market);
         return true;
     };
+    auto record_partial_execution = [&](double fill_price, double fill_qty, const std::string& source, const std::string& order_id_hint) {
+        std::string order_id = order_id_hint;
+        if (order_id.empty()) {
+            order_id = buildSyntheticLiveOrderId(market, "partial_sell");
+        }
+        recordLiveExecutionLifecycle(
+            source,
+            "submitted",
+            order_id,
+            market,
+            OrderSide::SELL,
+            OrderStatus::SUBMITTED,
+            0.0,
+            fill_qty,
+            fill_price,
+            position.strategy_name,
+            false
+        );
+        recordLiveExecutionLifecycle(
+            source,
+            "filled",
+            order_id,
+            market,
+            OrderSide::SELL,
+            OrderStatus::FILLED,
+            fill_qty,
+            fill_qty,
+            fill_price,
+            position.strategy_name,
+            true
+        );
+    };
 
     // 2. ???????占??占?占??關?占썲첎????????????袁⑸즴占????占쎈뗀援?????????占쎌굡占?????????? (?????占쎈Ŧ?????????? ????????? ??????袁⑸즴占?占쏙옙占???占쏙옙???????
     if (config_.mode == TradingMode::LIVE) {
@@ -4693,6 +4892,7 @@ bool TradingEngine::executePartialSell(const std::string& market, const risk::Po
             if (!apply_partial_fill(current_price, sell_quantity, "partial_take_profit_dry_run")) {
                 return false;
             }
+            record_partial_execution(current_price, sell_quantity, "live_paper", "");
             nlohmann::json reduce_payload;
             reduce_payload["exit_price"] = current_price;
             reduce_payload["quantity"] = sell_quantity;
@@ -4724,6 +4924,7 @@ bool TradingEngine::executePartialSell(const std::string& market, const risk::Po
         if (!apply_partial_fill(order_result.executed_price, order_result.executed_volume, "partial_take_profit")) {
             return false;
         }
+        record_partial_execution(order_result.executed_price, order_result.executed_volume, "live", order_result.order_uuid);
         nlohmann::json reduce_payload;
         reduce_payload["exit_price"] = order_result.executed_price;
         reduce_payload["quantity"] = order_result.executed_volume;
@@ -4741,6 +4942,7 @@ bool TradingEngine::executePartialSell(const std::string& market, const risk::Po
     if (!apply_partial_fill(current_price, sell_quantity, "partial_take_profit_paper")) {
         return false;
     }
+    record_partial_execution(current_price, sell_quantity, "live_paper", "");
     nlohmann::json reduce_payload;
     reduce_payload["exit_price"] = current_price;
     reduce_payload["quantity"] = sell_quantity;

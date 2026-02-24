@@ -1621,6 +1621,12 @@ void BacktestEngine::init(const Config& config) {
     adaptive_partial_ratio_samples_ = 0;
     adaptive_partial_ratio_sum_ = 0.0;
     adaptive_partial_ratio_histogram_ = {0, 0, 0, 0, 0};
+    strategyless_position_checks_ = 0;
+    strategyless_runtime_archetype_checks_ = 0;
+    strategyless_risk_exit_signals_ = 0;
+    strategyless_current_stop_hits_ = 0;
+    strategyless_current_tp1_hits_ = 0;
+    strategyless_current_tp2_hits_ = 0;
     recent_best_ask_price_ = 0.0;
     recent_best_ask_timestamp_ms_ = 0;
     
@@ -2189,6 +2195,75 @@ void BacktestEngine::processCandle(const Candle& candle) {
 
     if (position) {
         auto strategy = strategy_manager_->getStrategy(position->strategy_name);
+        if (!strategy) {
+            strategyless_position_checks_++;
+            if (position->entry_archetype.find("PROBABILISTIC_PRIMARY_RUNTIME") != std::string::npos) {
+                strategyless_runtime_archetype_checks_++;
+            }
+            const bool current_stop_hit = current_price <= position->stop_loss;
+            const bool current_tp1_hit = (!position->half_closed && current_price >= position->take_profit_1);
+            const bool current_tp2_hit = current_price >= position->take_profit_2;
+            if (current_stop_hit) {
+                strategyless_current_stop_hits_++;
+            }
+            if (current_tp1_hit) {
+                strategyless_current_tp1_hits_++;
+            }
+            if (current_tp2_hit) {
+                strategyless_current_tp2_hits_++;
+            }
+            if (current_stop_hit || current_tp2_hit) {
+                strategyless_risk_exit_signals_++;
+            }
+        }
+        if (!strategy &&
+            position &&
+            position->entry_archetype.find("PROBABILISTIC_PRIMARY_RUNTIME") != std::string::npos) {
+            const double holding_minutes = std::max(
+                0.0,
+                static_cast<double>(candle.timestamp - position->entry_time) / 60000.0
+            );
+            const bool runtime_long_hold_tail_guard =
+                position->market_regime == analytics::MarketRegime::TRENDING_UP &&
+                holding_minutes >= (72.0 * 60.0) &&
+                position->probabilistic_h5_calibrated >= 0.418 &&
+                position->probabilistic_h5_calibrated < 0.423 &&
+                position->probabilistic_h5_margin > -0.006 &&
+                position->probabilistic_h5_margin < -0.002 &&
+                position->liquidity_score >= 50.0 &&
+                position->liquidity_score < 57.0 &&
+                position->signal_strength >= 0.49 &&
+                position->signal_strength < 0.53 &&
+                current_price <= (position->entry_price * 0.9995);
+            if (runtime_long_hold_tail_guard) {
+                const risk::Position closed_position = *position;
+                const auto guard_slippage = computeDynamicSlippageThresholds(
+                    engine_config_,
+                    market_hostility_ewma_,
+                    false,
+                    position->market_regime,
+                    position->signal_strength,
+                    position->liquidity_score,
+                    position->expected_value,
+                    "runtime_long_hold_tail_guard"
+                );
+                const double guard_fill_slippage = std::min(
+                    exitSlippagePct(engine_config_),
+                    guard_slippage.max_slippage_pct
+                );
+                const double guard_fill = current_price * (1.0 - guard_fill_slippage);
+                Order guard_order;
+                guard_order.market = market_name_;
+                guard_order.side = OrderSide::SELL;
+                guard_order.volume = position->quantity;
+                guard_order.price = guard_fill;
+                guard_order.strategy_name = position->strategy_name;
+                executeOrder(guard_order, guard_fill);
+                risk_manager_->exitPosition(market_name_, guard_fill, "RuntimeLongHoldTailGuard");
+                notifyStrategyClosed(closed_position, guard_fill);
+                position = nullptr;
+            }
+        }
         if (strategy) {
             // Check Exit Condition
             bool should_exit = strategy->shouldExit(
@@ -3532,6 +3607,12 @@ BacktestEngine::Result BacktestEngine::getResult() const {
     result.post_entry_risk_telemetry.adaptive_partial_ratio_samples = adaptive_partial_ratio_samples_;
     result.post_entry_risk_telemetry.adaptive_partial_ratio_sum = adaptive_partial_ratio_sum_;
     result.post_entry_risk_telemetry.adaptive_partial_ratio_histogram = adaptive_partial_ratio_histogram_;
+    result.strategyless_position_checks = strategyless_position_checks_;
+    result.strategyless_runtime_archetype_checks = strategyless_runtime_archetype_checks_;
+    result.strategyless_risk_exit_signals = strategyless_risk_exit_signals_;
+    result.strategyless_current_stop_hits = strategyless_current_stop_hits_;
+    result.strategyless_current_tp1_hits = strategyless_current_tp1_hits_;
+    result.strategyless_current_tp2_hits = strategyless_current_tp2_hits_;
     return result;
 }
 

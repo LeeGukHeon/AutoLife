@@ -176,6 +176,14 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
             {"0.75_0.80", result.post_entry_risk_telemetry.adaptive_partial_ratio_histogram[4]}
         }}
     };
+    j["strategyless_exit_diagnostics"] = {
+        {"position_checks", result.strategyless_position_checks},
+        {"runtime_archetype_checks", result.strategyless_runtime_archetype_checks},
+        {"risk_exit_signals", result.strategyless_risk_exit_signals},
+        {"current_stop_hits", result.strategyless_current_stop_hits},
+        {"current_tp1_hits", result.strategyless_current_tp1_hits},
+        {"current_tp2_hits", result.strategyless_current_tp2_hits}
+    };
 
     j["entry_funnel"] = {
         {"entry_rounds", result.entry_funnel.entry_rounds},

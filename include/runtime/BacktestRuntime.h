@@ -246,6 +246,12 @@ public:
         ShadowFunnelSummary shadow_funnel;
         PreCatFeatureSnapshot pre_cat_feature_snapshot;
         PostEntryRiskTelemetry post_entry_risk_telemetry;
+        int strategyless_position_checks = 0;
+        int strategyless_runtime_archetype_checks = 0;
+        int strategyless_risk_exit_signals = 0;
+        int strategyless_current_stop_hits = 0;
+        int strategyless_current_tp1_hits = 0;
+        int strategyless_current_tp2_hits = 0;
     };
     Result getResult() const;
 
@@ -320,6 +326,12 @@ private:
     int adaptive_partial_ratio_samples_ = 0;
     double adaptive_partial_ratio_sum_ = 0.0;
     std::array<int, 5> adaptive_partial_ratio_histogram_{{0, 0, 0, 0, 0}};
+    int strategyless_position_checks_ = 0;
+    int strategyless_runtime_archetype_checks_ = 0;
+    int strategyless_risk_exit_signals_ = 0;
+    int strategyless_current_stop_hits_ = 0;
+    int strategyless_current_tp1_hits_ = 0;
+    int strategyless_current_tp2_hits_ = 0;
     Result::ShadowFunnelSummary shadow_funnel_;
 
     // Simulation Methods

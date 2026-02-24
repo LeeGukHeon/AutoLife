@@ -1,5 +1,5 @@
 ﻿# Current State
-Last updated: 2026-02-24
+Last updated: 2026-02-25
 
 ## Repository
 - Branch: `main`
@@ -8,6 +8,163 @@ Last updated: 2026-02-24
 ## Active ticket
 - Source of truth: `docs/_codex/ACTIVE_TICKET.md`
 - Current: `SO4-15-NEGATIVE-DAY-TAIL-ANALYSIS-20260224` (`Strict-Order-4-15`, Mode `A`, status `in_progress`)
+- Current phase: `correctness-first` (live original exit/risk-control validity review before further tuning)
+
+## Correctness audit snapshot
+- Live exit reference (`src/runtime/LiveTradingRuntime.cpp:4231`~`src/runtime/LiveTradingRuntime.cpp:4299`):
+  - `updatePosition -> applyAdaptiveRiskControls -> strategy shouldExit(optional) -> partial TP1 -> shouldExitPosition`
+- Backtest mismatch confirmed (`src/runtime/BacktestRuntime.cpp:2191`~`src/runtime/BacktestRuntime.cpp:2375`):
+  - strategy-missing positions skip `risk_manager_exit` + intrabar SL/TP branch due to `if (strategy)` gate.
+- Evidence:
+  - `build/Release/logs/so4_15_target_cell_trade_profile_step8w.json`
+  - `build/Release/logs/daily_oos_negative_trade_detail_step8e_postgate4_targetday.json`
+  - `build/Release/logs/strategyless_exit_audit_5set_20260224.json`
+- Next action:
+  - first decoupling patch probe failed hard; keep baseline restored.
+  - live execution update 로그 수집 선행조건은 충족됨
+    (`execution_updates_live.jsonl` 생성 확인).
+  - live parity path hardening landed:
+    - `src/runtime/LiveTradingRuntime.cpp` now emits
+      `execution_updates_live.jsonl` for paper/dry-run buy/sell/partial-sell lifecycle.
+  - latest evidence refresh:
+    - `build/Release/logs/live_probe_new_segment_20260224_step_minorder_align_long.log`
+      - min-order survivability gate mismatch 해소 후 paper buy 체결 2건.
+    - `build/Release/logs/strategyless_exit_audit_5set_20260224_after_minorder_align.json`
+      - `conclusions.entry_side_shadow_parity_pass=true`
+      - `conclusions.exit_side_parity_evidence_ready=true`
+    - `build/Release/logs/execution_parity_report_strategyless_audit_strict_after_minorder_align_20260224.json`
+      - strict execution parity pass.
+    - `python scripts/run_ci_operational_gate.py --include-backtest --strict-execution-parity`
+      - pass (`build/Release/logs/operational_readiness_report.json`,
+        `checks.execution_parity_passed=true`).
+    - `build/Release/logs/live_probe_new_segment_20260224_sell_capture.log`
+      - live paper SELL lifecycle 확보:
+        - `KRW-AGLD` stop-loss exit
+        - execution lifecycle `SELL submitted/filled` 기록 확인.
+    - `build/Release/logs/strategyless_exit_audit_5set_20260224_sell_lifecycle_v3.json`
+      - `conclusions.full_sell_lifecycle_evidence_ready=true`
+      - `conclusions.exit_event_side_comparison_ready=true`
+      - live side counts: `BUY=6`, `SELL=2`.
+    - `build/Release/logs/execution_event_distribution_comparison_20260224_sell_lifecycle_v1.json`
+      - `comparison.ready_flags.comparison_ready=true`
+      - `comparison.next_step_hint=ready_for_exit_event_parity_comparison`
+      - distance snapshot:
+        - `side_js_divergence=0.048794940695398484`
+        - `event_js_divergence=0.0`
+        - `status_js_divergence=0.0`
+    - `build/Release/logs/execution_event_distribution_comparison_ci.json`
+      - CI gate에서 prime 직후 자동 산출로 고정.
+      - latest: `comparison_ready=true`.
+    - `build/Release/logs/strategyless_exit_audit_5set_20260224_sell_lifecycle_v4_segmented.json`
+      - live segment reason snapshot:
+        - `exit_reason_counts={"stop_loss":1}` (`KRW-AGLD`)
+      - backtest runtime sample reason snapshot:
+        - `runtime_exit_reason_counts_in_samples={"BacktestEOD":5}`
+    - `build/Release/logs/strategyless_exit_audit_5set_20260224_sell_lifecycle_v5_overlap.json`
+      - overlap 시장 종료 이유 확보:
+        - `KRW-BTC`: `stop_loss`, `take_profit_full_due_to_min_order`
+        - `KRW-ETH`: `take_profit_full_due_to_min_order`
+    - `build/Release/logs/exit_reason_mapping_gap_20260224_v3_overlap.json`
+      - `readiness.comparable=true`
+      - `readiness.overlap_ready=true`
+      - `readiness.mapping_gap_observed=true`
+      - `readiness.next_step_hint=narrow_correctness_patch_scope_to_runtime_strategyless_exit_mapping`
+      - `common_markets=["KRW-BTC","KRW-ETH"]`
+    - post-patch diagnostics (`correctness_strategyless_exit_mapping_v1`, not retained):
+      - `build/Release/logs/strategyless_exit_audit_5set_20260224_sell_lifecycle_v6_postpatch.json`
+        - `conclusions.observed_runtime_backtest_eod_ratio=0.0`
+      - `build/Release/logs/exit_reason_mapping_gap_20260224_v4_postpatch.json`
+        - `readiness.stoploss_vs_backtesteod_signature=false`
+      - gate fail로 코드 롤백 완료(기준선 유지).
+    - post-fail distortion quantification:
+      - `scripts/analyze_daily_oos_delta.py`
+      - `build/Release/logs/daily_oos_delta_strategyless_exit_mapping_v1_vs_diag_probe_v1.json`
+      - `build/Release/logs/daily_oos_delta_focus_eth_20260216_20260217_strategyless_exit_mapping_v1.json`
+      - 핵심:
+        - `profit_sum_delta=-384.441416`, `nonpositive_day_count_delta=+2`
+        - ETH `2026-02-16/2026-02-17`에서
+          `PROBABILISTIC_PRIMARY_RUNTIME -> CORE_RESCUE_SHOULD_ENTER` dominant archetype 전환과
+          동시 trade expansion(`+3`, `+5`) 발생.
+    - transition-chain replay quantification:
+      - `scripts/analyze_backtest_trade_transition.py`
+      - `build/Release/logs/backtest_eth_transition_chain_baseline_vs_v1decouple.json`
+      - ETH replay 요약:
+        - `total_trades 12 -> 106` (`+94`)
+        - `CORE_RESCUE_SHOULD_ENTER 7 -> 67`
+        - direct `PROBABILISTIC_PRIMARY_RUNTIME -> CORE_RESCUE_SHOULD_ENTER` transition은 `2건`
+      - 해석:
+        - runtime 조기종료 자체보다 이후 multi-day rescue occupancy drift가 손익 악화의 주축.
+    - transition-chain replay v4 (post-exit chain):
+      - `build/Release/logs/backtest_eth_transition_chain_baseline_vs_v1decouple_v4_statechain.json`
+      - 요약:
+        - `total_trades_delta=+94`
+        - `runtime_to_rescue_transition_count_candidate=2`
+        - `post_exit_chain_total_trades_delta=0`
+      - 해석:
+        - `focus_days(2026-02-16~2026-02-19)` + runtime anchor 기준으로는
+          anchor sample이 부족해 occupancy 왜곡 포착력이 낮음.
+        - 다음 프로브는 runtime anchor 고정 대신
+          `TRENDING_UP|CORE_RESCUE` 직접 guard 후보 검증으로 전환.
+    - step8b 3일(`2026-02-16~2026-02-18`) TU|CORE_RESCUE 세부집계/후보:
+      - 신규 스크립트:
+        - `scripts/analyze_step8b_tu_core_rescue_candidates.py`
+      - 아티팩트:
+        - `build/Release/logs/step8b_tu_core_rescue_feature_summary_0216_0218_20260225.json`
+        - `build/Release/logs/step8b_tu_core_rescue_guard_candidates_20260225.json`
+      - 요약:
+        - sample `22` (`loss=19`, `win=3`)
+        - `loss_sum=-701.437983`, `win_sum=61.966807`
+      - zero-win-damage 후보(예):
+        - `cal <= 0.407797422825`:
+          - `blocked_loss=10`, `blocked_win=0`, `net_improvement=+418.253833`
+        - `margin <= -0.0197165944199`:
+          - `blocked_loss=6`, `blocked_win=0`, `net_improvement=+264.540534`
+    - step8af guard probe (not retained):
+      - patch:
+        - `TRENDING_UP|CORE_RESCUE`에
+          `cal<=0.4078 && margin<=-0.012 && volatility>=0.058` 추가.
+      - 결과:
+        - verification:
+          - `build/Release/logs/verification_report_global_full_5set_refresh_20260225_step8af_uptrend_rescue_step8b_focus_tail_v1.json`
+          - `avg_profit_factor=2.9145`, `avg_expectancy_krw=14.0552`
+          - `overall_gate_pass=false`, `adaptive_verdict=inconclusive`
+        - daily OOS(3셋 기준):
+          - `build/Release/logs/daily_oos_stability_report_3m_7d_20260225_step8af_uptrend_rescue_step8b_focus_tail_v1_3set.json`
+          - `status=fail`, `nonpositive_day_ratio=0.545455`, `total_profit_sum=-453.253435`
+      - 조치:
+        - fail-closed rollback 완료:
+          - `build/Release/logs/verification_report_global_full_5set_refresh_20260225_step8af_uptrend_rescue_step8b_focus_tail_rollback.json`
+          - `build/Release/logs/daily_oos_stability_report_3m_7d_20260225_step8af_uptrend_rescue_step8b_focus_tail_rollback_3set.json`
+        - CI 운영 게이트 재통과:
+          - `python scripts/run_ci_operational_gate.py --include-backtest --strict-execution-parity`
+    - step8ag probe (not retained, no-hit):
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260225_step8ag_uptrend_rescue_step8b_focus_scale_v1.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260225_step8ag_uptrend_rescue_step8b_focus_scale_v1_3set.json`
+      - outcome: verification/daily OOS 핵심 지표 무변화(no-hit).
+      - rollback:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260225_step8ag_rollback.json`
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260225_step8ag_rollback_3set.json`
+    - step8ah residual profile refresh:
+      - 신규 스크립트:
+        - `scripts/collect_daily_oos_trade_profile.py`
+      - 아티팩트:
+        - `build/Release/logs/daily_oos_trade_profile_3m_7d_20260225_step8ah_negative_evaluated_3set.json`
+        - `build/Release/logs/daily_oos_trade_profile_3m_7d_20260225_step8ah_negative_uptrend_rescue_3set.json`
+      - 핵심:
+        - 잔여 음수 거래 3건 중
+          `TRENDING_UP|PROBABILISTIC_PRIMARY_RUNTIME`(ETH) 2건이 주 병목.
+    - step8ai retained:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260225_step8ai_runtime_longhold_tailguard_v1.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260225_step8ai_runtime_longhold_tailguard_v1_3set.json`
+      - `build/Release/logs/daily_oos_delta_step8af_rollback_vs_step8ai_runtime_longhold_tailguard_v1_3set.json`
+      - 결과:
+        - verification 비열화 유지 (`overall_gate_pass=true`)
+        - daily OOS 개선:
+          - `total_profit_sum 246.968137 -> 408.37201`
+          - `peak_day_drawdown_pct 1.225673 -> 0.933162`
+        - day-level:
+          - `ETH 2026-02-19` `-220.846261 -> -51.992697`
+          - `ETH 2026-02-18` `-14.389814 -> -21.839505`
 
 ## Master ticket progress (0-7)
 - Ticket 0: implemented.
@@ -21,29 +178,89 @@ Last updated: 2026-02-24
 
 ## Latest gate snapshot (runtime tuning path)
 - Verification report:
-  - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_backtest_bridge_restore.json`
+  - `build/Release/logs/verification_report_global_full_5set_refresh_20260225_step8ai_runtime_longhold_tailguard_v1.json`
 - Result:
   - `overall_gate_pass=true`
   - `adaptive_verdict=pass`
   - `avg_profit_factor=2.9577`
   - `avg_expectancy_krw=14.7159`
   - `avg_total_trades=10.2`
+- Correctness probe (not retained):
+  - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_correctness_exit_decouple_v1.json`
+  - `overall_gate_pass=false`, `avg_profit_factor=0.4370`, `avg_expectancy_krw=-13.8017`, `avg_total_trades=68.2`
+  - decision: rollback and keep `backtest_bridge_restore` as active baseline.
+- Correctness probe v2 (not retained):
+  - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_correctness_strategyless_closepath_v2.json`
+  - `overall_gate_pass=false`, `avg_profit_factor=0.4136`, `avg_expectancy_krw=-13.9982`
+  - decision: rollback and keep `backtest_bridge_restore` as active baseline.
+- Correctness probe v3 (not retained):
+  - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_correctness_strategyless_exit_mapping_v1.json`
+  - `overall_gate_pass=false`, `avg_profit_factor=0.4370`, `avg_expectancy_krw=-13.8017`
+  - decision: fail-closed rollback and keep `backtest_bridge_restore` as active baseline.
+- Correctness probe v4 (not retained):
+  - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_correctness_strategyless_runtime_mapping_v2.json`
+  - `overall_gate_pass=false`, `avg_profit_factor=0.4370`, `avg_expectancy_krw=-13.8017`
+  - decision: fail-closed rollback and keep `backtest_bridge_restore` as active baseline.
+- Correctness probe v5 (not retained):
+  - `build/Release/logs/verification_report_global_full_5set_refresh_20260225_correctness_runtime_mapping_v3_rescuecooldown.json`
+  - `overall_gate_pass=false`, `avg_profit_factor=0.4805`, `avg_expectancy_krw=-13.3735`
+  - decision: fail-closed rollback and keep `backtest_bridge_restore` as active baseline.
+- Tuning probe `step8af` (not retained):
+  - `build/Release/logs/verification_report_global_full_5set_refresh_20260225_step8af_uptrend_rescue_step8b_focus_tail_v1.json`
+  - `overall_gate_pass=false`, `adaptive_verdict=inconclusive`, `avg_profit_factor=2.9145`, `avg_expectancy_krw=14.0552`
+  - decision: fail-closed rollback and keep baseline-safe state.
+- Tuning probe `step8ag` (not retained):
+  - `build/Release/logs/verification_report_global_full_5set_refresh_20260225_step8ag_uptrend_rescue_step8b_focus_scale_v1.json`
+  - `overall_gate_pass=true` but 핵심 지표 무변화(no-hit), rollback.
+- Tuning probe `step8ai` (retained):
+  - `build/Release/logs/verification_report_global_full_5set_refresh_20260225_step8ai_runtime_longhold_tailguard_v1.json`
+  - `overall_gate_pass=true`, `adaptive_verdict=pass`
+  - verification 비열화 유지.
 
 ## Daily OOS snapshot (Gate3 supplement)
 - Report:
-  - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_backtest_bridge_restore.json`
+  - `build/Release/logs/daily_oos_stability_report_3m_7d_20260225_step8ai_runtime_longhold_tailguard_v1_3set.json`
 - Result:
   - `status=pass`
   - `evaluated_day_count=10`
   - `nonpositive_day_ratio=0.3`
-  - `total_profit_sum=246.968137`
-  - `peak_day_drawdown_pct=1.225673`
+  - `total_profit_sum=408.37201`
+  - `peak_day_drawdown_pct=0.933162`
+- Correctness probe (not retained):
+  - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_correctness_exit_decouple_v1.json`
+  - `status=fail`, `nonpositive_day_ratio=0.5`, `total_profit_sum=-137.473279`
+- Correctness probe v2 (not retained):
+  - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_correctness_strategyless_closepath_v2.json`
+  - `status=fail`, `nonpositive_day_ratio=0.5`, `total_profit_sum=-131.162894`
+- Correctness probe v3 (not retained):
+  - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_correctness_strategyless_exit_mapping_v1.json`
+  - `status=fail`, `nonpositive_day_ratio=0.5`, `total_profit_sum=-137.473279`
+- Correctness probe v4 (not retained):
+  - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_correctness_strategyless_runtime_mapping_v2.json`
+  - `status=fail`, `nonpositive_day_ratio=0.5`, `total_profit_sum=-137.473279`
+- Correctness probe v5 (not retained):
+  - `build/Release/logs/daily_oos_stability_report_3m_7d_20260225_correctness_runtime_mapping_v3_rescuecooldown.json`
+  - `status=fail`, `nonpositive_day_ratio=0.5`, `total_profit_sum=-137.473279`
+- Tuning probe `step8af` (not retained):
+  - `build/Release/logs/daily_oos_stability_report_3m_7d_20260225_step8af_uptrend_rescue_step8b_focus_tail_v1_3set.json`
+  - `status=fail`, `nonpositive_day_ratio=0.545455`, `total_profit_sum=-453.253435`
+  - rollback:
+    - `build/Release/logs/daily_oos_stability_report_3m_7d_20260225_step8af_uptrend_rescue_step8b_focus_tail_rollback_3set.json`
+- Tuning probe `step8ag` (not retained):
+  - `build/Release/logs/daily_oos_stability_report_3m_7d_20260225_step8ag_uptrend_rescue_step8b_focus_scale_v1_3set.json`
+  - `status=pass` but 핵심 지표 무변화(no-hit), rollback.
+- Tuning probe `step8ai` (retained):
+  - `build/Release/logs/daily_oos_stability_report_3m_7d_20260225_step8ai_runtime_longhold_tailguard_v1_3set.json`
+  - `status=pass`, `total_profit_sum=408.37201`, `peak_day_drawdown_pct=0.933162`
 - Analysis artifacts:
   - `build/Release/logs/daily_oos_negative_day_cell_summary_step8e.json`
   - `build/Release/logs/daily_oos_negative_trade_detail_step8e_postgate4_targetday.json`
   - `build/Release/logs/verification_loss_tail_focus_step8e.json`
   - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8w_profile.json`
   - `build/Release/logs/so4_15_target_cell_trade_profile_step8w.json`
+  - `build/Release/logs/strategyless_exit_audit_5set_20260224.json`
+  - `build/Release/logs/execution_parity_report_strategyless_audit_20260224.json`
+  - `build/Release/logs/execution_parity_report_strategyless_audit_strict_after_livepaper_patch_20260224.json`
 - Failed experiment (rolled back):
   - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8f_runtime_tail_guard_v2.json`
   - outcome: `status=fail`, `nonpositive_day_ratio=0.6`, `total_profit_sum=-271.050584`
@@ -185,6 +402,9 @@ Last updated: 2026-02-24
   - canonical live shadow log exists (`build/Release/logs/policy_decisions.jsonl`).
   - aligned backtest builder now enforces market-aware scan alignment + live-selected hint priority.
   - Gate4 decision-parity blocker is closed under canonical v2 artifacts.
+  - exit parity 선행 근거(라이브 execution updates)는 확보 완료.
+  - SELL/CLOSE lifecycle 확장도 확보 완료.
+  - 다음은 exit 이벤트 분포(backtest vs live_paper) 비교 리포트 고정 단계.
 
 ## Canonical v2 gate artifact snapshot
 - Gate1:
@@ -206,6 +426,18 @@ Last updated: 2026-02-24
 - Residual loss-tail focus remains on:
   - `TRENDING_UP|PROBABILISTIC_PRIMARY_RUNTIME` (ETH `2026-02-18/2026-02-19`, BacktestEOD exits)
   - `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER` (XRP `2026-02-19`, loss reduced to `-27.26890753867527`)
+- Correctness-first gap:
+  - live execution parity의 파일/스키마/strict gate는 pass로 전환됨.
+  - standalone strict parity는 backtest execution artifact lifecycle에 따라
+    빈 파일로 실패 가능(비-canonical 실행 타이밍 이슈).
+  - canonical 기준은 CI gate 산출물:
+    - `build/Release/logs/execution_parity_report.json`
+    - `build/Release/logs/operational_readiness_report.json`
+    - `checks.execution_parity_passed=true`
+  - next focus:
+    - overlap-ready reason-gap 아티팩트 기준으로
+      strategy/market 축의 종료 라벨 차이(`stop_loss|take_profit_full_due_to_min_order` vs `BacktestEOD`)를
+      좁은 correctness patch 범위로 재시도.
 - Gate5 staged enable execution and monitoring evidence are not started yet.
 
 ## Detailed history references
