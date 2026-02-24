@@ -3,7 +3,7 @@ Last updated: 2026-02-24
 
 ## Repository
 - Branch: `main`
-- Commit snapshot (pushed): `ed105ca`
+- Commit snapshot (pushed): `346637a`
 
 ## Active ticket
 - Source of truth: `docs/_codex/ACTIVE_TICKET.md`
@@ -299,6 +299,27 @@ Last updated: 2026-02-24
         - `status=pass`
         - `daily_profit_sum_delta=0.0`
         - `v16_fail_reasons=[]`
+  - v18 minimal scoped code probe completed (default-OFF, not retained):
+    - probe intent:
+      - `TRENDING_UP|CORE_RESCUE` low-strength loss cluster를 좁은 조건으로 차단하고
+        v17 spillover gate 선행 통과 여부 확인.
+    - artifacts:
+      - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v18_probe_off_5set_20260224.json`
+      - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v18_probe_on_5set_20260224.json`
+      - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v18_probe_off_5set_3m7d_20260224.json`
+      - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v18_probe_on_5set_3m7d_20260224.json`
+      - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v18_probe_on_vs_off_5set_20260224.json`
+      - `build/Release/logs/v18_probe_spillover_gate_correctness_runtime_mapping_on_guard_v18_probe_on_vs_off_5set_20260224_workflow.json`
+    - gate snapshot:
+      - OFF/ON identical (no-hit):
+        - verification: `avg_profit_factor=1.0229`, `avg_expectancy_krw=-0.6964`, `avg_total_trades=14.0`
+        - daily OOS: `status=pass`, `nonpositive_day_ratio=0.368421`, `total_profit_sum=118.672413`
+        - delta: `profit_sum_delta=0.0`, `nonpositive_day_count_delta=0`
+      - v17 workflow:
+        - `status=pass`, `v16_fail_reasons=[]`
+    - action:
+      - no-hit로 판정하고 fail-closed rollback 완료(임시 v18 probe 코드/설정 미유지).
+      - next probe는 `v19`에서 lock pass + non-zero impact 동시 충족 후보만 승격.
   - live execution update 로그 수집 선행조건은 충족됨
     (`execution_updates_live.jsonl` 생성 확인).
   - live parity path hardening landed:

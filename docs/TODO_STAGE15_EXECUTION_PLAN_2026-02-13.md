@@ -1857,9 +1857,30 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
           - 결과:
             - v14 workflow: `status=fail`
             - v13 sanity workflow: `status=pass`
-        - 다음 국소 단계(v18):
-          - 신규 후보는 v17 workflow `status=pass`를 선행 통과해야만
-            Gate3(verification + daily OOS) 비교 단계로 승격.
+        - v18 국소 코드 프로브(기본 OFF, 미유지) 완료:
+          - 임시 적용:
+            - `TRENDING_UP|CORE_RESCUE` 저강도 손실 클러스터 대상 좁은 guard를
+              default-OFF flag로 주입.
+          - 검증 산출물:
+            - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v18_probe_off_5set_20260224.json`
+            - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v18_probe_on_5set_20260224.json`
+            - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v18_probe_off_5set_3m7d_20260224.json`
+            - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v18_probe_on_5set_3m7d_20260224.json`
+            - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v18_probe_on_vs_off_5set_20260224.json`
+            - `build/Release/logs/v18_probe_spillover_gate_correctness_runtime_mapping_on_guard_v18_probe_on_vs_off_5set_20260224_workflow.json`
+          - 결과:
+            - OFF/ON 동일(no-hit):
+              - verification: `avg_profit_factor=1.0229`, `avg_expectancy_krw=-0.6964`, `avg_total_trades=14.0`
+              - daily OOS: `status=pass`, `nonpositive_day_ratio=0.368421`, `total_profit_sum=118.672413`
+              - delta: `profit_sum_delta=0.0`, `nonpositive_day_count_delta=0`
+            - v17 workflow: `status=pass` (`v16_fail_reasons=[]`)
+          - 조치:
+            - fail-closed rollback 완료(임시 v18 probe 코드/설정 제거, baseline 유지).
+        - 다음 국소 단계(v19):
+          - 후보 승격 조건을 2단계로 고정:
+            - (1) v17 workflow `status=pass`
+            - (2) ON/OFF delta에서 non-zero impact 존재
+          - 두 조건 동시 충족 후보만 Gate3 비교 단계로 승격.
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
    - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.

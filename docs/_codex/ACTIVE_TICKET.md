@@ -355,6 +355,30 @@ Last updated: 2026-02-24
     - action:
       - next step is `v18`:
         - 신규 후보 프로브는 v17 workflow 결과가 `pass`일 때만 Gate3 비교 단계로 승격.
+  - v18 minimal scoped probe result (`2026-02-25`, not retained):
+    - probe intent:
+      - `TRENDING_UP|CORE_RESCUE` low-strength cluster를 대상으로
+        default-OFF 좁은 guard를 임시 주입해 v17 선행 게이트 + Gate3 delta 확인.
+    - artifacts:
+      - verification:
+        - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v18_probe_off_5set_20260224.json`
+        - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v18_probe_on_5set_20260224.json`
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v18_probe_off_5set_3m7d_20260224.json`
+        - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v18_probe_on_5set_3m7d_20260224.json`
+      - delta:
+        - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v18_probe_on_vs_off_5set_20260224.json`
+      - v17 workflow:
+        - `build/Release/logs/v18_probe_spillover_gate_correctness_runtime_mapping_on_guard_v18_probe_on_vs_off_5set_20260224_workflow.json`
+    - result:
+      - OFF/ON 완전 동일(no-hit):
+        - verification: `avg_profit_factor=1.0229`, `avg_expectancy_krw=-0.6964`, `avg_total_trades=14.0`
+        - daily OOS: `status=pass`, `nonpositive_day_ratio=0.368421`, `total_profit_sum=118.672413`
+        - delta: `profit_sum_delta=0.0`, `nonpositive_day_count_delta=0`
+      - v17 workflow: `status=pass` (`v16_fail_reasons=[]`)
+    - action:
+      - fail-closed rollback complete (temporary v18 probe code/config removed).
+      - next step is `v19`: lock-pass + non-zero impact 조건을 동시에 만족하는 후보만 probe.
 
 ## Current result snapshot
 - Baseline reference remains:
