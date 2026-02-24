@@ -3,7 +3,7 @@ Last updated: 2026-02-24
 
 ## Repository
 - Branch: `main`
-- Commit snapshot (pushed): `5d73058`
+- Commit snapshot (pushed): `986ee40`
 
 ## Active ticket
 - Source of truth: `docs/_codex/ACTIVE_TICKET.md`
@@ -21,7 +21,7 @@ Last updated: 2026-02-24
 
 ## Latest gate snapshot (runtime tuning path)
 - Verification report:
-  - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step7w_midvol_tailguard_v1.json`
+  - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step7z_recheck_v1.json`
 - Result:
   - `overall_gate_pass=true`
   - `adaptive_verdict=pass`
@@ -32,19 +32,20 @@ Last updated: 2026-02-24
 
 ## Daily OOS snapshot (Gate3 supplement)
 - Report:
-  - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step7w.json`
+  - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step7z_recheck.json`
 - Result:
   - `status=fail`
   - `evaluated_day_count=14`
-  - `nonpositive_day_ratio=0.785714` (threshold `0.45` fail)
-  - `total_profit_sum=-983.396745` (fail)
-  - `peak_day_drawdown_pct=1.786715` (pass)
+  - `nonpositive_day_ratio=0.642857` (threshold `0.45` fail)
+  - `total_profit_sum=-896.321805` (fail)
+  - `peak_day_drawdown_pct=1.658036` (pass)
   - dominant loss cell: `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER`
-  - improvement vs `step7u`:
-    - `total_profit_sum: -1180.672555 -> -983.396745`
-    - `peak_day_drawdown_pct: 2.043726 -> 1.786715`
+  - improvement vs `step7w`:
+    - `nonpositive_day_ratio: 0.785714 -> 0.642857`
+    - `total_profit_sum: -983.396745 -> -896.321805`
+    - `peak_day_drawdown_pct: 1.786715 -> 1.658036`
   - improvement vs `step7f`:
-    - `total_profit_sum: -2760.512552 -> -983.396745`
+    - `total_profit_sum: -2760.512552 -> -896.321805`
   - note:
     - `scripts/run_daily_oos_stability.py` corrected day-metric attribution fallback.
     - optional flag added: `--exclude-backtest-eod-trades` (default include).
@@ -60,6 +61,7 @@ Last updated: 2026-02-24
 - discarded probes (kept out of runtime): `step7g`, `step7j`, `step7k`, `step7l`, `step7m`, `step7q`, `step7s`, `step7t`, `step7v`.
 - latest discarded probe summary:
   - `step7v`: verification improved but daily OOS worsened (`total_profit_sum=-1505.699592`, `peak_day_drawdown_pct=2.80857`).
+  - `step8a`: verification degraded to `adaptive_verdict=inconclusive` and was rolled back.
 
 ## Detailed history references
 - `docs/TODO_STAGE15_EXECUTION_PLAN_2026-02-13.md`

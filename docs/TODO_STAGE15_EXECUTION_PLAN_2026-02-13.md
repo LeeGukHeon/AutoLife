@@ -623,24 +623,28 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
     - `step7v`: uptrend ultra-tail 추가 스케일링 시도, verification 소폭 개선 대비 daily OOS 악화로 폐기.
       - verification: `avg_profit_factor=2.9795`, `avg_expectancy_krw=15.3616`, `adaptive_verdict=pass`
       - daily OOS: `nonpositive_day_ratio=0.785714`, `total_profit_sum=-1505.699592`, `peak_day_drawdown_pct=2.80857`
-    - `step7w`: uptrend mid-vol loss-tail guard 추가로 daily OOS 추가 개선(현재 유지 후보).
-  - 현재 유지 후보 (`step7w`):
+    - `step7w`: uptrend mid-vol loss-tail guard 추가로 daily OOS 개선.
+    - `step7x`: uptrend low-mid-vol tail guard 추가로 daily OOS 추가 개선.
+    - `step7y`: deep-ev tail guard 시도(히트 없음, 폐기).
+    - `step7z`: deep-liq tail guard 추가로 nonpositive ratio 추가 개선(현재 유지 후보).
+    - `step8a`: high-liq/high-vol tail guard 시도, verification inconclusive로 폐기.
+  - 현재 유지 후보 (`step7z`):
     - verification:
-      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step7w_midvol_tailguard_v1.json`
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step7z_recheck_v1.json`
       - `overall_gate_pass=true`, `adaptive_verdict=pass`
       - `avg_profit_factor=2.9577`, `avg_expectancy_krw=14.7159`, `avg_total_trades=10.2`
       - `candidate_generation.no_signal_generated share=0.6374`
     - daily OOS:
-      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step7w.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step7z_recheck.json`
       - `status=fail`, `evaluated_day_count=14`
-      - `nonpositive_day_ratio=0.785714` (threshold `0.45` fail)
-      - `total_profit_sum=-983.396745` (fail)
-      - `peak_day_drawdown_pct=1.786715` (pass)
-      - `step7u` 대비 개선:
-        - `total_profit_sum: -1180.672555 -> -983.396745`
-        - `peak_day_drawdown_pct: 2.043726 -> 1.786715`
+      - `nonpositive_day_ratio=0.642857` (threshold `0.45` fail)
+      - `total_profit_sum=-896.321805` (fail)
+      - `peak_day_drawdown_pct=1.658036` (pass)
+      - `step7w` 대비 개선:
+        - `nonpositive_day_ratio: 0.785714 -> 0.642857`
+        - `total_profit_sum: -983.396745 -> -896.321805`
       - `step7f` 대비 개선:
-        - `total_profit_sum: -2760.512552 -> -983.396745`
+        - `total_profit_sum: -2760.512552 -> -896.321805`
       - dominant loss cell: `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER`
   - Gate3 supplement 집계 정합성 보정:
     - `scripts/run_daily_oos_stability.py`

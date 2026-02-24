@@ -1100,9 +1100,23 @@ bool passesProbabilisticPrimaryMinimums(
                 signal.probabilistic_h5_calibrated < 0.412 &&
                 signal.probabilistic_h5_margin < -0.014 &&
                 signal.strength < 0.455;
+            const bool weak_uptrend_rescue_lowmidvol_tail =
+                signal.volatility >= 0.09 &&
+                signal.volatility < 0.12 &&
+                signal.probabilistic_h5_calibrated < 0.408 &&
+                signal.probabilistic_h5_margin < -0.014 &&
+                signal.strength < 0.455 &&
+                signal.liquidity_score < 52.0;
+            const bool weak_uptrend_rescue_deep_liq_tail =
+                signal.probabilistic_h5_calibrated < 0.408 &&
+                signal.probabilistic_h5_margin < -0.016 &&
+                signal.strength < 0.455 &&
+                signal.liquidity_score < 48.0;
             if (weak_uptrend_rescue_lowliq_tail ||
                 weak_uptrend_rescue_narrow_tail ||
-                weak_uptrend_rescue_midvol_tail) {
+                weak_uptrend_rescue_midvol_tail ||
+                weak_uptrend_rescue_lowmidvol_tail ||
+                weak_uptrend_rescue_deep_liq_tail) {
                 if (reject_reason != nullptr) {
                     *reject_reason = "blocked_probabilistic_primary_rescue_tail_guard";
                 }
@@ -6668,7 +6682,4 @@ void TradingEngine::runPrometheusHttpServer(int port) {
 
 } // namespace engine
 } // namespace autolife
-
-
-
 

@@ -42,33 +42,36 @@ Last updated: 2026-02-24
 - Parity:
   - N/A (bundle/schema unchanged)
 - Verification:
-  - `verification_report_global_full_5set_refresh_20260224_step7w_midvol_tailguard_v1.json`
+  - `verification_report_global_full_5set_refresh_20260224_step7z_recheck_v1.json`
 - Extra tests:
-  - daily OOS report diff vs prior maintained candidate (`step7u`)
+  - daily OOS report diff vs prior maintained candidate (`step7w`)
 
 ## Current result snapshot
-- Verification (`step7w`):
+- Verification (`step7z`):
   - `overall_gate_pass=true`
   - `adaptive_verdict=pass`
   - `avg_profit_factor=2.9577`
   - `avg_expectancy_krw=14.7159`
   - `avg_total_trades=10.2`
   - `candidate_generation.no_signal_generated share=0.6374`
-- Daily OOS (`step7w`):
+- Daily OOS (`step7z`):
   - `status=fail`
   - `evaluated_day_count=14`
-  - `nonpositive_day_ratio=0.785714` (threshold 0.45 fail)
-  - `total_profit_sum=-983.396745` (fail)
-  - `peak_day_drawdown_pct=1.786715` (pass)
+  - `nonpositive_day_ratio=0.642857` (threshold 0.45 fail)
+  - `total_profit_sum=-896.321805` (fail)
+  - `peak_day_drawdown_pct=1.658036` (pass)
   - dominant loss cell: `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER`
-  - delta vs `step7u`: `total_profit_sum -1180.672555 -> -983.396745`, `peak_day_drawdown_pct 2.043726 -> 1.786715`
-  - delta vs `step7f`: `total_profit_sum -2760.512552 -> -983.396745`
+  - delta vs `step7w`: `nonpositive_day_ratio 0.785714 -> 0.642857`, `total_profit_sum -983.396745 -> -896.321805`
+  - delta vs `step7f`: `total_profit_sum -2760.512552 -> -896.321805`
   - note: daily OOS aggregation bugfix applied in script.
     - trade-history day metrics now avoid summary fallback contamination.
     - `--exclude-backtest-eod-trades` added (default keeps legacy include behavior).
   - discarded follow-up probe (`step7v`):
     - verification improved (`avg_profit_factor=2.9795`, `avg_expectancy_krw=15.3616`)
     - daily OOS worsened (`total_profit_sum=-1505.699592`, `peak_day_drawdown_pct=2.80857`)
+  - discarded follow-up probe (`step8a`):
+    - verification degraded (`adaptive_verdict=inconclusive`, `overall_gate_pass=false`)
+    - fail-closed rollback to `step7z`
 
 ## DoD
 - [x] runtime guards are live/backtest isomorphic.
@@ -80,4 +83,4 @@ Last updated: 2026-02-24
 - Risks:
   - over-tightening can drop sample-size guard in verification.
 - Rollback strategy:
-  - keep latest passing candidate (`step7w`) and iterate only guard thresholds incrementally.
+  - keep latest passing candidate (`step7z`) and iterate only guard thresholds incrementally.
