@@ -335,6 +335,26 @@ Last updated: 2026-02-24
       - next step is `v17`:
         - lock precheck를 probe 워크플로 앞단에 고정하고,
           lock 통과 후보만 default-OFF narrow code probe로 재시도.
+  - v17 spillover gate workflow automation (`2026-02-25`):
+    - new script:
+      - `scripts/run_probe_spillover_gate.py`
+    - workflow chain:
+      - `analyze_daily_oos_delta -> analyze_v15_occupancy_distortion -> evaluate_v16_spillover_lock`
+    - artifacts:
+      - v14 workflow:
+        - `build/Release/logs/v17_probe_spillover_gate_correctness_runtime_mapping_on_guard_v14_probe_on_vs_off_5set_20260224_workflow.json`
+      - v13 sanity workflow:
+        - `build/Release/logs/v17_probe_spillover_gate_correctness_runtime_mapping_on_guard_v13_probe_on_vs_off_5set_20260224_workflow.json`
+    - results:
+      - v14 workflow: `status=fail`
+        - `v16_fail_reasons`:
+          - `nontarget_positive_trade_delta`
+          - `nontarget_adverse_profit_delta`
+          - `nonpositive_day_count_delta`
+      - v13 sanity workflow: `status=pass`
+    - action:
+      - next step is `v18`:
+        - 신규 후보 프로브는 v17 workflow 결과가 `pass`일 때만 Gate3 비교 단계로 승격.
 
 ## Current result snapshot
 - Baseline reference remains:

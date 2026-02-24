@@ -1844,9 +1844,22 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
               - `nontarget_adverse_profit_delta=-1515.661983`
               - `nonpositive_day_count_delta=8`
             - v13 sanity: `status=pass`
-        - 다음 국소 단계(v17):
-          - lock precheck를 probe 워크플로 선행 게이트로 고정하고,
-            lock 통과 후보만 default OFF + narrow scope 코드 프로브로 재시도.
+        - v17 spillover gate workflow 고정 완료:
+          - 신규 스크립트:
+            - `scripts/run_probe_spillover_gate.py`
+          - workflow chain:
+            - `analyze_daily_oos_delta -> analyze_v15_occupancy_distortion -> evaluate_v16_spillover_lock`
+          - 산출물:
+            - v14 workflow:
+              - `build/Release/logs/v17_probe_spillover_gate_correctness_runtime_mapping_on_guard_v14_probe_on_vs_off_5set_20260224_workflow.json`
+            - v13 sanity workflow:
+              - `build/Release/logs/v17_probe_spillover_gate_correctness_runtime_mapping_on_guard_v13_probe_on_vs_off_5set_20260224_workflow.json`
+          - 결과:
+            - v14 workflow: `status=fail`
+            - v13 sanity workflow: `status=pass`
+        - 다음 국소 단계(v18):
+          - 신규 후보는 v17 workflow `status=pass`를 선행 통과해야만
+            Gate3(verification + daily OOS) 비교 단계로 승격.
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
    - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.

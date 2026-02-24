@@ -280,6 +280,25 @@ Last updated: 2026-02-24
       - v13 sanity: `status=pass` (all zero deltas)
     - action:
       - v17부터는 이 lock을 선행 통과하지 못하는 후보를 즉시 폐기.
+  - v17 probe spillover gate workflow fixed:
+    - new script:
+      - `scripts/run_probe_spillover_gate.py`
+    - workflow:
+      - `daily_delta -> v15_distortion -> v16_lock`를 단일 실행으로 연결.
+    - artifacts:
+      - v14 case (expected fail):
+        - `build/Release/logs/v17_probe_spillover_gate_correctness_runtime_mapping_on_guard_v14_probe_on_vs_off_5set_20260224_workflow.json`
+      - v13 sanity case (expected pass):
+        - `build/Release/logs/v17_probe_spillover_gate_correctness_runtime_mapping_on_guard_v13_probe_on_vs_off_5set_20260224_workflow.json`
+    - results:
+      - v14 workflow:
+        - `status=fail`
+        - `daily_profit_sum_delta=-1664.459763`
+        - `v16_fail_reasons=[nontarget_positive_trade_delta,nontarget_adverse_profit_delta,nonpositive_day_count_delta]`
+      - v13 workflow:
+        - `status=pass`
+        - `daily_profit_sum_delta=0.0`
+        - `v16_fail_reasons=[]`
   - live execution update 로그 수집 선행조건은 충족됨
     (`execution_updates_live.jsonl` 생성 확인).
   - live parity path hardening landed:
