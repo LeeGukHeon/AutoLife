@@ -3,7 +3,7 @@ Last updated: 2026-02-24
 
 ## Repository
 - Branch: `main`
-- Commit snapshot (pushed): `d6390bf`
+- Commit snapshot (pushed): `7166f39`
 
 ## Active ticket
 - Source of truth: `docs/_codex/ACTIVE_TICKET.md`
@@ -114,6 +114,21 @@ Last updated: 2026-02-24
     - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8w_ranging_rescue_bimodal_tail_scale_v3.json`
     - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8w_ranging_rescue_bimodal_tail_scale_v3.json`
     - outcome: verification 비열화 유지 + `nonpositive_day_ratio 0.4 -> 0.3` 개선, 현재 코드에 유지.
+  - uptrend tail dual guard v1 (`step8x`):
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8x_uptrend_tail_dual_guard_v1.json`
+    - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8x_uptrend_tail_dual_guard_v1.json`
+    - outcome: baseline(step8w) 대비 무변화(no-hit), rolled back.
+    - rollback:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8x_rollback_seq.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8x_rollback_seq.json`
+  - uptrend tail dual guard v2 (`step8y`):
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8y_uptrend_tail_dual_guard_v2.json`
+    - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8y_uptrend_tail_dual_guard_v2.json`
+    - outcome: baseline(step8w) 대비 무변화(no-hit), rolled back.
+  - riskmanager uptrend tail guard (`step8z`):
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8z_riskmanager_uptrend_tail_guard_v1.json`
+    - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8z_riskmanager_uptrend_tail_guard_v1.json`
+    - outcome: baseline(step8w) 대비 무변화(no-hit), rolled back.
 
 ## Gate4 shadow flow snapshot
 - Flow report:

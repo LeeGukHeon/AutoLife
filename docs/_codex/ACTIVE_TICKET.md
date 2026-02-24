@@ -220,6 +220,32 @@ Last updated: 2026-02-24
       - 코드 유지(현재 기준점 `step8w`).
       - 잔여 3개 음수일(`ETH 2026-02-18/2026-02-19`, `XRP 2026-02-19`)을
         `step8w_profile` 기준으로 다음 guard 후보에서 분리 처리.
+  - `step8x` uptrend tail dual guard v1:
+    - reports:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8x_uptrend_tail_dual_guard_v1.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8x_uptrend_tail_dual_guard_v1.json`
+    - outcome:
+      - verification/daily 모두 baseline(step8w) 대비 무변화(no-hit)
+    - action:
+      - discarded + rollback confirmed:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8x_rollback_seq.json`
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8x_rollback_seq.json`
+  - `step8y` uptrend tail dual guard v2:
+    - reports:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8y_uptrend_tail_dual_guard_v2.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8y_uptrend_tail_dual_guard_v2.json`
+    - outcome:
+      - verification/daily 모두 baseline(step8w) 대비 무변화(no-hit)
+    - action:
+      - discarded (code not retained).
+  - `step8z` riskmanager uptrend tail guard v1:
+    - reports:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8z_riskmanager_uptrend_tail_guard_v1.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8z_riskmanager_uptrend_tail_guard_v1.json`
+    - outcome:
+      - `RiskManager` post-entry guard 경로에서도 baseline(step8w) 대비 무변화(no-hit)
+    - action:
+      - discarded (code not retained).
 
 ## DoD
 - [x] residual negative-day trade-level evidence captured.

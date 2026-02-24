@@ -1068,6 +1068,49 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
       - 잔여 병목은 `TRENDING_UP|PROBABILISTIC_PRIMARY_RUNTIME`
         (`ETH 2026-02-18/2026-02-19`)와
         `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER` (`XRP 2026-02-19`)로 축소.
+  - 폐기 실험(step8x uptrend tail dual guard v1):
+    - 코드 시도:
+      - `applyProbabilisticPrimaryDecisionProfile`에
+        uptrend primary/runtime + uptrend rescue/high-liq deep-margin
+        dual tail guard 추가(라이브/백테스트 동형).
+    - 결과:
+      - verification:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8x_uptrend_tail_dual_guard_v1.json`
+        - baseline 대비 무변화(no-hit)
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8x_uptrend_tail_dual_guard_v1.json`
+        - baseline(step8w) 대비 무변화(no-hit)
+    - 조치:
+      - 실험 코드 롤백.
+      - 복구 확인(순차 재실행):
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8x_rollback_seq.json`
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8x_rollback_seq.json`
+  - 폐기 실험(step8y uptrend tail dual guard v2):
+    - 코드 시도:
+      - step8x 컨텍스트를 소폭 확장해 hit 유도(동일 경로, 동형 적용).
+    - 결과:
+      - verification:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8y_uptrend_tail_dual_guard_v2.json`
+        - baseline(step8w) 대비 무변화(no-hit)
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8y_uptrend_tail_dual_guard_v2.json`
+        - baseline(step8w) 대비 무변화(no-hit)
+    - 조치:
+      - no-hit로 코드 롤백(유지 안 함).
+  - 폐기 실험(step8z riskmanager uptrend tail guard v1):
+    - 코드 시도:
+      - `RiskManager::applyAdaptiveRiskControls` 공통 경로에
+        uptrend primary/runtime EOD tail + uptrend rescue high-liq tail
+        post-entry guard 추가(라이브/백테스트 동형).
+    - 결과:
+      - verification:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8z_riskmanager_uptrend_tail_guard_v1.json`
+        - baseline(step8w) 대비 무변화(no-hit)
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8z_riskmanager_uptrend_tail_guard_v1.json`
+        - baseline(step8w) 대비 무변화(no-hit)
+    - 조치:
+      - no-hit로 코드 롤백(유지 안 함).
 
 ## Next (Strict Order)
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
