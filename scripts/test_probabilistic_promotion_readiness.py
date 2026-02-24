@@ -268,6 +268,74 @@ class ProbabilisticPromotionReadinessTest(unittest.TestCase):
             self.assertEqual(result.get("status"), "fail")
             self.assertIn("gate4_shadow_validation_failed_or_missing", list(result.get("errors", [])))
 
+    def test_v2_live_enable_shadow_status_fail_even_if_gate_flags_true(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest = root / "feature_manifest_v2.json"
+            feature_validation = root / "feature_validation_v2.json"
+            parity = root / "parity_v2.json"
+            verification = root / "verification_v2.json"
+            shadow = root / "shadow_status_fail.json"
+            runtime_cfg = root / "config_v2.json"
+            out = root / "out_v2_fail_shadow_status.json"
+
+            write_json(manifest, {"version": "prob_features_v2_draft", "pipeline_version": "v2"})
+            write_json(
+                feature_validation,
+                {
+                    "status": "pass",
+                    "dataset_manifest_json": str(manifest),
+                    "pipeline_version": "v2",
+                    "gate_profile": "v2_strict",
+                    "preflight_errors": [],
+                },
+            )
+            write_json(parity, {"status": "pass", "pipeline_version": "v2", "gate_profile": "v2_strict"})
+            write_json(
+                verification,
+                {
+                    "overall_gate_pass": True,
+                    "pipeline_version": "v2",
+                    "gate_profile": {"name": "v2_strict"},
+                },
+            )
+            write_json(
+                shadow,
+                {
+                    "status": "fail",
+                    "pipeline_version": "v2",
+                    "overall_gate_pass": True,
+                    "shadow_pass": True,
+                    "checks": {
+                        "decision_log_comparison_pass": True,
+                        "same_bundle": True,
+                        "same_candles": True,
+                        "distinct_log_paths": True,
+                    },
+                    "metadata": {
+                        "compared_decision_count": 100,
+                        "mismatch_count": 0,
+                    },
+                },
+            )
+            write_json(runtime_cfg, {"trading": {"allow_live_orders": False}})
+
+            result = evaluate(
+                argparse.Namespace(
+                    feature_validation_json=str(feature_validation),
+                    parity_json=str(parity),
+                    verification_json=str(verification),
+                    shadow_report_json=str(shadow),
+                    shadow_validation_json="",
+                    runtime_config_json=str(runtime_cfg),
+                    target_stage="live_enable",
+                    pipeline_version="v2",
+                    output_json=str(out),
+                )
+            )
+            self.assertEqual(result.get("status"), "fail")
+            self.assertIn("gate4_shadow_failed_or_missing", list(result.get("errors", [])))
+
 
 if __name__ == "__main__":
     unittest.main()

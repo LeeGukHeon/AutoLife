@@ -113,6 +113,41 @@ class ProbabilisticShadowReportValidationTest(unittest.TestCase):
             self.assertEqual(result.get("status"), "fail")
             self.assertIn("shadow_report_pipeline_mismatch", list(result.get("errors", [])))
 
+    def test_shadow_validation_fail_when_status_fail_even_if_gate_flags_true(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            shadow = root / "shadow_status_fail.json"
+            out = root / "out_fail_status.json"
+            write_json(
+                shadow,
+                {
+                    "status": "fail",
+                    "pipeline_version": "v1",
+                    "overall_gate_pass": True,
+                    "shadow_pass": True,
+                    "checks": {
+                        "decision_log_comparison_pass": True,
+                        "same_bundle": True,
+                        "same_candles": True,
+                        "distinct_log_paths": True,
+                    },
+                    "metadata": {
+                        "compared_decision_count": 100,
+                        "mismatch_count": 0,
+                    },
+                },
+            )
+            result = evaluate(
+                argparse.Namespace(
+                    shadow_report_json=str(shadow),
+                    pipeline_version="v1",
+                    output_json=str(out),
+                    strict=True,
+                )
+            )
+            self.assertEqual(result.get("status"), "fail")
+            self.assertIn("shadow_report_status_not_pass", list(result.get("errors", [])))
+
 
 if __name__ == "__main__":
     unittest.main()
