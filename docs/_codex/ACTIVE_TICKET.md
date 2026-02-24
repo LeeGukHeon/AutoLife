@@ -232,6 +232,27 @@ Last updated: 2026-02-24
     - interpretation:
       - pure cooldown preset is insufficient; low-strength band (`ss<=0.431403`) forms the clean zero-win loss cluster.
       - next step is minimal scoped code probe behind default-OFF flag.
+  - v13 minimal scoped probe result (`2026-02-25`, not retained):
+    - probe intent:
+      - one low-strength self-loop guard candidate를 default-OFF flag로 코드에 임시 주입 후
+        OFF/ON 5-set gate 비교.
+    - artifacts:
+      - verification:
+        - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v13_probe_off_5set_20260224.json`
+        - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v13_probe_on_5set_20260224.json`
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v13_probe_off_5set_3m7d_20260224.json`
+        - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v13_probe_on_5set_3m7d_20260224.json`
+      - delta:
+        - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v13_probe_on_vs_off_5set_20260224.json`
+    - result:
+      - OFF/ON 완전 동일(no-hit):
+        - verification: `avg_profit_factor=1.0229`, `avg_expectancy_krw=-0.6964`, `avg_total_trades=14.0`
+        - daily OOS: `nonpositive_day_ratio=0.368421`, `total_profit_sum=118.672413`
+        - delta: `profit_sum_delta=0.0`, `nonpositive_day_count_delta=0`
+    - action:
+      - fail-closed rollback complete (temporary v13 probe code/config removed).
+      - next step is `v14` minimal probe on another shortlist clause (still default-OFF).
 
 ## Current result snapshot
 - Baseline reference remains:

@@ -190,6 +190,27 @@ Last updated: 2026-02-24
     - interpretation:
       - pure cooldown preset is weak; loss cluster is concentrated in low-strength band.
       - proceed to minimal scoped code probe behind default-OFF flag.
+  - v13 minimal scoped code probe completed (default-OFF, not retained):
+    - temporary probe intent:
+      - apply one low-strength self-loop candidate with default-OFF guard flag and compare OFF/ON 5-set gates.
+    - artifacts:
+      - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v13_probe_off_5set_20260224.json`
+      - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v13_probe_on_5set_20260224.json`
+      - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v13_probe_off_5set_3m7d_20260224.json`
+      - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v13_probe_on_5set_3m7d_20260224.json`
+      - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v13_probe_on_vs_off_5set_20260224.json`
+    - gate snapshot (OFF vs ON):
+      - verification identical:
+        - `overall_gate_pass=false`, `avg_profit_factor=1.0229`,
+          `avg_expectancy_krw=-0.6964`, `avg_total_trades=14.0`
+      - daily OOS identical:
+        - `status=pass`, `nonpositive_day_ratio=0.368421`,
+          `total_profit_sum=118.672413`
+      - delta:
+        - `profit_sum_delta=0.0`, `nonpositive_day_count_delta=0`
+    - action:
+      - no-hit로 판정하고 fail-closed rollback 완료(코드/설정 변경 미유지).
+      - next probe는 `v14`로 넘어가되 default-OFF + narrow scope 원칙 유지.
   - live execution update 로그 수집 선행조건은 충족됨
     (`execution_updates_live.jsonl` 생성 확인).
   - live parity path hardening landed:
