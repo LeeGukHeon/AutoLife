@@ -42,24 +42,26 @@ Last updated: 2026-02-24
 - Parity:
   - N/A (bundle/schema unchanged)
 - Verification:
-  - `verification_report_global_full_5set_refresh_20260224_step7f_tail_guard_balance2_v1.json`
+  - `verification_report_global_full_5set_refresh_20260224_step7i_final_v1.json`
 - Extra tests:
-  - daily OOS report diff vs prior baseline (`..._fix2`)
+  - daily OOS report diff vs prior maintained candidate (`step7f`)
 
 ## Current result snapshot
-- Verification (`step7f`):
+- Verification (`step7i_final`):
   - `overall_gate_pass=true`
   - `adaptive_verdict=pass`
-  - `avg_profit_factor=2.7085`
-  - `avg_expectancy_krw=9.9745`
-  - `avg_total_trades=11.0`
-- Daily OOS (`step7f`):
+  - `avg_profit_factor=2.9672`
+  - `avg_expectancy_krw=14.8279`
+  - `avg_total_trades=10.2`
+  - `candidate_generation.no_signal_generated share=0.6374`
+- Daily OOS (`step7i_final`):
   - `status=fail`
   - `evaluated_day_count=15`
-  - `nonpositive_day_ratio=0.933333` (threshold 0.45 fail)
-  - `total_profit_sum=-2760.512552` (fail)
-  - `peak_day_drawdown_pct=2.593171` (pass)
+  - `nonpositive_day_ratio=0.8` (threshold 0.45 fail)
+  - `total_profit_sum=-1850.427359` (fail)
+  - `peak_day_drawdown_pct=2.598311` (pass)
   - dominant loss cell: `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER`
+  - delta vs `step7f`: `nonpositive_day_ratio 0.933333 -> 0.8`, `total_profit_sum -2760.512552 -> -1850.427359`
 
 ## DoD
 - [x] runtime guards are live/backtest isomorphic.
@@ -71,4 +73,4 @@ Last updated: 2026-02-24
 - Risks:
   - over-tightening can drop sample-size guard in verification.
 - Rollback strategy:
-  - keep latest passing candidate (`step7f`) and iterate only guard thresholds incrementally.
+  - keep latest passing candidate (`step7i_final`) and iterate only guard thresholds incrementally.

@@ -599,22 +599,34 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
     - `passesProbabilisticPrimaryMinimums`에 패턴/레짐 기반 tail guard를 추가하고(코인 하드코딩 없음),
       과도 차단으로 표본이 붕괴되는 구간은 단계적으로 되돌려 균형점을 탐색.
     - `shouldUseProbabilisticPrimaryFallback`의 `RANGING` 품질 바닥(min margin/prob/liquidity/spread)을 강화.
+    - 최신 반영:
+      - `TRENDING_UP + CORE_RESCUE`에서
+        `calibrated<0.420 && margin>-0.012 && strength<0.50 && liquidity<65` 조건을 차단해
+        저유동 약신호 tail을 축소(라이브/백테스트 동형).
   - 실험 요약:
     - `step7a`: risk/size 과조정으로 OOS 악화(폐기).
     - `step7c`: OOS 품질 개선되나 표본 붕괴(`avg_total_trades=6.8`, 폐기).
-    - `step7f`: 표본/게이트 균형 복원(현재 유지 후보).
-  - 현재 유지 후보 (`step7f`):
+    - `step7g`: decision profile 조정으로 OOS 악화(`total_profit_sum=-3980.129364`, 폐기).
+    - `step7h`: uptrend-rescue band guard 과차단(`avg_total_trades=9.2`, 폐기).
+    - `step7j`: low-liq 임계 `68` 확장 시 OOS 지표 무변화(폐기).
+    - `step7k`: low/high-liq bimodal guard 과차단(`avg_total_trades=9.8`, 폐기).
+    - `step7l`: bimodal 완화안 OOS 지표 무변화(폐기).
+    - `step7i_final`: 표본/게이트 유지 + OOS 손실축소(현재 유지 후보).
+  - 현재 유지 후보 (`step7i_final`):
     - verification:
-      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step7f_tail_guard_balance2_v1.json`
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step7i_final_v1.json`
       - `overall_gate_pass=true`, `adaptive_verdict=pass`
-      - `avg_profit_factor=2.7085`, `avg_expectancy_krw=9.9745`, `avg_total_trades=11.0`
-      - `candidate_generation.no_signal_generated share=0.6417`
+      - `avg_profit_factor=2.9672`, `avg_expectancy_krw=14.8279`, `avg_total_trades=10.2`
+      - `candidate_generation.no_signal_generated share=0.6374`
     - daily OOS:
-      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step7f.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step7i_final.json`
       - `status=fail`, `evaluated_day_count=15`
-      - `nonpositive_day_ratio=0.933333` (threshold `0.45` fail)
-      - `total_profit_sum=-2760.512552` (fail)
-      - `peak_day_drawdown_pct=2.593171` (pass)
+      - `nonpositive_day_ratio=0.8` (threshold `0.45` fail)
+      - `total_profit_sum=-1850.427359` (fail)
+      - `peak_day_drawdown_pct=2.598311` (pass)
+      - `step7f` 대비 개선:
+        - `nonpositive_day_ratio: 0.933333 -> 0.8`
+        - `total_profit_sum: -2760.512552 -> -1850.427359`
       - dominant loss cell: `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER`
 
 ## Next (Strict Order)
@@ -622,8 +634,8 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
    - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.
 1. 표본 유지 + 품질 보강(Strict Order 4):
-   - 현재 `avg_total_trades=11.0` 방어 상태에서 `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER` loss-tail 추가 완화
-   - `candidate_generation`의 `no_signal_generated` 비중(`share=0.6417`) 유지/추가 완화
+   - 현재 `avg_total_trades=10.2` 방어 상태에서 `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER` loss-tail 추가 완화
+   - `candidate_generation`의 `no_signal_generated` 비중(`share=0.6374`) 유지/추가 완화
 2. 라벨/학습 구조 고도화:
    - optional triple-barrier 활성화 실험(기존 라벨과 병행)
    - `P(win)` + `E[pnl]` 2-head 학습 파이프라인 추가

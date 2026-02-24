@@ -1048,6 +1048,19 @@ bool passesProbabilisticPrimaryMinimums(
                 }
                 return false;
         }
+        if (regime == autolife::analytics::MarketRegime::TRENDING_UP) {
+            const bool weak_uptrend_rescue_lowliq_tail =
+                signal.probabilistic_h5_calibrated < 0.420 &&
+                signal.probabilistic_h5_margin > -0.012 &&
+                signal.strength < 0.50 &&
+                signal.liquidity_score < 65.0;
+            if (weak_uptrend_rescue_lowliq_tail) {
+                if (reject_reason != nullptr) {
+                    *reject_reason = "blocked_probabilistic_primary_rescue_tail_guard";
+                }
+                return false;
+            }
+        }
     }
     if (!hostile_regime &&
         regime == autolife::analytics::MarketRegime::TRENDING_UP &&
