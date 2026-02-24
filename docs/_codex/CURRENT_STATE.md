@@ -3,7 +3,7 @@ Last updated: 2026-02-24
 
 ## Repository
 - Branch: `main`
-- Commit snapshot (pushed): `a7d3f51`
+- Commit snapshot (pushed): `021b82d`
 
 ## Active ticket
 - Source of truth: `docs/_codex/ACTIVE_TICKET.md`
@@ -352,6 +352,34 @@ Last updated: 2026-02-24
     - action:
       - fail-closed rollback 완료(임시 v19 probe 코드/설정 미유지).
       - next probe는 `v20`: target clause 단독이 아닌 spillover-locked paired candidate로 제한.
+  - v20 spillover-locked paired probe completed (default-OFF, not retained):
+    - probe clause (paired):
+      - `probabilistic_h5_calibrated <= 0.406871 && expected_value >= -0.00027`
+      - scope: `TRENDING_UP|CORE_RESCUE`
+    - artifacts:
+      - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v20_probe_off_5set_20260224.json`
+      - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v20_probe_on_5set_20260224.json`
+      - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v20_probe_off_5set_3m7d_20260224.json`
+      - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v20_probe_on_5set_3m7d_20260224.json`
+      - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v20_probe_on_vs_off_5set_20260224.json`
+      - `build/Release/logs/v20_probe_spillover_gate_correctness_runtime_mapping_on_guard_v20_probe_on_vs_off_5set_20260224_workflow.json`
+    - gate snapshot:
+      - verification OFF -> ON: identical (`avg_profit_factor=1.0229`, `avg_expectancy_krw=-0.6964`)
+      - daily OOS OFF -> ON:
+        - `status: pass -> fail`
+        - `nonpositive_day_ratio: 0.368421 -> 0.529412`
+        - `total_profit_sum: 118.672413 -> -1212.605594`
+      - delta:
+        - `profit_sum_delta=-1331.278007`
+        - `nonpositive_day_count_delta=+4`
+      - v17 workflow:
+        - `status=fail`
+        - `v16_fail_reasons=[nontarget_positive_trade_delta,nontarget_adverse_profit_delta,nonpositive_day_count_delta]`
+    - interpretation:
+      - paired 형태로 좁혀도 v19와 동일한 spillover 악화가 재현됨(사실상 동일효과 후보군).
+    - action:
+      - fail-closed rollback 완료(임시 v20 probe 코드/설정 미유지).
+      - next probe는 `v21`: probe 전 hit-signature/impact 동형성 사전 필터를 추가해 중복 후보를 제거.
   - live execution update 로그 수집 선행조건은 충족됨
     (`execution_updates_live.jsonl` 생성 확인).
   - live parity path hardening landed:

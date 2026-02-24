@@ -413,6 +413,35 @@ Last updated: 2026-02-24
     - action:
       - fail-closed rollback complete (temporary v19 probe code/config removed).
       - next step is `v20`: spillover-locked paired candidate only.
+  - v20 spillover-locked paired probe result (`2026-02-25`, not retained):
+    - probe clause:
+      - `cal <= 0.406871 && expected_value >= -0.00027`
+      - scope: `TRENDING_UP|CORE_RESCUE`
+    - artifacts:
+      - verification:
+        - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v20_probe_off_5set_20260224.json`
+        - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v20_probe_on_5set_20260224.json`
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v20_probe_off_5set_3m7d_20260224.json`
+        - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v20_probe_on_5set_3m7d_20260224.json`
+      - delta:
+        - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v20_probe_on_vs_off_5set_20260224.json`
+      - v17 workflow:
+        - `build/Release/logs/v20_probe_spillover_gate_correctness_runtime_mapping_on_guard_v20_probe_on_vs_off_5set_20260224_workflow.json`
+    - result:
+      - verification: OFF/ON identical
+      - daily OOS: `pass -> fail`
+        - `nonpositive_day_ratio: 0.368421 -> 0.529412`
+        - `total_profit_sum: 118.672413 -> -1212.605594`
+      - delta:
+        - `profit_sum_delta=-1331.278007`
+        - `nonpositive_day_count_delta=+4`
+      - v17 workflow: `status=fail` (`v16_fail_reasons` 3개 재발)
+    - interpretation:
+      - paired candidate임에도 v19와 동일 열화 패턴 재현(동형 후보로 판단).
+    - action:
+      - fail-closed rollback complete (temporary v20 probe code/config removed).
+      - next step is `v21`: probe 전 hit-signature/impact-equivalence prefilter 추가.
 
 ## Current result snapshot
 - Baseline reference remains:

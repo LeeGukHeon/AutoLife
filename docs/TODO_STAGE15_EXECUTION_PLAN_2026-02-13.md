@@ -1904,9 +1904,36 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
               - `v16_fail_reasons` 3개 재발
           - 조치:
             - fail-closed rollback 완료(임시 v19 probe 코드/설정 제거, baseline 유지).
-        - 다음 국소 단계(v20):
-          - 단일 target clause 재시도 중단.
-          - spillover lock을 만족하는 paired candidate(목표 셀 + non-target 보호 조건)만 프로브.
+        - v20 paired candidate 프로브(기본 OFF, 미유지) 완료:
+          - 선택 paired clause:
+            - `cal <= 0.406871 && expected_value >= -0.00027`
+            - scope: `TRENDING_UP|CORE_RESCUE`
+          - 검증 산출물:
+            - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v20_probe_off_5set_20260224.json`
+            - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v20_probe_on_5set_20260224.json`
+            - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v20_probe_off_5set_3m7d_20260224.json`
+            - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v20_probe_on_5set_3m7d_20260224.json`
+            - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v20_probe_on_vs_off_5set_20260224.json`
+            - `build/Release/logs/v20_probe_spillover_gate_correctness_runtime_mapping_on_guard_v20_probe_on_vs_off_5set_20260224_workflow.json`
+          - 결과:
+            - verification OFF/ON 동일
+            - daily OOS `pass -> fail`:
+              - `nonpositive_day_ratio: 0.368421 -> 0.529412`
+              - `total_profit_sum: 118.672413 -> -1212.605594`
+            - delta:
+              - `profit_sum_delta=-1331.278007`
+              - `nonpositive_day_count_delta=+4`
+            - v17 workflow:
+              - `status=fail` (`v16_fail_reasons` 3개 재발)
+          - 해석:
+            - paired 조건으로 좁혀도 v19와 동일 열화 패턴이 재현되어
+              사실상 동형 후보군으로 판단.
+          - 조치:
+            - fail-closed rollback 완료(임시 v20 probe 코드/설정 제거, baseline 유지).
+        - 다음 국소 단계(v21):
+          - probe 전 단계에 hit-signature/impact-equivalence prefilter를 추가해
+            v19/v20과 동형인 후보를 사전 제거.
+          - prefilter 통과 후보만 v17 workflow + Gate3 비교로 승격.
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
    - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.
