@@ -1613,6 +1613,14 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
           - `python scripts/run_ci_operational_gate.py --include-backtest --strict-execution-parity` pass
           - flag ON smoke(`build/Release/config/config.json` 임시 override)에서도 동일 gate pass,
             실행 후 config 원복 완료.
+        - flag ON 5-set 실검증(미채택):
+          - verification:
+            - `build/Release/logs/verification_report_correctness_runtime_mapping_on_5set_20260224.json`
+            - `avg_profit_factor=1.0229`, `avg_expectancy_krw=-0.6964`, `overall_gate_pass=false`
+          - daily OOS:
+            - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_5set_3m7d_20260224.json`
+            - `status=fail`, `nonpositive_day_ratio=0.473684`, `total_profit_sum=-454.453357`
+          - 조치: fail-closed 유지(`backtest_strategyless_runtime_live_exit_mapping=false`).
       - 다음은 `코드 패치 재시도`가 아니라, 포지션 점유/후속 진입 왜곡 원인(ETH 2/16~2/17) 계측을
         먼저 고정한 뒤 국소 프로브(v2) 범위를 재정의.
       - v2(runtime-only) + v3(rescue cooldown) 모두 실패 반영:

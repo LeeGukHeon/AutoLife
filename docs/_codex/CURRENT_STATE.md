@@ -43,6 +43,15 @@ Last updated: 2026-02-25
         - `trading.backtest_strategyless_runtime_live_exit_mapping=true`
       - gate rerun: pass (`execution_parity_report.json`, `operational_readiness_report.json`)
       - config restored after run.
+  - flag-ON 5-set validation (not retained):
+    - verification:
+      - `build/Release/logs/verification_report_correctness_runtime_mapping_on_5set_20260224.json`
+      - `avg_profit_factor=1.0229`, `avg_expectancy_krw=-0.6964`, `overall_gate_pass=false`
+    - daily OOS:
+      - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_5set_3m7d_20260224.json`
+      - `status=fail`, `nonpositive_day_ratio=0.473684`, `total_profit_sum=-454.453357`
+    - action:
+      - keep `backtest_strategyless_runtime_live_exit_mapping=false` (default OFF).
   - live execution update 로그 수집 선행조건은 충족됨
     (`execution_updates_live.jsonl` 생성 확인).
   - live parity path hardening landed:
