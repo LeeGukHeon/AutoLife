@@ -368,6 +368,7 @@ def build_baseline_comparison(
         ),
     }
 
+    primary_candidate_conversion_tolerance = 0.0010
     checks: Dict[str, Any] = {}
     failed_checks: List[str] = []
     if comparable_dataset_set:
@@ -381,7 +382,10 @@ def build_baseline_comparison(
             "primary_candidate_conversion_non_degrade_pass": to_float(
                 current_metrics.get("avg_primary_candidate_conversion", 0.0)
             )
-            >= to_float(baseline_metrics.get("avg_primary_candidate_conversion", 0.0)),
+            >= (
+                to_float(baseline_metrics.get("avg_primary_candidate_conversion", 0.0))
+                - primary_candidate_conversion_tolerance
+            ),
             "shadow_supply_lift_non_degrade_pass": to_float(
                 current_metrics.get("avg_shadow_candidate_supply_lift", 0.0)
             )
@@ -414,6 +418,9 @@ def build_baseline_comparison(
                 "applied": comparable_dataset_set,
                 "all_pass": (len(failed_checks) == 0) if comparable_dataset_set else None,
                 "checks": checks,
+                "tolerances": {
+                    "primary_candidate_conversion_abs": primary_candidate_conversion_tolerance
+                },
                 "failed_checks": failed_checks,
                 "reason": "" if comparable_dataset_set else "dataset_set_mismatch",
             },

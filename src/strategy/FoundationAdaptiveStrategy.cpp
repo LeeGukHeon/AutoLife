@@ -224,10 +224,10 @@ bool isThinLiquidityAdaptiveOpportunity(
     double bb_middle,
     analytics::MarketRegime regime
 ) {
-    if (metrics.liquidity_score < 30.0 || metrics.liquidity_score >= 56.0) {
+    if (metrics.liquidity_score < 28.0 || metrics.liquidity_score >= 56.0) {
         return false;
     }
-    if (metrics.volume_surge_ratio < 0.56 || metrics.volume_surge_ratio > 1.85) {
+    if (metrics.volume_surge_ratio < 0.52 || metrics.volume_surge_ratio > 1.85) {
         return false;
     }
     if (metrics.orderbook_snapshot.valid && metrics.orderbook_snapshot.spread_pct > 0.0038) {
@@ -245,7 +245,7 @@ bool isThinLiquidityAdaptiveOpportunity(
                 ema_fast >= ema_slow * 0.9990 &&
                 rsi >= 44.0 && rsi <= 68.0 &&
                 ret8 >= -0.0004 &&
-                ret20 >= 0.0006 &&
+                ret20 >= 0.0003 &&
                 metrics.order_book_imbalance > -0.08
             );
         case analytics::MarketRegime::RANGING:
@@ -461,7 +461,7 @@ bool isDowntrendLowFlowReboundOpportunity(
     if (metrics.liquidity_score < 18.0 || metrics.liquidity_score >= 52.0) {
         return false;
     }
-    if (metrics.volume_surge_ratio < 0.22 || metrics.volume_surge_ratio > 1.40) {
+    if (metrics.volume_surge_ratio < 0.18 || metrics.volume_surge_ratio > 1.40) {
         return false;
     }
     if (metrics.orderbook_snapshot.valid && metrics.orderbook_snapshot.spread_pct > 0.0032) {
@@ -470,14 +470,14 @@ bool isDowntrendLowFlowReboundOpportunity(
     if (metrics.order_book_imbalance < -0.10) {
         return false;
     }
-    if (metrics.buy_pressure < (metrics.sell_pressure * 0.90)) {
+    if (metrics.buy_pressure < (metrics.sell_pressure * 0.86)) {
         return false;
     }
 
     const double ret3 = rollingReturn(closes, 3);
     const double ret8 = rollingReturn(closes, 8);
     const double ret20 = rollingReturn(closes, 20);
-    if (ret3 < -0.0012 || ret8 < -0.0050 || ret20 < -0.0280) {
+    if (ret3 < -0.0012 || ret8 < -0.0060 || ret20 < -0.0280) {
         return false;
     }
 

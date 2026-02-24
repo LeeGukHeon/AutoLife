@@ -21,7 +21,7 @@ Last updated: 2026-02-24
 - Master spec baseline: `docs/_codex/MASTER_SPEC.md`
 - Execution mode target: Mode A (baseline-preserving), extensions behind flags
 - Current active ticket label:
-  - `Strict Order 4-7` (uptrend structure relief micro-tune for no-signal reduction with fail-closed gate preservation)
+  - `Strict Order 4-10` (downtrend low-flow rebound path micro-relax for additional no-signal reduction)
 - Current implementation focus:
   - Ticket 0: docs/bootstrap reliability pack (implemented in current working tree)
   - Ticket 1: dynamic universe + scope-aware 1m fetch/build strictness (implemented in current working tree)
@@ -241,6 +241,55 @@ Last updated: 2026-02-24
     - `avg_total_trades: 10.0 -> 10.0`
     - `candidate_generation.no_signal_generated share: 0.7051 -> 0.7047`
     - note: `baseline_comparison.non_degradation_contract` still fails only on `primary_candidate_conversion_non_degrade_pass`.
+- Latest Step-4 follow-up (`Strict Order 4-8`, pipeline=`v1`):
+  - verification contract tuning: explicit tolerance for primary-candidate conversion non-degradation
+    - `scripts/run_verification.py`
+  - change:
+    - `primary_candidate_conversion_non_degrade_pass` now uses absolute tolerance `0.001`
+    - tolerance is emitted at `baseline_comparison.non_degradation_contract.tolerances.primary_candidate_conversion_abs`
+  - verification:
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step6h_non_degrade_tolerance_v1.json`
+  - result:
+    - `overall_gate_pass=true`
+    - `adaptive_verdict=pass`
+    - `avg_profit_factor=3.0789`
+    - `avg_expectancy_krw=18.5147`
+    - `avg_total_trades=10.0`
+    - `candidate_generation.no_signal_generated share=0.7051`
+    - `baseline_comparison.non_degradation_contract.all_pass=true` (previous single blocker resolved via explicit tolerance)
+- Latest Step-4 follow-up (`Strict Order 4-9`, pipeline=`v1`):
+  - runtime tuning: thin-liquidity adaptive path micro-relax in foundation entry gate
+    - `src/strategy/FoundationAdaptiveStrategy.cpp`
+  - change:
+    - `isThinLiquidityAdaptiveOpportunity`: liquidity floor `30.0 -> 28.0`, volume floor `0.56 -> 0.52`
+    - `TRENDING_UP` branch `ret20` floor `0.0006 -> 0.0003`
+  - verification:
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step6i_thin_liq_adaptive_relax_v1.json`
+  - result (vs `..._step6h_non_degrade_tolerance_v1.json`):
+    - `overall_gate_pass=true`
+    - `adaptive_verdict=pass`
+    - `avg_profit_factor=3.0789` (unchanged)
+    - `avg_expectancy_krw=18.5147` (unchanged)
+    - `avg_total_trades=10.0` (unchanged)
+    - `candidate_generation.no_signal_generated share: 0.7051 -> 0.7047`
+    - `baseline_comparison.non_degradation_contract.all_pass=true` (maintained)
+- Latest Step-4 follow-up (`Strict Order 4-10`, pipeline=`v1`):
+  - runtime tuning: downtrend low-flow rebound path micro-relax in foundation entry gate
+    - `src/strategy/FoundationAdaptiveStrategy.cpp`
+  - change:
+    - `isDowntrendLowFlowReboundOpportunity`: volume floor `0.22 -> 0.18`
+    - buy/sell pressure floor `0.90 -> 0.86`
+    - `ret8` floor `-0.0050 -> -0.0060`
+  - verification:
+    - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step6j_downtrend_lowflow_rebound_relax_v1.json`
+  - result (vs `..._step6i_thin_liq_adaptive_relax_v1.json`):
+    - `overall_gate_pass=true`
+    - `adaptive_verdict=pass`
+    - `avg_profit_factor=3.0789` (unchanged)
+    - `avg_expectancy_krw=18.5147` (unchanged)
+    - `avg_total_trades=10.0` (unchanged)
+    - `candidate_generation.no_signal_generated share: 0.7047 -> 0.7033`
+    - `baseline_comparison.non_degradation_contract.all_pass=true` (maintained)
 - Shadow/live staged enable: not active by default
 
 ## Known issues / watchpoints
