@@ -1713,10 +1713,34 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
           - 해석:
             - self-loop는 단일 시간대가 아니라 다중 재진입 bucket에서 확대됨.
             - 단일 임계치 guard보다 trigger/cooldown 경계 계측이 우선.
-        - 다음 국소 단계(v11):
-          - self-loop 전후 `policy_decisions_backtest*.jsonl` 기준으로
-            rescue 진입 트리거/쿨다운 재활성 경계를 동일 캔들 단위로 추출하고,
-            그 경계만 최소 범위로 제어하는 후보를 설계.
+        - v11 계측(policy selection drift, 단일 슬라이스) 완료:
+          - 신규 스크립트:
+            - `scripts/analyze_policy_selection_drift.py`
+          - 단일 슬라이스 재실행(ETH `2026-02-17`):
+            - OFF:
+              - `build/Release/logs/backtest_eth_20260217_correctness_mapping_off_v11.json`
+              - `build/Release/logs/policy_decisions_backtest_eth_20260217_correctness_mapping_off_v11.jsonl`
+            - ON:
+              - `build/Release/logs/backtest_eth_20260217_correctness_mapping_on_v11.json`
+              - `build/Release/logs/policy_decisions_backtest_eth_20260217_correctness_mapping_on_v11.jsonl`
+          - drift 리포트:
+            - `build/Release/logs/correctness_runtime_mapping_policy_selection_drift_eth_20260217_v11.json`
+          - 핵심:
+            - selected decision count `6 -> 14` (`delta=+8`)
+            - 확장 그룹:
+              - `TRENDING_UP|Foundation Adaptive Strategy: 1 -> 9` (`delta=+8`)
+            - `TRENDING_UP|Probabilistic Primary Runtime`는 `1 -> 1` (변화 없음)
+            - 확장된 TRENDING_UP foundation selection 대역:
+              - `strength 0.430581~0.475509`
+              - `expected_value <= -0.000179`
+              - `policy_score 0.234999~0.435348`
+          - 해석:
+            - mapping ON 확장은 runtime selection 증가가 아니라
+              TRENDING_UP foundation selection widening에서 발생.
+        - 다음 국소 단계(v12):
+          - v10/v11 경계를 결합해
+            `TRENDING_UP foundation widening -> CORE_RESCUE self-loop` 전이를
+            최소 차단(또는 재진입 쿨다운)하는 후보를 동일 캔들 기준으로 설계.
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
    - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.

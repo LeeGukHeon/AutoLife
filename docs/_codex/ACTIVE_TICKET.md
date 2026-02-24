@@ -189,6 +189,27 @@ Last updated: 2026-02-24
     - interpretation:
       - self-loop 증가는 단일 초단기 구간이 아닌 다중 재진입 버킷에서 발생.
       - next step remains instrumentation-first (trigger/cooldown boundary) before guard patch retry.
+  - v11 instrumentation refresh (policy selection drift, single-slice replay):
+    - new script:
+      - `scripts/analyze_policy_selection_drift.py`
+    - replay artifacts (`ETH 2026-02-17`):
+      - `build/Release/logs/backtest_eth_20260217_correctness_mapping_off_v11.json`
+      - `build/Release/logs/backtest_eth_20260217_correctness_mapping_on_v11.json`
+      - `build/Release/logs/policy_decisions_backtest_eth_20260217_correctness_mapping_off_v11.jsonl`
+      - `build/Release/logs/policy_decisions_backtest_eth_20260217_correctness_mapping_on_v11.jsonl`
+      - drift summary:
+        - `build/Release/logs/correctness_runtime_mapping_policy_selection_drift_eth_20260217_v11.json`
+    - key deltas:
+      - selected decisions: `6 -> 14` (`delta=+8`)
+      - `TRENDING_UP|Foundation Adaptive Strategy`: `1 -> 9` (`delta=+8`)
+      - `TRENDING_UP|Probabilistic Primary Runtime`: `1 -> 1` (unchanged)
+      - added TRENDING_UP foundation selection band:
+        - `strength 0.430581~0.475509`
+        - `expected_value <= -0.000179`
+        - `policy_score 0.234999~0.435348`
+    - interpretation:
+      - mapping ON expansion is driven by TRENDING_UP foundation selection widening, not runtime-selection growth.
+      - this widening aligns with rescue self-loop expansion observed in v10.
 
 ## Current result snapshot
 - Baseline reference remains:

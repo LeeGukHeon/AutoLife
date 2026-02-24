@@ -144,6 +144,29 @@ Last updated: 2026-02-24
         - `reward_risk_ratio=1.982152`
     - interpretation:
       - self-loop가 단순 저품질 단일 구간이 아니라 다중 re-entry bucket(0~60m, 60~360m, 6~24h)에서 발생하므로 단일 threshold guard보다 trigger/cooldown 경계 계측이 우선.
+  - v11 policy-decision selection drift instrumentation landed (`ETH 2026-02-17` single-slice):
+    - new script:
+      - `scripts/analyze_policy_selection_drift.py`
+    - artifacts:
+      - backtest replay pair:
+        - `build/Release/logs/backtest_eth_20260217_correctness_mapping_off_v11.json`
+        - `build/Release/logs/backtest_eth_20260217_correctness_mapping_on_v11.json`
+      - policy jsonl pair:
+        - `build/Release/logs/policy_decisions_backtest_eth_20260217_correctness_mapping_off_v11.jsonl`
+        - `build/Release/logs/policy_decisions_backtest_eth_20260217_correctness_mapping_on_v11.jsonl`
+      - drift report:
+        - `build/Release/logs/correctness_runtime_mapping_policy_selection_drift_eth_20260217_v11.json`
+    - key deltas:
+      - `selected_count: 6 -> 14` (`delta=+8`)
+      - expansion group:
+        - `TRENDING_UP|Foundation Adaptive Strategy: 1 -> 9` (`delta=+8`)
+      - `TRENDING_UP|Probabilistic Primary Runtime` selection count unchanged (`1 -> 1`)
+      - added TRENDING_UP foundation selections are concentrated at:
+        - `strength 0.430581~0.475509`
+        - `expected_value <= -0.000179`
+        - `policy_score 0.234999~0.435348`
+    - interpretation:
+      - mapping ON에서 runtime selection 자체가 늘어난 것이 아니라 TRENDING_UP foundation selection이 확장되고, 이 확장이 rescue self-loop로 연결되는 신호가 확인됨.
   - live execution update 로그 수집 선행조건은 충족됨
     (`execution_updates_live.jsonl` 생성 확인).
   - live parity path hardening landed:
@@ -397,6 +420,7 @@ Last updated: 2026-02-24
   - `build/Release/logs/so4_15_target_cell_trade_profile_step8w.json`
   - `build/Release/logs/correctness_runtime_mapping_occupancy_drift_eth_0216_0219_fullslice_cfgaligned_v9.json`
   - `build/Release/logs/correctness_runtime_mapping_rescue_selfloop_context_eth_0216_0219_v10.json`
+  - `build/Release/logs/correctness_runtime_mapping_policy_selection_drift_eth_20260217_v11.json`
   - `build/Release/logs/strategyless_exit_audit_5set_20260224.json`
   - `build/Release/logs/execution_parity_report_strategyless_audit_20260224.json`
   - `build/Release/logs/execution_parity_report_strategyless_audit_strict_after_livepaper_patch_20260224.json`
