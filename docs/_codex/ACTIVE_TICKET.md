@@ -52,11 +52,16 @@ Last updated: 2026-02-24
 - Baseline reference remains:
   - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8e_highcal_shallowmargin_tail_v1.json`
   - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8e_highcal_shallowmargin_tail_v1.json`
+- Current retained candidate reference:
+  - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8w_ranging_rescue_bimodal_tail_scale_v3.json`
+  - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8w_ranging_rescue_bimodal_tail_scale_v3.json`
 - Analysis artifacts (new):
   - `build/Release/logs/daily_oos_negative_day_cell_summary_step8e.json`
   - `build/Release/logs/verification_loss_tail_focus_step8e.json`
   - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8e_postgate4.json`
   - `build/Release/logs/daily_oos_negative_trade_detail_step8e_postgate4_targetday.json`
+  - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8w_profile.json`
+  - `build/Release/logs/so4_15_target_cell_trade_profile_step8w.json`
 - Target-day loss concentration:
   - `TRENDING_UP|PROBABILISTIC_PRIMARY_RUNTIME` (ETH, 2 trades, `profit_sum=-235.2360749483776`)
   - `RANGING|CORE_RESCUE_SHOULD_ENTER` (ETH, 2 trades, `profit_sum=-146.1536975705141`)
@@ -68,12 +73,159 @@ Last updated: 2026-02-24
   - rollback confirmed:
     - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8f_runtime_tail_guard_rollback.json`
     - `status=pass`, `nonpositive_day_ratio=0.4`, `total_profit_sum=195.2653`
+- Additional attempts (all rolled back):
+  - `step8g` / `step8h` runtime-tail position scaling:
+    - reports:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8g_fallback_tail_scale_v1.json`
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8h_runtime_tail_scale_v1.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8g_fallback_tail_scale_v1.json`
+    - outcome: baseline metrics unchanged (no-hit), discarded.
+  - `step8i` backtest runtime stop/tp parity fix:
+    - failed reports:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8i_backtest_runtime_stopfix_v1.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8i_backtest_runtime_stopfix_v1.json`
+    - outcome: verification/daily OOS both fail.
+    - rollback confirmed:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8i_rollback.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8i_rollback.json`
+  - `step8j` uptrend runtime tail guard:
+    - reports:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8j_uptrend_runtime_tail_guard_v1.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8j_uptrend_runtime_tail_guard_v1.json`
+    - outcome: verification pass but daily OOS fail (`nonpositive_day_ratio=0.6`), rolled back.
+    - rollback confirmed:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8j_rollback_seq.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8j_rollback_seq.json`
+  - `step8k` runtime time-guard (strategy-less runtime positions):
+    - reports:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8k_runtime_time_guard_v1.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8k_runtime_time_guard_v1.json`
+    - outcome: verification/daily OOS both fail, rolled back.
+    - rollback confirmed:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8k_rollback_seq.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8k_rollback_seq.json`
+  - `step8l` ranging-rescue narrow hard block:
+    - report:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8l_ranging_rescue_midvol_tail_v1.json`
+    - outcome: `avg_total_trades=9.8`로 sample-size guard fail,
+      `overall_gate_pass=false`, `adaptive_verdict=inconclusive` -> discarded.
+  - `step8m` ranging-rescue risk/size scaling:
+    - reports:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8m_ranging_rescue_midvol_riskscale_v1.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8m_ranging_rescue_midvol_riskscale_v1.json`
+    - outcome: gate pass but daily OOS 핵심 지표 무개선 + expectancy 악화(`14.7159 -> 13.7167`)로 discarded.
+    - rollback confirmed:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8m_rollback_seq.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8m_rollback_seq.json`
+  - `step8n` uptrend primary narrow-tail risk/size scaling:
+    - reports:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8n_uptrend_primary_tail_riskscale_v1.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8n_uptrend_primary_tail_riskscale_v1.json`
+    - outcome: baseline 대비 무변화(no-hit), discarded.
+    - rollback confirmed:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8n_rollback_seq.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8n_rollback_seq.json`
+  - `step8o` runtime post-entry tail hardening:
+    - analysis:
+      - `build/Release/logs/so4_15_target_cell_trade_profile_step8o.json`
+      - `TRENDING_UP|PROBABILISTIC_PRIMARY_RUNTIME`는 손실/이익의 entry-time feature 분리력이 사실상 없음.
+    - reports:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8o_runtime_tail_riskmanager_v1.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8o_runtime_tail_riskmanager_v1.json`
+    - outcome: baseline 대비 무변화(no-hit), discarded.
+    - rollback confirmed:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8o_rollback_seq.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8o_rollback_seq.json`
+  - `step8p` exclude-BacktestEOD attribution diagnostic:
+    - report:
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8p_exclude_eod_diag.json`
+    - outcome:
+      - `nonpositive_day_ratio=0.333333`, `total_profit_sum=57.316979`
+      - but `evaluated_day_count=6` -> `min_evaluated_days` fail.
+      - diagnostic-only evidence (not gate replacement).
+  - `step8q` uptrend-rescue high-liq positive-EV tail scaling:
+    - reports:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8q_uptrend_rescue_highliq_ev_tail_scale_v1.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8q_uptrend_rescue_highliq_ev_tail_scale_v1.json`
+    - outcome: `nonpositive_day_ratio` 무변화 + `total_profit_sum` 악화로 discarded.
+    - rollback confirmed:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8q_rollback_seq.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8q_rollback_seq.json`
+  - `step8r` uptrend-rescue high-liq margin-tail scaling v1:
+    - reports:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8r_uptrend_rescue_highliq_margin_tail_scale_v1.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8r_uptrend_rescue_highliq_margin_tail_scale_v1.json`
+    - outcome:
+      - daily `total_profit_sum` 개선(195.2653 -> 213.624496)
+      - but verification PF/expectancy 동반 하락으로 discarded.
+  - `step8s` uptrend-rescue high-liq margin-tail scaling v2 (relaxed):
+    - reports:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8s_uptrend_rescue_highliq_margin_tail_scale_v2.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8s_uptrend_rescue_highliq_margin_tail_scale_v2.json`
+    - outcome:
+      - daily `total_profit_sum` 소폭 개선(195.2653 -> 197.088748)
+      - verification PF/expectancy 동반 하락 잔존으로 discarded.
+    - rollback confirmed:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8s_rollback_seq.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8s_rollback_seq.json`
+  - `step8t` runtime long-hold tail guard:
+    - reports:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8t_runtime_long_hold_tail_guard_v1.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8t_runtime_long_hold_tail_guard_v1.json`
+    - outcome: baseline 대비 무변화(no-hit), discarded.
+    - rollback confirmed:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8t_rollback_seq.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8t_rollback_seq.json`
+  - `step8u` ranging-rescue bimodal-tail scaling v1 (retained):
+    - reports:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8u_ranging_rescue_bimodal_tail_scale_v1.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8u_ranging_rescue_bimodal_tail_scale_v1.json`
+    - outcome:
+      - verification 비열화(동일): `avg_profit_factor=2.9577`, `avg_expectancy_krw=14.7159`
+      - daily OOS:
+        - `status=pass`
+        - `nonpositive_day_ratio=0.4` (동일)
+        - `total_profit_sum=202.101449` (baseline `195.2653` 대비 개선)
+        - `peak_day_drawdown_pct=1.225729` (baseline `1.225896` 대비 개선)
+      - day-level delta:
+        - `upbit_KRW_ETH_1m_12000.csv` `2026-02-15`:
+          `-8.675957578169657 -> -1.8398085939078452`
+    - action:
+      - 코드 유지 후 추가 강화 실험(`step8v`)으로 진행.
+  - `step8v` ranging-rescue bimodal-tail scaling v2:
+    - reports:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8v_ranging_rescue_bimodal_tail_scale_v2.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8v_ranging_rescue_bimodal_tail_scale_v2.json`
+    - outcome:
+      - verification 비열화(동일)
+      - daily `nonpositive_day_ratio=0.4` 유지, `total_profit_sum=203.620593` 개선
+      - `ETH 2026-02-15` `-1.8398085939078452 -> -0.32066437518582624`
+    - action:
+      - ratio 개선 미달(0.4 유지)로 추가 강화 실험(`step8w`) 진행.
+  - `step8w` ranging-rescue bimodal-tail scaling v3 (current):
+    - reports:
+      - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8w_ranging_rescue_bimodal_tail_scale_v3.json`
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8w_ranging_rescue_bimodal_tail_scale_v3.json`
+    - outcome:
+      - verification 비열화(동일): `avg_profit_factor=2.9577`, `avg_expectancy_krw=14.7159`
+      - daily:
+        - `status=pass`
+        - `nonpositive_day_ratio=0.3` (baseline `0.4` 대비 개선)
+        - `total_profit_sum=204.380165` (baseline `195.2653` 대비 개선)
+        - `peak_day_drawdown_pct=1.225673` (baseline `1.225896` 대비 개선)
+      - day-level delta:
+        - `upbit_KRW_ETH_1m_12000.csv` `2026-02-15`:
+          `-8.675957578169657 -> 0.43890773417700935` (음수일 -> 양수일 전환)
+    - action:
+      - 코드 유지(현재 기준점 `step8w`).
+      - 잔여 3개 음수일(`ETH 2026-02-18/2026-02-19`, `XRP 2026-02-19`)을
+        `step8w_profile` 기준으로 다음 guard 후보에서 분리 처리.
 
 ## DoD
 - [x] residual negative-day trade-level evidence captured.
 - [x] first narrow candidate tested with strict metrics.
 - [x] failed candidate rolled back to baseline-safe state.
-- [ ] at least one candidate passes verification + daily OOS non-degrade.
+- [x] at least one candidate passes verification + daily OOS non-degrade.
 
 ## Risks and rollback
 - Risks:

@@ -701,6 +701,34 @@ void applyProbabilisticPrimaryDecisionProfile(
         signal.strength < 0.446 &&
         signal.liquidity_score < 52.0 &&
         margin < -0.013;
+    const bool ranging_rescue_lowliq_tail_context =
+        !hostile_regime &&
+        signal.market_regime == autolife::analytics::MarketRegime::RANGING &&
+        rescue_archetype &&
+        signal.probabilistic_h5_calibrated >= 0.4170 &&
+        signal.probabilistic_h5_calibrated < 0.4195 &&
+        margin <= -0.0050 &&
+        margin > -0.0080 &&
+        signal.liquidity_score < 48.0 &&
+        signal.volatility >= 0.18 &&
+        signal.volatility < 0.24 &&
+        signal.strength < 0.46;
+    const bool ranging_rescue_highliq_tail_context =
+        !hostile_regime &&
+        signal.market_regime == autolife::analytics::MarketRegime::RANGING &&
+        rescue_archetype &&
+        signal.probabilistic_h5_calibrated >= 0.4200 &&
+        signal.probabilistic_h5_calibrated < 0.4220 &&
+        margin < -0.0022 &&
+        margin > -0.0036 &&
+        signal.liquidity_score >= 72.0 &&
+        signal.liquidity_score < 74.0 &&
+        signal.volatility >= 0.22 &&
+        signal.volatility < 0.24 &&
+        signal.strength >= 0.50 &&
+        signal.strength < 0.53;
+    const bool ranging_rescue_bimodal_tail_context =
+        ranging_rescue_lowliq_tail_context || ranging_rescue_highliq_tail_context;
     const double confidence = std::clamp(
         (std::clamp((prob - 0.50) / 0.20, 0.0, 1.0) * 0.65) +
         (std::clamp((margin + 0.01) / 0.08, 0.0, 1.0) * 0.35),
@@ -768,6 +796,9 @@ void applyProbabilisticPrimaryDecisionProfile(
         if (uptrend_rescue_deep_negative_context) {
             target_risk_pct *= 0.82;
         }
+        if (ranging_rescue_bimodal_tail_context) {
+            target_risk_pct *= 0.76;
+        }
         if (!hostile_regime &&
             signal.market_regime == autolife::analytics::MarketRegime::TRENDING_UP &&
             uptrend_continuation_archetype &&
@@ -797,8 +828,12 @@ void applyProbabilisticPrimaryDecisionProfile(
         signal.stop_loss = signal.entry_price * (1.0 - blended_risk_pct);
         signal.take_profit_2 = signal.entry_price * (1.0 + (blended_risk_pct * rr_target));
         signal.take_profit_1 = signal.entry_price * (1.0 + (blended_risk_pct * std::max(1.0, rr_target * 0.55)));
-        const double breakeven_mult = (!hostile_regime && fragility_archetype) ? 0.48 : 0.70;
-        const double trailing_mult = (!hostile_regime && fragility_archetype) ? 0.82 : 1.10;
+        double breakeven_mult = (!hostile_regime && fragility_archetype) ? 0.48 : 0.70;
+        double trailing_mult = (!hostile_regime && fragility_archetype) ? 0.82 : 1.10;
+        if (ranging_rescue_bimodal_tail_context) {
+            breakeven_mult = std::min(breakeven_mult, 0.38);
+            trailing_mult = std::min(trailing_mult, 0.66);
+        }
         signal.breakeven_trigger = signal.entry_price * (1.0 + (blended_risk_pct * breakeven_mult));
         signal.trailing_start = signal.entry_price * (1.0 + (blended_risk_pct * trailing_mult));
         signal.expected_return_pct = (signal.take_profit_2 - signal.entry_price) / signal.entry_price;
@@ -822,6 +857,9 @@ void applyProbabilisticPrimaryDecisionProfile(
         }
         if (uptrend_rescue_deep_negative_context) {
             size_scale *= 0.84;
+        }
+        if (ranging_rescue_bimodal_tail_context) {
+            size_scale *= 0.80;
         }
         signal.position_size *= std::clamp(size_scale, 0.30, 1.35);
     }

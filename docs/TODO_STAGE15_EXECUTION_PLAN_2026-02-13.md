@@ -783,13 +783,299 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
       - 복구 확인:
         - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8f_runtime_tail_guard_rollback.json`
         - `status=pass`, `nonpositive_day_ratio=0.4`, `total_profit_sum=195.2653`
+  - 폐기 실험(step8g/step8h runtime tail scale):
+    - 코드 시도:
+      - `PROBABILISTIC_PRIMARY_RUNTIME` 저품질 좁은 구간에서 포지션 스케일 축소(라이브/백테스트 동형)
+      - `step8g`: fallback 삽입 경로 전용 적용
+      - `step8h`: adjusted-signal 공통 경로로 확장 적용
+    - 결과:
+      - verification:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8g_fallback_tail_scale_v1.json`
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8h_runtime_tail_scale_v1.json`
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8g_fallback_tail_scale_v1.json`
+      - 공통: baseline 대비 측정치 무변화(no-hit)로 폐기
+  - 폐기 실험(step8i backtest runtime stop/tp parity fix):
+    - 코드 시도:
+      - 백테스트에서 strategy object가 없는 포지션에도 stop/tp 평가를 강제해 `BacktestEOD` tail을 축소
+      - runtime tail scale 후보와 결합 테스트
+    - 결과:
+      - verification:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8i_backtest_runtime_stopfix_v1.json`
+        - `overall_gate_pass=false`, `adaptive_verdict=fail`
+        - `avg_profit_factor=0.437`, `avg_expectancy_krw=-13.8017`
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8i_backtest_runtime_stopfix_v1.json`
+        - `status=fail`, `nonpositive_day_ratio=0.5`, `total_profit_sum=-189.176117`
+    - 조치:
+      - 실험 코드 전면 롤백.
+      - 복구 확인:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8i_rollback.json`
+          - `overall_gate_pass=true`, `adaptive_verdict=pass`
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8i_rollback.json`
+          - `status=pass`, `nonpositive_day_ratio=0.4`, `total_profit_sum=195.2653`
+  - 폐기 실험(step8j uptrend runtime tail guard):
+    - 코드 시도:
+      - `passesProbabilisticPrimaryMinimums`에
+        `TRENDING_UP|PROBABILISTIC_PRIMARY_RUNTIME` 저품질 narrow guard 추가
+        (`calibrated<0.421`, `margin<-0.003`, `liquidity<65`, `volatility>=0.14`)
+    - 결과:
+      - verification:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8j_uptrend_runtime_tail_guard_v1.json`
+        - `avg_profit_factor=2.9763`, `avg_expectancy_krw=15.3035`, `overall_gate_pass=true`
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8j_uptrend_runtime_tail_guard_v1.json`
+        - `status=fail`, `nonpositive_day_ratio=0.6`, `total_profit_sum=-271.050584`
+    - 조치:
+      - 실험 코드 롤백.
+      - 복구 확인(순차 재실행):
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8j_rollback_seq.json`
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8j_rollback_seq.json`
+  - 폐기 실험(step8k runtime time guard for strategy-less runtime positions):
+    - 코드 시도:
+      - `PROBABILISTIC_PRIMARY_RUNTIME` 약신호 포지션에
+        장시간 보유(`>=8h`) 시 강제청산 guard 추가(라이브/백테스트 동형)
+    - 결과:
+      - verification:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8k_runtime_time_guard_v1.json`
+        - `overall_gate_pass=false`, `adaptive_verdict=inconclusive`
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8k_runtime_time_guard_v1.json`
+        - `status=fail`, `nonpositive_day_ratio=0.5`, `total_profit_sum=-131.901965`
+    - 조치:
+      - 실험 코드 롤백.
+      - 복구 확인(순차 재실행):
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8k_rollback_seq.json`
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8k_rollback_seq.json`
+  - 폐기 실험(step8l ranging-rescue narrow hard block):
+    - 코드 시도:
+      - `RANGING|CORE_RESCUE`의 ETH 손실 2건 타깃 narrow hard block 추가
+        (코인 하드코딩 없이 레짐/아키타입/확률/마진/유동성/변동성 조건만 사용)
+    - 결과:
+      - verification:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8l_ranging_rescue_midvol_tail_v1.json`
+        - `avg_profit_factor=3.1316`, `avg_expectancy_krw=18.4306`
+        - `avg_total_trades=9.8`로 sample-size guard 실패
+        - `overall_gate_pass=false`, `adaptive_verdict=inconclusive`
+    - 조치:
+      - verification fail-closed로 즉시 폐기(코드 유지 안 함).
+  - 폐기 실험(step8m ranging-rescue risk/size scale):
+    - 코드 시도:
+      - step8l hard block 대신 동일 컨텍스트에서
+        `target_risk_pct`/`position_size`를 축소하는 non-blocking 완화안 적용
+        (라이브/백테스트 동형)
+    - 결과:
+      - verification:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8m_ranging_rescue_midvol_riskscale_v1.json`
+        - `overall_gate_pass=true`, `adaptive_verdict=pass`
+        - `avg_profit_factor=2.983`, `avg_expectancy_krw=13.7167`, `avg_total_trades=10.0`
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8m_ranging_rescue_midvol_riskscale_v1.json`
+        - `status=pass`이나 baseline 대비 핵심 지표 무개선
+          (`nonpositive_day_ratio=0.4`, `total_profit_sum=195.2653` 동일)
+    - 조치:
+      - 기대수익 악화(`14.7159 -> 13.7167`) + day-sliced 개선 부재로 폐기.
+      - 코드 롤백 후 순차 복구 확인:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8m_rollback_seq.json`
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8m_rollback_seq.json`
+  - 폐기 실험(step8n uptrend primary narrow tail risk/size):
+    - 코드 시도:
+      - `TRENDING_UP|PROBABILISTIC_PRIMARY_RUNTIME` 저마진/저유동 narrow 구간에서
+        진입 차단 없이 리스크/사이즈/브레이크이븐 타이밍만 완화하는 soft guard 추가
+        (라이브/백테스트 동형)
+    - 결과:
+      - verification:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8n_uptrend_primary_tail_riskscale_v1.json`
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8n_uptrend_primary_tail_riskscale_v1.json`
+      - baseline 대비 핵심 지표 무변화(no-hit)
+        (`avg_profit_factor=2.9577`, `avg_expectancy_krw=14.7159`,
+         `nonpositive_day_ratio=0.4`, `total_profit_sum=195.2653`)
+    - 조치:
+      - 실험 코드 롤백.
+      - 복구 확인(순차 재실행):
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8n_rollback_seq.json`
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8n_rollback_seq.json`
+  - 폐기 실험(step8o runtime post-entry tail hardening):
+    - 사전 분석:
+      - `build/Release/logs/so4_15_target_cell_trade_profile_step8o.json`
+      - 요약:
+        - `TRENDING_UP|PROBABILISTIC_PRIMARY_RUNTIME` 샘플 5건 중 손실 2건이
+          `BacktestEOD`로 집중.
+        - 해당 셀은 손실/이익의 entry-time 피처(`prob/margin/ev/liq/vol/strength`)가
+          사실상 동일해 entry hard guard 분리력이 없음.
+    - 코드 시도:
+      - `RiskManager::applyAdaptiveRiskControls/getAdaptivePartialExitRatio`에
+        uptrend primary runtime tail-context 한정 시간/트레일/TP 재조정 추가
+        (공통 RiskManager 경로로 라이브/백테스트 동형)
+    - 결과:
+      - verification:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8o_runtime_tail_riskmanager_v1.json`
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8o_runtime_tail_riskmanager_v1.json`
+      - baseline 대비 핵심 지표 무변화(no-hit)
+    - 조치:
+      - 실험 코드 롤백.
+      - 복구 확인(순차 재실행):
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8o_rollback_seq.json`
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8o_rollback_seq.json`
+  - 진단(step8p exclude-BacktestEOD attribution check):
+    - 실행:
+      - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8p_exclude_eod_diag.json`
+      - 옵션: `--exclude-backtest-eod-trades`
+    - 결과:
+      - `nonpositive_day_ratio=0.333333`, `total_profit_sum=57.316979`
+      - 그러나 `evaluated_day_count=6`으로 `min_evaluated_days(10)` fail
+      - 해석:
+        - EOD 제외 시 핵심 손실 셀은
+          `RANGING|CORE_RESCUE_SHOULD_ENTER`,
+          `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER` 중심으로 재정렬됨.
+        - 본 결과는 공식 Gate3 대체가 아닌 구조 진단용 근거로만 사용.
+  - 폐기 실험(step8q uptrend rescue high-liq positive-EV tail scale):
+    - 코드 시도:
+      - `TRENDING_UP|CORE_RESCUE`의
+        고유동성/양(+)EV/음수마진 narrow 컨텍스트에서
+        risk/size/breakeven·trailing을 축소하는 soft guard 추가
+        (라이브/백테스트 동형)
+    - 결과:
+      - verification:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8q_uptrend_rescue_highliq_ev_tail_scale_v1.json`
+        - baseline 대비 무변화(no-hit)
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8q_uptrend_rescue_highliq_ev_tail_scale_v1.json`
+        - `status=pass`이나 `nonpositive_day_ratio` 무변화(0.4),
+          `total_profit_sum` 악화(195.2653 -> 190.218804)
+    - 조치:
+      - 비열화/개선 기준 미달로 폐기 및 코드 롤백.
+      - 복구 확인(순차 재실행):
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8q_rollback_seq.json`
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8q_rollback_seq.json`
+  - 폐기 실험(step8r uptrend rescue high-liq margin-tail scale v1):
+    - 코드 시도:
+      - `TRENDING_UP|CORE_RESCUE`의 high-liq + deep-negative-margin 컨텍스트에
+        risk/size + breakeven/trailing 강화 soft guard 적용
+    - 결과:
+      - verification:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8r_uptrend_rescue_highliq_margin_tail_scale_v1.json`
+        - `avg_profit_factor: 2.9577 -> 2.9455`
+        - `avg_expectancy_krw: 14.7159 -> 14.503`
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8r_uptrend_rescue_highliq_margin_tail_scale_v1.json`
+        - `nonpositive_day_ratio` 무변화(0.4)
+        - `total_profit_sum` 개선(195.2653 -> 213.624496)
+    - 조치:
+      - verification PF/expectancy 동반 하락으로 유지 불가 판단(문서 목표 미충족), 폐기.
+  - 폐기 실험(step8s uptrend rescue high-liq margin-tail scale v2, 완화안):
+    - 코드 시도:
+      - step8r을 완화해 risk/size만 약하게 축소(브레이크이븐/트레일 강화 제거)
+    - 결과:
+      - verification:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8s_uptrend_rescue_highliq_margin_tail_scale_v2.json`
+        - `avg_profit_factor: 2.9577 -> 2.9504`
+        - `avg_expectancy_krw: 14.7159 -> 14.5881`
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8s_uptrend_rescue_highliq_margin_tail_scale_v2.json`
+        - `nonpositive_day_ratio` 무변화(0.4)
+        - `total_profit_sum` 소폭 개선(195.2653 -> 197.088748)
+    - 조치:
+      - verification PF/expectancy 동반 하락이 잔존하여 폐기 및 코드 롤백.
+      - 복구 확인(순차 재실행):
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8s_rollback_seq.json`
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8s_rollback_seq.json`
+  - 폐기 실험(step8t runtime long-hold tail guard):
+    - 코드 시도:
+      - `RiskManager` 공통 경로에
+        `PROBABILISTIC_PRIMARY_RUNTIME + TRENDING_UP + 저유동/저변동 + 음수마진`
+        장기보유(>=36h) 보호 stop 당김 가드 추가
+    - 결과:
+      - verification:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8t_runtime_long_hold_tail_guard_v1.json`
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8t_runtime_long_hold_tail_guard_v1.json`
+      - baseline 대비 무변화(no-hit)
+    - 조치:
+      - 실험 코드 롤백.
+      - 복구 확인(순차 재실행):
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8t_rollback_seq.json`
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8t_rollback_seq.json`
+  - 유지 후보(step8u ranging-rescue bimodal-tail scale v1):
+    - 코드 시도:
+      - `RANGING|CORE_RESCUE`의 손실 2건이
+        저유동 tail + 고유동 tail로 분리되는 bimodal 구조를 반영해
+        공통 컨텍스트(`ranging_rescue_bimodal_tail_context`)를 추가.
+      - 해당 컨텍스트에서 `risk/size` 축소 + `breakeven/trailing` 조기화
+        (라이브/백테스트 동형).
+    - 결과:
+      - verification:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8u_ranging_rescue_bimodal_tail_scale_v1.json`
+        - baseline 대비 비열화(동일):
+          `avg_profit_factor=2.9577`, `avg_expectancy_krw=14.7159`,
+          `avg_total_trades=10.2`, `overall_gate_pass=true`
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8u_ranging_rescue_bimodal_tail_scale_v1.json`
+        - `status=pass`, `nonpositive_day_ratio=0.4`(동일)
+        - `total_profit_sum` 개선(195.2653 -> 202.101449)
+        - `peak_day_drawdown_pct` 소폭 개선(1.225896 -> 1.225729)
+      - 일자 영향:
+        - `ETH 2026-02-15` 손익 개선: `-8.675957578169657 -> -1.8398085939078452`
+        - aggregate loss cell 개선:
+          `RANGING|CORE_RESCUE_SHOULD_ENTER` `-39.855931 -> -33.019782`
+    - 조치:
+      - 비열화 + daily 개선 확인으로 코드 유지(임시 기준점 상향).
+      - 다음 후보는 `nonpositive_day_ratio` 0.4 -> 0.3 전환을 목표로
+        `ETH 2026-02-15`의 near-zero 음수일 추가 완화를 우선 검증.
+  - 중간 실험(step8v ranging-rescue bimodal-tail scale v2):
+    - 코드 시도:
+      - step8u 컨텍스트를 동일하게 유지한 채
+        risk/size와 BE/trailing 완화 강도를 소폭 추가.
+    - 결과:
+      - verification:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8v_ranging_rescue_bimodal_tail_scale_v2.json`
+        - baseline 대비 비열화(동일)
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8v_ranging_rescue_bimodal_tail_scale_v2.json`
+        - `nonpositive_day_ratio=0.4` (동일)
+        - `total_profit_sum=203.620593` (추가 개선)
+        - `ETH 2026-02-15`: `-1.8398085939078452 -> -0.32066437518582624`
+    - 조치:
+      - 목표 ratio 전환(0.3) 미달로 추가 강화 후보(step8w)로 진행.
+  - 채택 실험(step8w ranging-rescue bimodal-tail scale v3):
+    - 코드 시도:
+      - step8v를 한 단계 추가 보수화(동일 컨텍스트, 동형 적용).
+    - 결과:
+      - verification:
+        - `build/Release/logs/verification_report_global_full_5set_refresh_20260224_step8w_ranging_rescue_bimodal_tail_scale_v3.json`
+        - baseline 대비 비열화(동일):
+          `avg_profit_factor=2.9577`, `avg_expectancy_krw=14.7159`,
+          `avg_total_trades=10.2`, `overall_gate_pass=true`
+      - daily OOS:
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8w_ranging_rescue_bimodal_tail_scale_v3.json`
+        - `status=pass`
+        - `nonpositive_day_ratio` 개선(`0.4 -> 0.3`)
+        - `total_profit_sum` 개선(`195.2653 -> 204.380165`)
+        - `peak_day_drawdown_pct` 개선(`1.225896 -> 1.225673`)
+      - 일자 영향:
+        - `ETH 2026-02-15` 전환:
+          `-8.675957578169657 -> 0.43890773417700935`
+      - aggregate loss cell:
+        - `RANGING|CORE_RESCUE_SHOULD_ENTER`:
+          `-39.855931 -> -30.741066`
+    - 조치:
+      - 문서 목표(비열화 + ratio 개선) 충족으로 코드 유지.
+      - 잔여 병목 재분석 아티팩트 생성:
+        - `build/Release/logs/daily_oos_stability_report_3m_7d_20260224_step8w_profile.json`
+        - `build/Release/logs/so4_15_target_cell_trade_profile_step8w.json`
+      - 잔여 병목은 `TRENDING_UP|PROBABILISTIC_PRIMARY_RUNTIME`
+        (`ETH 2026-02-18/2026-02-19`)와
+        `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER` (`XRP 2026-02-19`)로 축소.
 
 ## Next (Strict Order)
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
    - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.
 1. 표본 유지 + 품질 보강(Strict Order 4):
-   - 현재 `avg_total_trades=10.2` 방어 상태에서 잔여 ETH/XRP 음수일 완화.
+   - 현재 `avg_total_trades=10.2` 방어 상태에서
+     잔여 음수일 3건(`ETH 2026-02-18/2026-02-19`, `XRP 2026-02-19`) 완화.
 2. 라벨/학습 구조 고도화:
    - optional triple-barrier 활성화 실험(기존 라벨과 병행)
    - `P(win)` + `E[pnl]` 2-head 학습 파이프라인 추가
