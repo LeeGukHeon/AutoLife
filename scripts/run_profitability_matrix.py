@@ -144,27 +144,9 @@ def run_profile_backtests(
         win_rate_pct = round(float(result.get("win_rate", 0.0)) * 100.0, 4)
         rejection_counts = normalize_reason_counts(result.get("entry_rejection_reason_counts", {}))
         entry_funnel = result.get("entry_funnel") if isinstance(result.get("entry_funnel"), dict) else {}
-        pre_cat_feature_snapshot = (
-            result.get("pre_cat_feature_snapshot")
-            if isinstance(result.get("pre_cat_feature_snapshot"), dict)
-            else {}
-        )
-
-        def pre_cat_branch(name: str) -> Dict[str, Any]:
-            branch = pre_cat_feature_snapshot.get(name)
-            return branch if isinstance(branch, dict) else {}
-
-        observed_branch = pre_cat_branch("observed")
-        softened_contextual_branch = pre_cat_branch("softened_contextual")
-        softened_override_branch = pre_cat_branch("softened_override")
-        blocked_severe_sync_branch = pre_cat_branch("blocked_severe_sync")
-        blocked_no_soft_path_branch = pre_cat_branch("blocked_no_soft_path")
         risk_gate_breakdown = {
             "blocked_risk_gate_total": int(entry_funnel.get("blocked_risk_gate", 0) or 0),
             "blocked_risk_gate_strategy_ev": int(entry_funnel.get("blocked_risk_gate_strategy_ev", 0) or 0),
-            "blocked_risk_gate_strategy_ev_pre_catastrophic": int(
-                entry_funnel.get("blocked_risk_gate_strategy_ev_pre_catastrophic", 0) or 0
-            ),
             "blocked_risk_gate_strategy_ev_severe_threshold": int(
                 entry_funnel.get("blocked_risk_gate_strategy_ev_severe_threshold", 0) or 0
             ),
@@ -311,73 +293,6 @@ def run_profile_backtests(
                 entry_funnel.get("two_head_aggregation_blocked", 0) or 0
             ),
         }
-        observed_samples = int(observed_branch.get("samples", 0) or 0)
-        blocked_no_soft_path_samples = int(blocked_no_soft_path_branch.get("samples", 0) or 0)
-        blocked_no_soft_path_share = (
-            float(blocked_no_soft_path_samples) / float(observed_samples)
-            if observed_samples > 0
-            else 0.0
-        )
-        pre_cat_feature_snapshot_diagnostics = {
-            "observed_samples": observed_samples,
-            "softened_contextual_samples": int(softened_contextual_branch.get("samples", 0) or 0),
-            "softened_override_samples": int(softened_override_branch.get("samples", 0) or 0),
-            "blocked_severe_sync_samples": int(blocked_severe_sync_branch.get("samples", 0) or 0),
-            "blocked_no_soft_path_samples": blocked_no_soft_path_samples,
-            "blocked_no_soft_path_share": round(blocked_no_soft_path_share, 6),
-            "blocked_no_soft_avg_signal_strength": round(
-                float(blocked_no_soft_path_branch.get("avg_signal_strength", 0.0) or 0.0),
-                6,
-            ),
-            "blocked_no_soft_avg_signal_expected_value": round(
-                float(blocked_no_soft_path_branch.get("avg_signal_expected_value", 0.0) or 0.0),
-                6,
-            ),
-            "blocked_no_soft_avg_signal_liquidity": round(
-                float(blocked_no_soft_path_branch.get("avg_signal_liquidity", 0.0) or 0.0),
-                6,
-            ),
-            "blocked_no_soft_avg_signal_reward_risk": round(
-                float(blocked_no_soft_path_branch.get("avg_signal_reward_risk", 0.0) or 0.0),
-                6,
-            ),
-            "blocked_no_soft_avg_history_expectancy_krw": round(
-                float(blocked_no_soft_path_branch.get("avg_history_expectancy_krw", 0.0) or 0.0),
-                6,
-            ),
-            "blocked_no_soft_avg_history_profit_factor": round(
-                float(blocked_no_soft_path_branch.get("avg_history_profit_factor", 0.0) or 0.0),
-                6,
-            ),
-            "blocked_no_soft_avg_full_history_pressure": round(
-                float(blocked_no_soft_path_branch.get("avg_full_history_pressure", 0.0) or 0.0),
-                6,
-            ),
-            "softened_override_avg_signal_strength": round(
-                float(softened_override_branch.get("avg_signal_strength", 0.0) or 0.0),
-                6,
-            ),
-            "softened_override_avg_signal_expected_value": round(
-                float(softened_override_branch.get("avg_signal_expected_value", 0.0) or 0.0),
-                6,
-            ),
-            "softened_override_avg_history_profit_factor": round(
-                float(softened_override_branch.get("avg_history_profit_factor", 0.0) or 0.0),
-                6,
-            ),
-            "softened_contextual_avg_signal_strength": round(
-                float(softened_contextual_branch.get("avg_signal_strength", 0.0) or 0.0),
-                6,
-            ),
-            "softened_contextual_avg_signal_expected_value": round(
-                float(softened_contextual_branch.get("avg_signal_expected_value", 0.0) or 0.0),
-                6,
-            ),
-            "softened_contextual_avg_history_profit_factor": round(
-                float(softened_contextual_branch.get("avg_history_profit_factor", 0.0) or 0.0),
-                6,
-            ),
-        }
 
         return {
             "profile_id": str(profile["profile_id"]),
@@ -399,12 +314,6 @@ def run_profile_backtests(
             ),
             "entry_risk_gate_breakdown_json": json.dumps(
                 risk_gate_breakdown, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-            ),
-            "pre_cat_feature_snapshot_diagnostics_json": json.dumps(
-                pre_cat_feature_snapshot_diagnostics,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
             ),
             "gate_trade_eligible": (
                 total_trades >= min_trades_per_run_for_gate
