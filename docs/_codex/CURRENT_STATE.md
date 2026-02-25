@@ -15,6 +15,10 @@ Last updated: 2026-02-25
 - Small code cleanup applied during audit:
   - removed unused locals in `src/runtime/LiveTradingRuntime.cpp`
   - removed unused local in `src/strategy/FoundationRiskPipeline.cpp`
+- Cleanup wave C applied (policy alignment):
+  - shared hostility score computation between live/backtest
+  - removed backtest-only manager hostility/small-seed additive prefilter path
+  - removed non-policy hardcoded relief branches in foundation manager filter
 - Post-cleanup gate status:
   - `CIGate PASSED`
   - `ExecutionParity PASSED`

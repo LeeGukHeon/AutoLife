@@ -213,6 +213,7 @@ using autolife::common::signal_policy::computeStrategyHistoryWinProbPrior;
 using autolife::common::signal_policy::computeCalibratedExpectedEdgePct;
 using autolife::common::execution_guard::computeRealtimeEntryVetoThresholds;
 using autolife::common::execution_guard::computeDynamicSlippageThresholds;
+using autolife::common::execution_guard::computeMarketHostilityScore;
 using autolife::common::strategy_edge::StrategyEdgeStats;
 using autolife::common::strategy_edge::buildStrategyEdgeStats;
 using autolife::common::strategy_edge::makeStrategyRegimeKey;
@@ -2312,40 +2313,12 @@ void BacktestEngine::processCandle(const Candle& candle) {
         const bool core_policy_enabled = core_bridge_enabled && engine_config_.enable_core_policy_plane;
         const bool core_risk_enabled = core_bridge_enabled && engine_config_.enable_core_risk_plane;
         const double hostility_alpha = std::clamp(engine_config_.hostility_ewma_alpha, 0.01, 0.99);
-        const double hostile_threshold = std::clamp(engine_config_.hostility_hostile_threshold, 0.0, 1.0);
-        if (small_seed_mode) {
-            filter_threshold = std::clamp(filter_threshold + 0.08, 0.35, 0.90);
-        }
 
-        double hostility_now = 0.0;
-        switch (regime.regime) {
-            case analytics::MarketRegime::HIGH_VOLATILITY:
-                hostility_now += 0.72;
-                break;
-            case analytics::MarketRegime::TRENDING_DOWN:
-                hostility_now += 0.62;
-                break;
-            case analytics::MarketRegime::RANGING:
-                hostility_now += 0.34;
-                break;
-            case analytics::MarketRegime::TRENDING_UP:
-                hostility_now += 0.12;
-                break;
-            default:
-                hostility_now += 0.28;
-                break;
-        }
-        if (metrics.volatility > 0.0) {
-            hostility_now += std::clamp((metrics.volatility - 1.8) / 6.0, 0.0, 0.28);
-        }
-        if (metrics.liquidity_score > 0.0) {
-            hostility_now += std::clamp((55.0 - metrics.liquidity_score) / 90.0, 0.0, 0.20);
-        }
-        if (metrics.orderbook_snapshot.valid) {
-            const double spread_pct = metrics.orderbook_snapshot.spread_pct * 100.0;
-            hostility_now += std::clamp((spread_pct - 0.18) / 0.40, 0.0, 0.18);
-        }
-        hostility_now = std::clamp(hostility_now, 0.0, 1.0);
+        const double hostility_now = computeMarketHostilityScore(
+            engine_config_,
+            metrics,
+            regime.regime
+        );
         if (market_hostility_ewma_ <= 1e-9) {
             market_hostility_ewma_ = hostility_now;
         } else {
@@ -2355,79 +2328,23 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 1.0
             );
         }
-        const double effective_hostility = std::max(hostility_now, market_hostility_ewma_);
-        const bool hostile_market = effective_hostility >= hostile_threshold;
-        
+
         if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
-            filter_threshold = std::max(
-                filter_threshold,
-                manager_pick(
-                    manager_policy.base_min_strength_high_volatility,
-                    manager_defaults.base_min_strength_high_volatility
-                )
+            filter_threshold = manager_pick(
+                manager_policy.base_min_strength_high_volatility,
+                manager_defaults.base_min_strength_high_volatility
             );
         } else if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
-            filter_threshold = std::max(
-                filter_threshold,
-                manager_pick(
-                    manager_policy.base_min_strength_trending_down,
-                    manager_defaults.base_min_strength_trending_down
-                )
+            filter_threshold = manager_pick(
+                manager_policy.base_min_strength_trending_down,
+                manager_defaults.base_min_strength_trending_down
             );
         } else if (regime.regime == analytics::MarketRegime::RANGING) {
-            filter_threshold = std::max(
-                filter_threshold,
-                manager_pick(
-                    manager_policy.base_min_strength_ranging,
-                    manager_defaults.base_min_strength_ranging
-                )
+            filter_threshold = manager_pick(
+                manager_policy.base_min_strength_ranging,
+                manager_defaults.base_min_strength_ranging
             );
         }
-
-        if (hostile_market) {
-            const double hostile_strength_scale =
-                manager_pick(manager_policy.hostile_strength_add_scale, manager_defaults.hostile_strength_add_scale);
-            const double hostile_strength_cap = std::max(
-                0.0,
-                manager_pick(manager_policy.hostile_strength_add_cap, manager_defaults.hostile_strength_add_cap)
-            );
-            const double hostile_ev_scale =
-                manager_pick(manager_policy.hostile_ev_add_scale, manager_defaults.hostile_ev_add_scale);
-            const double hostile_ev_cap = std::max(
-                0.0,
-                manager_pick(manager_policy.hostile_ev_add_cap, manager_defaults.hostile_ev_add_cap)
-            );
-            filter_threshold += std::clamp(
-                (effective_hostility - hostile_threshold) * hostile_strength_scale,
-                0.0,
-                hostile_strength_cap
-            );
-            min_expected_value += std::clamp(
-                (effective_hostility - hostile_threshold) * hostile_ev_scale,
-                0.0,
-                hostile_ev_cap
-            );
-        }
-        const double min_strength_floor = manager_pick(manager_policy.min_strength_floor, manager_defaults.min_strength_floor);
-        const double min_strength_cap = manager_pick(manager_policy.min_strength_cap, manager_defaults.min_strength_cap);
-        filter_threshold = std::clamp(
-            filter_threshold,
-            std::min(min_strength_floor, min_strength_cap),
-            std::max(min_strength_floor, min_strength_cap)
-        );
-        const double min_expected_floor = manager_pick(
-            manager_policy.min_expected_value_floor,
-            manager_defaults.min_expected_value_floor
-        );
-        const double min_expected_cap = manager_pick(
-            manager_policy.min_expected_value_cap,
-            manager_defaults.min_expected_value_cap
-        );
-        min_expected_value = std::clamp(
-            min_expected_value,
-            std::min(min_expected_floor, min_expected_cap),
-            std::max(min_expected_floor, min_expected_cap)
-        );
 
         double primary_manager_min_strength = filter_threshold;
         double primary_manager_min_expected_value = min_expected_value;

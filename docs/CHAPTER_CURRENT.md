@@ -359,7 +359,6 @@ Title: `Probabilistic Hybrid Foundation`
   - `probabilistic_runtime_scan_prefilter_enabled=true`
   - `probabilistic_runtime_scan_prefilter_margin=-0.10`
   - `probabilistic_runtime_strength_blend=0.45`
-  - `probabilistic_runtime_position_scale_weight=0.35`
 - 회귀 결과(6 datasets):
   - 리포트: `build/Release/logs/verification_report_prob_primary_refactor_final_20260220.json`
   - `avg_profit_factor=0.3941`

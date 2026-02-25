@@ -76,6 +76,7 @@ using autolife::common::signal_policy::computeCalibratedExpectedEdgePct;
 using autolife::common::execution_guard::computeLiveScanPrefilterThresholds;
 using autolife::common::execution_guard::computeRealtimeEntryVetoThresholds;
 using autolife::common::execution_guard::computeDynamicSlippageThresholds;
+using autolife::common::execution_guard::computeMarketHostilityScore;
 using autolife::common::runtime_diag::classifySignalRejectionGroup;
 
 std::filesystem::path resolveLiveExecutionArtifactPath() {
@@ -2901,6 +2902,8 @@ void TradingEngine::executeSignals() {
     analytics::MarketRegime dominant_regime = analytics::MarketRegime::UNKNOWN;
     std::map<analytics::MarketRegime, int> regime_counts;
     int analyzed_regimes = 0;
+    double hostility_score_sum = 0.0;
+    int hostility_samples = 0;
     {
         for (const auto& coin : scanned_markets_) {
             if (coin.candles.empty()) {
@@ -2909,6 +2912,8 @@ void TradingEngine::executeSignals() {
             auto r = regime_detector_->analyzeRegime(coin.candles);
             regime_counts[r.regime]++;
             analyzed_regimes++;
+            hostility_score_sum += computeMarketHostilityScore(config_, coin, r.regime);
+            hostility_samples++;
         }
         int best_count = -1;
         for (const auto& [r, count] : regime_counts) {
@@ -2934,16 +2939,20 @@ void TradingEngine::executeSignals() {
     const double down_ratio = regime_ratio(analytics::MarketRegime::TRENDING_DOWN);
     const double ranging_ratio = regime_ratio(analytics::MarketRegime::RANGING);
     const double up_ratio = regime_ratio(analytics::MarketRegime::TRENDING_UP);
-    const double market_hostility_score = std::clamp(
-        (high_vol_ratio * 1.00) +
-        (down_ratio * 0.85) +
-        (ranging_ratio * 0.30) +
-        ((1.0 - up_ratio) * 0.10),
-        0.0,
-        1.0
-    );
+    const double market_hostility_score = (hostility_samples > 0)
+        ? std::clamp(
+              hostility_score_sum / static_cast<double>(hostility_samples),
+              0.0,
+              1.0
+          )
+        : 0.0;
     const double hostility_alpha = std::clamp(config_.hostility_ewma_alpha, 0.01, 0.99);
     const double hostile_threshold = std::clamp(config_.hostility_hostile_threshold, 0.0, 1.0);
+    const double buy_limit_tighten_threshold = std::clamp(
+        hostile_threshold + std::clamp(config_.hostility_scan_buy_limit_hostile_add, 0.0, 1.0),
+        hostile_threshold,
+        1.0
+    );
 
     if (market_hostility_ewma_ <= 1e-9) {
         market_hostility_ewma_ = market_hostility_score;
@@ -2956,7 +2965,7 @@ void TradingEngine::executeSignals() {
     }
     const double effective_hostility = std::max(market_hostility_score, market_hostility_ewma_);
 
-    if (!small_seed_mode && effective_hostility >= (hostile_threshold + 0.13)) {
+    if (!small_seed_mode && effective_hostility >= buy_limit_tighten_threshold) {
         per_scan_buy_limit = 1;
     }
 

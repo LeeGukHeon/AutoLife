@@ -34,8 +34,6 @@ FilterDecision evaluateFilter(const FilterInput& input) {
     out.required_expected_value = input.min_expected_value;
     out.reward_risk_ratio = rewardRiskRatio(signal);
     const bool probabilistic_primary_signal = signal.probabilistic_runtime_applied;
-    const bool range_pullback_archetype =
-        signal.entry_archetype.find("FOUNDATION_RANGE_PULLBACK") != std::string::npos;
     const double probabilistic_confidence = probabilistic_primary_signal
         ? std::clamp(
               (std::clamp((signal.probabilistic_h5_margin + 0.02) / 0.12, 0.0, 1.0) * 0.60) +
@@ -128,24 +126,6 @@ FilterDecision evaluateFilter(const FilterInput& input) {
             ) *
             probabilistic_confidence;
     }
-    if (probabilistic_primary_signal && !input.hostile_regime && range_pullback_archetype) {
-        const double range_strength_floor = std::clamp(
-            0.26 - (0.07 * probabilistic_confidence),
-            0.18,
-            0.26
-        );
-        const double range_ev_floor = std::clamp(
-            -0.00008 + ((1.0 - probabilistic_confidence) * 0.00014),
-            -0.00008,
-            0.00008
-        );
-        out.required_strength = std::max(out.required_strength, range_strength_floor);
-        out.required_expected_value = std::max(out.required_expected_value, range_ev_floor);
-        if (signal.probabilistic_h5_calibrated < 0.54 || signal.probabilistic_h5_margin < 0.008) {
-            out.required_strength = std::max(out.required_strength, 0.30);
-            out.required_expected_value = std::max(out.required_expected_value, 0.00008);
-        }
-    }
 
     bool history_guard_active = false;
     int effective_history_sample = std::max(1, input.min_history_sample);
@@ -183,38 +163,38 @@ FilterDecision evaluateFilter(const FilterInput& input) {
                 // In probabilistic-primary mode, early/mild history drag should not fully
                 // shut down candidate supply.
             } else {
-            history_guard_active = true;
-            const double history_guard_scale = probabilistic_primary_signal
-                ? std::clamp(
-                      manager_pick(manager_policy.history_guard_scale_base, 0.45) -
-                          (manager_pick(
-                               manager_policy.history_guard_scale_confidence_scale,
-                               0.35
-                           ) *
-                           probabilistic_confidence),
-                      input.hostile_regime
-                          ? manager_pick(manager_policy.history_guard_scale_min_hostile, 0.18)
-                          : manager_pick(manager_policy.history_guard_scale_min_calm, 0.10),
-                      input.hostile_regime
-                          ? manager_pick(manager_policy.history_guard_scale_max_hostile, 0.60)
-                          : manager_pick(manager_policy.history_guard_scale_max_calm, 0.45)
-                  )
-                : 1.0;
-            const double strength_bump = probabilistic_primary_signal
-                ? manager_pick(manager_policy.history_strength_bump_prob, 0.012)
-                : manager_pick(manager_policy.history_strength_bump_non_prob, 0.05);
-            const double edge_bump_core = probabilistic_primary_signal
-                ? manager_pick(manager_policy.history_edge_bump_core_prob, 0.00002)
-                : manager_pick(manager_policy.history_edge_bump_core_non_prob, 0.00005);
-            const double edge_bump_other = probabilistic_primary_signal
-                ? manager_pick(manager_policy.history_edge_bump_other_prob, 0.00003)
-                : manager_pick(manager_policy.history_edge_bump_other_non_prob, 0.00010);
-            out.required_strength = std::min(
-                required_strength_cap,
-                out.required_strength + (strength_bump * history_guard_scale)
-            );
-            out.required_expected_value +=
-                (input.core_signal_ownership ? edge_bump_core : edge_bump_other) * history_guard_scale;
+                history_guard_active = true;
+                const double history_guard_scale = probabilistic_primary_signal
+                    ? std::clamp(
+                          manager_pick(manager_policy.history_guard_scale_base, 0.45) -
+                              (manager_pick(
+                                   manager_policy.history_guard_scale_confidence_scale,
+                                   0.35
+                               ) *
+                               probabilistic_confidence),
+                          input.hostile_regime
+                              ? manager_pick(manager_policy.history_guard_scale_min_hostile, 0.18)
+                              : manager_pick(manager_policy.history_guard_scale_min_calm, 0.10),
+                          input.hostile_regime
+                              ? manager_pick(manager_policy.history_guard_scale_max_hostile, 0.60)
+                              : manager_pick(manager_policy.history_guard_scale_max_calm, 0.45)
+                      )
+                    : 1.0;
+                const double strength_bump = probabilistic_primary_signal
+                    ? manager_pick(manager_policy.history_strength_bump_prob, 0.012)
+                    : manager_pick(manager_policy.history_strength_bump_non_prob, 0.05);
+                const double edge_bump_core = probabilistic_primary_signal
+                    ? manager_pick(manager_policy.history_edge_bump_core_prob, 0.00002)
+                    : manager_pick(manager_policy.history_edge_bump_core_non_prob, 0.00005);
+                const double edge_bump_other = probabilistic_primary_signal
+                    ? manager_pick(manager_policy.history_edge_bump_other_prob, 0.00003)
+                    : manager_pick(manager_policy.history_edge_bump_other_non_prob, 0.00010);
+                out.required_strength = std::min(
+                    required_strength_cap,
+                    out.required_strength + (strength_bump * history_guard_scale)
+                );
+                out.required_expected_value +=
+                    (input.core_signal_ownership ? edge_bump_core : edge_bump_other) * history_guard_scale;
             }
         }
     }
@@ -253,62 +233,6 @@ FilterDecision evaluateFilter(const FilterInput& input) {
                      : manager_pick(manager_policy.rr_guard_expected_value_add_other, 0.00006)) *
                 rr_guard_scale;
         }
-    }
-
-    const bool low_vol_low_liq_context =
-        !input.hostile_regime &&
-        signal.liquidity_score >= 22.0 &&
-        signal.liquidity_score <= 60.0 &&
-        signal.volatility > 0.0 &&
-        signal.volatility <= 2.8;
-    const bool probabilistic_supply_relief =
-        probabilistic_primary_signal &&
-        !input.hostile_regime &&
-        signal.probabilistic_h5_calibrated >= 0.54 &&
-        signal.probabilistic_h5_margin >= -0.01 &&
-        signal.liquidity_score >= 28.0;
-    if ((low_vol_low_liq_context && probabilistic_primary_signal) || probabilistic_supply_relief) {
-        const double relief_scale = probabilistic_supply_relief
-            ? std::clamp(0.55 + (0.45 * probabilistic_confidence), 0.55, 1.0)
-            : 0.70;
-        out.required_strength = std::max(0.28, out.required_strength - (0.05 * relief_scale));
-        out.required_expected_value -= (input.core_signal_ownership ? 0.00010 : 0.00007) * relief_scale;
-    }
-
-    const bool high_quality_relief =
-        !input.hostile_regime &&
-        signal.strength >= 0.72 &&
-        signal.expected_value >= 0.00060 &&
-        out.reward_risk_ratio >= 1.20;
-    const bool probabilistic_quality_relief =
-        probabilistic_primary_signal &&
-        !input.hostile_regime &&
-        signal.probabilistic_h5_margin >= 0.01 &&
-        signal.probabilistic_h5_calibrated >= 0.58 &&
-        signal.liquidity_score >= 54.0;
-    if (high_quality_relief || probabilistic_quality_relief) {
-        out.required_strength = std::max(0.40, out.required_strength - 0.03);
-        out.required_expected_value -= input.core_signal_ownership ? 0.00004 : 0.00003;
-    }
-
-    if (probabilistic_primary_signal) {
-        const bool calm_context =
-            !input.hostile_regime &&
-            signal.volatility > 0.0 &&
-            signal.volatility <= 3.2 &&
-            signal.liquidity_score >= 22.0;
-        const double strength_cap = input.hostile_regime
-            ? std::clamp(0.50 - (0.08 * probabilistic_confidence), 0.40, 0.50)
-            : std::clamp(0.42 - (0.14 * probabilistic_confidence), 0.26, 0.42);
-        double ev_cap = input.hostile_regime
-            ? (0.00010 - (0.00008 * probabilistic_confidence))
-            : (-0.00005 - (0.00028 * probabilistic_confidence));
-        if (calm_context) {
-            ev_cap -= 0.00010;
-        }
-        ev_cap = std::clamp(ev_cap, -0.00055, 0.00018);
-        out.required_strength = std::min(out.required_strength, strength_cap);
-        out.required_expected_value = std::min(out.required_expected_value, ev_cap);
     }
 
     out.base_required_expected_value = out.required_expected_value;

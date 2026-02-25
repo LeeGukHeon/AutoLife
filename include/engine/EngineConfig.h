@@ -122,6 +122,21 @@ struct EngineConfig {
     double hostility_hostile_threshold = 0.62;
     double hostility_severe_threshold = 0.82;
     double hostility_extreme_threshold = 0.88;
+    double hostility_score_regime_high_vol = 0.72;
+    double hostility_score_regime_trending_down = 0.62;
+    double hostility_score_regime_ranging = 0.34;
+    double hostility_score_regime_trending_up = 0.12;
+    double hostility_score_regime_unknown = 0.28;
+    double hostility_score_volatility_pivot = 1.8;
+    double hostility_score_volatility_divisor = 6.0;
+    double hostility_score_volatility_cap = 0.28;
+    double hostility_score_liquidity_pivot = 55.0;
+    double hostility_score_liquidity_divisor = 90.0;
+    double hostility_score_liquidity_cap = 0.20;
+    double hostility_score_spread_pct_pivot = 0.18;
+    double hostility_score_spread_pct_divisor = 0.40;
+    double hostility_score_spread_pct_cap = 0.18;
+    double hostility_scan_buy_limit_hostile_add = 0.13;
     // Gate4 shadow evidence helper: keep policy decisions flowing without
     // position-state side effects during backtest replays.
     bool backtest_shadow_policy_only = false;

@@ -34,6 +34,12 @@ double computeHostilityTightenPressure(
     double hostility_ewma
 );
 
+double computeMarketHostilityScore(
+    const engine::EngineConfig& cfg,
+    const analytics::CoinMetrics& metrics,
+    analytics::MarketRegime regime
+);
+
 LiveScanPrefilterThresholds computeLiveScanPrefilterThresholds(
     const engine::EngineConfig& cfg,
     const std::vector<analytics::CoinMetrics>& markets,
@@ -68,4 +74,3 @@ DynamicSlippageThresholds computeDynamicSlippageThresholds(
 } // namespace execution_guard
 } // namespace common
 } // namespace autolife
-

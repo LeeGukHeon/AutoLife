@@ -49,6 +49,54 @@ double computeHostilityTightenPressure(
     return std::clamp((hostility - hostile_threshold) / denom, 0.0, 1.0);
 }
 
+double computeMarketHostilityScore(
+    const engine::EngineConfig& cfg,
+    const analytics::CoinMetrics& metrics,
+    analytics::MarketRegime regime
+) {
+    double hostility = 0.0;
+    switch (regime) {
+        case analytics::MarketRegime::HIGH_VOLATILITY:
+            hostility += std::clamp(cfg.hostility_score_regime_high_vol, 0.0, 1.0);
+            break;
+        case analytics::MarketRegime::TRENDING_DOWN:
+            hostility += std::clamp(cfg.hostility_score_regime_trending_down, 0.0, 1.0);
+            break;
+        case analytics::MarketRegime::RANGING:
+            hostility += std::clamp(cfg.hostility_score_regime_ranging, 0.0, 1.0);
+            break;
+        case analytics::MarketRegime::TRENDING_UP:
+            hostility += std::clamp(cfg.hostility_score_regime_trending_up, 0.0, 1.0);
+            break;
+        case analytics::MarketRegime::UNKNOWN:
+        default:
+            hostility += std::clamp(cfg.hostility_score_regime_unknown, 0.0, 1.0);
+            break;
+    }
+
+    if (metrics.volatility > 0.0) {
+        const double vol_pivot = std::max(0.0, cfg.hostility_score_volatility_pivot);
+        const double vol_divisor = std::max(1e-6, cfg.hostility_score_volatility_divisor);
+        const double vol_cap = std::max(0.0, cfg.hostility_score_volatility_cap);
+        hostility += std::clamp((metrics.volatility - vol_pivot) / vol_divisor, 0.0, vol_cap);
+    }
+    if (metrics.liquidity_score > 0.0) {
+        const double liq_pivot = std::max(0.0, cfg.hostility_score_liquidity_pivot);
+        const double liq_divisor = std::max(1e-6, cfg.hostility_score_liquidity_divisor);
+        const double liq_cap = std::max(0.0, cfg.hostility_score_liquidity_cap);
+        hostility += std::clamp((liq_pivot - metrics.liquidity_score) / liq_divisor, 0.0, liq_cap);
+    }
+    if (metrics.orderbook_snapshot.valid) {
+        const double spread_pct = metrics.orderbook_snapshot.spread_pct * 100.0;
+        const double spread_pivot = std::max(0.0, cfg.hostility_score_spread_pct_pivot);
+        const double spread_divisor = std::max(1e-6, cfg.hostility_score_spread_pct_divisor);
+        const double spread_cap = std::max(0.0, cfg.hostility_score_spread_pct_cap);
+        hostility += std::clamp((spread_pct - spread_pivot) / spread_divisor, 0.0, spread_cap);
+    }
+
+    return std::clamp(hostility, 0.0, 1.0);
+}
+
 LiveScanPrefilterThresholds computeLiveScanPrefilterThresholds(
     const engine::EngineConfig& cfg,
     const std::vector<analytics::CoinMetrics>& markets,

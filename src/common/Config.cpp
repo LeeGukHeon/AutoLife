@@ -484,6 +484,81 @@ void Config::load(const std::string& path) {
             engine_config_.hostility_hostile_threshold = t.value("hostility_hostile_threshold", 0.62);
             engine_config_.hostility_severe_threshold = t.value("hostility_severe_threshold", 0.82);
             engine_config_.hostility_extreme_threshold = t.value("hostility_extreme_threshold", 0.88);
+            engine_config_.hostility_score_regime_high_vol = std::clamp(
+                t.value("hostility_score_regime_high_vol", 0.72),
+                0.0,
+                1.0
+            );
+            engine_config_.hostility_score_regime_trending_down = std::clamp(
+                t.value("hostility_score_regime_trending_down", 0.62),
+                0.0,
+                1.0
+            );
+            engine_config_.hostility_score_regime_ranging = std::clamp(
+                t.value("hostility_score_regime_ranging", 0.34),
+                0.0,
+                1.0
+            );
+            engine_config_.hostility_score_regime_trending_up = std::clamp(
+                t.value("hostility_score_regime_trending_up", 0.12),
+                0.0,
+                1.0
+            );
+            engine_config_.hostility_score_regime_unknown = std::clamp(
+                t.value("hostility_score_regime_unknown", 0.28),
+                0.0,
+                1.0
+            );
+            engine_config_.hostility_score_volatility_pivot = std::clamp(
+                t.value("hostility_score_volatility_pivot", 1.8),
+                0.0,
+                20.0
+            );
+            engine_config_.hostility_score_volatility_divisor = std::clamp(
+                t.value("hostility_score_volatility_divisor", 6.0),
+                0.001,
+                1000.0
+            );
+            engine_config_.hostility_score_volatility_cap = std::clamp(
+                t.value("hostility_score_volatility_cap", 0.28),
+                0.0,
+                1.0
+            );
+            engine_config_.hostility_score_liquidity_pivot = std::clamp(
+                t.value("hostility_score_liquidity_pivot", 55.0),
+                0.0,
+                1000.0
+            );
+            engine_config_.hostility_score_liquidity_divisor = std::clamp(
+                t.value("hostility_score_liquidity_divisor", 90.0),
+                0.001,
+                1000.0
+            );
+            engine_config_.hostility_score_liquidity_cap = std::clamp(
+                t.value("hostility_score_liquidity_cap", 0.20),
+                0.0,
+                1.0
+            );
+            engine_config_.hostility_score_spread_pct_pivot = std::clamp(
+                t.value("hostility_score_spread_pct_pivot", 0.18),
+                0.0,
+                100.0
+            );
+            engine_config_.hostility_score_spread_pct_divisor = std::clamp(
+                t.value("hostility_score_spread_pct_divisor", 0.40),
+                0.001,
+                1000.0
+            );
+            engine_config_.hostility_score_spread_pct_cap = std::clamp(
+                t.value("hostility_score_spread_pct_cap", 0.18),
+                0.0,
+                1.0
+            );
+            engine_config_.hostility_scan_buy_limit_hostile_add = std::clamp(
+                t.value("hostility_scan_buy_limit_hostile_add", 0.13),
+                0.0,
+                1.0
+            );
 
             if (t.contains("enabled_strategies")) {
                 engine_config_.enabled_strategies = t["enabled_strategies"].get<std::vector<std::string>>();

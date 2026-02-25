@@ -7,6 +7,15 @@ Last updated: 2026-02-25
 - Removed manager soft-queue / probabilistic fastpass promotion path.
 - Removed related config keys from `EngineConfig`/`Config.cpp`/`config/config.json`.
 
+## Update (2026-02-25 cleanup wave C)
+- Backtest manager prefilter path was aligned to live:
+  - removed backtest-only hostile-market additive boost on manager `min_strength/min_expected_value`
+  - removed backtest-only small-seed additive prefilter bump
+- Hostility score computation was shared across live/backtest via `ExecutionGuardPolicyShared`.
+- Foundation manager filter removed non-policy hardcoded relief branches
+  (range-only supply relief / low-vol-low-liq relief / quality relief caps), keeping
+  frontier + manager-policy-driven thresholds as primary.
+
 ## Scope
 - Goal: verify actual runtime code path from startup to sell/risk-management before script-side work.
 - Scope included: `src/main.cpp`, `src/app/*`, `src/runtime/*`, `src/strategy/*`, `src/risk/*`, `src/common/*`, `CMakeLists.txt`.
