@@ -5,6 +5,16 @@ Last updated: 2026-02-25
 - Branch: `main`
 - Commit snapshot (pushed): `02abe90`
 
+## Validation and script cleanup update (2026-02-25)
+- Full-source validation run completed (build + unit test executables + script suite + strict parity gate).
+- Latest gate verdict remains:
+  - `CIGate PASSED`
+  - `ExecutionParity PASSED`
+  - `should_exit_parity_report.json: verdict=pass, critical_findings=0`
+- Python cleanup (unreferenced helper scripts) applied:
+  - removed `scripts/run_probabilistic_fetch_live.py`
+  - removed `scripts/watch_probabilistic_progress.py`
+
 ## Active ticket
 - Source of truth: `docs/_codex/ACTIVE_TICKET.md`
 - Current: `SO4-15-NEGATIVE-DAY-TAIL-ANALYSIS-20260224` (`Strict-Order-4-15`, Mode `A`, status `in_progress`)

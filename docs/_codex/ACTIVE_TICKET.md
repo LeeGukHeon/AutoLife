@@ -19,6 +19,10 @@ Last updated: 2026-02-25
   - `docs/_codex/CH01_PHASE3_FINAL_DELIVERY_2026-02-25.md`
 - Phase 2/3 migration cleanup wave-1 was documented:
   - `docs/_codex/PHASE23_MIGRATION_CLEANUP_2026-02-25.md`
+- Full-source validation rerun passed (build/unit/script-suite/strict parity gate).
+- Unreferenced Python helper scripts removed:
+  - `scripts/run_probabilistic_fetch_live.py`
+  - `scripts/watch_probabilistic_progress.py`
 - Profitability tuning remains deferred by policy until Phase 3/4 rollout completion.
 
 ## Scope

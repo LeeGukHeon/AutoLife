@@ -1,6 +1,6 @@
 # File Usage Map
 
-Last updated: 2026-02-21
+Last updated: 2026-02-25
 
 ## Purpose
 Keep only files that are directly tied to current runtime, CI gate, and probabilistic model workflow.
@@ -63,6 +63,9 @@ Rule:
 - Unreferenced utility scripts (final deleted):
   - `scripts/check_upbit_auth_status.py`
   - `scripts/cleanup_generated_artifacts.py`
+- Unreferenced probabilistic fetch helper scripts (final deleted, 2026-02-25):
+  - `scripts/run_probabilistic_fetch_live.py`
+  - `scripts/watch_probabilistic_progress.py`
 - Obsolete large archive docs:
   - `docs/archive/CHAPTER_CURRENT_FULLLOG_2026-02-20.md`
   - `docs/archive/TODO_STAGE15_EXECUTION_PLAN_2026-02-13_FULLLOG_2026-02-19.md`

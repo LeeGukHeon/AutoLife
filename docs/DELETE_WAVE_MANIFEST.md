@@ -1,6 +1,6 @@
 # Delete Wave Manifest
 
-Last updated: 2026-02-21
+Last updated: 2026-02-25
 
 ## Cleanup Policy
 - Strategy: aggressive cleanup with two-stage deletion.
@@ -230,6 +230,22 @@ python -m py_compile scripts/run_verification.py scripts/verify_baseline.py scri
 ```powershell
 rg -n "check_upbit_auth_status.py|cleanup_generated_artifacts.py" docs scripts .github
 python -m py_compile scripts/run_verification.py scripts/verify_baseline.py scripts/run_profitability_matrix.py
+```
+
+## Wave E (Final Delete Executed)
+- Stage-1 move skipped by operator policy (retention override), hard delete completed for unreferenced helper scripts:
+  - `scripts/run_probabilistic_fetch_live.py`
+  - `scripts/watch_probabilistic_progress.py`
+- Class:
+  - `research-aux`
+- Status:
+  - final delete complete (2026-02-25)
+
+### Wave E Verification Command
+```powershell
+rg -n "run_probabilistic_fetch_live.py|watch_probabilistic_progress.py" docs scripts .github
+python scripts/verify_script_suite.py
+python scripts/run_ci_operational_gate.py --include-backtest --strict-execution-parity --run-should-exit-parity-analysis --refresh-should-exit-audit-from-logs --should-exit-audit-live-runtime-log-glob "build/Release/logs/live_probe_stdout*.txt" --should-exit-audit-live-runtime-log-mode-filter exclude_backtest --strict-should-exit-parity
 ```
 
 ## Rollback
