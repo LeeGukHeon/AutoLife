@@ -1,9 +1,9 @@
 ﻿# Current State
-Last updated: 2026-02-24
+Last updated: 2026-02-25
 
 ## Repository
 - Branch: `main`
-- Commit snapshot (pushed): `021b82d`
+- Commit snapshot (pushed): `f7a6891`
 
 ## Active ticket
 - Source of truth: `docs/_codex/ACTIVE_TICKET.md`
@@ -380,6 +380,48 @@ Last updated: 2026-02-24
     - action:
       - fail-closed rollback 완료(임시 v20 probe 코드/설정 미유지).
       - next probe는 `v21`: probe 전 hit-signature/impact 동형성 사전 필터를 추가해 중복 후보를 제거.
+  - v21 prefilter-qualified paired probe completed (default-OFF, in code as opt-in flag):
+    - prefilter stage:
+      - script:
+        - `scripts/filter_v21_candidate_equivalence.py`
+      - artifact:
+        - `build/Release/logs/v21_prefilter_tu_core_rescue_candidates_5set_20260224.json`
+      - selected probe clause:
+        - `probabilistic_h5_calibrated >= 0.40515 && probabilistic_h5_margin <= -0.017422`
+        - scope: `TRENDING_UP|CORE_RESCUE`
+    - artifacts:
+      - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v21_probe_off_5set_20260224.json`
+      - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v21_probe_on_5set_20260224.json`
+      - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v21_probe_off_5set_3m7d_20260224.json`
+      - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v21_probe_on_5set_3m7d_20260224.json`
+      - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v21_probe_on_vs_off_5set_20260224.json`
+      - `build/Release/logs/v21_probe_spillover_gate_correctness_runtime_mapping_on_guard_v21_probe_on_vs_off_5set_20260224_workflow.json`
+    - gate snapshot:
+      - verification OFF -> ON: identical
+        - `avg_profit_factor=1.0229`
+        - `avg_expectancy_krw=-0.6964`
+        - `avg_total_trades=14.0`
+      - daily OOS OFF -> ON: `pass -> pass`
+        - `nonpositive_day_ratio: 0.368421 -> 0.315789`
+        - `total_profit_sum: 118.672413 -> 269.508805`
+      - delta:
+        - `profit_sum_delta=+150.836392`
+        - `nonpositive_day_count_delta=-1`
+      - v17 workflow:
+        - `status=pass`
+        - `v16_fail_reasons=[]`
+        - `v15_adverse_day_cell_count=0`
+    - interpretation:
+      - v19/v20과 달리 non-target spillover 없이 target-tail 완화가 확인됨.
+      - baseline 유지(default OFF) 조건에서 승격 검토 가능한 첫 후보.
+    - action:
+      - 코드/플래그는 opt-in(default OFF)로 유지:
+        - `enable_v21_rescue_prefiltered_pair_probe=false`
+      - next step(`v22`):
+        - 운영 플래그 승격 기준(명시적 조건 + 명명 정리) 정의 후 재검증.
+    - tooling note:
+      - `run_verification.py`는 config를 `utf-8`로 읽으므로,
+        임시 config override 시 BOM 없는 UTF-8로 저장해야 함.
   - live execution update 로그 수집 선행조건은 충족됨
     (`execution_updates_live.jsonl` 생성 확인).
   - live parity path hardening landed:

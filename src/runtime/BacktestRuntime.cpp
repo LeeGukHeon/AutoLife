@@ -1290,6 +1290,10 @@ bool passesProbabilisticPrimaryMinimums(
                 return false;
         }
         if (regime == autolife::analytics::MarketRegime::TRENDING_UP) {
+            const bool v21_probe_rescue_prefiltered_pair =
+                cfg.enable_v21_rescue_prefiltered_pair_probe &&
+                signal.probabilistic_h5_calibrated >= 0.40515 &&
+                signal.probabilistic_h5_margin <= -0.017422;
             const bool weak_uptrend_rescue_lowliq_tail =
                 signal.probabilistic_h5_calibrated < 0.420 &&
                 signal.probabilistic_h5_margin > -0.012 &&
@@ -1343,7 +1347,8 @@ bool passesProbabilisticPrimaryMinimums(
                 signal.probabilistic_h5_margin < -0.0115 &&
                 signal.strength >= 0.472 &&
                 signal.strength < 0.476;
-            if (weak_uptrend_rescue_lowliq_tail ||
+            if (v21_probe_rescue_prefiltered_pair ||
+                weak_uptrend_rescue_lowliq_tail ||
                 weak_uptrend_rescue_narrow_tail ||
                 weak_uptrend_rescue_midvol_tail ||
                 weak_uptrend_rescue_lowmidvol_tail ||
@@ -1352,7 +1357,9 @@ bool passesProbabilisticPrimaryMinimums(
                 weak_uptrend_rescue_midliq_tail ||
                 weak_uptrend_rescue_highcal_shallowmargin_tail) {
                 if (reject_reason != nullptr) {
-                    *reject_reason = "blocked_probabilistic_primary_rescue_tail_guard";
+                    *reject_reason = v21_probe_rescue_prefiltered_pair
+                        ? "blocked_probabilistic_primary_rescue_tail_guard_v21_probe"
+                        : "blocked_probabilistic_primary_rescue_tail_guard";
                 }
                 return false;
             }

@@ -1,5 +1,5 @@
 ﻿# Active Ticket Snapshot
-Last updated: 2026-02-24
+Last updated: 2026-02-25
 
 ## Header
 - Ticket ID: `SO4-15-NEGATIVE-DAY-TAIL-ANALYSIS-20260224`
@@ -33,6 +33,7 @@ Last updated: 2026-02-24
   - none
 - Flags added/changed:
   - `backtest_strategyless_runtime_live_exit_mapping` (default `false`)
+  - `enable_v21_rescue_prefiltered_pair_probe` (default `false`)
 
 ## Implementation plan
 1. audit `LiveTradingRuntime` exit/risk-control flow and confirm intended behavior.
@@ -1103,6 +1104,38 @@ Last updated: 2026-02-24
       - 코드 유지(현재 기준점 업데이트).
       - CI operational gate 재확인 pass:
         - `python scripts/run_ci_operational_gate.py --include-backtest --strict-execution-parity`
+
+## Latest update (2026-02-25, v21)
+- prefilter stage completed:
+  - code:
+    - `scripts/filter_v21_candidate_equivalence.py`
+  - artifact:
+    - `build/Release/logs/v21_prefilter_tu_core_rescue_candidates_5set_20260224.json`
+  - selected clause:
+    - `probabilistic_h5_calibrated >= 0.40515 && probabilistic_h5_margin <= -0.017422`
+    - target: `TRENDING_UP|CORE_RESCUE_SHOULD_ENTER`
+- probe artifacts:
+  - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v21_probe_off_5set_20260224.json`
+  - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v21_probe_on_5set_20260224.json`
+  - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v21_probe_off_5set_3m7d_20260224.json`
+  - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v21_probe_on_5set_3m7d_20260224.json`
+  - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v21_probe_on_vs_off_5set_20260224.json`
+  - `build/Release/logs/v21_probe_spillover_gate_correctness_runtime_mapping_on_guard_v21_probe_on_vs_off_5set_20260224_workflow.json`
+- result snapshot:
+  - verification OFF -> ON identical:
+    - `avg_profit_factor=1.0229`, `avg_expectancy_krw=-0.6964`, `avg_total_trades=14.0`
+  - daily OOS OFF -> ON improved while both pass:
+    - `nonpositive_day_ratio: 0.368421 -> 0.315789`
+    - `total_profit_sum: 118.672413 -> 269.508805`
+    - delta: `profit_sum_delta=+150.836392`, `nonpositive_day_count_delta=-1`
+  - v17 spillover workflow:
+    - `status=pass`, `v16_fail_reasons=[]`
+- decision:
+  - fail-closed baseline는 유지 (`enable_v21_rescue_prefiltered_pair_probe=false` default).
+  - v21 후보는 승격 가능 후보로 분류하고 `v22`에서 정책 승격 기준/명명 정리를 포함해 재검증.
+- tooling note:
+  - 임시 config override 시 UTF-8 BOM이 들어가면 `run_verification.py`의 config 파싱이 실패하므로
+    BOM 없는 UTF-8 저장을 사용.
 
 ## DoD
 - [x] residual negative-day trade-level evidence captured.

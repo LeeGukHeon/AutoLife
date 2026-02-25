@@ -1930,10 +1930,40 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
               사실상 동형 후보군으로 판단.
           - 조치:
             - fail-closed rollback 완료(임시 v20 probe 코드/설정 제거, baseline 유지).
-        - 다음 국소 단계(v21):
-          - probe 전 단계에 hit-signature/impact-equivalence prefilter를 추가해
-            v19/v20과 동형인 후보를 사전 제거.
-          - prefilter 통과 후보만 v17 workflow + Gate3 비교로 승격.
+        - v21 prefilter-qualified paired 프로브 완료(기본 OFF, 코드 유지):
+          - prefilter:
+            - 신규 스크립트:
+              - `scripts/filter_v21_candidate_equivalence.py`
+            - 산출물:
+              - `build/Release/logs/v21_prefilter_tu_core_rescue_candidates_5set_20260224.json`
+            - 선택 clause:
+              - `cal >= 0.40515 && margin <= -0.017422` (`TRENDING_UP|CORE_RESCUE`)
+          - 검증 산출물:
+            - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v21_probe_off_5set_20260224.json`
+            - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v21_probe_on_5set_20260224.json`
+            - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v21_probe_off_5set_3m7d_20260224.json`
+            - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v21_probe_on_5set_3m7d_20260224.json`
+            - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v21_probe_on_vs_off_5set_20260224.json`
+            - `build/Release/logs/v21_probe_spillover_gate_correctness_runtime_mapping_on_guard_v21_probe_on_vs_off_5set_20260224_workflow.json`
+          - 결과:
+            - verification OFF/ON 동일:
+              - `avg_profit_factor=1.0229`
+              - `avg_expectancy_krw=-0.6964`
+              - `avg_total_trades=14.0`
+            - daily OOS OFF/ON 모두 pass + 개선:
+              - `nonpositive_day_ratio: 0.368421 -> 0.315789`
+              - `total_profit_sum: 118.672413 -> 269.508805`
+            - delta:
+              - `profit_sum_delta=+150.836392`
+              - `nonpositive_day_count_delta=-1`
+            - v17 workflow:
+              - `status=pass` (`v16_fail_reasons=[]`)
+          - 조치:
+            - baseline fail-closed 유지(기본값 OFF):
+              - `enable_v21_rescue_prefiltered_pair_probe=false`
+            - 다음 단계(v22):
+              - 승격 기준(정량 threshold + 명명) 확정 후
+                동일 5-set Gate3 + daily OOS 재검증.
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
    - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.

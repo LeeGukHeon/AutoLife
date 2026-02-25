@@ -699,6 +699,8 @@ void Config::load(const std::string& path) {
             engine_config_.backtest_hostility_pause_candles_extreme = t.value("backtest_hostility_pause_candles_extreme", 60);
             engine_config_.backtest_strategyless_runtime_live_exit_mapping =
                 t.value("backtest_strategyless_runtime_live_exit_mapping", false);
+            engine_config_.enable_v21_rescue_prefiltered_pair_probe =
+                t.value("enable_v21_rescue_prefiltered_pair_probe", false);
 
             if (t.contains("enabled_strategies")) {
                 engine_config_.enabled_strategies = t["enabled_strategies"].get<std::vector<std::string>>();
