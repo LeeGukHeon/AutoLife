@@ -235,7 +235,6 @@ private:
     bool strict_live_equivalent_data_parity_ = false;
     int strict_data_parity_skip_count_ = 0;
     double market_hostility_ewma_ = 0.0;
-    int hostile_entry_pause_candles_ = 0;
     double recent_best_ask_price_ = 0.0;
     long long recent_best_ask_timestamp_ms_ = 0;
     bool was_open_position_prev_candle_ = false; // Count open-position skip once per holding episode

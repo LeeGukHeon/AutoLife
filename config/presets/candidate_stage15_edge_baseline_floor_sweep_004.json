@@ -15,14 +15,7 @@
     "hostility_ewma_alpha": 0.14,
     "hostility_hostile_threshold": 0.62,
     "hostility_severe_threshold": 0.82,
-    "hostility_extreme_threshold": 0.88,
-    "hostility_pause_scans": 4,
-    "hostility_pause_scans_extreme": 6,
-    "hostility_pause_recent_sample_min": 10,
-    "hostility_pause_recent_expectancy_krw": 0.0,
-    "hostility_pause_recent_win_rate": 0.4,
-    "backtest_hostility_pause_candles": 41,
-    "backtest_hostility_pause_candles_extreme": 64
+    "hostility_extreme_threshold": 0.88
   },
   "strategies": {
     "scalping": {

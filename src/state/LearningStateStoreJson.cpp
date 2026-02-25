@@ -33,8 +33,7 @@ bool LearningStateStoreJson::migrateLegacySchemaToCurrent(nlohmann::json& raw) {
     }
 
     constexpr const char* kPolicyKeys[] = {
-        "market_hostility_ewma",
-        "hostile_pause_scans_remaining"
+        "market_hostility_ewma"
     };
     for (const char* key : kPolicyKeys) {
         if (raw.contains(key)) {

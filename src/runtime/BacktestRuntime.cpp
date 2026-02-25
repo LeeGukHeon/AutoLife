@@ -2451,25 +2451,6 @@ void BacktestEngine::processCandle(const Candle& candle) {
         const bool core_risk_enabled = core_bridge_enabled && engine_config_.enable_core_risk_plane;
         const double hostility_alpha = std::clamp(engine_config_.hostility_ewma_alpha, 0.01, 0.99);
         const double hostile_threshold = std::clamp(engine_config_.hostility_hostile_threshold, 0.0, 1.0);
-        const double severe_threshold = std::clamp(
-            std::max(engine_config_.hostility_severe_threshold, hostile_threshold),
-            0.0,
-            1.0
-        );
-        const double extreme_threshold = std::clamp(
-            std::max(engine_config_.hostility_extreme_threshold, severe_threshold),
-            0.0,
-            1.0
-        );
-        const int pause_candles_base = std::clamp(engine_config_.backtest_hostility_pause_candles, 1, 2000);
-        const int pause_candles_extreme = std::clamp(
-            std::max(engine_config_.backtest_hostility_pause_candles_extreme, pause_candles_base),
-            pause_candles_base,
-            4000
-        );
-        const int pause_sample_min = std::clamp(engine_config_.hostility_pause_recent_sample_min, 1, 100);
-        const double pause_expectancy_threshold = engine_config_.hostility_pause_recent_expectancy_krw;
-        const double pause_win_rate_threshold = std::clamp(engine_config_.hostility_pause_recent_win_rate, 0.0, 1.0);
         if (small_seed_mode) {
             filter_threshold = std::clamp(filter_threshold + 0.08, 0.35, 0.90);
         }
@@ -2514,35 +2495,6 @@ void BacktestEngine::processCandle(const Candle& candle) {
         }
         const double effective_hostility = std::max(hostility_now, market_hostility_ewma_);
         const bool hostile_market = effective_hostility >= hostile_threshold;
-        const bool severe_hostile_market = effective_hostility >= severe_threshold;
-
-        double recent_expectancy_krw = 0.0;
-        double recent_win_rate = 0.5;
-        int recent_sample = 0;
-        {
-            const auto trade_history = risk_manager_->getTradeHistory();
-            double recent_profit_sum = 0.0;
-            int recent_wins = 0;
-            for (auto it = trade_history.rbegin(); it != trade_history.rend() && recent_sample < 20; ++it) {
-                recent_profit_sum += it->profit_loss;
-                if (it->profit_loss > 0.0) {
-                    recent_wins++;
-                }
-                recent_sample++;
-            }
-            if (recent_sample > 0) {
-                recent_expectancy_krw = recent_profit_sum / static_cast<double>(recent_sample);
-                recent_win_rate = static_cast<double>(recent_wins) / static_cast<double>(recent_sample);
-            }
-        }
-        if (severe_hostile_market &&
-            recent_sample >= pause_sample_min &&
-            recent_expectancy_krw < pause_expectancy_threshold &&
-            recent_win_rate < pause_win_rate_threshold) {
-            const int base_pause_candles =
-                (effective_hostility >= extreme_threshold) ? pause_candles_extreme : pause_candles_base;
-            hostile_entry_pause_candles_ = std::max(hostile_entry_pause_candles_, base_pause_candles);
-        }
         
         if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
             filter_threshold = std::max(
@@ -2592,26 +2544,6 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 (effective_hostility - hostile_threshold) * hostile_ev_scale,
                 0.0,
                 hostile_ev_cap
-            );
-        }
-        if (hostile_entry_pause_candles_ > 0) {
-            filter_threshold = std::max(
-                filter_threshold,
-                manager_pick(manager_policy.hostile_pause_min_strength, manager_defaults.hostile_pause_min_strength)
-            );
-            min_expected_value = std::max(
-                min_expected_value,
-                manager_pick(
-                    manager_policy.hostile_pause_min_expected_value,
-                    manager_defaults.hostile_pause_min_expected_value
-                )
-            );
-            hostile_entry_pause_candles_--;
-            LOG_INFO(
-                "Backtest hostile-entry pause active: remaining_candles={}, hostility_now={:.3f}, hostility_ewma={:.3f}",
-                hostile_entry_pause_candles_,
-                hostility_now,
-                market_hostility_ewma_
             );
         }
         const double min_strength_floor = manager_pick(manager_policy.min_strength_floor, manager_defaults.min_strength_floor);

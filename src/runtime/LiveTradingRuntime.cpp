@@ -3016,9 +3016,6 @@ void TradingEngine::executeSignals() {
     std::map<std::string, StrategyEdgeStats> strategy_regime_edge_recent;
     std::map<std::string, StrategyEdgeStats> market_strategy_regime_edge;
     std::map<std::string, StrategyEdgeStats> market_strategy_regime_edge_recent;
-    double recent_expectancy_krw = 0.0;
-    double recent_win_rate = 0.5;
-    int recent_sample = 0;
     {
         const auto history = risk_manager_->getTradeHistory();
         if (performance_store_) {
@@ -3036,19 +3033,6 @@ void TradingEngine::executeSignals() {
             history,
             recent_market_regime_window
         );
-        double recent_profit_sum = 0.0;
-        int recent_wins = 0;
-        for (auto it = history.rbegin(); it != history.rend() && recent_sample < 30; ++it) {
-            recent_profit_sum += it->profit_loss;
-            if (it->profit_loss > 0.0) {
-                recent_wins++;
-            }
-            recent_sample++;
-        }
-        if (recent_sample > 0) {
-            recent_expectancy_krw = recent_profit_sum / static_cast<double>(recent_sample);
-            recent_win_rate = static_cast<double>(recent_wins) / static_cast<double>(recent_sample);
-        }
     }
 
     analytics::MarketRegime dominant_regime = analytics::MarketRegime::UNKNOWN;
@@ -3097,25 +3081,6 @@ void TradingEngine::executeSignals() {
     );
     const double hostility_alpha = std::clamp(config_.hostility_ewma_alpha, 0.01, 0.99);
     const double hostile_threshold = std::clamp(config_.hostility_hostile_threshold, 0.0, 1.0);
-    const double severe_threshold = std::clamp(
-        std::max(config_.hostility_severe_threshold, hostile_threshold),
-        0.0,
-        1.0
-    );
-    const double extreme_threshold = std::clamp(
-        std::max(config_.hostility_extreme_threshold, severe_threshold),
-        0.0,
-        1.0
-    );
-    const int pause_scans_base = std::clamp(config_.hostility_pause_scans, 1, 64);
-    const int pause_scans_extreme = std::clamp(
-        std::max(config_.hostility_pause_scans_extreme, pause_scans_base),
-        pause_scans_base,
-        96
-    );
-    const int pause_sample_min = std::clamp(config_.hostility_pause_recent_sample_min, 1, 100);
-    const double pause_expectancy_threshold = config_.hostility_pause_recent_expectancy_krw;
-    const double pause_win_rate_threshold = std::clamp(config_.hostility_pause_recent_win_rate, 0.0, 1.0);
 
     if (market_hostility_ewma_ <= 1e-9) {
         market_hostility_ewma_ = market_hostility_score;
@@ -3128,73 +3093,20 @@ void TradingEngine::executeSignals() {
     }
     const double effective_hostility = std::max(market_hostility_score, market_hostility_ewma_);
 
-    const bool severe_hostile_market = effective_hostility >= severe_threshold;
-    const bool bad_recent_quality =
-        recent_sample >= pause_sample_min &&
-        recent_expectancy_krw < pause_expectancy_threshold &&
-        recent_win_rate < pause_win_rate_threshold;
-    const bool pause_new_entries_this_scan =
-        severe_hostile_market &&
-        bad_recent_quality;
-    if (pause_new_entries_this_scan) {
-        const int base_pause = (effective_hostility >= extreme_threshold) ? pause_scans_extreme : pause_scans_base;
-        hostile_pause_scans_remaining_ = std::max(hostile_pause_scans_remaining_, base_pause);
-    }
-
     if (!small_seed_mode && effective_hostility >= (hostile_threshold + 0.13)) {
         per_scan_buy_limit = 1;
     }
 
     LOG_INFO(
-        "Adaptive scan profile: hostility_now={:.3f}, hostility_ewma={:.3f} (up {:.2f}/range {:.2f}/down {:.2f}/hv {:.2f}), per_scan_limit={}, pause_remaining={}",
+        "Adaptive scan profile: hostility_now={:.3f}, hostility_ewma={:.3f} (up {:.2f}/range {:.2f}/down {:.2f}/hv {:.2f}), per_scan_limit={}",
         market_hostility_score,
         market_hostility_ewma_,
         up_ratio,
         ranging_ratio,
         down_ratio,
         high_vol_ratio,
-        per_scan_buy_limit,
-        hostile_pause_scans_remaining_
+        per_scan_buy_limit
     );
-    if (pause_new_entries_this_scan) {
-        LOG_WARN(
-            "Hostile market entry pause armed: hostility_now {:.3f}, hostility_ewma {:.3f}, recent_expectancy {:.2f} KRW, recent_win_rate {:.2f}, sample={}, pause_scans={}",
-            market_hostility_score,
-            market_hostility_ewma_,
-            recent_expectancy_krw,
-            recent_win_rate,
-            recent_sample,
-            hostile_pause_scans_remaining_
-        );
-    }
-    if (hostile_pause_scans_remaining_ > 0) {
-        hostile_pause_scans_remaining_--;
-        LOG_WARN(
-            "Hostile market entry pause active: remaining_scans={}, hostility_now {:.3f}, hostility_ewma {:.3f}",
-            hostile_pause_scans_remaining_,
-            market_hostility_score,
-            market_hostility_ewma_
-        );
-        {
-            nlohmann::json payload;
-            payload["reason"] = "hostility_pause_active";
-            payload["remaining_scans"] = hostile_pause_scans_remaining_;
-            payload["hostility_now"] = market_hostility_score;
-            payload["hostility_ewma"] = market_hostility_ewma_;
-            payload["dominant_regime"] = regimeToString(dominant_regime);
-            payload["recent_expectancy_krw"] = recent_expectancy_krw;
-            payload["recent_win_rate"] = recent_win_rate;
-            payload["pending_candidates"] = pending_signals_.size();
-            appendJournalEvent(
-                core::JournalEventType::NO_TRADE,
-                "MULTI",
-                "hostility_guard",
-                payload
-            );
-        }
-        pending_signals_.clear();
-        return;
-    }
 
     std::vector<strategy::Signal> execution_candidates = pending_signals_;
     if (config_.enable_core_plane_bridge &&
@@ -5509,20 +5421,12 @@ void TradingEngine::loadLearningState() {
                 1.0
             );
         }
-        if (policy.contains("hostile_pause_scans_remaining")) {
-            hostile_pause_scans_remaining_ = std::clamp(
-                policy.value("hostile_pause_scans_remaining", hostile_pause_scans_remaining_),
-                0,
-                64
-            );
-        }
 
         LOG_INFO(
-            "Learning state loaded (schema v{}, saved_at={}, hostility_ewma={:.3f}, pause_remaining={})",
+            "Learning state loaded (schema v{}, saved_at={}, hostility_ewma={:.3f})",
             loaded->schema_version,
             loaded->saved_at_ms,
-            market_hostility_ewma_,
-            hostile_pause_scans_remaining_
+            market_hostility_ewma_
         );
     } catch (const std::exception& e) {
         LOG_ERROR("Failed to load learning state: {}", e.what());
@@ -5540,7 +5444,6 @@ void TradingEngine::saveLearningState() {
         snapshot.saved_at_ms = getCurrentTimestampMs();
         snapshot.policy_params = nlohmann::json::object();
         snapshot.policy_params["market_hostility_ewma"] = market_hostility_ewma_;
-        snapshot.policy_params["hostile_pause_scans_remaining"] = hostile_pause_scans_remaining_;
 
         nlohmann::json bucket_stats = nlohmann::json::array();
         if (performance_store_) {
@@ -5561,7 +5464,6 @@ void TradingEngine::saveLearningState() {
         snapshot.bucket_stats = std::move(bucket_stats);
         snapshot.rollback_point = nlohmann::json::object();
         snapshot.rollback_point["market_hostility_ewma"] = market_hostility_ewma_;
-        snapshot.rollback_point["hostile_pause_scans_remaining"] = hostile_pause_scans_remaining_;
 
         if (!learning_state_store_->save(snapshot)) {
             LOG_WARN("Learning state save failed");
@@ -5578,7 +5480,6 @@ void TradingEngine::saveState() {
         state["timestamp"] = getCurrentTimestampMs();
         state["snapshot_last_event_seq"] = event_journal_ ? event_journal_->lastSeq() : 0;
         state["market_hostility_ewma"] = market_hostility_ewma_;
-        state["hostile_pause_scans_remaining"] = hostile_pause_scans_remaining_;
 
         // Trade history
         nlohmann::json history = nlohmann::json::array();
@@ -5745,11 +5646,6 @@ void TradingEngine::loadState() {
             state.value("market_hostility_ewma", market_hostility_ewma_),
             0.0,
             1.0
-        );
-        hostile_pause_scans_remaining_ = std::clamp(
-            state.value("hostile_pause_scans_remaining", hostile_pause_scans_remaining_),
-            0,
-            64
         );
 
         if (state.contains("trade_history") && state["trade_history"].is_array()) {
