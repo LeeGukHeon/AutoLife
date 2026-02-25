@@ -19,6 +19,9 @@ Last updated: 2026-02-25
   - shared hostility score computation between live/backtest
   - removed backtest-only manager hostility/small-seed additive prefilter path
   - removed non-policy hardcoded relief branches in foundation manager filter
+- Cleanup wave D applied (primary minimum path):
+  - removed hardcoded context-relief/composite-rescue branch from probabilistic primary minimum pass gate
+  - policyized primary-minimum regime adjustments via `phase3.primary_minimums` bundle keys
 - Post-cleanup gate status:
   - `CIGate PASSED`
   - `ExecutionParity PASSED`

@@ -16,6 +16,16 @@ Last updated: 2026-02-25
   (range-only supply relief / low-vol-low-liq relief / quality relief caps), keeping
   frontier + manager-policy-driven thresholds as primary.
 
+## Update (2026-02-25 cleanup wave D)
+- `probabilistic primary minimum` gate cleanup:
+  - removed hardcoded context-relief/composite-rescue path from
+    `passesProbabilisticPrimaryMinimums` (live/backtest parity kept)
+  - gate now uses deterministic minimum checks only
+    (`calibrated/margin/liquidity/strength`)
+- moved regime-dependent minimum adjustments into bundle policy:
+  - `phase3.primary_minimums.*` extended with hostile/ranging/uptrend adds and clamp bounds
+  - runtime reads bundle-first; missing keys fallback to conservative defaults
+
 ## Scope
 - Goal: verify actual runtime code path from startup to sell/risk-management before script-side work.
 - Scope included: `src/main.cpp`, `src/app/*`, `src/runtime/*`, `src/strategy/*`, `src/risk/*`, `src/common/*`, `CMakeLists.txt`.

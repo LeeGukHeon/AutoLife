@@ -97,6 +97,27 @@ public:
         double min_h5_margin = -0.03;
         double min_liquidity_score = 42.0;
         double min_signal_strength = 0.34;
+        double hostile_add_h5_calibrated = 0.06;
+        double hostile_add_h5_margin = 0.03;
+        double hostile_add_liquidity_score = 10.0;
+        double hostile_add_signal_strength = 0.08;
+        double ranging_add_h5_calibrated = 0.01;
+        double ranging_add_h5_margin = 0.005;
+        double ranging_add_liquidity_score = 2.0;
+        double ranging_add_signal_strength = 0.02;
+        double trending_up_add_h5_calibrated = -0.02;
+        double trending_up_add_h5_margin = -0.01;
+        double trending_up_add_liquidity_score = -5.0;
+        double trending_up_add_signal_strength = -0.03;
+        double regime_volatile_add_signal_strength = 0.03;
+        double regime_hostile_add_liquidity_score = 8.0;
+        double regime_hostile_add_signal_strength = 0.08;
+        double clamp_h5_margin_min = -0.50;
+        double clamp_h5_margin_max = 0.20;
+        double clamp_liquidity_min = 0.0;
+        double clamp_liquidity_max = 100.0;
+        double clamp_strength_min = 0.0;
+        double clamp_strength_max = 1.0;
     };
 
     struct Phase3PrimaryPriorityPolicy {

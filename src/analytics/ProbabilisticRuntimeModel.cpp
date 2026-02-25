@@ -912,6 +912,174 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         0.0,
         1.0
     );
+    phase3_policy_.primary_minimums.hostile_add_h5_calibrated = parseCostParam(
+        phase3_primary_minimums_node,
+        "hostile_add_h5_calibrated",
+        0.06,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.primary_minimums.hostile_add_h5_margin = parseCostParam(
+        phase3_primary_minimums_node,
+        "hostile_add_h5_margin",
+        0.03,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.primary_minimums.hostile_add_liquidity_score = parseCostParam(
+        phase3_primary_minimums_node,
+        "hostile_add_liquidity_score",
+        10.0,
+        -100.0,
+        100.0
+    );
+    phase3_policy_.primary_minimums.hostile_add_signal_strength = parseCostParam(
+        phase3_primary_minimums_node,
+        "hostile_add_signal_strength",
+        0.08,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.primary_minimums.ranging_add_h5_calibrated = parseCostParam(
+        phase3_primary_minimums_node,
+        "ranging_add_h5_calibrated",
+        0.01,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.primary_minimums.ranging_add_h5_margin = parseCostParam(
+        phase3_primary_minimums_node,
+        "ranging_add_h5_margin",
+        0.005,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.primary_minimums.ranging_add_liquidity_score = parseCostParam(
+        phase3_primary_minimums_node,
+        "ranging_add_liquidity_score",
+        2.0,
+        -100.0,
+        100.0
+    );
+    phase3_policy_.primary_minimums.ranging_add_signal_strength = parseCostParam(
+        phase3_primary_minimums_node,
+        "ranging_add_signal_strength",
+        0.02,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.primary_minimums.trending_up_add_h5_calibrated = parseCostParam(
+        phase3_primary_minimums_node,
+        "trending_up_add_h5_calibrated",
+        -0.02,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.primary_minimums.trending_up_add_h5_margin = parseCostParam(
+        phase3_primary_minimums_node,
+        "trending_up_add_h5_margin",
+        -0.01,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.primary_minimums.trending_up_add_liquidity_score = parseCostParam(
+        phase3_primary_minimums_node,
+        "trending_up_add_liquidity_score",
+        -5.0,
+        -100.0,
+        100.0
+    );
+    phase3_policy_.primary_minimums.trending_up_add_signal_strength = parseCostParam(
+        phase3_primary_minimums_node,
+        "trending_up_add_signal_strength",
+        -0.03,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.primary_minimums.regime_volatile_add_signal_strength = parseCostParam(
+        phase3_primary_minimums_node,
+        "regime_volatile_add_signal_strength",
+        0.03,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.primary_minimums.regime_hostile_add_liquidity_score = parseCostParam(
+        phase3_primary_minimums_node,
+        "regime_hostile_add_liquidity_score",
+        8.0,
+        -100.0,
+        100.0
+    );
+    phase3_policy_.primary_minimums.regime_hostile_add_signal_strength = parseCostParam(
+        phase3_primary_minimums_node,
+        "regime_hostile_add_signal_strength",
+        0.08,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.primary_minimums.clamp_h5_margin_min = parseCostParam(
+        phase3_primary_minimums_node,
+        "clamp_h5_margin_min",
+        -0.50,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.primary_minimums.clamp_h5_margin_max = parseCostParam(
+        phase3_primary_minimums_node,
+        "clamp_h5_margin_max",
+        0.20,
+        -1.0,
+        1.0
+    );
+    if (phase3_policy_.primary_minimums.clamp_h5_margin_max <
+        phase3_policy_.primary_minimums.clamp_h5_margin_min) {
+        std::swap(
+            phase3_policy_.primary_minimums.clamp_h5_margin_min,
+            phase3_policy_.primary_minimums.clamp_h5_margin_max
+        );
+    }
+    phase3_policy_.primary_minimums.clamp_liquidity_min = parseCostParam(
+        phase3_primary_minimums_node,
+        "clamp_liquidity_min",
+        0.0,
+        0.0,
+        100.0
+    );
+    phase3_policy_.primary_minimums.clamp_liquidity_max = parseCostParam(
+        phase3_primary_minimums_node,
+        "clamp_liquidity_max",
+        100.0,
+        0.0,
+        100.0
+    );
+    if (phase3_policy_.primary_minimums.clamp_liquidity_max <
+        phase3_policy_.primary_minimums.clamp_liquidity_min) {
+        std::swap(
+            phase3_policy_.primary_minimums.clamp_liquidity_min,
+            phase3_policy_.primary_minimums.clamp_liquidity_max
+        );
+    }
+    phase3_policy_.primary_minimums.clamp_strength_min = parseCostParam(
+        phase3_primary_minimums_node,
+        "clamp_strength_min",
+        0.0,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_minimums.clamp_strength_max = parseCostParam(
+        phase3_primary_minimums_node,
+        "clamp_strength_max",
+        1.0,
+        0.0,
+        1.0
+    );
+    if (phase3_policy_.primary_minimums.clamp_strength_max <
+        phase3_policy_.primary_minimums.clamp_strength_min) {
+        std::swap(
+            phase3_policy_.primary_minimums.clamp_strength_min,
+            phase3_policy_.primary_minimums.clamp_strength_max
+        );
+    }
 
     phase3_policy_.primary_priority.enabled = phase3_primary_priority_node.value("enabled", false);
     phase3_policy_.primary_priority.margin_score_shift = parseCostParam(

@@ -1014,12 +1014,26 @@ ProbabilisticPrimaryMinimums effectiveProbabilisticPrimaryMinimums(
     autolife::analytics::MarketRegime regime,
     const ProbabilisticRuntimeSnapshot* snapshot
 ) {
+    const auto defaults = autolife::analytics::ProbabilisticRuntimeModel::Phase3PrimaryMinimumPolicy{};
+    const auto& policy = (snapshot != nullptr)
+        ? snapshot->phase3_primary_minimum_policy
+        : defaults;
+    const bool use_policy = (snapshot != nullptr) && snapshot->phase3_primary_minimum_policy.enabled;
+    const auto pick = [&](double policy_value, double fallback_value) {
+        return use_policy ? policy_value : fallback_value;
+    };
+
     ProbabilisticPrimaryMinimums out;
-    if (signal.phase3.primary_minimums_enabled) {
-        out.min_h5_calibrated = signal.phase3.primary_min_h5_calibrated;
-        out.min_h5_margin = signal.phase3.primary_min_h5_margin;
-        out.min_liquidity_score = signal.phase3.primary_min_liquidity_score;
-        out.min_signal_strength = signal.phase3.primary_min_signal_strength;
+    if (use_policy) {
+        out.min_h5_calibrated = policy.min_h5_calibrated;
+        out.min_h5_margin = policy.min_h5_margin;
+        out.min_liquidity_score = policy.min_liquidity_score;
+        out.min_signal_strength = policy.min_signal_strength;
+    } else if (signal.phase3.primary_minimums_enabled) {
+        out.min_h5_calibrated = std::clamp(signal.phase3.primary_min_h5_calibrated, 0.0, 1.0);
+        out.min_h5_margin = std::clamp(signal.phase3.primary_min_h5_margin, -1.0, 1.0);
+        out.min_liquidity_score = std::clamp(signal.phase3.primary_min_liquidity_score, 0.0, 100.0);
+        out.min_signal_strength = std::clamp(signal.phase3.primary_min_signal_strength, 0.0, 1.0);
     } else {
         out.min_h5_calibrated = cfg.probabilistic_primary_min_h5_calibrated;
         out.min_h5_margin = cfg.probabilistic_primary_min_h5_margin;
@@ -1031,20 +1045,50 @@ ProbabilisticPrimaryMinimums effectiveProbabilisticPrimaryMinimums(
         regime == autolife::analytics::MarketRegime::HIGH_VOLATILITY ||
         regime == autolife::analytics::MarketRegime::TRENDING_DOWN;
     if (hostile) {
-        out.min_h5_calibrated += 0.06;
-        out.min_h5_margin += 0.03;
-        out.min_liquidity_score += 10.0;
-        out.min_signal_strength += 0.08;
+        out.min_h5_calibrated += pick(
+            policy.hostile_add_h5_calibrated,
+            defaults.hostile_add_h5_calibrated
+        );
+        out.min_h5_margin += pick(policy.hostile_add_h5_margin, defaults.hostile_add_h5_margin);
+        out.min_liquidity_score += pick(
+            policy.hostile_add_liquidity_score,
+            defaults.hostile_add_liquidity_score
+        );
+        out.min_signal_strength += pick(
+            policy.hostile_add_signal_strength,
+            defaults.hostile_add_signal_strength
+        );
     } else if (regime == autolife::analytics::MarketRegime::RANGING) {
-        out.min_h5_calibrated += 0.01;
-        out.min_h5_margin += 0.005;
-        out.min_liquidity_score += 2.0;
-        out.min_signal_strength += 0.02;
+        out.min_h5_calibrated += pick(
+            policy.ranging_add_h5_calibrated,
+            defaults.ranging_add_h5_calibrated
+        );
+        out.min_h5_margin += pick(policy.ranging_add_h5_margin, defaults.ranging_add_h5_margin);
+        out.min_liquidity_score += pick(
+            policy.ranging_add_liquidity_score,
+            defaults.ranging_add_liquidity_score
+        );
+        out.min_signal_strength += pick(
+            policy.ranging_add_signal_strength,
+            defaults.ranging_add_signal_strength
+        );
     } else if (regime == autolife::analytics::MarketRegime::TRENDING_UP) {
-        out.min_h5_calibrated -= 0.02;
-        out.min_h5_margin -= 0.01;
-        out.min_liquidity_score -= 5.0;
-        out.min_signal_strength -= 0.03;
+        out.min_h5_calibrated += pick(
+            policy.trending_up_add_h5_calibrated,
+            defaults.trending_up_add_h5_calibrated
+        );
+        out.min_h5_margin += pick(
+            policy.trending_up_add_h5_margin,
+            defaults.trending_up_add_h5_margin
+        );
+        out.min_liquidity_score += pick(
+            policy.trending_up_add_liquidity_score,
+            defaults.trending_up_add_liquidity_score
+        );
+        out.min_signal_strength += pick(
+            policy.trending_up_add_signal_strength,
+            defaults.trending_up_add_signal_strength
+        );
     }
 
     if (snapshot != nullptr && cfg.probabilistic_regime_spec_enabled) {
@@ -1052,17 +1096,38 @@ ProbabilisticPrimaryMinimums effectiveProbabilisticPrimaryMinimums(
         out.min_h5_margin += regime_add;
         out.min_h5_calibrated += std::clamp(regime_add * 1.5, 0.0, 0.20);
         if (snapshot->regime_state == autolife::common::probabilistic_regime::State::VOLATILE) {
-            out.min_signal_strength += 0.03;
+            out.min_signal_strength += pick(
+                policy.regime_volatile_add_signal_strength,
+                defaults.regime_volatile_add_signal_strength
+            );
         } else if (snapshot->regime_state == autolife::common::probabilistic_regime::State::HOSTILE) {
-            out.min_liquidity_score += 8.0;
-            out.min_signal_strength += 0.08;
+            out.min_liquidity_score += pick(
+                policy.regime_hostile_add_liquidity_score,
+                defaults.regime_hostile_add_liquidity_score
+            );
+            out.min_signal_strength += pick(
+                policy.regime_hostile_add_signal_strength,
+                defaults.regime_hostile_add_signal_strength
+            );
         }
     }
 
     out.min_h5_calibrated = std::clamp(out.min_h5_calibrated, 0.0, 1.0);
-    out.min_h5_margin = std::clamp(out.min_h5_margin, -0.50, 0.20);
-    out.min_liquidity_score = std::clamp(out.min_liquidity_score, 0.0, 100.0);
-    out.min_signal_strength = std::clamp(out.min_signal_strength, 0.0, 1.0);
+    out.min_h5_margin = std::clamp(
+        out.min_h5_margin,
+        pick(policy.clamp_h5_margin_min, defaults.clamp_h5_margin_min),
+        pick(policy.clamp_h5_margin_max, defaults.clamp_h5_margin_max)
+    );
+    out.min_liquidity_score = std::clamp(
+        out.min_liquidity_score,
+        pick(policy.clamp_liquidity_min, defaults.clamp_liquidity_min),
+        pick(policy.clamp_liquidity_max, defaults.clamp_liquidity_max)
+    );
+    out.min_signal_strength = std::clamp(
+        out.min_signal_strength,
+        pick(policy.clamp_strength_min, defaults.clamp_strength_min),
+        pick(policy.clamp_strength_max, defaults.clamp_strength_max)
+    );
     return out;
 }
 
@@ -1180,132 +1245,7 @@ bool passesProbabilisticPrimaryMinimums(
 
     ProbabilisticPrimaryMinimums mins =
         effectiveProbabilisticPrimaryMinimums(cfg, signal, regime, snapshot);
-    const bool hostile_regime = autolife::common::signal_policy::isHostileRegime(regime);
-    const bool calm_context =
-        !hostile_regime &&
-        signal.volatility > 0.0 &&
-        signal.volatility <= 3.0 &&
-        signal.liquidity_score >= 20.0 &&
-        signal.reason.find("foundation_adaptive_regime_entry") != std::string::npos;
-    const bool strong_prob_context =
-        !hostile_regime &&
-        signal.probabilistic_h5_calibrated >= 0.54 &&
-        signal.probabilistic_h5_margin >= -0.010;
-    const bool probabilistic_supportive_context =
-        !hostile_regime &&
-        signal.probabilistic_h5_calibrated >= 0.46 &&
-        signal.probabilistic_h5_margin >= -0.015 &&
-        signal.liquidity_score >= 16.0;
-    if (hostile_regime) {
-        if (signal.probabilistic_h5_margin < -0.010) {
-            if (reject_reason != nullptr) {
-                *reject_reason = "blocked_probabilistic_primary_margin";
-            }
-            return false;
-        }
-        if (signal.probabilistic_h5_calibrated < 0.49 &&
-            signal.probabilistic_h5_margin < 0.0) {
-            if (reject_reason != nullptr) {
-                *reject_reason = "blocked_probabilistic_primary_calibrated";
-            }
-            return false;
-        }
-    } else {
-        if (signal.probabilistic_h5_margin < -0.045 &&
-            signal.probabilistic_h5_calibrated < 0.40) {
-            if (reject_reason != nullptr) {
-                *reject_reason = "blocked_probabilistic_primary_margin";
-            }
-            return false;
-        }
-        if (signal.probabilistic_h5_calibrated < 0.35 &&
-            signal.probabilistic_h5_margin < -0.030) {
-            if (reject_reason != nullptr) {
-                *reject_reason = "blocked_probabilistic_primary_calibrated";
-            }
-            return false;
-        }
-    }
-    if (calm_context) {
-        mins.min_h5_calibrated = std::max(0.0, mins.min_h5_calibrated - 0.03);
-        mins.min_h5_margin = std::max(-0.50, mins.min_h5_margin - 0.015);
-        mins.min_liquidity_score = std::max(0.0, mins.min_liquidity_score - 10.0);
-        mins.min_signal_strength = std::max(0.0, mins.min_signal_strength - 0.08);
-    }
-    if (strong_prob_context) {
-        mins.min_h5_calibrated = std::max(0.0, mins.min_h5_calibrated - 0.02);
-        mins.min_h5_margin = std::max(-0.50, mins.min_h5_margin - 0.010);
-        mins.min_signal_strength = std::max(0.0, mins.min_signal_strength - 0.04);
-    }
-    if (probabilistic_supportive_context) {
-        mins.min_h5_calibrated = std::max(0.0, mins.min_h5_calibrated - 0.02);
-        mins.min_h5_margin = std::max(-0.50, mins.min_h5_margin - 0.010);
-        mins.min_liquidity_score = std::max(0.0, mins.min_liquidity_score - 10.0);
-        mins.min_signal_strength = std::max(0.0, mins.min_signal_strength - 0.04);
-    }
-    const bool calibrated_fail = signal.probabilistic_h5_calibrated < mins.min_h5_calibrated;
-    const bool margin_fail = signal.probabilistic_h5_margin < mins.min_h5_margin;
-    const bool liquidity_fail = signal.liquidity_score < mins.min_liquidity_score;
-    const bool strength_fail = signal.strength < mins.min_signal_strength;
-    if (!(calibrated_fail || margin_fail || liquidity_fail || strength_fail)) {
-        return true;
-    }
-    if (!hostile_regime) {
-        const double calibrated_score = std::clamp(
-            (signal.probabilistic_h5_calibrated - (mins.min_h5_calibrated - 0.14)) / 0.24,
-            0.0,
-            1.0
-        );
-        const double margin_score = std::clamp(
-            (signal.probabilistic_h5_margin - (mins.min_h5_margin - 0.06)) / 0.14,
-            0.0,
-            1.0
-        );
-        const double liquidity_score = std::clamp(
-            signal.liquidity_score / std::max(1.0, mins.min_liquidity_score + 20.0),
-            0.0,
-            1.0
-        );
-        const double strength_score = std::clamp(
-            signal.strength / std::max(0.30, mins.min_signal_strength + 0.20),
-            0.0,
-            1.0
-        );
-        const double expected_edge_score = std::clamp(
-            (signal.expected_value + 0.00055) / 0.00160,
-            0.0,
-            1.0
-        );
-        const double composite_score =
-            (calibrated_score * 0.34) +
-            (margin_score * 0.28) +
-            (liquidity_score * 0.14) +
-            (strength_score * 0.14) +
-            (expected_edge_score * 0.10);
-        const double composite_threshold = 0.48;
-        if (composite_score >= composite_threshold &&
-            signal.probabilistic_h5_margin >= (mins.min_h5_margin - 0.028)) {
-            return true;
-        }
-        if (signal.probabilistic_h5_calibrated >= 0.40 &&
-            signal.probabilistic_h5_margin >= -0.028 &&
-            signal.liquidity_score >= 12.0 &&
-            signal.strength >= 0.07 &&
-            signal.expected_value >= -0.00014) {
-            return true;
-        }
-    } else {
-        const double hostile_score =
-            (std::clamp((signal.probabilistic_h5_calibrated - 0.46) / 0.20, 0.0, 1.0) * 0.45) +
-            (std::clamp((signal.probabilistic_h5_margin + 0.02) / 0.08, 0.0, 1.0) * 0.35) +
-            (std::clamp(signal.liquidity_score / 70.0, 0.0, 1.0) * 0.10) +
-            (std::clamp(signal.strength / 0.75, 0.0, 1.0) * 0.10);
-        if (hostile_score >= 0.58 &&
-            signal.probabilistic_h5_margin >= (mins.min_h5_margin - 0.012) &&
-            signal.liquidity_score >= std::max(20.0, mins.min_liquidity_score - 6.0)) {
-            return true;
-        }
-    }
+
     if (signal.probabilistic_h5_calibrated < mins.min_h5_calibrated) {
         if (reject_reason != nullptr) {
             *reject_reason = "blocked_probabilistic_primary_calibrated";
