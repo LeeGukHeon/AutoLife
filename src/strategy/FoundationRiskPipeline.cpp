@@ -34,8 +34,6 @@ FilterDecision evaluateFilter(const FilterInput& input) {
     out.required_expected_value = input.min_expected_value;
     out.reward_risk_ratio = rewardRiskRatio(signal);
     const bool probabilistic_primary_signal = signal.probabilistic_runtime_applied;
-    const bool rescue_archetype =
-        signal.entry_archetype.find("CORE_RESCUE") != std::string::npos;
     const bool range_pullback_archetype =
         signal.entry_archetype.find("FOUNDATION_RANGE_PULLBACK") != std::string::npos;
     const double probabilistic_confidence = probabilistic_primary_signal
@@ -130,41 +128,22 @@ FilterDecision evaluateFilter(const FilterInput& input) {
             ) *
             probabilistic_confidence;
     }
-    if (probabilistic_primary_signal && !input.hostile_regime) {
-        if (rescue_archetype) {
-            const double rescue_strength_floor = std::clamp(
-                0.30 - (0.08 * probabilistic_confidence),
-                0.22,
-                0.30
-            );
-            const double rescue_ev_floor = std::clamp(
-                -0.00004 + ((1.0 - probabilistic_confidence) * 0.00016),
-                -0.00004,
-                0.00012
-            );
-            out.required_strength = std::max(out.required_strength, rescue_strength_floor);
-            out.required_expected_value = std::max(out.required_expected_value, rescue_ev_floor);
-            if (signal.probabilistic_h5_calibrated < 0.55 || signal.probabilistic_h5_margin < 0.002) {
-                out.required_strength = std::max(out.required_strength, 0.34);
-                out.required_expected_value = std::max(out.required_expected_value, 0.00010);
-            }
-        } else if (range_pullback_archetype) {
-            const double range_strength_floor = std::clamp(
-                0.26 - (0.07 * probabilistic_confidence),
-                0.18,
-                0.26
-            );
-            const double range_ev_floor = std::clamp(
-                -0.00008 + ((1.0 - probabilistic_confidence) * 0.00014),
-                -0.00008,
-                0.00008
-            );
-            out.required_strength = std::max(out.required_strength, range_strength_floor);
-            out.required_expected_value = std::max(out.required_expected_value, range_ev_floor);
-            if (signal.probabilistic_h5_calibrated < 0.54 || signal.probabilistic_h5_margin < 0.008) {
-                out.required_strength = std::max(out.required_strength, 0.30);
-                out.required_expected_value = std::max(out.required_expected_value, 0.00008);
-            }
+    if (probabilistic_primary_signal && !input.hostile_regime && range_pullback_archetype) {
+        const double range_strength_floor = std::clamp(
+            0.26 - (0.07 * probabilistic_confidence),
+            0.18,
+            0.26
+        );
+        const double range_ev_floor = std::clamp(
+            -0.00008 + ((1.0 - probabilistic_confidence) * 0.00014),
+            -0.00008,
+            0.00008
+        );
+        out.required_strength = std::max(out.required_strength, range_strength_floor);
+        out.required_expected_value = std::max(out.required_expected_value, range_ev_floor);
+        if (signal.probabilistic_h5_calibrated < 0.54 || signal.probabilistic_h5_margin < 0.008) {
+            out.required_strength = std::max(out.required_strength, 0.30);
+            out.required_expected_value = std::max(out.required_expected_value, 0.00008);
         }
     }
 

@@ -674,12 +674,6 @@ bool applyProbabilisticRuntimeAdjustment(
     signal.phase3.primary_min_liquidity_score = snapshot.phase3_primary_minimum_policy.min_liquidity_score;
     signal.phase3.primary_min_signal_strength = snapshot.phase3_primary_minimum_policy.min_signal_strength;
     signal.phase3.primary_priority.enabled = snapshot.phase3_primary_priority_policy.enabled;
-    signal.phase3.primary_priority.conf_prob_shift = snapshot.phase3_primary_priority_policy.conf_prob_shift;
-    signal.phase3.primary_priority.conf_prob_scale = snapshot.phase3_primary_priority_policy.conf_prob_scale;
-    signal.phase3.primary_priority.conf_margin_shift = snapshot.phase3_primary_priority_policy.conf_margin_shift;
-    signal.phase3.primary_priority.conf_margin_scale = snapshot.phase3_primary_priority_policy.conf_margin_scale;
-    signal.phase3.primary_priority.conf_prob_weight = snapshot.phase3_primary_priority_policy.conf_prob_weight;
-    signal.phase3.primary_priority.conf_margin_weight = snapshot.phase3_primary_priority_policy.conf_margin_weight;
     signal.phase3.primary_priority.margin_score_shift = snapshot.phase3_primary_priority_policy.margin_score_shift;
     signal.phase3.primary_priority.margin_score_scale = snapshot.phase3_primary_priority_policy.margin_score_scale;
     signal.phase3.primary_priority.edge_score_shift = snapshot.phase3_primary_priority_policy.edge_score_shift;
@@ -697,13 +691,6 @@ bool applyProbabilisticRuntimeAdjustment(
     signal.phase3.primary_priority.strong_buy_bonus = snapshot.phase3_primary_priority_policy.strong_buy_bonus;
     signal.phase3.primary_priority.margin_bonus_scale = snapshot.phase3_primary_priority_policy.margin_bonus_scale;
     signal.phase3.primary_priority.margin_bonus_cap = snapshot.phase3_primary_priority_policy.margin_bonus_cap;
-    signal.phase3.primary_priority.rescue_penalty = snapshot.phase3_primary_priority_policy.rescue_penalty;
-    signal.phase3.primary_priority.rescue_bonus = snapshot.phase3_primary_priority_policy.rescue_bonus;
-    signal.phase3.primary_priority.rescue_confidence_floor =
-        snapshot.phase3_primary_priority_policy.rescue_confidence_floor;
-    signal.phase3.primary_priority.rescue_strength_floor =
-        snapshot.phase3_primary_priority_policy.rescue_strength_floor;
-    signal.phase3.primary_priority.rescue_margin_floor = snapshot.phase3_primary_priority_policy.rescue_margin_floor;
     signal.phase3.primary_priority.range_penalty = snapshot.phase3_primary_priority_policy.range_penalty;
     signal.phase3.primary_priority.range_bonus = snapshot.phase3_primary_priority_policy.range_bonus;
     signal.phase3.primary_priority.range_penalty_strength_floor =
@@ -894,11 +881,9 @@ void applyProbabilisticPrimaryDecisionProfile(
     const bool hostile_regime =
         signal.market_regime == autolife::analytics::MarketRegime::HIGH_VOLATILITY ||
         signal.market_regime == autolife::analytics::MarketRegime::TRENDING_DOWN;
-    const bool rescue_archetype =
-        signal.entry_archetype.find("CORE_RESCUE") != std::string::npos;
     const bool range_pullback_archetype =
         signal.entry_archetype.find("FOUNDATION_RANGE_PULLBACK") != std::string::npos;
-    const bool fragility_archetype = rescue_archetype || range_pullback_archetype;
+    const bool fragility_archetype = range_pullback_archetype;
     const double prob = std::clamp(signal.probabilistic_h5_calibrated, 0.0, 1.0);
     const double threshold = std::clamp(signal.probabilistic_h5_threshold, 0.0, 1.0);
     const double margin = std::clamp(signal.probabilistic_h5_margin, -1.0, 1.0);
@@ -1187,30 +1172,6 @@ double probabilisticPrimaryPriorityScore(
     const double margin = signal.probabilistic_runtime_applied
         ? std::clamp(signal.probabilistic_h5_margin, -1.0, 1.0)
         : 0.0;
-    const double conf_prob_shift = pick(priority.conf_prob_shift, 0.50);
-    const double conf_prob_scale = std::max(1e-6, pick(priority.conf_prob_scale, 0.25));
-    const double conf_margin_shift = pick(priority.conf_margin_shift, 0.02);
-    const double conf_margin_scale = std::max(1e-6, pick(priority.conf_margin_scale, 0.12));
-    const double conf_prob_weight = std::max(0.0, pick(priority.conf_prob_weight, 0.65));
-    const double conf_margin_weight = std::max(0.0, pick(priority.conf_margin_weight, 0.35));
-    const double conf_prob_component = std::clamp(
-        (prob - conf_prob_shift) / conf_prob_scale,
-        0.0,
-        1.0
-    );
-    const double conf_margin_component = std::clamp(
-        (margin + conf_margin_shift) / conf_margin_scale,
-        0.0,
-        1.0
-    );
-    const double conf_mix_denom = std::max(1e-6, conf_prob_weight + conf_margin_weight);
-    const double confidence = std::clamp(
-        ((conf_prob_component * conf_prob_weight) +
-         (conf_margin_component * conf_margin_weight)) /
-            conf_mix_denom,
-        0.0,
-        1.0
-    );
     const double margin_score_shift = pick(priority.margin_score_shift, 0.10);
     const double margin_score_scale = std::max(1e-6, pick(priority.margin_score_scale, 0.20));
     const double margin_score = std::clamp((margin + margin_score_shift) / margin_score_scale, 0.0, 1.0);
@@ -1252,16 +1213,7 @@ double probabilisticPrimaryPriorityScore(
     }
 
     const std::string& archetype = signal.entry_archetype;
-    if (archetype.find("CORE_RESCUE") != std::string::npos) {
-        const double rescue_confidence_floor = pick(priority.rescue_confidence_floor, 0.72);
-        const double rescue_strength_floor = pick(priority.rescue_strength_floor, 0.46);
-        const double rescue_margin_floor = pick(priority.rescue_margin_floor, 0.002);
-        if (confidence < rescue_confidence_floor || signal.strength < rescue_strength_floor || margin < rescue_margin_floor) {
-            score -= std::max(0.0, pick(priority.rescue_penalty, 0.16));
-        } else {
-            score += pick(priority.rescue_bonus, 0.02);
-        }
-    } else if (archetype.find("FOUNDATION_RANGE_PULLBACK") != std::string::npos) {
+    if (archetype.find("FOUNDATION_RANGE_PULLBACK") != std::string::npos) {
         const double range_penalty_strength_floor = pick(priority.range_penalty_strength_floor, 0.50);
         const double range_penalty_margin_floor = pick(priority.range_penalty_margin_floor, 0.008);
         const double range_penalty_prob_floor = pick(priority.range_penalty_prob_floor, 0.54);
@@ -1333,22 +1285,6 @@ bool passesProbabilisticPrimaryMinimums(
         signal.probabilistic_h5_calibrated >= 0.46 &&
         signal.probabilistic_h5_margin >= -0.015 &&
         signal.liquidity_score >= 16.0;
-    const bool rescue_archetype =
-        signal.entry_archetype.find("CORE_RESCUE") != std::string::npos;
-    if (!hostile_regime && rescue_archetype) {
-        const bool weak_probabilistic_support =
-            signal.probabilistic_h5_calibrated < 0.46 &&
-            signal.probabilistic_h5_margin < -0.010;
-        const bool weak_execution_quality =
-            signal.liquidity_score < 12.0 ||
-            signal.strength < 0.14;
-        if (weak_probabilistic_support && weak_execution_quality) {
-            if (reject_reason != nullptr) {
-                *reject_reason = "blocked_probabilistic_primary_rescue_quality";
-            }
-            return false;
-        }
-    }
     if (hostile_regime) {
         if (signal.probabilistic_h5_margin < -0.010) {
             if (reject_reason != nullptr) {
@@ -1401,16 +1337,6 @@ bool passesProbabilisticPrimaryMinimums(
     const bool liquidity_fail = signal.liquidity_score < mins.min_liquidity_score;
     const bool strength_fail = signal.strength < mins.min_signal_strength;
     if (!(calibrated_fail || margin_fail || liquidity_fail || strength_fail)) {
-        if (rescue_archetype &&
-            !hostile_regime &&
-            signal.probabilistic_h5_calibrated < 0.47 &&
-            signal.probabilistic_h5_margin < -0.008 &&
-            signal.strength < 0.14) {
-            if (reject_reason != nullptr) {
-                *reject_reason = "blocked_probabilistic_primary_rescue_quality";
-            }
-            return false;
-        }
         return true;
     }
     if (!hostile_regime) {

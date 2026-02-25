@@ -228,16 +228,6 @@ bool rebalanceSignalRiskReward(strategy::Signal& signal, const engine::EngineCon
         const double rr_boost = (favorable_regime ? 0.12 : 0.08) + (0.22 * asymmetry_pressure);
         target_rr = std::min(target_rr + rr_boost, base_target_rr + 1.10);
     }
-    const bool rescue_archetype = signal.entry_archetype.find("CORE_RESCUE") != std::string::npos;
-    const bool constructive_rescue_setup =
-        !isHostileRegime(signal.market_regime) &&
-        rescue_archetype &&
-        signal.probabilistic_h5_calibrated >= 0.415 &&
-        signal.probabilistic_h5_margin >= -0.009 &&
-        signal.strength >= 0.43;
-    if (constructive_rescue_setup) {
-        target_rr += 0.08;
-    }
     const bool constructive_uptrend_continuation_setup =
         signal.entry_archetype == "FOUNDATION_UPTREND_CONTINUATION" &&
         signal.market_regime == analytics::MarketRegime::TRENDING_UP &&

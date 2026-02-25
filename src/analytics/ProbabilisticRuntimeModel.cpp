@@ -914,48 +914,6 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
     );
 
     phase3_policy_.primary_priority.enabled = phase3_primary_priority_node.value("enabled", false);
-    phase3_policy_.primary_priority.conf_prob_shift = parseCostParam(
-        phase3_primary_priority_node,
-        "conf_prob_shift",
-        0.50,
-        -1.0,
-        2.0
-    );
-    phase3_policy_.primary_priority.conf_prob_scale = parseCostParam(
-        phase3_primary_priority_node,
-        "conf_prob_scale",
-        0.25,
-        1e-6,
-        10.0
-    );
-    phase3_policy_.primary_priority.conf_margin_shift = parseCostParam(
-        phase3_primary_priority_node,
-        "conf_margin_shift",
-        0.02,
-        -1.0,
-        2.0
-    );
-    phase3_policy_.primary_priority.conf_margin_scale = parseCostParam(
-        phase3_primary_priority_node,
-        "conf_margin_scale",
-        0.12,
-        1e-6,
-        10.0
-    );
-    phase3_policy_.primary_priority.conf_prob_weight = parseCostParam(
-        phase3_primary_priority_node,
-        "conf_prob_weight",
-        0.65,
-        0.0,
-        10.0
-    );
-    phase3_policy_.primary_priority.conf_margin_weight = parseCostParam(
-        phase3_primary_priority_node,
-        "conf_margin_weight",
-        0.35,
-        0.0,
-        10.0
-    );
     phase3_policy_.primary_priority.margin_score_shift = parseCostParam(
         phase3_primary_priority_node,
         "margin_score_shift",
@@ -1073,41 +1031,6 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         "margin_bonus_cap",
         0.03,
         0.0,
-        1.0
-    );
-    phase3_policy_.primary_priority.rescue_penalty = parseCostParam(
-        phase3_primary_priority_node,
-        "rescue_penalty",
-        0.16,
-        0.0,
-        1.0
-    );
-    phase3_policy_.primary_priority.rescue_bonus = parseCostParam(
-        phase3_primary_priority_node,
-        "rescue_bonus",
-        0.02,
-        -1.0,
-        1.0
-    );
-    phase3_policy_.primary_priority.rescue_confidence_floor = parseCostParam(
-        phase3_primary_priority_node,
-        "rescue_confidence_floor",
-        0.72,
-        0.0,
-        1.0
-    );
-    phase3_policy_.primary_priority.rescue_strength_floor = parseCostParam(
-        phase3_primary_priority_node,
-        "rescue_strength_floor",
-        0.46,
-        0.0,
-        1.0
-    );
-    phase3_policy_.primary_priority.rescue_margin_floor = parseCostParam(
-        phase3_primary_priority_node,
-        "rescue_margin_floor",
-        0.002,
-        -1.0,
         1.0
     );
     phase3_policy_.primary_priority.range_penalty = parseCostParam(

@@ -101,12 +101,6 @@ public:
 
     struct Phase3PrimaryPriorityPolicy {
         bool enabled = false;
-        double conf_prob_shift = 0.50;
-        double conf_prob_scale = 0.25;
-        double conf_margin_shift = 0.02;
-        double conf_margin_scale = 0.12;
-        double conf_prob_weight = 0.65;
-        double conf_margin_weight = 0.35;
         double margin_score_shift = 0.10;
         double margin_score_scale = 0.20;
         double edge_score_shift = 0.0005;
@@ -124,11 +118,6 @@ public:
         double strong_buy_bonus = 0.02;
         double margin_bonus_scale = 0.08;
         double margin_bonus_cap = 0.03;
-        double rescue_penalty = 0.16;
-        double rescue_bonus = 0.02;
-        double rescue_confidence_floor = 0.72;
-        double rescue_strength_floor = 0.46;
-        double rescue_margin_floor = 0.002;
         double range_penalty = 0.11;
         double range_bonus = 0.03;
         double range_penalty_strength_floor = 0.50;
