@@ -1,5 +1,5 @@
 # Codex Bootstrap (Read First)
-Last updated: 2026-02-24
+Last updated: 2026-02-25
 
 ## Session startup order
 1. Read `docs/_codex/CURRENT_STATE.md`.
@@ -17,9 +17,13 @@ python scripts/run_codex_context_refresh_checks.py `
   --touched-areas feature,model,runtime `
   --pipeline-version auto `
   --skip-missing
+python scripts/check_source_encoding.py `
+  --output-json .\build\Release\logs\source_encoding_check_bootstrap.json
 ```
 
 ## Baseline reminder
 - Baseline behavior is authoritative and must remain unchanged unless explicitly versioned.
 - Extensions are opt-in and default OFF.
 - Live trading remains disabled unless all gates pass.
+- Source/script/docs/config text files must be `UTF-8 (No BOM)`.
+- CSV files are the only exception and use `UTF-8 with BOM`.

@@ -1,5 +1,5 @@
 # PR Checklist (Mandatory)
-Last updated: 2026-02-24
+Last updated: 2026-02-25
 
 ## Scope and baseline
 - [ ] Ticket scope is explicit and matches `TICKET_TEMPLATE`.
@@ -16,6 +16,7 @@ Last updated: 2026-02-24
 - [ ] Relevant manifests/summaries include hashes and args metadata.
 - [ ] Contract and bundle changes recorded with updated hashes.
 - [ ] `docs/_codex/CURRENT_STATE.md` updated.
+- [ ] Encoding policy verified: source/script/docs/config are `UTF-8 (No BOM)` (CSV 제외).
 
 ## Validation gates
 - [ ] Strict feature validation pass (if applicable).

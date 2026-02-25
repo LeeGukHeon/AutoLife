@@ -1,5 +1,8 @@
 root = true
 
+# Encoding policy:
+# - source/script/docs/config: UTF-8 (no BOM)
+# - csv only: UTF-8 with BOM
 [*]
 charset = utf-8
 end_of_line = crlf

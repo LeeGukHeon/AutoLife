@@ -1964,6 +1964,55 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
             - 다음 단계(v22):
               - 승격 기준(정량 threshold + 명명) 확정 후
                 동일 5-set Gate3 + daily OOS 재검증.
+        - v22 명명/승격기준 고정 + 재검증 완료:
+          - 코드 정리:
+            - 운영 플래그명 승격:
+              - `enable_uptrend_rescue_prefilter_tail_guard` (default `false`)
+            - 하위호환 alias 유지:
+              - `enable_v21_rescue_prefiltered_pair_probe` (deprecated alias)
+            - reject reason 정규화:
+              - `blocked_probabilistic_primary_rescue_prefilter_tail_guard`
+          - 승격기준 evaluator 추가:
+            - `scripts/evaluate_v22_guard_promotion.py`
+            - fail-closed 기준:
+              - verification OFF/ON 지표 차이 epsilon 이내
+              - daily OOS OFF/ON 모두 `pass`
+              - `profit_sum_delta >= 0`
+              - `nonpositive_day_count_delta <= 0`
+              - v17 workflow `status=pass`, `v16_fail_reasons=[]`
+          - 재검증 산출물:
+            - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v22_rename_off_5set_20260225.json`
+            - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v22_rename_on_5set_20260225.json`
+            - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v22_rename_off_5set_3m7d_20260225.json`
+            - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v22_rename_on_5set_3m7d_20260225.json`
+            - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v22_rename_on_vs_off_5set_20260225.json`
+            - `build/Release/logs/v22_rename_probe_spillover_gate_correctness_runtime_mapping_on_guard_v22_rename_on_vs_off_5set_20260225_workflow.json`
+            - `build/Release/logs/v22_guard_promotion_evaluation_rename_20260225.json`
+          - 결과:
+            - verification OFF/ON 동일:
+              - `avg_profit_factor=1.0229`
+              - `avg_expectancy_krw=-0.6964`
+              - `avg_total_trades=14.0`
+            - daily OOS OFF/ON 모두 pass + 개선:
+              - `nonpositive_day_ratio: 0.368421 -> 0.315789`
+              - `total_profit_sum: 118.672413 -> 269.508805`
+            - delta:
+              - `profit_sum_delta=+150.836392`
+              - `nonpositive_day_count_delta=-1`
+            - v17 workflow:
+              - `status=pass` (`v16_fail_reasons=[]`)
+            - evaluator:
+              - `status=pass`
+        - 인코딩 정책(요청사항) 명시/검증 고정:
+          - 정책:
+            - source/script/docs/config text files는 `UTF-8 (No BOM)` 고정
+            - csv만 `UTF-8 with BOM` 허용
+          - 코드:
+            - `scripts/check_source_encoding.py`
+            - `scripts/run_ci_operational_gate.py` 기본 단계에 인코딩 체크 연결
+          - 산출물:
+            - `build/Release/logs/source_encoding_check_20260225.json`
+            - `build/Release/logs/source_encoding_check_ci.json`
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
    - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.

@@ -1290,8 +1290,9 @@ bool passesProbabilisticPrimaryMinimums(
                 return false;
         }
         if (regime == autolife::analytics::MarketRegime::TRENDING_UP) {
-            const bool v21_probe_rescue_prefiltered_pair =
-                cfg.enable_v21_rescue_prefiltered_pair_probe &&
+            const bool uptrend_rescue_prefilter_tail_guard =
+                (cfg.enable_uptrend_rescue_prefilter_tail_guard ||
+                 cfg.enable_v21_rescue_prefiltered_pair_probe) &&
                 signal.probabilistic_h5_calibrated >= 0.40515 &&
                 signal.probabilistic_h5_margin <= -0.017422;
             const bool weak_uptrend_rescue_lowliq_tail =
@@ -1347,7 +1348,7 @@ bool passesProbabilisticPrimaryMinimums(
                 signal.probabilistic_h5_margin < -0.0115 &&
                 signal.strength >= 0.472 &&
                 signal.strength < 0.476;
-            if (v21_probe_rescue_prefiltered_pair ||
+            if (uptrend_rescue_prefilter_tail_guard ||
                 weak_uptrend_rescue_lowliq_tail ||
                 weak_uptrend_rescue_narrow_tail ||
                 weak_uptrend_rescue_midvol_tail ||
@@ -1357,8 +1358,8 @@ bool passesProbabilisticPrimaryMinimums(
                 weak_uptrend_rescue_midliq_tail ||
                 weak_uptrend_rescue_highcal_shallowmargin_tail) {
                 if (reject_reason != nullptr) {
-                    *reject_reason = v21_probe_rescue_prefiltered_pair
-                        ? "blocked_probabilistic_primary_rescue_tail_guard_v21_probe"
+                    *reject_reason = uptrend_rescue_prefilter_tail_guard
+                        ? "blocked_probabilistic_primary_rescue_prefilter_tail_guard"
                         : "blocked_probabilistic_primary_rescue_tail_guard";
                 }
                 return false;

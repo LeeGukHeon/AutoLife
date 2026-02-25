@@ -3,7 +3,7 @@ Last updated: 2026-02-25
 
 ## Repository
 - Branch: `main`
-- Commit snapshot (pushed): `f7a6891`
+- Commit snapshot (pushed): `bf16195`
 
 ## Active ticket
 - Source of truth: `docs/_codex/ACTIVE_TICKET.md`
@@ -422,6 +422,50 @@ Last updated: 2026-02-25
     - tooling note:
       - `run_verification.py`는 config를 `utf-8`로 읽으므로,
         임시 config override 시 BOM 없는 UTF-8로 저장해야 함.
+  - v22 naming hardening + promotion criteria completed:
+    - runtime/config naming:
+      - promoted flag:
+        - `enable_uptrend_rescue_prefilter_tail_guard` (default `false`)
+      - backward-compatible alias:
+        - `enable_v21_rescue_prefiltered_pair_probe` (deprecated alias)
+      - reject reason normalized:
+        - `blocked_probabilistic_primary_rescue_prefilter_tail_guard`
+    - v22 artifacts:
+      - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v22_rename_off_5set_20260225.json`
+      - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v22_rename_on_5set_20260225.json`
+      - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v22_rename_off_5set_3m7d_20260225.json`
+      - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v22_rename_on_5set_3m7d_20260225.json`
+      - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v22_rename_on_vs_off_5set_20260225.json`
+      - `build/Release/logs/v22_rename_probe_spillover_gate_correctness_runtime_mapping_on_guard_v22_rename_on_vs_off_5set_20260225_workflow.json`
+      - `build/Release/logs/v22_guard_promotion_evaluation_rename_20260225.json`
+    - gate snapshot:
+      - verification OFF -> ON: identical
+        - `avg_profit_factor=1.0229`
+        - `avg_expectancy_krw=-0.6964`
+        - `avg_total_trades=14.0`
+      - daily OOS OFF -> ON: `pass -> pass`
+        - `nonpositive_day_ratio: 0.368421 -> 0.315789`
+        - `total_profit_sum: 118.672413 -> 269.508805`
+      - delta:
+        - `profit_sum_delta=+150.836392`
+        - `nonpositive_day_count_delta=-1`
+      - v17 workflow:
+        - `status=pass`, `v16_fail_reasons=[]`
+      - promotion evaluator:
+        - `status=pass`
+    - decision:
+      - baseline remains fail-closed (default OFF).
+      - v22 candidate is promotion-ready under fixed criteria; stage application remains operator-gated.
+  - encoding policy hardening completed:
+    - explicit rule:
+      - source/script/docs/config text files: `UTF-8 (No BOM)`
+      - csv only: `UTF-8 with BOM`
+    - code/tooling:
+      - `scripts/check_source_encoding.py`
+      - `scripts/run_ci_operational_gate.py` (default-on source encoding check)
+    - artifacts:
+      - `build/Release/logs/source_encoding_check_20260225.json`
+      - `build/Release/logs/source_encoding_check_ci.json`
   - live execution update 로그 수집 선행조건은 충족됨
     (`execution_updates_live.jsonl` 생성 확인).
   - live parity path hardening landed:

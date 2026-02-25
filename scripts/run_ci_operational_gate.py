@@ -2,6 +2,7 @@
 import argparse
 import subprocess
 
+import check_source_encoding
 import compare_execution_event_distribution
 import generate_live_execution_probe
 import prepare_operational_readiness_fixture
@@ -47,11 +48,27 @@ def parse_args(argv=None) -> argparse.Namespace:
         action="store_true",
         help="Skip execution event distribution comparison artifact generation.",
     )
+    parser.add_argument(
+        "--skip-source-encoding-check",
+        "-SkipSourceEncodingCheck",
+        action="store_true",
+        help="Skip UTF-8 no-BOM source encoding check.",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
+    if not args.skip_source_encoding_check:
+        encoding_exit = check_source_encoding.main(
+            [
+                "--output-json",
+                "build/Release/logs/source_encoding_check_ci.json",
+            ]
+        )
+        if encoding_exit != 0:
+            raise RuntimeError(f"Source encoding check failed with exit code {encoding_exit}")
+
     exe_path = resolve_repo_path(args.exe_path)
     backtest_prime_csv = resolve_repo_path(args.backtest_prime_csv)
     backtest_prime_fallback_csv = resolve_repo_path(args.backtest_prime_fallback_csv)

@@ -234,7 +234,9 @@ struct EngineConfig {
     // Correctness probe (default OFF): allow strategy-less runtime positions
     // to use live-like RiskManager exit mapping in backtest.
     bool backtest_strategyless_runtime_live_exit_mapping = false;
-    // Guard probe (default OFF): v21 prefilter-qualified paired condition.
+    // Guard flag (default OFF): prefilter-qualified uptrend rescue tail guard.
+    bool enable_uptrend_rescue_prefilter_tail_guard = false;
+    // Deprecated alias (default OFF): retained for backward-compatible config.
     bool enable_v21_rescue_prefiltered_pair_probe = false;
     std::vector<std::string> enabled_strategies;
 

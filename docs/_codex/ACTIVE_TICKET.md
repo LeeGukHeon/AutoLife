@@ -33,6 +33,7 @@ Last updated: 2026-02-25
   - none
 - Flags added/changed:
   - `backtest_strategyless_runtime_live_exit_mapping` (default `false`)
+  - `enable_uptrend_rescue_prefilter_tail_guard` (default `false`)
   - `enable_v21_rescue_prefiltered_pair_probe` (default `false`)
 
 ## Implementation plan
@@ -1136,6 +1137,56 @@ Last updated: 2026-02-25
 - tooling note:
   - 임시 config override 시 UTF-8 BOM이 들어가면 `run_verification.py`의 config 파싱이 실패하므로
     BOM 없는 UTF-8 저장을 사용.
+
+## Latest update (2026-02-25, v22)
+- naming hardening:
+  - runtime/config flag promoted:
+    - `enable_uptrend_rescue_prefilter_tail_guard` (default `false`)
+  - backward-compatible alias retained:
+    - `enable_v21_rescue_prefiltered_pair_probe` (deprecated alias, default `false`)
+  - reject reason normalized:
+    - `blocked_probabilistic_primary_rescue_prefilter_tail_guard`
+- promotion criteria fixed in code:
+  - new script:
+    - `scripts/evaluate_v22_guard_promotion.py`
+  - criteria (fail-closed):
+    - verification OFF/ON metric diff = 0 within epsilon
+    - daily OOS OFF/ON both `pass`
+    - `profit_sum_delta >= 0`
+    - `nonpositive_day_count_delta <= 0`
+    - v17 workflow `status=pass` and `v16_fail_reasons=[]`
+- v22 revalidation artifacts:
+  - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v22_rename_off_5set_20260225.json`
+  - `build/Release/logs/verification_report_correctness_runtime_mapping_on_guard_v22_rename_on_5set_20260225.json`
+  - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v22_rename_off_5set_3m7d_20260225.json`
+  - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v22_rename_on_5set_3m7d_20260225.json`
+  - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v22_rename_on_vs_off_5set_20260225.json`
+  - `build/Release/logs/v22_rename_probe_spillover_gate_correctness_runtime_mapping_on_guard_v22_rename_on_vs_off_5set_20260225_workflow.json`
+  - `build/Release/logs/v22_guard_promotion_evaluation_rename_20260225.json`
+- v22 result snapshot:
+  - verification OFF -> ON identical:
+    - `avg_profit_factor=1.0229`, `avg_expectancy_krw=-0.6964`, `avg_total_trades=14.0`
+  - daily OOS OFF -> ON pass + improve:
+    - `nonpositive_day_ratio: 0.368421 -> 0.315789`
+    - `total_profit_sum: 118.672413 -> 269.508805`
+    - `profit_sum_delta=+150.836392`, `nonpositive_day_count_delta=-1`
+  - v17 workflow:
+    - `status=pass`, `v16_fail_reasons=[]`
+  - promotion evaluator:
+    - `status=pass` (`v22_guard_promotion_evaluation_rename_20260225.json`)
+- encoding policy hardening:
+  - source encoding check script:
+    - `scripts/check_source_encoding.py`
+  - CI integration:
+    - `scripts/run_ci_operational_gate.py` now runs source encoding check by default
+    - skip only with explicit `--skip-source-encoding-check`
+  - evidence:
+    - `build/Release/logs/source_encoding_check_20260225.json` (`status=pass`)
+    - `build/Release/logs/source_encoding_check_ci.json` (`status=pass`)
+- decision:
+  - baseline fail-closed 유지:
+    - `enable_uptrend_rescue_prefilter_tail_guard=false` (default)
+  - 승격 준비는 완료되었고, 실제 정책 ON 전 마지막 단계는 운영 캡/모니터링 템플릿에 맞춘 staged 적용.
 
 ## DoD
 - [x] residual negative-day trade-level evidence captured.
