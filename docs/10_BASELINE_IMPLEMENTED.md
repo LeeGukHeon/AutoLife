@@ -1,5 +1,5 @@
-# Baseline Implemented (v1)
-Last updated: 2026-02-23
+# Baseline Implemented (v2_draft)
+Last updated: 2026-02-25
 Status: Active baseline
 
 ## Purpose
@@ -34,7 +34,7 @@ Define the current production-relevant probabilistic pipeline behavior that must
 - Builder: `scripts/build_probabilistic_feature_dataset.py`
 - Validator: `scripts/validate_probabilistic_feature_dataset.py`
 - Contract:
-  - `config/model/probabilistic_feature_contract_v1.json`
+  - `config/model/probabilistic_feature_contract_v2.json`
 - Labels:
   - `label_up_h1`
   - `label_up_h5`
@@ -57,7 +57,7 @@ Define the current production-relevant probabilistic pipeline behavior that must
 - Parity:
   - `scripts/validate_runtime_bundle_parity.py`
 - Contract:
-  - `config/model/probabilistic_runtime_bundle_v1.json`
+  - `config/model/probabilistic_runtime_bundle_v2.json`
 - Export modes:
   - `global_only` (default)
   - `hybrid`

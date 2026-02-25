@@ -27,7 +27,12 @@ def _to_i64(value: Any, default: int = 0) -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--snapshot-path", "-SnapshotPath", default="build/Release/state/snapshot_state.json")
-    parser.add_argument("--legacy-state-path", "-LegacyStatePath", default="build/Release/state/state.json")
+    parser.add_argument(
+        "--state-path",
+        "-StatePath",
+        dest="state_path",
+        default="build/Release/state/state.json",
+    )
     parser.add_argument("--journal-path", "-JournalPath", default="build/Release/state/event_journal.jsonl")
     parser.add_argument("--output-json", "-OutputJson", default="build/Release/logs/recovery_state_validation.json")
     return parser.parse_args()
@@ -35,15 +40,15 @@ def parse_args() -> argparse.Namespace:
 
 def main_with_paths(
     snapshot_path,
-    legacy_path,
+    state_path,
     journal_path,
     output_path,
 ) -> int:
-    state_source = snapshot_path if snapshot_path.exists() else (legacy_path if legacy_path.exists() else None)
+    state_source = snapshot_path if snapshot_path.exists() else (state_path if state_path.exists() else None)
     result: Dict[str, Any] = {
         "generated_at": datetime.now(tz=timezone.utc).isoformat(),
         "snapshot_path": str(snapshot_path),
-        "legacy_state_path": str(legacy_path),
+        "state_path": str(state_path),
         "journal_path": str(journal_path),
         "state_source": str(state_source) if state_source else None,
         "checks": {
@@ -200,10 +205,10 @@ def main_with_paths(
 def main() -> int:
     args = parse_args()
     snapshot_path = resolve_repo_path(args.snapshot_path)
-    legacy_path = resolve_repo_path(args.legacy_state_path)
+    state_path = resolve_repo_path(args.state_path)
     journal_path = resolve_repo_path(args.journal_path)
     output_path = resolve_repo_path(args.output_json)
-    return main_with_paths(snapshot_path, legacy_path, journal_path, output_path)
+    return main_with_paths(snapshot_path, state_path, journal_path, output_path)
 
 
 if __name__ == "__main__":

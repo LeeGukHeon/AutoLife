@@ -16,7 +16,12 @@ from _script_common import (
 def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--snapshot-path", "-SnapshotPath", default="build/Release/state/snapshot_state.json")
-    parser.add_argument("--legacy-state-path", "-LegacyStatePath", default="build/Release/state/state.json")
+    parser.add_argument(
+        "--state-path",
+        "-StatePath",
+        dest="state_path",
+        default="build/Release/state/state.json",
+    )
     parser.add_argument("--journal-path", "-JournalPath", default="build/Release/state/event_journal.jsonl")
     parser.add_argument("--log-dir", "-LogDir", default="build/Release/logs")
     parser.add_argument("--log-path", "-LogPath", default="")
@@ -33,7 +38,7 @@ def parse_args(argv=None) -> argparse.Namespace:
 def main(argv=None) -> int:
     args = parse_args(argv)
     snapshot_path = resolve_repo_path(args.snapshot_path)
-    legacy_path = resolve_repo_path(args.legacy_state_path)
+    state_path = resolve_repo_path(args.state_path)
     journal_path = resolve_repo_path(args.journal_path)
     log_dir = resolve_repo_path(args.log_dir)
     output_path = resolve_repo_path(args.output_json)
@@ -41,7 +46,7 @@ def main(argv=None) -> int:
 
     state_exit = validate_recovery_state.main_with_paths(
         snapshot_path,
-        legacy_path,
+        state_path,
         journal_path,
         state_validation_path,
     )
@@ -109,7 +114,7 @@ def main(argv=None) -> int:
         "generated_at": datetime.now(tz=timezone.utc).isoformat(),
         "inputs": {
             "snapshot_path": str(snapshot_path),
-            "legacy_state_path": str(legacy_path),
+            "state_path": str(state_path),
             "journal_path": str(journal_path),
             "log_path": str(log_path) if log_path else "",
             "state_validation_json": str(state_validation_path),

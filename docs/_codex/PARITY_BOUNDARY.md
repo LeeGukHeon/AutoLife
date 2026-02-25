@@ -1,4 +1,4 @@
-﻿# Live/Backtest Parity Boundary
+# Live/Backtest Parity Boundary
 Last updated: 2026-02-25
 
 ## Goal
@@ -35,11 +35,11 @@ python scripts/compare_execution_event_distribution.py `
   --output-json build/Release/logs/execution_event_distribution_comparison_ci.json
 
 python scripts/validate_should_exit_parity.py `
-  --audit-json build/Release/logs/strategyless_exit_audit_5set_20260225_v25_skip_primary.json `
+  --audit-json build/Release/logs/strategyless_exit_audit_latest.json `
   --output-json build/Release/logs/should_exit_parity_report.json
 
 python scripts/validate_should_exit_parity.py `
-  --audit-json build/Release/logs/strategyless_exit_audit_5set_20260225_v25_skip_primary.json `
+  --audit-json build/Release/logs/strategyless_exit_audit_latest.json `
   --output-json build/Release/logs/should_exit_parity_report.json `
   --tp1-unobservable-policy pass
 
@@ -66,5 +66,5 @@ python scripts/run_ci_operational_gate.py `
 ## Artifacts
 - `build/Release/logs/execution_parity_report.json`
 - `build/Release/logs/execution_event_distribution_comparison_ci.json`
-- `build/Release/logs/strategyless_exit_audit_5set_20260225_v25_skip_primary.json`
+- `build/Release/logs/strategyless_exit_audit_latest.json`
 - `build/Release/logs/should_exit_parity_report.json`

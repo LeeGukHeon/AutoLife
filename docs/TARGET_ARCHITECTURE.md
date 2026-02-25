@@ -135,7 +135,7 @@
 ## 전환 실행 현황 (2026-02-13, Stage 0~8 완료)
 1. 완료된 단계
 - Stage 0 (기준선 고정): baseline 캡처 스크립트 추가 및 최신 baseline 산출물 생성 완료.
-  - `scripts/capture_baseline.py`
+  - `scripts/verify_baseline.py` (current baseline entrypoint; `capture_baseline.py` removed on 2026-02-25)
   - `build/Release/logs/*baseline_20260213_141137*`
 - Stage 1 (모듈 경계 스캐폴딩): `core/contracts + adapters + orchestration` 추가, legacy 브리지 연결 완료.
   - `include/core/contracts/*`

@@ -94,7 +94,7 @@ Default:
 
 ### 3.3 Feature dataset (baseline)
 - `scripts/build_probabilistic_feature_dataset.py`
-- Contract: `config/model/probabilistic_feature_contract_v1.json`
+- Contract: `config/model/probabilistic_feature_contract_v2.json`
 - Contract summary:
   - 36 feature cols
   - 43 total cols incl meta/labels
@@ -121,7 +121,7 @@ Default:
 - Parity:
   - `scripts/validate_runtime_bundle_parity.py`
 - Bundle:
-  - `config/model/probabilistic_runtime_bundle_v1.json`
+  - `config/model/probabilistic_runtime_bundle_v2.json`
 
 ### 3.6 Execution engine (baseline)
 - Live: `src/runtime/LiveTradingRuntime.cpp`

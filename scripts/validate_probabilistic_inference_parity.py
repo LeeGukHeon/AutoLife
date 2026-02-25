@@ -25,15 +25,15 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--train-summary-json",
-        default=r".\build\Release\logs\probabilistic_model_train_summary_full_20260220.json",
+        default=r".\build\Release\logs\probabilistic_model_train_summary_global_latest.json",
     )
     parser.add_argument(
         "--split-manifest-json",
-        default=r".\data\model_input\probabilistic_features_v1_full_20260220_181345\probabilistic_split_manifest_v1.json",
+        default=r".\data\model_input\probabilistic_features_v2_draft_latest\probabilistic_split_manifest_v2_draft.json",
     )
     parser.add_argument(
         "--output-json",
-        default=r".\build\Release\logs\probabilistic_inference_parity_full_20260220.json",
+        default=r".\build\Release\logs\probabilistic_inference_parity_latest.json",
     )
     parser.add_argument("--samples-per-fold", type=int, default=2000)
     parser.add_argument("--clip-abs", type=float, default=8.0)
@@ -234,4 +234,3 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

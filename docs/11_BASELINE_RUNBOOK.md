@@ -1,5 +1,5 @@
-# Baseline Runbook (v1)
-Last updated: 2026-02-23
+# Baseline Runbook (v2_draft)
+Last updated: 2026-02-25
 
 ## Preconditions
 - Python environment is active and dependencies are installed.
@@ -33,15 +33,15 @@ python scripts/fetch_probabilistic_training_bundle.py `
 ```powershell
 python scripts/build_probabilistic_feature_dataset.py `
   --input-dir ".\data\backtest_probabilistic" `
-  --output-dir ".\data\model_input\probabilistic_features_v1_latest" `
-  --manifest-json ".\data\model_input\probabilistic_features_v1_latest\feature_dataset_manifest.json" `
+  --output-dir ".\data\model_input\probabilistic_features_v2_draft_latest" `
+  --manifest-json ".\data\model_input\probabilistic_features_v2_draft_latest\feature_dataset_manifest.json" `
   --universe-file ".\config\universe\runtime_universe.json"
 
 # EXT-54 optional (default OFF)
 python scripts/build_probabilistic_feature_dataset.py `
   --input-dir ".\data\backtest_probabilistic" `
-  --output-dir ".\data\model_input\probabilistic_features_v1_latest" `
-  --manifest-json ".\data\model_input\probabilistic_features_v1_latest\feature_dataset_manifest.json" `
+  --output-dir ".\data\model_input\probabilistic_features_v2_draft_latest" `
+  --manifest-json ".\data\model_input\probabilistic_features_v2_draft_latest\feature_dataset_manifest.json" `
   --universe-file ".\config\universe\runtime_universe.json" `
   --enable-conditional-cost-model `
   --cost-fee-floor-bps 6.0 `
@@ -57,8 +57,8 @@ python scripts/build_probabilistic_feature_dataset.py `
 # EXT-52 optional (default OFF)
 python scripts/build_probabilistic_feature_dataset.py `
   --input-dir ".\data\backtest_probabilistic" `
-  --output-dir ".\data\model_input\probabilistic_features_v1_latest" `
-  --manifest-json ".\data\model_input\probabilistic_features_v1_latest\feature_dataset_manifest.json" `
+  --output-dir ".\data\model_input\probabilistic_features_v2_draft_latest" `
+  --manifest-json ".\data\model_input\probabilistic_features_v2_draft_latest\feature_dataset_manifest.json" `
   --universe-file ".\config\universe\runtime_universe.json" `
   --sample-mode volatility `
   --sample-threshold 0.0015 `
@@ -67,13 +67,6 @@ python scripts/build_probabilistic_feature_dataset.py `
 
 ## 3) Strict feature validation
 ```powershell
-python scripts/validate_probabilistic_feature_dataset.py `
-  --dataset-manifest-json ".\data\model_input\probabilistic_features_v1_latest\feature_dataset_manifest.json" `
-  --contract-json ".\config\model\probabilistic_feature_contract_v1.json" `
-  --pipeline-version v1 `
-  --strict
-
-# Optional MODE B / v2 strict gate
 python scripts/validate_probabilistic_feature_dataset.py `
   --dataset-manifest-json ".\data\model_input\probabilistic_features_v2_draft_latest\feature_dataset_manifest.json" `
   --contract-json ".\config\model\probabilistic_feature_contract_v2.json" `
@@ -84,34 +77,34 @@ python scripts/validate_probabilistic_feature_dataset.py `
 ## 4) Split manifest + baseline
 ```powershell
 python scripts/generate_probabilistic_split_manifest.py `
-  --input-manifest-json ".\data\model_input\probabilistic_features_v1_latest\feature_dataset_manifest.json" `
-  --output-split-manifest-json ".\data\model_input\probabilistic_features_v1_latest\probabilistic_split_manifest_v1.json" `
+  --input-manifest-json ".\data\model_input\probabilistic_features_v2_draft_latest\feature_dataset_manifest.json" `
+  --output-split-manifest-json ".\data\model_input\probabilistic_features_v2_draft_latest\probabilistic_split_manifest_v2_draft.json" `
   --dataset-kind feature
 
 # EXT-51 optional (default OFF)
 python scripts/generate_probabilistic_split_manifest.py `
-  --input-manifest-json ".\data\model_input\probabilistic_features_v1_latest\feature_dataset_manifest.json" `
-  --output-split-manifest-json ".\data\model_input\probabilistic_features_v1_latest\probabilistic_split_manifest_v1.json" `
+  --input-manifest-json ".\data\model_input\probabilistic_features_v2_draft_latest\feature_dataset_manifest.json" `
+  --output-split-manifest-json ".\data\model_input\probabilistic_features_v2_draft_latest\probabilistic_split_manifest_v2_draft.json" `
   --dataset-kind feature `
   --enable-purged-walk-forward `
   --h1-bars 1 `
   --h5-bars 5 `
   --purge-bars -1 `
   --embargo-bars -1 `
-  --split-plan-json ".\data\model_input\probabilistic_features_v1_latest\split_plan.json"
+  --split-plan-json ".\data\model_input\probabilistic_features_v2_draft_latest\split_plan.json"
 
 python scripts/generate_probabilistic_baseline.py `
-  --split-manifest-json ".\data\model_input\probabilistic_features_v1_latest\probabilistic_split_manifest_v1.json"
+  --split-manifest-json ".\data\model_input\probabilistic_features_v2_draft_latest\probabilistic_split_manifest_v2_draft.json"
 ```
 
 ## 5) Global train
 ```powershell
 python scripts/train_probabilistic_pattern_model_global.py `
-  --split-manifest-json ".\data\model_input\probabilistic_features_v1_latest\probabilistic_split_manifest_v1.json"
+  --split-manifest-json ".\data\model_input\probabilistic_features_v2_draft_latest\probabilistic_split_manifest_v2_draft.json"
 
 # EXT-53 optional (default OFF)
 python scripts/train_probabilistic_pattern_model_global.py `
-  --split-manifest-json ".\data\model_input\probabilistic_features_v1_latest\probabilistic_split_manifest_v1.json" `
+  --split-manifest-json ".\data\model_input\probabilistic_features_v2_draft_latest\probabilistic_split_manifest_v2_draft.json" `
   --ensemble-k 5 `
   --ensemble-seed-step 1000
 ```
@@ -120,13 +113,13 @@ python scripts/train_probabilistic_pattern_model_global.py `
 ```powershell
 python scripts/export_probabilistic_runtime_bundle.py `
   --export-mode global_only `
-  --output-json ".\config\model\probabilistic_runtime_bundle_v1.json"
+  --output-json ".\config\model\probabilistic_runtime_bundle_v2.json"
 ```
 
 ## 7) Parity gate
 ```powershell
 python scripts/validate_runtime_bundle_parity.py `
-  --runtime-bundle-json ".\config\model\probabilistic_runtime_bundle_v1.json"
+  --runtime-bundle-json ".\config\model\probabilistic_runtime_bundle_v2.json"
 ```
 
 ## 8) Verification gate

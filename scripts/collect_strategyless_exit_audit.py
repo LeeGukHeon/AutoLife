@@ -117,7 +117,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-json",
-        default=r".\build\Release\logs\strategyless_exit_audit_5set_20260224.json",
+        default=r".\build\Release\logs\strategyless_exit_audit_latest.json",
         help="Output audit JSON path.",
     )
     return parser.parse_args()

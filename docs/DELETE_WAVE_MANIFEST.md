@@ -253,5 +253,5 @@ python scripts/run_ci_operational_gate.py --include-backtest --strict-execution-
 - Recovery path is git history-based restore for explicitly selected files.
 
 ## Notes
-- `scripts/validate_small_seed.py` is intentionally kept because `scripts/capture_baseline.py` imports it.
+- `scripts/capture_baseline.py` and `scripts/validate_small_seed.py` were removed in the verification-script cleanup wave (2026-02-25).
 - `data/backtest/simulation_large.csv` is intentionally kept because it is used as a default dataset in operational scripts.

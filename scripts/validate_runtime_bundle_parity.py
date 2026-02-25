@@ -37,7 +37,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-json",
-        default=r".\build\Release\logs\probabilistic_runtime_bundle_parity_full_20260220.json",
+        default=r".\build\Release\logs\probabilistic_runtime_bundle_parity_latest.json",
     )
     parser.add_argument("--samples-per-market", type=int, default=3000)
     parser.add_argument("--clip-abs", type=float, default=8.0)

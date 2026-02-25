@@ -60,7 +60,7 @@ Status: `ACTIVE_IMPLEMENTED_BASELINE`
   - triple-barrier 라벨(`--enable-triple-barrier-labels`)은 선택 활성화
 
 계약 파일:
-- `config/model/probabilistic_feature_contract_v1.json`
+- `config/model/probabilistic_feature_contract_v2.json`
 
 ## 4.3 학습 레이어
 - 전역 학습: `scripts/train_probabilistic_pattern_model_global.py`
@@ -82,7 +82,7 @@ Status: `ACTIVE_IMPLEMENTED_BASELINE`
   - `scripts/validate_runtime_bundle_parity.py`
 
 배포 번들:
-- `config/model/probabilistic_runtime_bundle_v1.json`
+- `config/model/probabilistic_runtime_bundle_v2.json`
 
 ## 4.5 실행 엔진 레이어
 - Live: `src/runtime/LiveTradingRuntime.cpp`

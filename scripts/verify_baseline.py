@@ -290,7 +290,7 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--realdata-only",
         action="store_true",
-        help="Deprecated: verification is now always realdata-only.",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--data-mode",
@@ -423,7 +423,7 @@ def main(argv=None) -> int:
     ).resolve()
     if requested_data_dir_resolved != fixed_data_dir:
         raise RuntimeError(
-            "Verification CLI is realdata-only and fixed to data/backtest_real. "
+            "Verification CLI is fixed to data/backtest_real. "
             f"requested={requested_data_dir_resolved}"
         )
     data_dir = fixed_data_dir
@@ -444,12 +444,12 @@ def main(argv=None) -> int:
             )
         datasets = discovered
         print(
-            f"[verify_baseline] realdata-only dataset auto-discovery: count={len(datasets)}",
+            f"[verify_baseline] dataset auto-discovery: count={len(datasets)}",
             flush=True,
         )
         if missing_companion:
             print(
-                "[verify_baseline] realdata-only skipped (missing higher TF companions): "
+                "[verify_baseline] skipped (missing higher TF companions): "
                 + ",".join(missing_companion),
                 flush=True,
             )

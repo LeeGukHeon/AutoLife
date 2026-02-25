@@ -9,7 +9,12 @@ from _script_common import ensure_parent_directory, resolve_repo_path
 def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--snapshot-path", "-SnapshotPath", default="build/Release/state/snapshot_state.json")
-    parser.add_argument("--legacy-state-path", "-LegacyStatePath", default="build/Release/state/state.json")
+    parser.add_argument(
+        "--state-path",
+        "-StatePath",
+        dest="state_path",
+        default="build/Release/state/state.json",
+    )
     parser.add_argument("--journal-path", "-JournalPath", default="build/Release/state/event_journal.jsonl")
     parser.add_argument("--log-path", "-LogPath", default="build/Release/logs/ci_fixture/autolife_ci_fixture.log")
     return parser.parse_args(argv)
@@ -18,11 +23,11 @@ def parse_args(argv=None) -> argparse.Namespace:
 def main(argv=None) -> int:
     args = parse_args(argv)
     snapshot_path = resolve_repo_path(args.snapshot_path)
-    legacy_path = resolve_repo_path(args.legacy_state_path)
+    state_path = resolve_repo_path(args.state_path)
     journal_path = resolve_repo_path(args.journal_path)
     log_path = resolve_repo_path(args.log_path)
 
-    for p in (snapshot_path, legacy_path, journal_path, log_path):
+    for p in (snapshot_path, state_path, journal_path, log_path):
         ensure_parent_directory(p)
 
     ts_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
@@ -34,7 +39,7 @@ def main(argv=None) -> int:
 
     serialized_state = json.dumps(state, ensure_ascii=False, indent=2) + "\n"
     snapshot_path.write_text(serialized_state, encoding="utf-8")
-    legacy_path.write_text(serialized_state, encoding="utf-8")
+    state_path.write_text(serialized_state, encoding="utf-8")
 
     journal_event = {
         "seq": 0,

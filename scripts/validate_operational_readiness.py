@@ -16,7 +16,12 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--no-strict-log-check", "-NoStrictLogCheck", action="store_true")
     parser.add_argument("--strict-execution-parity", "-StrictExecutionParity", action="store_true")
     parser.add_argument("--snapshot-path", "-SnapshotPath", default="build/Release/state/snapshot_state.json")
-    parser.add_argument("--legacy-state-path", "-LegacyStatePath", default="build/Release/state/state.json")
+    parser.add_argument(
+        "--state-path",
+        "-StatePath",
+        dest="state_path",
+        default="build/Release/state/state.json",
+    )
     parser.add_argument("--journal-path", "-JournalPath", default="build/Release/state/event_journal.jsonl")
     parser.add_argument("--log-dir", "-LogDir", default="build/Release/logs")
     parser.add_argument("--recovery-output-json", "-RecoveryOutputJson", default="build/Release/logs/recovery_e2e_report_strict.json")
@@ -61,8 +66,8 @@ def main(argv=None) -> int:
     recovery_argv = [
         "-SnapshotPath",
         str(resolve_repo_path(args.snapshot_path)),
-        "-LegacyStatePath",
-        str(resolve_repo_path(args.legacy_state_path)),
+        "-StatePath",
+        str(resolve_repo_path(args.state_path)),
         "-JournalPath",
         str(resolve_repo_path(args.journal_path)),
         "-LogDir",

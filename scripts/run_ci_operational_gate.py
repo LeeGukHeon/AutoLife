@@ -68,7 +68,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--should-exit-audit-json",
-        default="build/Release/logs/strategyless_exit_audit_5set_20260225_v25_skip_primary.json",
+        default="build/Release/logs/strategyless_exit_audit_latest.json",
         help="Input audit JSON path for should-exit parity analysis.",
     )
     parser.add_argument(

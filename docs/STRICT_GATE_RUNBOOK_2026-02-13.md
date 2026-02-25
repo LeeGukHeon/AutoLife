@@ -1,4 +1,4 @@
-﻿# Strict Gate Runbook (2026-02-13)
+# Strict Gate Runbook (2026-02-13)
 
 ## Purpose
 - Separate CI gates by risk level while keeping `validate_operational_readiness.py` as the single operational entrypoint.
@@ -257,7 +257,7 @@ python scripts/run_ci_operational_gate.py -IncludeBacktest
 python scripts/run_ci_operational_gate.py -IncludeBacktest -RunLiveProbe -StrictExecutionParity
 python scripts/generate_strict_live_gate_trend_alert.py -GateProfile strict_live -ApplyTunedThresholds -ActionExecutionPolicy safe-auto-execute -EnableActionFeedbackLoop
 python scripts/verify_baseline.py --data-mode fixed --validation-profile adaptive
-python scripts/verify_baseline.py --realdata-only --datasets upbit_KRW_BTC_1m_12000.csv --data-mode refresh_if_missing --validation-profile adaptive
+python scripts/verify_baseline.py --datasets upbit_KRW_BTC_1m_12000.csv --data-mode refresh_if_missing --validation-profile adaptive
 python scripts/run_profitability_exploratory.py
 python scripts/apply_trading_preset.py -Preset safe
 ```
