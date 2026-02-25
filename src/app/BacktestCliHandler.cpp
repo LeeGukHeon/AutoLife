@@ -308,9 +308,6 @@ bool tryRunCliBacktest(int argc, char* argv[], Config& config, int& out_exit_cod
         s = trim_copy(s);
         std::transform(s.begin(), s.end(), s.begin(),
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        if (s == "grid") {
-            return std::string("grid_trading");
-        }
         if (s == "foundation" ||
             s == "foundation_adaptive_strategy" ||
             s == "foundation adaptive strategy") {

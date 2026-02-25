@@ -1,6 +1,7 @@
 #include "strategy/FoundationAdaptiveStrategy.h"
 
 #include "analytics/TechnicalIndicators.h"
+#include "common/Config.h"
 
 #include <algorithm>
 #include <chrono>
@@ -73,62 +74,122 @@ MtfConfirmation evaluateMtfConfirmation(
     analytics::MarketRegime regime
 ) {
     MtfConfirmation out;
+    const auto& engine_cfg = autolife::Config::getInstance().getEngineConfig();
 
     const auto closes_5m = extractTfCloses(metrics, "5m");
     const auto closes_15m = extractTfCloses(metrics, "15m");
     const auto closes_1h = extractTfCloses(metrics, "1h");
-    if (closes_5m.size() < 24 || closes_15m.size() < 20 || closes_1h.size() < 16) {
+    const std::size_t min_bars_5m =
+        static_cast<std::size_t>(std::max(1, engine_cfg.foundation_mtf_min_bars_5m));
+    const std::size_t min_bars_15m =
+        static_cast<std::size_t>(std::max(1, engine_cfg.foundation_mtf_min_bars_15m));
+    const std::size_t min_bars_1h =
+        static_cast<std::size_t>(std::max(1, engine_cfg.foundation_mtf_min_bars_1h));
+    if (closes_5m.size() < min_bars_5m || closes_15m.size() < min_bars_15m || closes_1h.size() < min_bars_1h) {
         out.reject_reason = "foundation_no_signal_mtf_window";
         return out;
     }
 
-    out.momentum_5m = rollingReturn(closes_5m, 6);
-    out.momentum_15m = rollingReturn(closes_15m, 4);
-    out.momentum_1h = rollingReturn(closes_1h, 3);
-    out.ema_gap_15m = safeEmaGap(closes_15m, 8, 21);
-    out.ema_gap_1h = safeEmaGap(closes_1h, 5, 13);
-    out.rsi_5m = analytics::TechnicalIndicators::calculateRSI(closes_5m, 14);
-    out.rsi_15m = analytics::TechnicalIndicators::calculateRSI(closes_15m, 14);
+    const std::size_t momentum_5m_lookback =
+        static_cast<std::size_t>(std::max(1, engine_cfg.foundation_mtf_momentum_5m_lookback));
+    const std::size_t momentum_15m_lookback =
+        static_cast<std::size_t>(std::max(1, engine_cfg.foundation_mtf_momentum_15m_lookback));
+    const std::size_t momentum_1h_lookback =
+        static_cast<std::size_t>(std::max(1, engine_cfg.foundation_mtf_momentum_1h_lookback));
+    const int ema_fast_15m = std::max(1, engine_cfg.foundation_mtf_ema_fast_15m);
+    const int ema_slow_15m = std::max(ema_fast_15m + 1, engine_cfg.foundation_mtf_ema_slow_15m);
+    const int ema_fast_1h = std::max(1, engine_cfg.foundation_mtf_ema_fast_1h);
+    const int ema_slow_1h = std::max(ema_fast_1h + 1, engine_cfg.foundation_mtf_ema_slow_1h);
+    const int rsi_period = std::max(2, engine_cfg.foundation_mtf_rsi_period);
 
-    double score = 0.50;
-    score += std::clamp(out.momentum_5m * 14.0, -0.08, 0.08);
-    score += std::clamp(out.momentum_15m * 18.0, -0.10, 0.10);
-    score += std::clamp(out.momentum_1h * 12.0, -0.08, 0.08);
-    score += std::clamp(out.ema_gap_15m * 16.0, -0.08, 0.08);
-    score += std::clamp(out.ema_gap_1h * 10.0, -0.06, 0.06);
-    score += std::clamp((56.0 - out.rsi_15m) / 180.0, -0.05, 0.05);
-    score += std::clamp((54.0 - out.rsi_5m) / 220.0, -0.04, 0.04);
+    out.momentum_5m = rollingReturn(closes_5m, momentum_5m_lookback);
+    out.momentum_15m = rollingReturn(closes_15m, momentum_15m_lookback);
+    out.momentum_1h = rollingReturn(closes_1h, momentum_1h_lookback);
+    out.ema_gap_15m = safeEmaGap(closes_15m, ema_fast_15m, ema_slow_15m);
+    out.ema_gap_1h = safeEmaGap(closes_1h, ema_fast_1h, ema_slow_1h);
+    out.rsi_5m = analytics::TechnicalIndicators::calculateRSI(closes_5m, rsi_period);
+    out.rsi_15m = analytics::TechnicalIndicators::calculateRSI(closes_15m, rsi_period);
+
+    const double score_momentum_5m_clip = std::max(0.0, engine_cfg.foundation_mtf_score_momentum_5m_clip);
+    const double score_momentum_15m_clip = std::max(0.0, engine_cfg.foundation_mtf_score_momentum_15m_clip);
+    const double score_momentum_1h_clip = std::max(0.0, engine_cfg.foundation_mtf_score_momentum_1h_clip);
+    const double score_ema_gap_15m_clip = std::max(0.0, engine_cfg.foundation_mtf_score_ema_gap_15m_clip);
+    const double score_ema_gap_1h_clip = std::max(0.0, engine_cfg.foundation_mtf_score_ema_gap_1h_clip);
+    const double score_rsi_15m_clip = std::max(0.0, engine_cfg.foundation_mtf_score_rsi_15m_clip);
+    const double score_rsi_5m_clip = std::max(0.0, engine_cfg.foundation_mtf_score_rsi_5m_clip);
+    const double score_rsi_15m_divisor =
+        std::max(1e-9, std::abs(engine_cfg.foundation_mtf_score_rsi_15m_divisor));
+    const double score_rsi_5m_divisor =
+        std::max(1e-9, std::abs(engine_cfg.foundation_mtf_score_rsi_5m_divisor));
+
+    double score = engine_cfg.foundation_mtf_score_base;
+    score += std::clamp(
+        out.momentum_5m * engine_cfg.foundation_mtf_score_momentum_5m_weight,
+        -score_momentum_5m_clip,
+        score_momentum_5m_clip
+    );
+    score += std::clamp(
+        out.momentum_15m * engine_cfg.foundation_mtf_score_momentum_15m_weight,
+        -score_momentum_15m_clip,
+        score_momentum_15m_clip
+    );
+    score += std::clamp(
+        out.momentum_1h * engine_cfg.foundation_mtf_score_momentum_1h_weight,
+        -score_momentum_1h_clip,
+        score_momentum_1h_clip
+    );
+    score += std::clamp(
+        out.ema_gap_15m * engine_cfg.foundation_mtf_score_ema_gap_15m_weight,
+        -score_ema_gap_15m_clip,
+        score_ema_gap_15m_clip
+    );
+    score += std::clamp(
+        out.ema_gap_1h * engine_cfg.foundation_mtf_score_ema_gap_1h_weight,
+        -score_ema_gap_1h_clip,
+        score_ema_gap_1h_clip
+    );
+    score += std::clamp(
+        (engine_cfg.foundation_mtf_score_rsi_15m_center - out.rsi_15m) / score_rsi_15m_divisor,
+        -score_rsi_15m_clip,
+        score_rsi_15m_clip
+    );
+    score += std::clamp(
+        (engine_cfg.foundation_mtf_score_rsi_5m_center - out.rsi_5m) / score_rsi_5m_divisor,
+        -score_rsi_5m_clip,
+        score_rsi_5m_clip
+    );
     out.score = std::clamp(score, 0.0, 1.0);
 
     switch (regime) {
         case analytics::MarketRegime::TRENDING_UP:
             out.pass =
-                out.momentum_15m >= -0.0020 &&
-                out.ema_gap_15m >= -0.0014 &&
-                out.momentum_1h >= -0.0050 &&
-                out.rsi_15m <= 71.0 &&
-                out.score >= 0.43;
+                out.momentum_15m >= engine_cfg.foundation_mtf_uptrend_min_momentum_15m &&
+                out.ema_gap_15m >= engine_cfg.foundation_mtf_uptrend_min_ema_gap_15m &&
+                out.momentum_1h >= engine_cfg.foundation_mtf_uptrend_min_momentum_1h &&
+                out.rsi_15m <= engine_cfg.foundation_mtf_uptrend_max_rsi_15m &&
+                out.score >= engine_cfg.foundation_mtf_uptrend_min_score;
             out.reject_reason = "foundation_no_signal_mtf_uptrend_mismatch";
             break;
         case analytics::MarketRegime::RANGING:
             out.pass =
-                std::abs(out.momentum_15m) <= 0.0240 &&
-                out.rsi_15m <= 66.0 &&
-                out.score >= 0.37;
+                std::abs(out.momentum_15m) <=
+                    std::max(0.0, engine_cfg.foundation_mtf_ranging_max_abs_momentum_15m) &&
+                out.rsi_15m <= engine_cfg.foundation_mtf_ranging_max_rsi_15m &&
+                out.score >= engine_cfg.foundation_mtf_ranging_min_score;
             out.reject_reason = "foundation_no_signal_mtf_ranging_mismatch";
             break;
         case analytics::MarketRegime::TRENDING_DOWN:
         case analytics::MarketRegime::HIGH_VOLATILITY:
             out.pass =
-                out.momentum_1h >= -0.0100 &&
-                out.momentum_15m >= -0.0070 &&
-                out.rsi_5m <= 50.0 &&
-                out.score >= 0.50;
+                out.momentum_1h >= engine_cfg.foundation_mtf_hostile_min_momentum_1h &&
+                out.momentum_15m >= engine_cfg.foundation_mtf_hostile_min_momentum_15m &&
+                out.rsi_5m <= engine_cfg.foundation_mtf_hostile_max_rsi_5m &&
+                out.score >= engine_cfg.foundation_mtf_hostile_min_score;
             out.reject_reason = "foundation_no_signal_mtf_hostile_mismatch";
             break;
         case analytics::MarketRegime::UNKNOWN:
         default:
-            out.pass = out.score >= 0.47;
+            out.pass = out.score >= engine_cfg.foundation_mtf_unknown_min_score;
             out.reject_reason = "foundation_no_signal_mtf_unknown_mismatch";
             break;
     }
@@ -136,6 +197,7 @@ MtfConfirmation evaluateMtfConfirmation(
 }
 
 bool isLowLiquidityUptrendOpportunity(
+    const engine::EngineConfig& cfg,
     const analytics::CoinMetrics& metrics,
     const std::vector<double>& closes,
     double current_price,
@@ -143,30 +205,38 @@ bool isLowLiquidityUptrendOpportunity(
     double ema_slow,
     double rsi
 ) {
-    if (metrics.liquidity_score < 34.0 || metrics.liquidity_score >= 48.0) {
+    if (!cfg.foundation_entry_low_liq_uptrend_enabled) {
         return false;
     }
-    if (metrics.volume_surge_ratio < 0.62 || metrics.volume_surge_ratio > 1.70) {
+    if (metrics.liquidity_score < cfg.foundation_entry_low_liq_uptrend_liquidity_min ||
+        metrics.liquidity_score >= cfg.foundation_entry_low_liq_uptrend_liquidity_max) {
         return false;
     }
-    if (metrics.order_book_imbalance <= -0.06) {
+    if (metrics.volume_surge_ratio < cfg.foundation_entry_low_liq_uptrend_volume_surge_min ||
+        metrics.volume_surge_ratio > cfg.foundation_entry_low_liq_uptrend_volume_surge_max) {
+        return false;
+    }
+    if (metrics.order_book_imbalance <= cfg.foundation_entry_low_liq_uptrend_imbalance_min) {
         return false;
     }
 
     const double ret5 = rollingReturn(closes, 5);
     const double ret20 = rollingReturn(closes, 20);
-    if (ret5 < 0.0004 || ret20 < 0.0010) {
+    if (ret5 < cfg.foundation_entry_low_liq_uptrend_ret5_min ||
+        ret20 < cfg.foundation_entry_low_liq_uptrend_ret20_min) {
         return false;
     }
 
     return (
-        current_price > ema_fast * 0.9992 &&
-        ema_fast >= ema_slow * 0.9990 &&
-        rsi >= 48.0 && rsi <= 68.0
+        current_price > ema_fast * cfg.foundation_entry_low_liq_uptrend_price_to_ema_fast_min &&
+        ema_fast >= ema_slow * cfg.foundation_entry_low_liq_uptrend_ema_fast_to_ema_slow_min &&
+        rsi >= cfg.foundation_entry_low_liq_uptrend_rsi_min &&
+        rsi <= cfg.foundation_entry_low_liq_uptrend_rsi_max
     );
 }
 
 bool isThinLiquidityAdaptiveOpportunity(
+    const engine::EngineConfig& cfg,
     const analytics::CoinMetrics& metrics,
     const std::vector<double>& closes,
     double current_price,
@@ -176,13 +246,19 @@ bool isThinLiquidityAdaptiveOpportunity(
     double bb_middle,
     analytics::MarketRegime regime
 ) {
-    if (metrics.liquidity_score < 28.0 || metrics.liquidity_score >= 56.0) {
+    if (!cfg.foundation_entry_thin_liq_adaptive_enabled) {
         return false;
     }
-    if (metrics.volume_surge_ratio < 0.52 || metrics.volume_surge_ratio > 1.85) {
+    if (metrics.liquidity_score < cfg.foundation_entry_thin_liq_adaptive_liquidity_min ||
+        metrics.liquidity_score >= cfg.foundation_entry_thin_liq_adaptive_liquidity_max) {
         return false;
     }
-    if (metrics.orderbook_snapshot.valid && metrics.orderbook_snapshot.spread_pct > 0.0038) {
+    if (metrics.volume_surge_ratio < cfg.foundation_entry_thin_liq_adaptive_volume_surge_min ||
+        metrics.volume_surge_ratio > cfg.foundation_entry_thin_liq_adaptive_volume_surge_max) {
+        return false;
+    }
+    if (metrics.orderbook_snapshot.valid &&
+        metrics.orderbook_snapshot.spread_pct > cfg.foundation_entry_thin_liq_adaptive_spread_max) {
         return false;
     }
 
@@ -193,42 +269,52 @@ bool isThinLiquidityAdaptiveOpportunity(
     switch (regime) {
         case analytics::MarketRegime::TRENDING_UP:
             return (
-                current_price >= ema_fast * 0.9995 &&
-                ema_fast >= ema_slow * 0.9990 &&
-                rsi >= 44.0 && rsi <= 68.0 &&
-                ret8 >= -0.0004 &&
-                ret20 >= 0.0003 &&
-                metrics.order_book_imbalance > -0.08
+                current_price >=
+                    ema_fast * cfg.foundation_entry_thin_liq_adaptive_uptrend_price_to_ema_fast_min &&
+                ema_fast >=
+                    ema_slow * cfg.foundation_entry_thin_liq_adaptive_uptrend_ema_fast_to_ema_slow_min &&
+                rsi >= cfg.foundation_entry_thin_liq_adaptive_uptrend_rsi_min &&
+                rsi <= cfg.foundation_entry_thin_liq_adaptive_uptrend_rsi_max &&
+                ret8 >= cfg.foundation_entry_thin_liq_adaptive_uptrend_ret8_min &&
+                ret20 >= cfg.foundation_entry_thin_liq_adaptive_uptrend_ret20_min &&
+                metrics.order_book_imbalance > cfg.foundation_entry_thin_liq_adaptive_uptrend_imbalance_min
             );
         case analytics::MarketRegime::RANGING:
             return (
-                current_price <= bb_middle * 1.0030 &&
-                rsi >= 34.0 && rsi <= 50.0 &&
-                ret3 <= 0.0018 &&
-                ret20 >= -0.0015 &&
-                metrics.order_book_imbalance > -0.12
+                current_price <=
+                    bb_middle * cfg.foundation_entry_thin_liq_adaptive_ranging_price_to_bb_middle_max &&
+                rsi >= cfg.foundation_entry_thin_liq_adaptive_ranging_rsi_min &&
+                rsi <= cfg.foundation_entry_thin_liq_adaptive_ranging_rsi_max &&
+                ret3 <= cfg.foundation_entry_thin_liq_adaptive_ranging_ret3_max &&
+                ret20 >= cfg.foundation_entry_thin_liq_adaptive_ranging_ret20_min &&
+                metrics.order_book_imbalance > cfg.foundation_entry_thin_liq_adaptive_ranging_imbalance_min
             );
         case analytics::MarketRegime::TRENDING_DOWN:
         case analytics::MarketRegime::HIGH_VOLATILITY:
             return (
-                rsi <= 35.0 &&
-                current_price >= ema_fast * 0.9985 &&
-                metrics.buy_pressure >= (metrics.sell_pressure * 0.95) &&
-                ret3 >= -0.0010 &&
-                ret8 >= -0.0020
+                rsi <= cfg.foundation_entry_thin_liq_adaptive_hostile_rsi_max &&
+                current_price >=
+                    ema_fast * cfg.foundation_entry_thin_liq_adaptive_hostile_price_to_ema_fast_min &&
+                metrics.buy_pressure >=
+                    (metrics.sell_pressure *
+                     cfg.foundation_entry_thin_liq_adaptive_hostile_buy_pressure_ratio_min) &&
+                ret3 >= cfg.foundation_entry_thin_liq_adaptive_hostile_ret3_min &&
+                ret8 >= cfg.foundation_entry_thin_liq_adaptive_hostile_ret8_min
             );
         case analytics::MarketRegime::UNKNOWN:
         default:
             return (
-                current_price >= ema_fast * 0.9990 &&
-                rsi <= 55.0 &&
-                metrics.order_book_imbalance > -0.08 &&
-                ret8 >= -0.0006
+                current_price >=
+                    ema_fast * cfg.foundation_entry_thin_liq_adaptive_unknown_price_to_ema_fast_min &&
+                rsi <= cfg.foundation_entry_thin_liq_adaptive_unknown_rsi_max &&
+                metrics.order_book_imbalance > cfg.foundation_entry_thin_liq_adaptive_unknown_imbalance_min &&
+                ret8 >= cfg.foundation_entry_thin_liq_adaptive_unknown_ret8_min
             );
     }
 }
 
 bool isRangingLowFlowOpportunity(
+    const engine::EngineConfig& cfg,
     const analytics::CoinMetrics& metrics,
     const std::vector<double>& closes,
     double current_price,
@@ -236,30 +322,39 @@ bool isRangingLowFlowOpportunity(
     double rsi,
     double bb_middle
 ) {
-    if (metrics.liquidity_score < 22.0 || metrics.liquidity_score >= 55.0) {
+    if (!cfg.foundation_entry_ranging_low_flow_enabled) {
         return false;
     }
-    if (metrics.volume_surge_ratio < 0.34 || metrics.volume_surge_ratio > 1.30) {
+    if (metrics.liquidity_score < cfg.foundation_entry_ranging_low_flow_liquidity_min ||
+        metrics.liquidity_score >= cfg.foundation_entry_ranging_low_flow_liquidity_max) {
         return false;
     }
-    if (metrics.orderbook_snapshot.valid && metrics.orderbook_snapshot.spread_pct > 0.0042) {
+    if (metrics.volume_surge_ratio < cfg.foundation_entry_ranging_low_flow_volume_surge_min ||
+        metrics.volume_surge_ratio > cfg.foundation_entry_ranging_low_flow_volume_surge_max) {
+        return false;
+    }
+    if (metrics.orderbook_snapshot.valid &&
+        metrics.orderbook_snapshot.spread_pct > cfg.foundation_entry_ranging_low_flow_spread_max) {
         return false;
     }
 
     const double ret3 = rollingReturn(closes, 3);
     const double ret8 = rollingReturn(closes, 8);
     return (
-        current_price <= bb_middle * 1.0030 &&
-        current_price >= ema_fast * 0.9950 &&
-        rsi >= 28.0 && rsi <= 52.0 &&
-        ret3 <= 0.0015 &&
-        ret8 >= -0.0034 &&
-        metrics.order_book_imbalance > -0.14 &&
-        metrics.buy_pressure >= (metrics.sell_pressure * 0.82)
+        current_price <= bb_middle * cfg.foundation_entry_ranging_low_flow_price_to_bb_middle_max &&
+        current_price >= ema_fast * cfg.foundation_entry_ranging_low_flow_price_to_ema_fast_min &&
+        rsi >= cfg.foundation_entry_ranging_low_flow_rsi_min &&
+        rsi <= cfg.foundation_entry_ranging_low_flow_rsi_max &&
+        ret3 <= cfg.foundation_entry_ranging_low_flow_ret3_max &&
+        ret8 >= cfg.foundation_entry_ranging_low_flow_ret8_min &&
+        metrics.order_book_imbalance > cfg.foundation_entry_ranging_low_flow_imbalance_min &&
+        metrics.buy_pressure >=
+            (metrics.sell_pressure * cfg.foundation_entry_ranging_low_flow_buy_pressure_ratio_min)
     );
 }
 
 bool isDowntrendLowFlowReboundOpportunity(
+    const engine::EngineConfig& cfg,
     const analytics::CoinMetrics& metrics,
     const std::vector<double>& closes,
     double current_price,
@@ -267,40 +362,49 @@ bool isDowntrendLowFlowReboundOpportunity(
     double ema_slow,
     double rsi
 ) {
-    if (metrics.liquidity_score < 18.0 || metrics.liquidity_score >= 52.0) {
+    if (!cfg.foundation_entry_downtrend_rebound_enabled) {
         return false;
     }
-    if (metrics.volume_surge_ratio < 0.18 || metrics.volume_surge_ratio > 1.40) {
+    if (metrics.liquidity_score < cfg.foundation_entry_downtrend_rebound_liquidity_min ||
+        metrics.liquidity_score >= cfg.foundation_entry_downtrend_rebound_liquidity_max) {
         return false;
     }
-    if (metrics.orderbook_snapshot.valid && metrics.orderbook_snapshot.spread_pct > 0.0032) {
+    if (metrics.volume_surge_ratio < cfg.foundation_entry_downtrend_rebound_volume_surge_min ||
+        metrics.volume_surge_ratio > cfg.foundation_entry_downtrend_rebound_volume_surge_max) {
         return false;
     }
-    if (metrics.order_book_imbalance < -0.12) {
+    if (metrics.orderbook_snapshot.valid &&
+        metrics.orderbook_snapshot.spread_pct > cfg.foundation_entry_downtrend_rebound_spread_max) {
         return false;
     }
-    if (metrics.buy_pressure < (metrics.sell_pressure * 0.86)) {
+    if (metrics.order_book_imbalance < cfg.foundation_entry_downtrend_rebound_imbalance_min) {
+        return false;
+    }
+    if (metrics.buy_pressure <
+        (metrics.sell_pressure * cfg.foundation_entry_downtrend_rebound_buy_pressure_ratio_min)) {
         return false;
     }
 
     const double ret3 = rollingReturn(closes, 3);
     const double ret8 = rollingReturn(closes, 8);
     const double ret20 = rollingReturn(closes, 20);
-    if (ret3 < -0.0012 || ret8 < -0.0060 || ret20 < -0.0280) {
+    if (ret3 < cfg.foundation_entry_downtrend_rebound_ret3_min ||
+        ret8 < cfg.foundation_entry_downtrend_rebound_ret8_min ||
+        ret20 < cfg.foundation_entry_downtrend_rebound_ret20_min) {
         return false;
     }
 
     return (
-        current_price >= ema_fast * 0.9970 &&
-        ema_fast >= ema_slow * 0.9920 &&
-        rsi >= 23.0 && rsi <= 43.0
+        current_price >= ema_fast * cfg.foundation_entry_downtrend_rebound_price_to_ema_fast_min &&
+        ema_fast >= ema_slow * cfg.foundation_entry_downtrend_rebound_ema_fast_to_ema_slow_min &&
+        rsi >= cfg.foundation_entry_downtrend_rebound_rsi_min &&
+        rsi <= cfg.foundation_entry_downtrend_rebound_rsi_max
     );
 }
 
 struct EntryGateDecision {
     bool pass = false;
     const char* reject_reason = "foundation_no_signal_entry_gate_unknown";
-    bool core_liquidity_pass = false;
     bool low_liquidity_relaxed_path = false;
     bool thin_liquidity_adaptive_path = false;
     bool ranging_low_flow_path = false;
@@ -318,30 +422,57 @@ EntryGateDecision evaluateEntryGate(
     analytics::MarketRegime regime
 ) {
     EntryGateDecision decision;
+    const auto& engine_cfg = autolife::Config::getInstance().getEngineConfig();
     const bool base_liquidity_pass = (
-        metrics.liquidity_score >= 42.0 &&
-        metrics.volume_surge_ratio >= 0.68
+        metrics.liquidity_score >= std::max(0.0, engine_cfg.foundation_entry_base_liquidity_min) &&
+        metrics.volume_surge_ratio >=
+            std::max(0.0, engine_cfg.foundation_entry_base_volume_surge_min)
     );
     const bool non_hostile_regime =
         regime != analytics::MarketRegime::HIGH_VOLATILITY &&
         regime != analytics::MarketRegime::TRENDING_DOWN;
     const bool spread_guard_ok =
         !metrics.orderbook_snapshot.valid ||
-        metrics.orderbook_snapshot.spread_pct <= 0.0042;
-    double adaptive_liquidity_floor = 32.0;
-    double adaptive_volume_floor = 0.45;
+        metrics.orderbook_snapshot.spread_pct <=
+            std::max(0.0, engine_cfg.foundation_entry_spread_guard_max);
+    double adaptive_liquidity_floor = std::max(
+        0.0,
+        engine_cfg.foundation_entry_adaptive_liquidity_floor_default
+    );
+    double adaptive_volume_floor = std::max(
+        0.0,
+        engine_cfg.foundation_entry_adaptive_volume_floor_default
+    );
     switch (regime) {
         case analytics::MarketRegime::RANGING:
-            adaptive_liquidity_floor = 20.0;
-            adaptive_volume_floor = 0.20;
+            adaptive_liquidity_floor = std::max(
+                0.0,
+                engine_cfg.foundation_entry_adaptive_liquidity_floor_ranging
+            );
+            adaptive_volume_floor = std::max(
+                0.0,
+                engine_cfg.foundation_entry_adaptive_volume_floor_ranging
+            );
             break;
         case analytics::MarketRegime::TRENDING_UP:
-            adaptive_liquidity_floor = 30.0;
-            adaptive_volume_floor = 0.34;
+            adaptive_liquidity_floor = std::max(
+                0.0,
+                engine_cfg.foundation_entry_adaptive_liquidity_floor_uptrend
+            );
+            adaptive_volume_floor = std::max(
+                0.0,
+                engine_cfg.foundation_entry_adaptive_volume_floor_uptrend
+            );
             break;
         case analytics::MarketRegime::UNKNOWN:
-            adaptive_liquidity_floor = 24.0;
-            adaptive_volume_floor = 0.28;
+            adaptive_liquidity_floor = std::max(
+                0.0,
+                engine_cfg.foundation_entry_adaptive_liquidity_floor_unknown
+            );
+            adaptive_volume_floor = std::max(
+                0.0,
+                engine_cfg.foundation_entry_adaptive_volume_floor_unknown
+            );
             break;
         case analytics::MarketRegime::TRENDING_DOWN:
         case analytics::MarketRegime::HIGH_VOLATILITY:
@@ -352,18 +483,24 @@ EntryGateDecision evaluateEntryGate(
         non_hostile_regime &&
         spread_guard_ok &&
         metrics.volatility > 0.0 &&
-        metrics.volatility <= 3.6 &&
+        metrics.volatility <=
+            std::max(0.0, engine_cfg.foundation_entry_adaptive_thin_volatility_max) &&
         metrics.liquidity_score >= adaptive_liquidity_floor &&
         metrics.volume_surge_ratio >= adaptive_volume_floor &&
-        metrics.order_book_imbalance > -0.26 &&
-        metrics.buy_pressure >= (metrics.sell_pressure * 0.74);
+        metrics.order_book_imbalance >
+            engine_cfg.foundation_entry_adaptive_thin_imbalance_min &&
+        metrics.buy_pressure >=
+            (metrics.sell_pressure *
+             std::max(0.0, engine_cfg.foundation_entry_adaptive_thin_buy_pressure_ratio_min));
     const bool tight_spread_context =
         metrics.orderbook_snapshot.valid &&
         metrics.orderbook_snapshot.spread_pct > 0.0 &&
-        metrics.orderbook_snapshot.spread_pct <= 0.0018;
+        metrics.orderbook_snapshot.spread_pct <=
+            std::max(0.0, engine_cfg.foundation_entry_narrow_relief_spread_max);
     const bool low_vol_context =
         metrics.volatility > 0.0 &&
-        metrics.volatility <= 2.2;
+        metrics.volatility <=
+            std::max(0.0, engine_cfg.foundation_entry_narrow_relief_volatility_max);
     const bool narrow_liquidity_relief_context =
         tight_spread_context &&
         low_vol_context &&
@@ -371,25 +508,38 @@ EntryGateDecision evaluateEntryGate(
         regime != analytics::MarketRegime::TRENDING_DOWN;
     const bool narrow_liquidity_relief_pass =
         narrow_liquidity_relief_context &&
-        metrics.liquidity_score >= 34.0 &&
-        metrics.volume_surge_ratio >= 0.58 &&
-        metrics.order_book_imbalance > -0.14 &&
-        metrics.buy_pressure >= (metrics.sell_pressure * 0.85);
+        metrics.liquidity_score >=
+            std::max(0.0, engine_cfg.foundation_entry_narrow_relief_liquidity_min) &&
+        metrics.volume_surge_ratio >=
+            std::max(0.0, engine_cfg.foundation_entry_narrow_relief_volume_surge_min) &&
+        metrics.order_book_imbalance >
+            engine_cfg.foundation_entry_narrow_relief_imbalance_min &&
+        metrics.buy_pressure >=
+            (metrics.sell_pressure *
+             std::max(0.0, engine_cfg.foundation_entry_narrow_relief_buy_pressure_ratio_min));
 
-    decision.core_liquidity_pass =
+    const bool core_liquidity_pass =
         base_liquidity_pass ||
         narrow_liquidity_relief_pass ||
         adaptive_thin_flow_pass;
     decision.low_liquidity_relaxed_path = (
+        engine_cfg.foundation_entry_enable_low_liq_relaxed_path &&
         regime == analytics::MarketRegime::TRENDING_UP &&
-        metrics.liquidity_score >= 28.0 &&
-        metrics.liquidity_score < 45.0 &&
-        metrics.volume_surge_ratio >= 0.46 &&
-        metrics.order_book_imbalance > -0.18 &&
-        metrics.buy_pressure >= (metrics.sell_pressure * 0.80)
+        metrics.liquidity_score >=
+            std::max(0.0, engine_cfg.foundation_entry_low_liq_relaxed_liquidity_min) &&
+        metrics.liquidity_score <
+            std::max(0.0, engine_cfg.foundation_entry_low_liq_relaxed_liquidity_max) &&
+        metrics.volume_surge_ratio >=
+            std::max(0.0, engine_cfg.foundation_entry_low_liq_relaxed_volume_surge_min) &&
+        metrics.order_book_imbalance >
+            engine_cfg.foundation_entry_low_liq_relaxed_imbalance_min &&
+        metrics.buy_pressure >=
+            (metrics.sell_pressure *
+             std::max(0.0, engine_cfg.foundation_entry_low_liq_relaxed_buy_pressure_ratio_min))
     );
     decision.thin_liquidity_adaptive_path =
         isThinLiquidityAdaptiveOpportunity(
+            engine_cfg,
             metrics,
             closes,
             current_price,
@@ -402,6 +552,7 @@ EntryGateDecision evaluateEntryGate(
     decision.ranging_low_flow_path =
         regime == analytics::MarketRegime::RANGING &&
         isRangingLowFlowOpportunity(
+            engine_cfg,
             metrics,
             closes,
             current_price,
@@ -412,6 +563,7 @@ EntryGateDecision evaluateEntryGate(
     decision.downtrend_low_flow_rebound_path =
         regime == analytics::MarketRegime::TRENDING_DOWN &&
         isDowntrendLowFlowReboundOpportunity(
+            engine_cfg,
             metrics,
             closes,
             current_price,
@@ -420,9 +572,10 @@ EntryGateDecision evaluateEntryGate(
             rsi
         );
 
-    if (!decision.core_liquidity_pass) {
+    if (!core_liquidity_pass) {
         if (regime == analytics::MarketRegime::TRENDING_UP &&
             isLowLiquidityUptrendOpportunity(
+                engine_cfg,
                 metrics,
                 closes,
                 current_price,
@@ -454,55 +607,78 @@ EntryGateDecision evaluateEntryGate(
             const double ret3 = rollingReturn(closes, 3);
             const double ret5 = rollingReturn(closes, 5);
             const double ret20 = rollingReturn(closes, 20);
-            const double ret20_floor = (metrics.liquidity_score >= 60.0) ? 0.0008 : 0.0004;
-            const bool overextended_uptrend = (rsi >= 68.0 && ret5 >= 0.0045);
+            const double ret20_floor =
+                (metrics.liquidity_score >= engine_cfg.foundation_entry_uptrend_ret20_floor_liquidity_pivot)
+                    ? engine_cfg.foundation_entry_uptrend_ret20_floor_high_liq
+                    : engine_cfg.foundation_entry_uptrend_ret20_floor_default;
+            const bool overextended_uptrend =
+                (rsi >= engine_cfg.foundation_entry_uptrend_overextended_rsi_min &&
+                 ret5 >= engine_cfg.foundation_entry_uptrend_overextended_ret5_min);
             const bool base_structure_ok =
-                current_price >= ema_fast * 0.9985 &&
-                ema_fast >= ema_slow * 0.9980 &&
-                rsi >= 42.0 && rsi <= 74.0 &&
-                metrics.order_book_imbalance > -0.16 &&
-                metrics.buy_pressure >= (metrics.sell_pressure * 0.86) &&
-                ret5 >= -0.0016 &&
-                ret20 >= (ret20_floor - 0.0008);
+                current_price >=
+                    ema_fast * engine_cfg.foundation_entry_uptrend_base_price_to_ema_fast_min &&
+                ema_fast >=
+                    ema_slow * engine_cfg.foundation_entry_uptrend_base_ema_fast_to_ema_slow_min &&
+                rsi >= engine_cfg.foundation_entry_uptrend_base_rsi_min &&
+                rsi <= engine_cfg.foundation_entry_uptrend_base_rsi_max &&
+                metrics.order_book_imbalance >
+                    engine_cfg.foundation_entry_uptrend_base_imbalance_min &&
+                metrics.buy_pressure >=
+                    (metrics.sell_pressure *
+                     engine_cfg.foundation_entry_uptrend_base_buy_pressure_ratio_min) &&
+                ret5 >= engine_cfg.foundation_entry_uptrend_base_ret5_min &&
+                ret20 >= (ret20_floor + engine_cfg.foundation_entry_uptrend_base_ret20_offset);
             const bool thin_uptrend_structure_relief_context =
-                metrics.liquidity_score < 55.0 &&
+                metrics.liquidity_score <
+                    engine_cfg.foundation_entry_uptrend_relief_context_liquidity_max &&
                 metrics.volatility > 0.0 &&
-                metrics.volatility <= 1.8;
+                metrics.volatility <=
+                    engine_cfg.foundation_entry_uptrend_relief_context_volatility_max;
             const bool relaxed_structure_ok =
                 thin_uptrend_structure_relief_context &&
-                current_price >= ema_fast * 0.9978 &&
-                ema_fast >= ema_slow * 0.9972 &&
-                rsi >= 40.0 && rsi <= 75.0 &&
-                metrics.order_book_imbalance > -0.20 &&
-                metrics.buy_pressure >= (metrics.sell_pressure * 0.82) &&
-                ret5 >= -0.0022 &&
-                ret20 >= (ret20_floor - 0.0014);
+                current_price >=
+                    ema_fast * engine_cfg.foundation_entry_uptrend_relief_price_to_ema_fast_min &&
+                ema_fast >=
+                    ema_slow * engine_cfg.foundation_entry_uptrend_relief_ema_fast_to_ema_slow_min &&
+                rsi >= engine_cfg.foundation_entry_uptrend_relief_rsi_min &&
+                rsi <= engine_cfg.foundation_entry_uptrend_relief_rsi_max &&
+                metrics.order_book_imbalance >
+                    engine_cfg.foundation_entry_uptrend_relief_imbalance_min &&
+                metrics.buy_pressure >=
+                    (metrics.sell_pressure *
+                     engine_cfg.foundation_entry_uptrend_relief_buy_pressure_ratio_min) &&
+                ret5 >= engine_cfg.foundation_entry_uptrend_relief_ret5_min &&
+                ret20 >= (ret20_floor + engine_cfg.foundation_entry_uptrend_relief_ret20_offset);
             if ((!base_structure_ok && !relaxed_structure_ok) || overextended_uptrend) {
                 decision.reject_reason = "foundation_no_signal_uptrend_structure";
                 return decision;
             }
             const bool low_vol_high_liq_uptrend =
-                metrics.liquidity_score >= 62.0 &&
+                metrics.liquidity_score >=
+                    engine_cfg.foundation_entry_uptrend_exhaustion_context_liquidity_min &&
                 metrics.volatility > 0.0 &&
-                metrics.volatility <= 1.7;
+                metrics.volatility <=
+                    engine_cfg.foundation_entry_uptrend_exhaustion_context_volatility_max;
             const double ema_premium = (ema_fast > 1e-9)
                 ? ((current_price - ema_fast) / ema_fast)
                 : 0.0;
             const bool exhaustion_risk =
-                rsi >= 63.0 &&
-                (ret3 >= 0.0038 || ret5 >= 0.0055 || ema_premium >= 0.0045);
+                rsi >= engine_cfg.foundation_entry_uptrend_exhaustion_rsi_min &&
+                (ret3 >= engine_cfg.foundation_entry_uptrend_exhaustion_ret3_min ||
+                 ret5 >= engine_cfg.foundation_entry_uptrend_exhaustion_ret5_min ||
+                 ema_premium >= engine_cfg.foundation_entry_uptrend_exhaustion_ema_premium_min);
             if (low_vol_high_liq_uptrend && exhaustion_risk) {
                 decision.reject_reason = "foundation_no_signal_uptrend_exhaustion_guard";
                 return decision;
             }
-            if (metrics.liquidity_score < 55.0 &&
-                metrics.volatility > 0.0 &&
-                metrics.volatility <= 1.8) {
-                if (!(metrics.volume_surge_ratio >= 0.74 &&
-                      metrics.order_book_imbalance >= -0.10 &&
-                      rsi <= 72.0 &&
-                      ret5 >= -0.0006 &&
-                      ret20 >= 0.0004)) {
+            if (thin_uptrend_structure_relief_context) {
+                if (!(metrics.volume_surge_ratio >=
+                          engine_cfg.foundation_entry_uptrend_thin_context_volume_surge_min &&
+                      metrics.order_book_imbalance >=
+                          engine_cfg.foundation_entry_uptrend_thin_context_imbalance_min &&
+                      rsi <= engine_cfg.foundation_entry_uptrend_thin_context_rsi_max &&
+                      ret5 >= engine_cfg.foundation_entry_uptrend_thin_context_ret5_min &&
+                      ret20 >= engine_cfg.foundation_entry_uptrend_thin_context_ret20_min)) {
                     decision.reject_reason = "foundation_no_signal_uptrend_thin_context";
                     return decision;
                 }
@@ -511,16 +687,24 @@ EntryGateDecision evaluateEntryGate(
             return decision;
         }
         case analytics::MarketRegime::RANGING:
-            if (!(current_price <= bb_middle * 1.0025 &&
-                  rsi <= 46.0 &&
-                  metrics.order_book_imbalance > -0.24 &&
-                  metrics.buy_pressure >= (metrics.sell_pressure * 0.80))) {
+            if (!(current_price <=
+                      bb_middle * engine_cfg.foundation_entry_ranging_structure_price_to_bb_middle_max &&
+                  rsi <= engine_cfg.foundation_entry_ranging_structure_rsi_max &&
+                  metrics.order_book_imbalance >
+                      engine_cfg.foundation_entry_ranging_structure_imbalance_min &&
+                  metrics.buy_pressure >=
+                      (metrics.sell_pressure *
+                       engine_cfg.foundation_entry_ranging_structure_buy_pressure_ratio_min))) {
                 const bool narrow_ranging_relief =
                     narrow_liquidity_relief_pass &&
-                    current_price <= bb_middle * 1.0035 &&
-                    rsi <= 47.0 &&
-                    metrics.order_book_imbalance > -0.20 &&
-                    metrics.buy_pressure >= (metrics.sell_pressure * 0.82);
+                    current_price <=
+                        bb_middle * engine_cfg.foundation_entry_ranging_relief_price_to_bb_middle_max &&
+                    rsi <= engine_cfg.foundation_entry_ranging_relief_rsi_max &&
+                    metrics.order_book_imbalance >
+                        engine_cfg.foundation_entry_ranging_relief_imbalance_min &&
+                    metrics.buy_pressure >=
+                        (metrics.sell_pressure *
+                         engine_cfg.foundation_entry_ranging_relief_buy_pressure_ratio_min);
                 if (narrow_ranging_relief) {
                     decision.pass = true;
                     return decision;
@@ -532,11 +716,16 @@ EntryGateDecision evaluateEntryGate(
             return decision;
         case analytics::MarketRegime::TRENDING_DOWN:
         case analytics::MarketRegime::HIGH_VOLATILITY:
-            if (!(rsi <= 32.0 &&
-                  current_price > ema_fast &&
-                  metrics.buy_pressure >= metrics.sell_pressure &&
-                  metrics.liquidity_score >= 62.0 &&
-                  metrics.volume_surge_ratio >= 1.10)) {
+            if (!(rsi <= engine_cfg.foundation_entry_hostile_bear_rebound_rsi_max &&
+                  current_price >
+                      ema_fast * engine_cfg.foundation_entry_hostile_bear_rebound_price_to_ema_fast_min &&
+                  metrics.buy_pressure >=
+                      (metrics.sell_pressure *
+                       engine_cfg.foundation_entry_hostile_bear_rebound_buy_pressure_ratio_min) &&
+                  metrics.liquidity_score >=
+                      engine_cfg.foundation_entry_hostile_bear_rebound_liquidity_min &&
+                  metrics.volume_surge_ratio >=
+                      engine_cfg.foundation_entry_hostile_bear_rebound_volume_surge_min)) {
                 decision.reject_reason = "foundation_no_signal_bear_rebound_guard";
                 return decision;
             }
@@ -544,9 +733,11 @@ EntryGateDecision evaluateEntryGate(
             return decision;
         case analytics::MarketRegime::UNKNOWN:
         default:
-            if (!(current_price > ema_fast &&
-                  rsi < 52.0 &&
-                  metrics.order_book_imbalance > -0.10)) {
+            if (!(current_price >
+                      ema_fast * engine_cfg.foundation_entry_unknown_structure_price_to_ema_fast_min &&
+                  rsi < engine_cfg.foundation_entry_unknown_structure_rsi_max &&
+                  metrics.order_book_imbalance >
+                      engine_cfg.foundation_entry_unknown_structure_imbalance_min)) {
                 decision.reject_reason = "foundation_no_signal_unknown_regime_guard";
                 return decision;
             }
@@ -573,16 +764,34 @@ EntryEvaluationSnapshot evaluateEntrySnapshot(
     analytics::MarketRegime regime
 ) {
     EntryEvaluationSnapshot snapshot;
+    const auto& engine_cfg = autolife::Config::getInstance().getEngineConfig();
     const std::vector<double> closes = analytics::TechnicalIndicators::extractClosePrices(candles);
-    if (closes.size() < 60) {
+    if (closes.size() <
+        static_cast<std::size_t>(std::max(1, engine_cfg.foundation_entry_snapshot_min_bars))) {
         snapshot.reject_reason = "foundation_no_signal_data_window";
         return snapshot;
     }
 
-    snapshot.ema_fast = analytics::TechnicalIndicators::calculateEMA(closes, 12);
-    snapshot.ema_slow = analytics::TechnicalIndicators::calculateEMA(closes, 48);
-    snapshot.rsi = analytics::TechnicalIndicators::calculateRSI(closes, 14);
-    const auto bb = analytics::TechnicalIndicators::calculateBollingerBands(closes, current_price, 20, 2.0);
+    const int snapshot_ema_fast_period =
+        std::max(1, engine_cfg.foundation_entry_snapshot_ema_fast_period);
+    const int snapshot_ema_slow_period =
+        std::max(snapshot_ema_fast_period + 1, engine_cfg.foundation_entry_snapshot_ema_slow_period);
+    const int snapshot_rsi_period =
+        std::max(2, engine_cfg.foundation_entry_snapshot_rsi_period);
+    const int snapshot_bb_period =
+        std::max(2, engine_cfg.foundation_entry_snapshot_bb_period);
+    const double snapshot_bb_stddev =
+        std::max(1e-9, engine_cfg.foundation_entry_snapshot_bb_stddev);
+
+    snapshot.ema_fast = analytics::TechnicalIndicators::calculateEMA(closes, snapshot_ema_fast_period);
+    snapshot.ema_slow = analytics::TechnicalIndicators::calculateEMA(closes, snapshot_ema_slow_period);
+    snapshot.rsi = analytics::TechnicalIndicators::calculateRSI(closes, snapshot_rsi_period);
+    const auto bb = analytics::TechnicalIndicators::calculateBollingerBands(
+        closes,
+        current_price,
+        snapshot_bb_period,
+        snapshot_bb_stddev
+    );
     snapshot.bb_middle = bb.middle;
 
     snapshot.entry_gate = evaluateEntryGate(
@@ -637,6 +846,7 @@ Signal FoundationAdaptiveStrategy::generateSignal(
     const analytics::RegimeAnalysis& regime
 ) {
     std::lock_guard<std::mutex> lock(mutex_);
+    const auto& engine_cfg = autolife::Config::getInstance().getEngineConfig();
 
     Signal signal;
     signal.type = SignalType::NONE;
@@ -678,104 +888,230 @@ Signal FoundationAdaptiveStrategy::generateSignal(
     const bool ranging_low_flow_path = entry_gate.ranging_low_flow_path;
     const bool downtrend_low_flow_rebound_path = entry_gate.downtrend_low_flow_rebound_path;
     const bool thin_low_vol_context =
-        (metrics.liquidity_score < 55.0 &&
+        (metrics.liquidity_score <
+             engine_cfg.foundation_signal_context_thin_low_vol_liquidity_max &&
          metrics.volatility > 0.0 &&
-         metrics.volatility <= 1.8);
+         metrics.volatility <=
+             engine_cfg.foundation_signal_context_thin_low_vol_volatility_max);
     const bool thin_low_vol_uptrend_context =
         (regime.regime == analytics::MarketRegime::TRENDING_UP && thin_low_vol_context);
     const bool hostile_uptrend_context =
         (regime.regime == analytics::MarketRegime::TRENDING_UP &&
-         metrics.liquidity_score < 50.0 &&
+         metrics.liquidity_score <
+             engine_cfg.foundation_signal_context_hostile_uptrend_liquidity_max &&
          metrics.volatility > 0.0 &&
-         metrics.volatility <= 1.9);
+         metrics.volatility <=
+             engine_cfg.foundation_signal_context_hostile_uptrend_volatility_max);
 
     double risk_pct = clampRiskPctByRegime(regime.regime, atr_pct);
     double reward_risk = targetRewardRiskByRegime(regime.regime);
     if (thin_liquidity_adaptive_path) {
-        risk_pct = std::clamp(risk_pct * 0.74, 0.0024, 0.0088);
-        reward_risk = std::max(reward_risk, 2.10);
+        risk_pct *= std::max(0.0, engine_cfg.foundation_signal_path_risk_mult_thin_liq_adaptive);
+        reward_risk = std::max(
+            reward_risk,
+            std::max(0.0, engine_cfg.foundation_signal_path_reward_risk_min_thin_liq_adaptive)
+        );
     } else if (downtrend_low_flow_rebound_path) {
-        risk_pct = std::clamp(risk_pct * 0.58, 0.0020, 0.0068);
-        reward_risk = std::max(reward_risk, 2.00);
+        risk_pct *= std::max(0.0, engine_cfg.foundation_signal_path_risk_mult_downtrend_rebound);
+        reward_risk = std::max(
+            reward_risk,
+            std::max(0.0, engine_cfg.foundation_signal_path_reward_risk_min_downtrend_rebound)
+        );
     } else if (low_liquidity_relaxed_path) {
-        risk_pct = std::clamp(risk_pct * 0.84, 0.0028, 0.0105);
-        reward_risk = std::max(reward_risk, 2.25);
+        risk_pct *= std::max(0.0, engine_cfg.foundation_signal_path_risk_mult_low_liq_relaxed);
+        reward_risk = std::max(
+            reward_risk,
+            std::max(0.0, engine_cfg.foundation_signal_path_reward_risk_min_low_liq_relaxed)
+        );
     }
     if (ranging_low_flow_path) {
-        risk_pct = std::clamp(risk_pct * 0.78, 0.0024, 0.0088);
-        reward_risk = std::max(reward_risk, 1.80);
+        risk_pct *= std::max(0.0, engine_cfg.foundation_signal_path_risk_mult_ranging_low_flow);
+        reward_risk = std::max(
+            reward_risk,
+            std::max(0.0, engine_cfg.foundation_signal_path_reward_risk_min_ranging_low_flow)
+        );
     }
     if (thin_low_vol_context) {
-        risk_pct = std::clamp(risk_pct * 0.88, 0.0025, 0.0098);
+        risk_pct *= std::max(0.0, engine_cfg.foundation_signal_context_thin_low_vol_risk_mult);
         if (regime.regime == analytics::MarketRegime::TRENDING_UP) {
-            reward_risk = std::clamp(reward_risk, 1.35, 1.75);
+            reward_risk = std::clamp(
+                reward_risk,
+                std::max(0.0, engine_cfg.foundation_signal_context_thin_low_vol_reward_min_uptrend),
+                std::max(0.0, engine_cfg.foundation_signal_context_thin_low_vol_reward_max_uptrend)
+            );
         } else {
-            reward_risk = std::clamp(reward_risk, 1.45, 1.90);
+            reward_risk = std::clamp(
+                reward_risk,
+                std::max(0.0, engine_cfg.foundation_signal_context_thin_low_vol_reward_min_other),
+                std::max(0.0, engine_cfg.foundation_signal_context_thin_low_vol_reward_max_other)
+            );
         }
     }
     if (hostile_uptrend_context) {
-        risk_pct = std::clamp(risk_pct * 0.92, 0.0023, 0.0085);
-        reward_risk = std::clamp(reward_risk, 1.30, 1.65);
+        risk_pct *= std::max(0.0, engine_cfg.foundation_signal_context_hostile_uptrend_risk_mult);
+        reward_risk = std::clamp(
+            reward_risk,
+            std::max(0.0, engine_cfg.foundation_signal_context_hostile_uptrend_reward_min),
+            std::max(0.0, engine_cfg.foundation_signal_context_hostile_uptrend_reward_max)
+        );
     }
     const double mtf_centered = mtf_confirmation.score - 0.50;
-    risk_pct *= std::clamp(1.0 - (mtf_centered * 0.40), 0.84, 1.12);
-    reward_risk += std::clamp(mtf_centered * 0.90, -0.12, 0.18);
-    risk_pct = std::clamp(risk_pct, 0.0022, 0.0185);
-    reward_risk = std::clamp(reward_risk, 1.10, 2.50);
+    risk_pct *= std::clamp(
+        1.0 - (mtf_centered * engine_cfg.foundation_signal_mtf_risk_scale),
+        std::max(0.0, engine_cfg.foundation_signal_mtf_risk_scale_min),
+        std::max(0.0, engine_cfg.foundation_signal_mtf_risk_scale_max)
+    );
+    reward_risk += std::clamp(
+        mtf_centered * engine_cfg.foundation_signal_mtf_reward_add_scale,
+        engine_cfg.foundation_signal_mtf_reward_add_min,
+        engine_cfg.foundation_signal_mtf_reward_add_max
+    );
+    risk_pct = std::clamp(
+        risk_pct,
+        std::max(0.0, engine_cfg.foundation_signal_risk_pct_min),
+        std::max(0.0, engine_cfg.foundation_signal_risk_pct_max)
+    );
+    reward_risk = std::clamp(
+        reward_risk,
+        std::max(0.0, engine_cfg.foundation_signal_reward_risk_min),
+        std::max(0.0, engine_cfg.foundation_signal_reward_risk_max)
+    );
 
     const double ema_gap = (ema_slow > 1e-9) ? ((ema_fast - ema_slow) / ema_slow) : 0.0;
-    double strength = 0.50;
-    strength += std::clamp(ema_gap * 12.0, -0.10, 0.20);
-    strength += std::clamp((55.0 - rsi) / 120.0, -0.08, 0.10);
-    strength += std::clamp((metrics.liquidity_score - 50.0) / 350.0, -0.07, 0.12);
+    const double strength_ema_gap_add_min = std::min(
+        engine_cfg.foundation_signal_strength_ema_gap_add_min,
+        engine_cfg.foundation_signal_strength_ema_gap_add_max
+    );
+    const double strength_ema_gap_add_max = std::max(
+        engine_cfg.foundation_signal_strength_ema_gap_add_min,
+        engine_cfg.foundation_signal_strength_ema_gap_add_max
+    );
+    const double strength_rsi_add_min = std::min(
+        engine_cfg.foundation_signal_strength_rsi_add_min,
+        engine_cfg.foundation_signal_strength_rsi_add_max
+    );
+    const double strength_rsi_add_max = std::max(
+        engine_cfg.foundation_signal_strength_rsi_add_min,
+        engine_cfg.foundation_signal_strength_rsi_add_max
+    );
+    const double strength_liquidity_add_min = std::min(
+        engine_cfg.foundation_signal_strength_liquidity_add_min,
+        engine_cfg.foundation_signal_strength_liquidity_add_max
+    );
+    const double strength_liquidity_add_max = std::max(
+        engine_cfg.foundation_signal_strength_liquidity_add_min,
+        engine_cfg.foundation_signal_strength_liquidity_add_max
+    );
+    const double strength_mtf_add_min = std::min(
+        engine_cfg.foundation_signal_strength_mtf_add_min,
+        engine_cfg.foundation_signal_strength_mtf_add_max
+    );
+    const double strength_mtf_add_max = std::max(
+        engine_cfg.foundation_signal_strength_mtf_add_min,
+        engine_cfg.foundation_signal_strength_mtf_add_max
+    );
+    const double strength_final_min = std::min(
+        std::clamp(engine_cfg.foundation_signal_strength_final_min, 0.0, 1.0),
+        std::clamp(engine_cfg.foundation_signal_strength_final_max, 0.0, 1.0)
+    );
+    const double strength_final_max = std::max(
+        std::clamp(engine_cfg.foundation_signal_strength_final_min, 0.0, 1.0),
+        std::clamp(engine_cfg.foundation_signal_strength_final_max, 0.0, 1.0)
+    );
+    double strength = std::clamp(engine_cfg.foundation_signal_strength_base, 0.0, 1.0);
+    strength += std::clamp(
+        ema_gap * std::clamp(engine_cfg.foundation_signal_strength_ema_gap_weight, -1000.0, 1000.0),
+        strength_ema_gap_add_min,
+        strength_ema_gap_add_max
+    );
+    strength += std::clamp(
+        (std::clamp(engine_cfg.foundation_signal_strength_rsi_center, 0.0, 100.0) - rsi) /
+            std::max(1e-9, std::abs(engine_cfg.foundation_signal_strength_rsi_divisor)),
+        strength_rsi_add_min,
+        strength_rsi_add_max
+    );
+    strength += std::clamp(
+        (metrics.liquidity_score - std::clamp(engine_cfg.foundation_signal_strength_liquidity_center, 0.0, 10000.0)) /
+            std::max(1e-9, std::abs(engine_cfg.foundation_signal_strength_liquidity_divisor)),
+        strength_liquidity_add_min,
+        strength_liquidity_add_max
+    );
     if (regime.regime == analytics::MarketRegime::TRENDING_UP) {
-        strength += 0.08;
+        strength += std::clamp(engine_cfg.foundation_signal_strength_uptrend_add, -1.0, 1.0);
     }
     if (regime.regime == analytics::MarketRegime::TRENDING_DOWN ||
         regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
-        strength -= 0.06;
+        strength += std::clamp(engine_cfg.foundation_signal_strength_hostile_regime_add, -1.0, 1.0);
     }
     if (thin_liquidity_adaptive_path) {
-        strength += 0.03;
-    } else if (downtrend_low_flow_rebound_path) {
-        strength += 0.00;
+        strength += std::clamp(engine_cfg.foundation_signal_strength_path_thin_liq_add, -1.0, 1.0);
     } else if (ranging_low_flow_path) {
-        strength += 0.02;
+        strength += std::clamp(engine_cfg.foundation_signal_strength_path_ranging_add, -1.0, 1.0);
     } else if (low_liquidity_relaxed_path) {
-        strength += 0.04;
+        strength += std::clamp(engine_cfg.foundation_signal_strength_path_low_liq_add, -1.0, 1.0);
     }
     if (hostile_uptrend_context) {
-        strength -= 0.03;
+        strength += std::clamp(engine_cfg.foundation_signal_strength_hostile_uptrend_add, -1.0, 1.0);
     }
-    strength += std::clamp(mtf_centered * 0.30, -0.10, 0.12);
-    strength = std::clamp(strength, 0.35, 0.92);
+    strength += std::clamp(
+        mtf_centered * std::clamp(engine_cfg.foundation_signal_strength_mtf_scale, -1000.0, 1000.0),
+        strength_mtf_add_min,
+        strength_mtf_add_max
+    );
+    strength = std::clamp(strength, strength_final_min, strength_final_max);
 
-    signal.type = (regime.regime == analytics::MarketRegime::TRENDING_UP && strength >= 0.74)
+    signal.type = (
+        regime.regime == analytics::MarketRegime::TRENDING_UP &&
+        strength >= std::clamp(engine_cfg.foundation_strong_buy_strength_threshold, 0.0, 1.0)
+    )
         ? SignalType::STRONG_BUY
         : SignalType::BUY;
     signal.strength = strength;
     signal.entry_price = current_price;
     signal.stop_loss = current_price * (1.0 - risk_pct);
-    signal.take_profit_1 = current_price * (1.0 + risk_pct * std::max(1.0, reward_risk * 0.55));
+    const double tp1_rr_multiplier = std::max(0.0, engine_cfg.foundation_take_profit_1_rr_multiplier);
+    const double breakeven_rr_multiplier = std::max(0.0, engine_cfg.foundation_breakeven_rr_multiplier);
+    const double trailing_rr_multiplier = std::max(0.0, engine_cfg.foundation_trailing_rr_multiplier);
+    signal.take_profit_1 = current_price * (1.0 + risk_pct * std::max(1.0, reward_risk * tp1_rr_multiplier));
     signal.take_profit_2 = current_price * (1.0 + risk_pct * reward_risk);
-    signal.breakeven_trigger = current_price * (1.0 + risk_pct * 0.80);
-    signal.trailing_start = current_price * (1.0 + risk_pct * 1.20);
+    signal.breakeven_trigger = current_price * (1.0 + risk_pct * breakeven_rr_multiplier);
+    signal.trailing_start = current_price * (1.0 + risk_pct * trailing_rr_multiplier);
     signal.position_size = calculatePositionSize(
         available_capital,
         signal.entry_price,
         signal.stop_loss,
         metrics
     );
+    const double size_mult_thin_liquidity_adaptive = std::max(
+        0.0,
+        engine_cfg.foundation_position_mult_thin_liquidity_adaptive
+    );
+    const double size_mult_downtrend_low_flow_rebound = std::max(
+        0.0,
+        engine_cfg.foundation_position_mult_downtrend_low_flow_rebound
+    );
+    const double size_mult_ranging_low_flow = std::max(
+        0.0,
+        engine_cfg.foundation_position_mult_ranging_low_flow
+    );
+    const double size_mult_thin_low_vol_uptrend = std::max(
+        0.0,
+        engine_cfg.foundation_position_mult_thin_low_vol_uptrend
+    );
+    const double size_mult_thin_low_vol = std::max(
+        0.0,
+        engine_cfg.foundation_position_mult_thin_low_vol
+    );
     if (thin_liquidity_adaptive_path) {
-        signal.position_size *= 0.48;
+        signal.position_size *= size_mult_thin_liquidity_adaptive;
     } else if (downtrend_low_flow_rebound_path) {
-        signal.position_size *= 0.32;
+        signal.position_size *= size_mult_downtrend_low_flow_rebound;
     } else if (ranging_low_flow_path) {
-        signal.position_size *= 0.50;
+        signal.position_size *= size_mult_ranging_low_flow;
     } else if (thin_low_vol_uptrend_context) {
-        signal.position_size *= 0.55;
+        signal.position_size *= size_mult_thin_low_vol_uptrend;
     } else if (thin_low_vol_context) {
-        signal.position_size *= 0.62;
+        signal.position_size *= size_mult_thin_low_vol;
     }
 
     if (signal.position_size <= 0.0) {
@@ -786,19 +1122,47 @@ Signal FoundationAdaptiveStrategy::generateSignal(
 
     signal.expected_return_pct = (signal.take_profit_2 - signal.entry_price) / signal.entry_price;
     signal.expected_risk_pct = (signal.entry_price - signal.stop_loss) / signal.entry_price;
-    double implied_win_prob = std::clamp(0.47 + (strength * 0.18), 0.44, 0.66);
+    double implied_win_prob = std::clamp(
+        std::clamp(engine_cfg.foundation_implied_win_base, 0.0, 1.0) +
+            (strength * std::clamp(engine_cfg.foundation_implied_win_strength_scale, -10.0, 10.0)),
+        std::clamp(engine_cfg.foundation_implied_win_preclamp_min, 0.0, 1.0),
+        std::clamp(engine_cfg.foundation_implied_win_preclamp_max, 0.0, 1.0)
+    );
     if (hostile_uptrend_context) {
-        implied_win_prob = std::clamp(implied_win_prob - 0.08, 0.36, 0.58);
+        implied_win_prob = std::clamp(
+            implied_win_prob -
+                std::clamp(engine_cfg.foundation_implied_win_hostile_uptrend_penalty, -1.0, 1.0),
+            std::clamp(engine_cfg.foundation_implied_win_hostile_min, 0.0, 1.0),
+            std::clamp(engine_cfg.foundation_implied_win_hostile_max, 0.0, 1.0)
+        );
     }
-    implied_win_prob += std::clamp(mtf_centered * 0.22, -0.05, 0.06);
-    implied_win_prob = std::clamp(implied_win_prob, 0.34, 0.72);
+    implied_win_prob += std::clamp(
+        mtf_centered * std::clamp(engine_cfg.foundation_implied_win_mtf_scale, -10.0, 10.0),
+        std::clamp(engine_cfg.foundation_implied_win_mtf_add_min, -1.0, 1.0),
+        std::clamp(engine_cfg.foundation_implied_win_mtf_add_max, -1.0, 1.0)
+    );
+    implied_win_prob = std::clamp(
+        implied_win_prob,
+        std::clamp(engine_cfg.foundation_implied_win_final_min, 0.0, 1.0),
+        std::clamp(engine_cfg.foundation_implied_win_final_max, 0.0, 1.0)
+    );
     signal.expected_value =
         (implied_win_prob * signal.expected_return_pct) -
         ((1.0 - implied_win_prob) * signal.expected_risk_pct);
 
-    signal.signal_filter = std::clamp(0.52 + (strength * 0.30), 0.55, 0.85);
+    signal.signal_filter = std::clamp(
+        std::clamp(engine_cfg.foundation_signal_filter_base, 0.0, 1.0) +
+            (strength * std::clamp(engine_cfg.foundation_signal_filter_strength_scale, -10.0, 10.0)),
+        std::clamp(engine_cfg.foundation_signal_filter_min, 0.0, 1.0),
+        std::clamp(engine_cfg.foundation_signal_filter_max, 0.0, 1.0)
+    );
     if (hostile_uptrend_context) {
-        signal.signal_filter = std::clamp(signal.signal_filter + 0.03, 0.55, 0.88);
+        signal.signal_filter = std::clamp(
+            signal.signal_filter +
+                std::clamp(engine_cfg.foundation_signal_filter_hostile_uptrend_add, -1.0, 1.0),
+            std::clamp(engine_cfg.foundation_signal_filter_min, 0.0, 1.0),
+            std::clamp(engine_cfg.foundation_signal_filter_hostile_uptrend_max, 0.0, 1.0)
+        );
     }
     signal.buy_order_type = OrderTypePolicy::LIMIT_WITH_FALLBACK;
     signal.sell_order_type = OrderTypePolicy::LIMIT_WITH_FALLBACK;
@@ -852,13 +1216,23 @@ bool FoundationAdaptiveStrategy::shouldExit(
     if (entry_price <= 0.0 || current_price <= 0.0) {
         return false;
     }
-    if (current_price <= entry_price * 0.994) {
+    const auto& cfg = autolife::Config::getInstance().getEngineConfig();
+    const double stop_loss_pct = std::clamp(cfg.foundation_exit_stop_loss_pct, 0.0, 1.0);
+    const double take_profit_pct = std::clamp(cfg.foundation_exit_take_profit_pct, 0.0, 5.0);
+    const double time_limit_hours = std::clamp(cfg.foundation_exit_time_limit_hours, 0.0, 168.0);
+    const double time_limit_min_profit_pct = std::clamp(
+        cfg.foundation_exit_time_limit_min_profit_pct,
+        -1.0,
+        1.0
+    );
+    if (current_price <= entry_price * (1.0 - stop_loss_pct)) {
         return true;
     }
-    if (current_price >= entry_price * 1.018) {
+    if (current_price >= entry_price * (1.0 + take_profit_pct)) {
         return true;
     }
-    if (holding_time_seconds >= 6.0 * 3600.0 && current_price <= entry_price * 1.001) {
+    if (holding_time_seconds >= (time_limit_hours * 3600.0) &&
+        current_price <= entry_price * (1.0 + time_limit_min_profit_pct)) {
         return true;
     }
     return false;
@@ -898,26 +1272,41 @@ double FoundationAdaptiveStrategy::calculatePositionSize(
     if (capital <= 0.0 || entry_price <= 0.0 || stop_loss <= 0.0) {
         return 0.0;
     }
+    const auto& cfg = autolife::Config::getInstance().getEngineConfig();
 
     const double stop_distance = std::max(entry_price - stop_loss, entry_price * 0.0025);
-    const double risk_budget_krw = capital * 0.0065;
+    const double risk_budget_pct = std::clamp(cfg.foundation_position_risk_budget_pct, 0.0, 1.0);
+    const double risk_budget_krw = capital * risk_budget_pct;
     const double risk_limited_notional = (risk_budget_krw * entry_price) / std::max(1e-9, stop_distance);
 
-    double max_notional = capital * 0.22;
+    double max_notional = capital * std::clamp(cfg.foundation_position_notional_cap_pct, 0.0, 1.0);
     if (metrics.liquidity_score < 50.0) {
-        max_notional *= 0.60;
+        max_notional *= std::max(0.0, cfg.foundation_position_liq_mult_lt_50);
     } else if (metrics.liquidity_score < 55.0) {
-        max_notional *= 0.75;
+        max_notional *= std::max(0.0, cfg.foundation_position_liq_mult_lt_55);
     }
     if (metrics.volatility > 4.0) {
-        max_notional *= 0.85;
+        max_notional *= std::max(0.0, cfg.foundation_position_vol_mult_gt_4);
     }
-    if (metrics.orderbook_snapshot.valid && metrics.orderbook_snapshot.spread_pct > 0.0025) {
-        max_notional *= 0.80;
+    if (metrics.orderbook_snapshot.valid &&
+        metrics.orderbook_snapshot.spread_pct >
+            std::clamp(cfg.foundation_position_spread_threshold_pct, 0.0, 1.0)) {
+        max_notional *= std::max(0.0, cfg.foundation_position_spread_mult);
     }
-    const double min_notional = capital * ((metrics.liquidity_score < 55.0) ? 0.02 : 0.03);
+    const double min_notional_low_liq =
+        std::clamp(cfg.foundation_position_min_notional_pct_low_liq, 0.0, 1.0);
+    const double min_notional_default =
+        std::clamp(cfg.foundation_position_min_notional_pct_default, 0.0, 1.0);
+    const double min_notional = capital * ((metrics.liquidity_score < 55.0)
+                                               ? min_notional_low_liq
+                                               : min_notional_default);
     const double notional = std::clamp(risk_limited_notional, min_notional, max_notional);
-    return std::clamp(notional / capital, 0.02, 0.22);
+    double output_min = std::clamp(cfg.foundation_position_output_min_pct, 0.0, 1.0);
+    double output_max = std::clamp(cfg.foundation_position_output_max_pct, 0.0, 1.0);
+    if (output_max < output_min) {
+        std::swap(output_min, output_max);
+    }
+    return std::clamp(notional / capital, output_min, output_max);
 }
 
 void FoundationAdaptiveStrategy::setEnabled(bool enabled) {
@@ -987,32 +1376,62 @@ double FoundationAdaptiveStrategy::clampRiskPctByRegime(
     analytics::MarketRegime regime,
     double atr_pct
 ) {
+    const auto& cfg = autolife::Config::getInstance().getEngineConfig();
     switch (regime) {
         case analytics::MarketRegime::TRENDING_UP:
-            return std::clamp(std::max(atr_pct * 1.35, 0.0040), 0.0040, 0.0180);
+            return std::clamp(
+                std::max(
+                    atr_pct * std::max(0.0, cfg.foundation_risk_mult_uptrend),
+                    std::clamp(cfg.foundation_risk_floor_uptrend, 0.0, 1.0)
+                ),
+                std::clamp(cfg.foundation_risk_floor_uptrend, 0.0, 1.0),
+                std::clamp(cfg.foundation_risk_cap_uptrend, 0.0, 1.0)
+            );
         case analytics::MarketRegime::RANGING:
-            return std::clamp(std::max(atr_pct * 1.15, 0.0035), 0.0035, 0.0140);
+            return std::clamp(
+                std::max(
+                    atr_pct * std::max(0.0, cfg.foundation_risk_mult_ranging),
+                    std::clamp(cfg.foundation_risk_floor_ranging, 0.0, 1.0)
+                ),
+                std::clamp(cfg.foundation_risk_floor_ranging, 0.0, 1.0),
+                std::clamp(cfg.foundation_risk_cap_ranging, 0.0, 1.0)
+            );
         case analytics::MarketRegime::TRENDING_DOWN:
         case analytics::MarketRegime::HIGH_VOLATILITY:
-            return std::clamp(std::max(atr_pct * 0.90, 0.0030), 0.0030, 0.0100);
+            return std::clamp(
+                std::max(
+                    atr_pct * std::max(0.0, cfg.foundation_risk_mult_hostile),
+                    std::clamp(cfg.foundation_risk_floor_hostile, 0.0, 1.0)
+                ),
+                std::clamp(cfg.foundation_risk_floor_hostile, 0.0, 1.0),
+                std::clamp(cfg.foundation_risk_cap_hostile, 0.0, 1.0)
+            );
         case analytics::MarketRegime::UNKNOWN:
         default:
-            return std::clamp(std::max(atr_pct * 1.00, 0.0038), 0.0038, 0.0140);
+            return std::clamp(
+                std::max(
+                    atr_pct * std::max(0.0, cfg.foundation_risk_mult_unknown),
+                    std::clamp(cfg.foundation_risk_floor_unknown, 0.0, 1.0)
+                ),
+                std::clamp(cfg.foundation_risk_floor_unknown, 0.0, 1.0),
+                std::clamp(cfg.foundation_risk_cap_unknown, 0.0, 1.0)
+            );
     }
 }
 
 double FoundationAdaptiveStrategy::targetRewardRiskByRegime(analytics::MarketRegime regime) {
+    const auto& cfg = autolife::Config::getInstance().getEngineConfig();
     switch (regime) {
         case analytics::MarketRegime::TRENDING_UP:
-            return 1.90;
+            return std::max(0.0, cfg.foundation_reward_risk_uptrend);
         case analytics::MarketRegime::RANGING:
-            return 1.45;
+            return std::max(0.0, cfg.foundation_reward_risk_ranging);
         case analytics::MarketRegime::TRENDING_DOWN:
         case analytics::MarketRegime::HIGH_VOLATILITY:
-            return 1.15;
+            return std::max(0.0, cfg.foundation_reward_risk_hostile);
         case analytics::MarketRegime::UNKNOWN:
         default:
-            return 1.35;
+            return std::max(0.0, cfg.foundation_reward_risk_unknown);
     }
 }
 

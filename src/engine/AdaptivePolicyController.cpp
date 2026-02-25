@@ -108,7 +108,7 @@ double bucketPerformanceModifier(const strategy::Signal& s, const PolicyInput& i
 }
 
 double computePolicyScore(const strategy::Signal& s, const PolicyInput& input) {
-    const double base = (s.score > 0.0) ? s.score : s.strength;
+    const double base = s.strength;
     const double liq_bonus = std::clamp((s.liquidity_score - 50.0) / 40.0, -1.0, 1.0) * 0.06;
     const double vol_penalty = std::clamp((s.volatility - 2.5) / 6.0, 0.0, 1.0) * 0.05;
     const double ev_bonus = std::clamp(s.expected_value / 0.0035, -1.0, 1.0) * 0.08;
@@ -177,7 +177,7 @@ PolicyOutput AdaptivePolicyController::selectCandidates(const PolicyInput& input
                 s,
                 false,
                 "dropped_low_strength",
-                (s.score > 0.0 ? s.score : s.strength),
+                s.strength,
                 0.0,
                 hist_trades,
                 hist_wr,
@@ -197,7 +197,10 @@ PolicyOutput AdaptivePolicyController::selectCandidates(const PolicyInput& input
                   const auto& sig_b = std::get<1>(b);
                   if (score_a == score_b) {
                       if (sig_a.strength == sig_b.strength) {
-                          return sig_a.score > sig_b.score;
+                          if (sig_a.expected_value == sig_b.expected_value) {
+                              return sig_a.market < sig_b.market;
+                          }
+                          return sig_a.expected_value > sig_b.expected_value;
                       }
                       return sig_a.strength > sig_b.strength;
                   }
@@ -232,7 +235,7 @@ PolicyOutput AdaptivePolicyController::selectCandidates(const PolicyInput& input
             s,
             selected,
             reason,
-            (s.score > 0.0 ? s.score : s.strength),
+            s.strength,
             policy_score,
             hist_trades,
             hist_wr,

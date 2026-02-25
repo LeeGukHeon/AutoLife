@@ -9,9 +9,6 @@
 #include <mutex>
 
 namespace autolife {
-namespace risk {
-struct TradeHistory;
-}
 namespace strategy {
 
 // Aggregates strategy execution and signal selection/filtering.
@@ -62,24 +59,9 @@ public:
 
     std::map<std::string, IStrategy::Statistics> getAllStatistics() const;
     std::vector<std::shared_ptr<IStrategy>> getStrategies() const;
-    void refreshStrategyStatesFromHistory(
-        const std::vector<risk::TradeHistory>& history,
-        analytics::MarketRegime dominant_regime,
-        bool avoid_high_volatility,
-        bool avoid_trending_down,
-        int min_trades_for_ev,
-        double min_expectancy_krw,
-        double min_profit_factor
-    );
-
 private:
     enum class StrategyRole {
         FOUNDATION,
-        SCALPING,
-        MOMENTUM,
-        BREAKOUT,
-        MEAN_REVERSION,
-        GRID,
         OTHER
     };
 
@@ -109,10 +91,8 @@ private:
     std::shared_ptr<network::UpbitHttpClient> client_;
     mutable std::mutex mutex_;
 
-    double calculateSignalScore(const Signal& signal) const;
     StrategyRole detectStrategyRole(const std::string& strategy_name) const;
     RegimePolicy getRegimePolicy(StrategyRole role, analytics::MarketRegime regime) const;
-    PerformanceGate getPerformanceGate(StrategyRole role, analytics::MarketRegime regime) const;
 };
 
 } // namespace strategy

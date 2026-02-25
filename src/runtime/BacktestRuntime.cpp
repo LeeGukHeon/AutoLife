@@ -197,19 +197,8 @@ bool passesRegimeGate(analytics::MarketRegime regime, const engine::EngineConfig
 
 using autolife::common::signal_policy::normalizeStrategyToken;
 using autolife::common::signal_policy::isStrategyEnabledByConfig;
-using autolife::common::signal_policy::isBreakoutContinuationArchetype;
-using autolife::common::signal_policy::isTrendReaccelerationArchetype;
-using autolife::common::signal_policy::isConsolidationBreakArchetype;
-using autolife::common::signal_policy::isRangePullbackArchetype;
-using autolife::common::signal_policy::isDefensiveFoundationArchetype;
-using autolife::common::signal_policy::isTrendContinuationStyleSignal;
-using autolife::common::signal_policy::computeTargetRewardRisk;
-using autolife::common::signal_policy::computeImpliedLossToWinRatio;
-using autolife::common::signal_policy::computeHistoryRewardRiskAsymmetryPressure;
 using autolife::common::signal_policy::computeEffectiveRoundTripCostPct;
-using autolife::common::signal_policy::computeCostAwareRewardRiskFloor;
 using autolife::common::signal_policy::rebalanceSignalRiskReward;
-using autolife::common::signal_policy::computeStrategyHistoryWinProbPrior;
 using autolife::common::signal_policy::computeCalibratedExpectedEdgePct;
 using autolife::common::execution_guard::computeRealtimeEntryVetoThresholds;
 using autolife::common::execution_guard::computeDynamicSlippageThresholds;
@@ -275,16 +264,23 @@ struct ProbabilisticRuntimeSnapshot {
 
 double effectiveProbabilisticScanPrefilterMargin(
     const autolife::engine::EngineConfig& cfg,
-    autolife::analytics::MarketRegime regime
+    autolife::analytics::MarketRegime regime,
+    const autolife::analytics::ProbabilisticRuntimeModel::Phase3ManagerFilterPolicy& policy
 ) {
+    const autolife::analytics::ProbabilisticRuntimeModel::Phase3ManagerFilterPolicy defaults{};
+    const auto pick = [](double candidate, double fallback) -> double {
+        return std::isfinite(candidate) ? candidate : fallback;
+    };
     double gate = cfg.probabilistic_runtime_scan_prefilter_margin;
     if (regime == autolife::analytics::MarketRegime::TRENDING_DOWN ||
         regime == autolife::analytics::MarketRegime::HIGH_VOLATILITY) {
-        gate += 0.015;
+        gate += pick(policy.scan_prefilter_margin_add_hostile, defaults.scan_prefilter_margin_add_hostile);
     } else if (regime == autolife::analytics::MarketRegime::TRENDING_UP) {
-        gate -= 0.005;
+        gate += pick(policy.scan_prefilter_margin_add_trending_up, defaults.scan_prefilter_margin_add_trending_up);
     }
-    return std::clamp(gate, -0.30, 0.15);
+    const double clamp_min = pick(policy.scan_prefilter_margin_clamp_min, defaults.scan_prefilter_margin_clamp_min);
+    const double clamp_max = pick(policy.scan_prefilter_margin_clamp_max, defaults.scan_prefilter_margin_clamp_max);
+    return std::clamp(gate, std::min(clamp_min, clamp_max), std::max(clamp_min, clamp_max));
 }
 
 double probabilisticUncertaintySizeScale(
@@ -340,11 +336,8 @@ double resolveAdaptiveEvBlend(
     if (hostile_regime) {
         blend -= p.hostile_penalty;
     }
-    if (snapshot.edge_regressor_used) {
-        blend += 0.02;
-    }
     const double ev_confidence = std::clamp(snapshot.ev_confidence, 0.0, 1.0);
-    if (ev_confidence >= 0.72) {
+    if (ev_confidence >= p.high_confidence_threshold) {
         blend += p.high_confidence_bonus;
     } else {
         blend -= (1.0 - ev_confidence) * p.low_confidence_penalty;
@@ -500,10 +493,25 @@ bool inferProbabilisticRuntimeSnapshot(
     );
 
     if (cfg.probabilistic_runtime_scan_prefilter_enabled) {
+        const auto& manager_policy = out_snapshot.phase3_manager_filter_policy;
+        const autolife::analytics::ProbabilisticRuntimeModel::Phase3ManagerFilterPolicy
+            manager_defaults{};
+        const auto pick = [](double candidate, double fallback) -> double {
+            return std::isfinite(candidate) ? candidate : fallback;
+        };
+        const double gate_with_regime_clamp_min = pick(
+            manager_policy.scan_prefilter_margin_with_regime_clamp_min,
+            manager_defaults.scan_prefilter_margin_with_regime_clamp_min
+        );
+        const double gate_with_regime_clamp_max = pick(
+            manager_policy.scan_prefilter_margin_with_regime_clamp_max,
+            manager_defaults.scan_prefilter_margin_with_regime_clamp_max
+        );
         const double gate_margin = std::clamp(
-            effectiveProbabilisticScanPrefilterMargin(cfg, regime) + out_snapshot.regime_threshold_add,
-            -0.30,
-            0.30
+            effectiveProbabilisticScanPrefilterMargin(cfg, regime, manager_policy) +
+                out_snapshot.regime_threshold_add,
+            std::min(gate_with_regime_clamp_min, gate_with_regime_clamp_max),
+            std::max(gate_with_regime_clamp_min, gate_with_regime_clamp_max)
         );
         if (out_snapshot.margin_h5 < gate_margin) {
             if (reject_reason != nullptr) {
@@ -705,10 +713,95 @@ bool applyProbabilisticRuntimeAdjustment(
         snapshot.phase3_manager_filter_policy.rr_guard_expected_value_add_core;
     signal.phase3.manager_filter.rr_guard_expected_value_add_other =
         snapshot.phase3_manager_filter_policy.rr_guard_expected_value_add_other;
+    signal.phase3.manager_filter.probabilistic_confidence_prob_shift =
+        snapshot.phase3_manager_filter_policy.probabilistic_confidence_prob_shift;
+    signal.phase3.manager_filter.probabilistic_confidence_prob_scale =
+        snapshot.phase3_manager_filter_policy.probabilistic_confidence_prob_scale;
+    signal.phase3.manager_filter.probabilistic_confidence_margin_shift =
+        snapshot.phase3_manager_filter_policy.probabilistic_confidence_margin_shift;
+    signal.phase3.manager_filter.probabilistic_confidence_margin_scale =
+        snapshot.phase3_manager_filter_policy.probabilistic_confidence_margin_scale;
+    signal.phase3.manager_filter.probabilistic_confidence_prob_weight =
+        snapshot.phase3_manager_filter_policy.probabilistic_confidence_prob_weight;
+    signal.phase3.manager_filter.probabilistic_confidence_margin_weight =
+        snapshot.phase3_manager_filter_policy.probabilistic_confidence_margin_weight;
+    signal.phase3.manager_filter.probabilistic_high_confidence_threshold =
+        snapshot.phase3_manager_filter_policy.probabilistic_high_confidence_threshold;
+    signal.phase3.manager_filter.history_gate_min_win_rate_base =
+        snapshot.phase3_manager_filter_policy.history_gate_min_win_rate_base;
+    signal.phase3.manager_filter.history_gate_min_profit_factor_base =
+        snapshot.phase3_manager_filter_policy.history_gate_min_profit_factor_base;
+    signal.phase3.manager_filter.history_gate_min_sample_trades_base =
+        snapshot.phase3_manager_filter_policy.history_gate_min_sample_trades_base;
+    signal.phase3.manager_filter.history_gate_win_rate_add_trending_down =
+        snapshot.phase3_manager_filter_policy.history_gate_win_rate_add_trending_down;
+    signal.phase3.manager_filter.history_gate_profit_factor_add_trending_down =
+        snapshot.phase3_manager_filter_policy.history_gate_profit_factor_add_trending_down;
+    signal.phase3.manager_filter.history_gate_win_rate_add_high_volatility =
+        snapshot.phase3_manager_filter_policy.history_gate_win_rate_add_high_volatility;
+    signal.phase3.manager_filter.history_gate_profit_factor_add_high_volatility =
+        snapshot.phase3_manager_filter_policy.history_gate_profit_factor_add_high_volatility;
+    signal.phase3.manager_filter.history_severe_win_rate_shortfall =
+        snapshot.phase3_manager_filter_policy.history_severe_win_rate_shortfall;
+    signal.phase3.manager_filter.history_severe_profit_factor_shortfall =
+        snapshot.phase3_manager_filter_policy.history_severe_profit_factor_shortfall;
+    signal.phase3.manager_filter.history_relief_max_trade_count =
+        snapshot.phase3_manager_filter_policy.history_relief_max_trade_count;
+    signal.phase3.manager_filter.history_relief_min_h5_calibrated =
+        snapshot.phase3_manager_filter_policy.history_relief_min_h5_calibrated;
+    signal.phase3.manager_filter.history_relief_min_h5_margin =
+        snapshot.phase3_manager_filter_policy.history_relief_min_h5_margin;
+    signal.phase3.manager_filter.frontier_uncertainty_prob_weight =
+        snapshot.phase3_manager_filter_policy.frontier_uncertainty_prob_weight;
+    signal.phase3.manager_filter.frontier_uncertainty_ev_weight =
+        snapshot.phase3_manager_filter_policy.frontier_uncertainty_ev_weight;
+    signal.phase3.manager_filter.scan_prefilter_margin_add_hostile =
+        snapshot.phase3_manager_filter_policy.scan_prefilter_margin_add_hostile;
+    signal.phase3.manager_filter.scan_prefilter_margin_add_trending_up =
+        snapshot.phase3_manager_filter_policy.scan_prefilter_margin_add_trending_up;
+    signal.phase3.manager_filter.scan_prefilter_margin_clamp_min =
+        snapshot.phase3_manager_filter_policy.scan_prefilter_margin_clamp_min;
+    signal.phase3.manager_filter.scan_prefilter_margin_clamp_max =
+        snapshot.phase3_manager_filter_policy.scan_prefilter_margin_clamp_max;
+    signal.phase3.manager_filter.scan_prefilter_margin_with_regime_clamp_min =
+        snapshot.phase3_manager_filter_policy.scan_prefilter_margin_with_regime_clamp_min;
+    signal.phase3.manager_filter.scan_prefilter_margin_with_regime_clamp_max =
+        snapshot.phase3_manager_filter_policy.scan_prefilter_margin_with_regime_clamp_max;
+    const auto decision_defaults =
+        autolife::analytics::ProbabilisticRuntimeModel::Phase3PrimaryDecisionProfilePolicy{};
+    const auto& decision_policy = snapshot.phase3_primary_decision_profile_policy;
+    const bool use_decision_policy = decision_policy.enabled;
+    const auto decision_pick = [&](double policy_value, double fallback_value) {
+        return use_decision_policy ? policy_value : fallback_value;
+    };
 
     const double score_weight = std::clamp(cfg.probabilistic_runtime_score_weight, 0.0, 1.0);
-    signal.score += std::clamp(effective_margin * score_weight, -0.12, 0.12);
-    signal.signal_filter = std::clamp(signal.signal_filter + (effective_margin * 0.10), 0.0, 1.0);
+    signal.score += std::clamp(
+        effective_margin * score_weight,
+        -std::max(
+            0.0,
+            decision_pick(
+                decision_policy.score_margin_boost_cap,
+                decision_defaults.score_margin_boost_cap
+            )
+        ),
+        std::max(
+            0.0,
+            decision_pick(
+                decision_policy.score_margin_boost_cap,
+                decision_defaults.score_margin_boost_cap
+            )
+        )
+    );
+    signal.signal_filter = std::clamp(
+        signal.signal_filter +
+            (effective_margin * decision_pick(
+                decision_policy.filter_margin_boost_scale,
+                decision_defaults.filter_margin_boost_scale
+            )),
+        0.0,
+        1.0
+    );
     signal.expected_value += effective_margin * std::clamp(
         cfg.probabilistic_runtime_expected_edge_weight,
         0.0,
@@ -717,21 +810,44 @@ bool applyProbabilisticRuntimeAdjustment(
     const double ev_blend = resolveAdaptiveEvBlend(cfg, snapshot, signal);
     signal.phase3.adaptive_ev_blend = ev_blend;
     if (std::isfinite(snapshot.expected_edge_pct) && std::abs(snapshot.expected_edge_pct) > 1e-9) {
+        const double edge_clip_abs_pct = std::max(
+            0.0,
+            decision_pick(decision_policy.edge_clip_abs_pct, decision_defaults.edge_clip_abs_pct)
+        );
         signal.expected_value =
             (signal.expected_value * (1.0 - ev_blend)) +
-            (std::clamp(snapshot.expected_edge_pct, -0.05, 0.05) * ev_blend);
+            (std::clamp(snapshot.expected_edge_pct, -edge_clip_abs_pct, edge_clip_abs_pct) * ev_blend);
     }
 
     if (cfg.probabilistic_runtime_primary_mode) {
         const double blend = std::clamp(cfg.probabilistic_runtime_strength_blend, 0.0, 1.0);
-        const double primary_nudge = effective_margin * (0.20 + (0.25 * blend));
+        const double primary_nudge = effective_margin *
+            (decision_pick(
+                 decision_policy.primary_nudge_base,
+                 decision_defaults.primary_nudge_base
+             ) +
+             (decision_pick(
+                  decision_policy.primary_nudge_blend_scale,
+                  decision_defaults.primary_nudge_blend_scale
+              ) *
+              blend));
         signal.strength = std::clamp(
             signal.strength + primary_nudge,
             0.0,
             1.0
         );
         signal.signal_filter = std::clamp(
-            signal.signal_filter + (effective_margin * (0.10 + (0.10 * blend))),
+            signal.signal_filter +
+                (effective_margin *
+                 (decision_pick(
+                      decision_policy.primary_filter_nudge_base,
+                      decision_defaults.primary_filter_nudge_base
+                  ) +
+                  (decision_pick(
+                       decision_policy.primary_filter_nudge_blend_scale,
+                       decision_defaults.primary_filter_nudge_blend_scale
+                   ) *
+                   blend))),
             0.0,
             1.0
         );
@@ -773,31 +889,99 @@ void applyProbabilisticPrimaryDecisionProfile(
     const double prob = std::clamp(signal.probabilistic_h5_calibrated, 0.0, 1.0);
     const double threshold = std::clamp(signal.probabilistic_h5_threshold, 0.0, 1.0);
     const double margin = std::clamp(signal.probabilistic_h5_margin, -1.0, 1.0);
+    const double confidence_prob_shift =
+        pick(policy.confidence_prob_shift, defaults.confidence_prob_shift);
+    const double confidence_prob_scale = std::max(
+        1e-6,
+        pick(policy.confidence_prob_scale, defaults.confidence_prob_scale)
+    );
+    const double confidence_margin_shift =
+        pick(policy.confidence_margin_shift, defaults.confidence_margin_shift);
+    const double confidence_margin_scale = std::max(
+        1e-6,
+        pick(policy.confidence_margin_scale, defaults.confidence_margin_scale)
+    );
+    const double confidence_prob_weight = std::max(
+        0.0,
+        pick(policy.confidence_prob_weight, defaults.confidence_prob_weight)
+    );
+    const double confidence_margin_weight = std::max(
+        0.0,
+        pick(policy.confidence_margin_weight, defaults.confidence_margin_weight)
+    );
+    const double confidence_weight_denom =
+        std::max(1e-6, confidence_prob_weight + confidence_margin_weight);
     const double confidence = std::clamp(
-        (std::clamp((prob - 0.50) / 0.20, 0.0, 1.0) * 0.65) +
-        (std::clamp((margin + 0.01) / 0.08, 0.0, 1.0) * 0.35),
+        ((std::clamp((prob - confidence_prob_shift) / confidence_prob_scale, 0.0, 1.0) *
+          confidence_prob_weight) +
+         (std::clamp((margin + confidence_margin_shift) / confidence_margin_scale, 0.0, 1.0) *
+          confidence_margin_weight)) /
+            confidence_weight_denom,
         0.0,
         1.0
     );
 
     const double target_strength = std::clamp(
-        0.22 + (prob * 0.60) + (margin * 1.80),
-        hostile_regime ? 0.26 : 0.18,
-        0.98
+        pick(policy.target_strength_base, defaults.target_strength_base) +
+            (prob * pick(policy.target_strength_prob_weight, defaults.target_strength_prob_weight)) +
+            (margin *
+             pick(policy.target_strength_margin_weight, defaults.target_strength_margin_weight)),
+        hostile_regime
+            ? pick(policy.target_strength_min_hostile, defaults.target_strength_min_hostile)
+            : pick(policy.target_strength_min_calm, defaults.target_strength_min_calm),
+        pick(policy.target_strength_max, defaults.target_strength_max)
     );
-    signal.strength = std::clamp((signal.strength * 0.25) + (target_strength * 0.75), 0.0, 1.0);
+    const double strength_blend_old_weight = std::clamp(
+        pick(policy.strength_blend_old_weight, defaults.strength_blend_old_weight),
+        0.0,
+        1.0
+    );
+    const double strength_blend_target_weight = std::clamp(
+        pick(policy.strength_blend_target_weight, defaults.strength_blend_target_weight),
+        0.0,
+        1.0
+    );
+    const double strength_blend_denom = std::max(1e-6, strength_blend_old_weight + strength_blend_target_weight);
+    signal.strength = std::clamp(
+        ((signal.strength * strength_blend_old_weight) + (target_strength * strength_blend_target_weight)) /
+            strength_blend_denom,
+        0.0,
+        1.0
+    );
 
     const double target_filter = std::clamp(
-        0.42 + (prob * 0.40) + (margin * 0.70),
-        0.20,
-        0.95
+        pick(policy.target_filter_base, defaults.target_filter_base) +
+            (prob * pick(policy.target_filter_prob_weight, defaults.target_filter_prob_weight)) +
+            (margin * pick(policy.target_filter_margin_weight, defaults.target_filter_margin_weight)),
+        pick(policy.target_filter_min, defaults.target_filter_min),
+        pick(policy.target_filter_max, defaults.target_filter_max)
     );
-    signal.signal_filter = std::clamp((signal.signal_filter * 0.30) + (target_filter * 0.70), 0.0, 1.0);
+    const double filter_blend_old_weight = std::clamp(
+        pick(policy.filter_blend_old_weight, defaults.filter_blend_old_weight),
+        0.0,
+        1.0
+    );
+    const double filter_blend_target_weight = std::clamp(
+        pick(policy.filter_blend_target_weight, defaults.filter_blend_target_weight),
+        0.0,
+        1.0
+    );
+    const double filter_blend_denom = std::max(1e-6, filter_blend_old_weight + filter_blend_target_weight);
+    signal.signal_filter = std::clamp(
+        ((signal.signal_filter * filter_blend_old_weight) + (target_filter * filter_blend_target_weight)) /
+            filter_blend_denom,
+        0.0,
+        1.0
+    );
 
     const double implied_win = std::clamp(
-        prob + (margin * 0.45) + ((prob - threshold) * 0.35),
-        hostile_regime ? 0.44 : 0.40,
-        0.86
+        prob + (margin * pick(policy.implied_win_margin_weight, defaults.implied_win_margin_weight)) +
+            ((prob - threshold) *
+             pick(policy.implied_win_threshold_gap_weight, defaults.implied_win_threshold_gap_weight)),
+        hostile_regime
+            ? pick(policy.implied_win_min_hostile, defaults.implied_win_min_hostile)
+            : pick(policy.implied_win_min_calm, defaults.implied_win_min_calm),
+        pick(policy.implied_win_max, defaults.implied_win_max)
     );
 
     if (signal.entry_price > 0.0 &&
@@ -818,9 +1002,28 @@ void applyProbabilisticPrimaryDecisionProfile(
         }
     }
     const double probabilistic_edge_floor =
-        (margin * 0.0012) +
-        ((prob - 0.50) * 0.0010) -
-        (hostile_regime ? 0.00045 : 0.00030);
+        (margin *
+         pick(
+             policy.probabilistic_edge_floor_margin_weight,
+             defaults.probabilistic_edge_floor_margin_weight
+         )) +
+        ((prob - pick(
+                      policy.probabilistic_edge_floor_prob_center,
+                      defaults.probabilistic_edge_floor_prob_center
+                  )) *
+         pick(
+             policy.probabilistic_edge_floor_prob_weight,
+             defaults.probabilistic_edge_floor_prob_weight
+         )) -
+        (hostile_regime
+             ? pick(
+                 policy.probabilistic_edge_floor_penalty_hostile,
+                 defaults.probabilistic_edge_floor_penalty_hostile
+             )
+             : pick(
+                 policy.probabilistic_edge_floor_penalty_calm,
+                 defaults.probabilistic_edge_floor_penalty_calm
+             ));
     signal.expected_value = std::max(signal.expected_value, probabilistic_edge_floor);
 
     if (signal.entry_price > 0.0 && signal.stop_loss > 0.0 && signal.stop_loss < signal.entry_price) {
@@ -1361,14 +1564,6 @@ bool passesProbabilisticPrimaryMinimums(
         return false;
     }
     return true;
-}
-
-bool requiresTypedArchetype(const std::string& strategy_name) {
-    return autolife::common::signal_policy::requiresTypedArchetype(strategy_name);
-}
-
-void normalizeSignalStopLossByRegime(strategy::Signal& signal, analytics::MarketRegime regime) {
-    autolife::common::signal_policy::normalizeSignalStopLossByRegime(signal, regime);
 }
 
 }
@@ -2514,7 +2709,10 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 if (best_signal.type != strategy::SignalType::NONE) {
             best_signal.market_regime = regime.regime;
 
-            normalizeSignalStopLossByRegime(best_signal, best_signal.market_regime);
+            autolife::common::signal_policy::normalizeSignalStopLossByRegime(
+                best_signal,
+                best_signal.market_regime
+            );
             const bool rr_rebalance_ok = rebalanceSignalRiskReward(best_signal, engine_config_);
             if (!rr_rebalance_ok) {
                 entry_funnel_.blocked_rr_rebalance++;
@@ -2526,7 +2724,10 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     entry_funnel_.blocked_risk_gate_regime++;
                     markEntryReject("blocked_risk_gate_regime");
                 } else {
-                    const bool archetype_required = requiresTypedArchetype(best_signal.strategy_name);
+                    const bool archetype_required =
+                        autolife::common::signal_policy::requiresTypedArchetype(
+                            best_signal.strategy_name
+                        );
                     const bool archetype_ready =
                         !archetype_required ||
                         (!best_signal.entry_archetype.empty() && best_signal.entry_archetype != "UNSPECIFIED");
@@ -2612,18 +2813,40 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     markEntryReject(veto_reason_code);
                 } else {
                 const double min_order_krw = std::max(5000.0, engine_config_.min_order_krw);
+                const double stop_guard_min_pct = std::clamp(
+                    engine_config_.entry_capacity_stop_guard_min_pct,
+                    0.0,
+                    1.0
+                );
+                const double stop_guard_max_pct = std::clamp(
+                    engine_config_.entry_capacity_stop_guard_max_pct,
+                    stop_guard_min_pct,
+                    1.0
+                );
+                const double exit_retention_floor = std::clamp(
+                    engine_config_.entry_capacity_exit_retention_floor,
+                    0.01,
+                    0.99
+                );
                 const double fee_rate = Config::getInstance().getFeeRate();
                 const double stop_guard_pct = [&]() {
                     if (best_signal.entry_price > 0.0 &&
                         best_signal.stop_loss > 0.0 &&
                         best_signal.stop_loss < best_signal.entry_price) {
                         const double rp = (best_signal.entry_price - best_signal.stop_loss) / best_signal.entry_price;
-                        return std::clamp(rp, 0.01, 0.20);
+                        return std::clamp(rp, stop_guard_min_pct, stop_guard_max_pct);
                     }
-                    return 0.03;
+                    return std::clamp(
+                        engine_config_.entry_capacity_default_stop_guard_pct,
+                        stop_guard_min_pct,
+                        stop_guard_max_pct
+                    );
                 }();
                 const double slip_guard_pct = dynamic_buy_slippage.guard_slippage_pct;
-                const double exit_retention = std::max(0.50, 1.0 - stop_guard_pct - slip_guard_pct - fee_rate);
+                const double exit_retention = std::max(
+                    exit_retention_floor,
+                    1.0 - stop_guard_pct - slip_guard_pct - fee_rate
+                );
                 const double min_safe_order_krw = std::max(min_order_krw, min_order_krw / exit_retention);
                 const double min_executable_order_krw =
                     std::ceil(min_safe_order_krw / min_order_krw) * min_order_krw;

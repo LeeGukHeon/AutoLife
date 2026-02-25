@@ -15,14 +15,9 @@
     "min_strategy_expectancy_krw": -2.0,
     "min_strategy_profit_factor": 0.95,
     "avoid_high_volatility": true,
-    "avoid_trending_down": true
-  },
-  "strategies": {
-    "scalping": {
-      "min_signal_strength": 0.70
-    },
-    "momentum": {
-      "min_signal_strength": 0.72
-    }
+    "avoid_trending_down": true,
+    "enabled_strategies": [
+      "foundation_adaptive"
+    ]
   }
 }

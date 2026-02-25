@@ -70,8 +70,6 @@ def main() -> int:
     patch: Dict[str, Any] = {}
     if "trading" in preset_root:
         patch["trading"] = preset_root["trading"]
-    if "strategies" in preset_root:
-        patch["strategies"] = preset_root["strategies"]
 
     merge_json_object(config, patch)
     dump_json(config_path, config)

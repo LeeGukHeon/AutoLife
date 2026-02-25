@@ -123,21 +123,12 @@ def main(argv=None) -> int:
     if not datasets:
         raise RuntimeError(f"No CSV files found in {data_dir}")
 
-    include_strategy_matrix = True if not args.include_strategy_matrix else True
+    include_strategy_matrix = bool(args.include_strategy_matrix)
     profiles = [{"name": "all", "strategies": []}]
     if include_strategy_matrix:
         profiles.extend(
             [
-                {"name": "scalping_only", "strategies": ["scalping"]},
-                {"name": "momentum_only", "strategies": ["momentum"]},
-                {"name": "breakout_only", "strategies": ["breakout"]},
-                {"name": "mean_reversion_only", "strategies": ["mean_reversion"]},
-                {"name": "grid_only", "strategies": ["grid_trading"]},
-                {"name": "scalp_momentum", "strategies": ["scalping", "momentum"]},
-                {"name": "scalp_breakout", "strategies": ["scalping", "breakout"]},
-                {"name": "scalp_meanrev", "strategies": ["scalping", "mean_reversion"]},
-                {"name": "trend_pair", "strategies": ["momentum", "breakout"]},
-                {"name": "range_pair", "strategies": ["mean_reversion", "grid_trading"]},
+                {"name": "foundation_only", "strategies": ["foundation_adaptive"]},
             ]
         )
 

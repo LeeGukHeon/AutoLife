@@ -15,20 +15,9 @@
     "hostility_ewma_alpha": 0.14,
     "hostility_hostile_threshold": 0.62,
     "hostility_severe_threshold": 0.82,
-    "hostility_extreme_threshold": 0.88
-  },
-  "strategies": {
-    "scalping": {
-      "min_signal_strength": 0.72
-    },
-    "momentum": {
-      "min_signal_strength": 0.74
-    },
-    "breakout": {
-      "min_signal_strength": 0.41
-    },
-    "mean_reversion": {
-      "min_signal_strength": 0.41
-    }
+    "hostility_extreme_threshold": 0.88,
+    "enabled_strategies": [
+      "foundation_adaptive"
+    ]
   }
 }

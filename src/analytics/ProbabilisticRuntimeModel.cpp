@@ -878,6 +878,8 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         parseCostParam(phase3_blend_node, "ranging_penalty", 0.06, -1.0, 1.0);
     phase3_policy_.adaptive_ev_blend.hostile_penalty =
         parseCostParam(phase3_blend_node, "hostile_penalty", 0.08, -1.0, 1.0);
+    phase3_policy_.adaptive_ev_blend.high_confidence_threshold =
+        parseCostParam(phase3_blend_node, "high_confidence_threshold", 0.72, 0.0, 1.0);
     phase3_policy_.adaptive_ev_blend.high_confidence_bonus =
         parseCostParam(phase3_blend_node, "high_confidence_bonus", 0.05, -1.0, 1.0);
     phase3_policy_.adaptive_ev_blend.low_confidence_penalty =
@@ -1276,6 +1278,250 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
 
     phase3_policy_.primary_decision_profile.enabled =
         phase3_primary_decision_profile_node.value("enabled", false);
+    phase3_policy_.primary_decision_profile.confidence_prob_shift = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "confidence_prob_shift",
+        0.50,
+        -1.0,
+        2.0
+    );
+    phase3_policy_.primary_decision_profile.confidence_prob_scale = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "confidence_prob_scale",
+        0.20,
+        1e-6,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.confidence_margin_shift = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "confidence_margin_shift",
+        0.01,
+        -1.0,
+        2.0
+    );
+    phase3_policy_.primary_decision_profile.confidence_margin_scale = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "confidence_margin_scale",
+        0.08,
+        1e-6,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.confidence_prob_weight = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "confidence_prob_weight",
+        0.65,
+        0.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.confidence_margin_weight = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "confidence_margin_weight",
+        0.35,
+        0.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.target_strength_base = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "target_strength_base",
+        0.22,
+        -10.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.target_strength_prob_weight = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "target_strength_prob_weight",
+        0.60,
+        -20.0,
+        20.0
+    );
+    phase3_policy_.primary_decision_profile.target_strength_margin_weight = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "target_strength_margin_weight",
+        1.80,
+        -20.0,
+        20.0
+    );
+    phase3_policy_.primary_decision_profile.target_strength_min_hostile = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "target_strength_min_hostile",
+        0.26,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.target_strength_min_calm = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "target_strength_min_calm",
+        0.18,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.target_strength_max = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "target_strength_max",
+        0.98,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.strength_blend_old_weight = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "strength_blend_old_weight",
+        0.25,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.strength_blend_target_weight = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "strength_blend_target_weight",
+        0.75,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.target_filter_base = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "target_filter_base",
+        0.42,
+        -10.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.target_filter_prob_weight = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "target_filter_prob_weight",
+        0.40,
+        -20.0,
+        20.0
+    );
+    phase3_policy_.primary_decision_profile.target_filter_margin_weight = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "target_filter_margin_weight",
+        0.70,
+        -20.0,
+        20.0
+    );
+    phase3_policy_.primary_decision_profile.target_filter_min = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "target_filter_min",
+        0.20,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.target_filter_max = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "target_filter_max",
+        0.95,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.filter_blend_old_weight = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "filter_blend_old_weight",
+        0.30,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.filter_blend_target_weight = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "filter_blend_target_weight",
+        0.70,
+        0.0,
+        1.0
+    );
+    if (phase3_policy_.primary_decision_profile.target_strength_max <
+        phase3_policy_.primary_decision_profile.target_strength_min_hostile) {
+        phase3_policy_.primary_decision_profile.target_strength_max =
+            phase3_policy_.primary_decision_profile.target_strength_min_hostile;
+    }
+    if (phase3_policy_.primary_decision_profile.target_strength_max <
+        phase3_policy_.primary_decision_profile.target_strength_min_calm) {
+        phase3_policy_.primary_decision_profile.target_strength_max =
+            phase3_policy_.primary_decision_profile.target_strength_min_calm;
+    }
+    if (phase3_policy_.primary_decision_profile.target_filter_max <
+        phase3_policy_.primary_decision_profile.target_filter_min) {
+        std::swap(
+            phase3_policy_.primary_decision_profile.target_filter_min,
+            phase3_policy_.primary_decision_profile.target_filter_max
+        );
+    }
+    phase3_policy_.primary_decision_profile.implied_win_margin_weight = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "implied_win_margin_weight",
+        0.45,
+        -20.0,
+        20.0
+    );
+    phase3_policy_.primary_decision_profile.implied_win_threshold_gap_weight = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "implied_win_threshold_gap_weight",
+        0.35,
+        -20.0,
+        20.0
+    );
+    phase3_policy_.primary_decision_profile.implied_win_min_hostile = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "implied_win_min_hostile",
+        0.44,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.implied_win_min_calm = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "implied_win_min_calm",
+        0.40,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.implied_win_max = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "implied_win_max",
+        0.86,
+        0.0,
+        1.0
+    );
+    if (phase3_policy_.primary_decision_profile.implied_win_max <
+        phase3_policy_.primary_decision_profile.implied_win_min_hostile) {
+        phase3_policy_.primary_decision_profile.implied_win_max =
+            phase3_policy_.primary_decision_profile.implied_win_min_hostile;
+    }
+    if (phase3_policy_.primary_decision_profile.implied_win_max <
+        phase3_policy_.primary_decision_profile.implied_win_min_calm) {
+        phase3_policy_.primary_decision_profile.implied_win_max =
+            phase3_policy_.primary_decision_profile.implied_win_min_calm;
+    }
+    phase3_policy_.primary_decision_profile.probabilistic_edge_floor_margin_weight = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "probabilistic_edge_floor_margin_weight",
+        0.0012,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.probabilistic_edge_floor_prob_weight = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "probabilistic_edge_floor_prob_weight",
+        0.0010,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.probabilistic_edge_floor_prob_center = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "probabilistic_edge_floor_prob_center",
+        0.50,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.probabilistic_edge_floor_penalty_hostile = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "probabilistic_edge_floor_penalty_hostile",
+        0.00045,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.probabilistic_edge_floor_penalty_calm = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "probabilistic_edge_floor_penalty_calm",
+        0.00030,
+        -1.0,
+        1.0
+    );
     phase3_policy_.primary_decision_profile.current_risk_min = parseCostParam(
         phase3_primary_decision_profile_node,
         "current_risk_min",
@@ -1591,6 +1837,55 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
             phase3_policy_.primary_decision_profile.size_max
         );
     }
+    phase3_policy_.primary_decision_profile.score_margin_boost_cap = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "score_margin_boost_cap",
+        0.12,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.filter_margin_boost_scale = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "filter_margin_boost_scale",
+        0.10,
+        -10.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.edge_clip_abs_pct = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "edge_clip_abs_pct",
+        0.05,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.primary_nudge_base = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "primary_nudge_base",
+        0.20,
+        -10.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.primary_nudge_blend_scale = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "primary_nudge_blend_scale",
+        0.25,
+        -10.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.primary_filter_nudge_base = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "primary_filter_nudge_base",
+        0.10,
+        -10.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.primary_filter_nudge_blend_scale = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "primary_filter_nudge_blend_scale",
+        0.10,
+        -10.0,
+        10.0
+    );
 
     phase3_policy_.manager_filter.enabled = phase3_manager_filter_node.value("enabled", false);
     phase3_policy_.manager_filter.base_min_strength_default = parseCostParam(
@@ -1628,6 +1923,62 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         -0.20,
         0.20
     );
+    phase3_policy_.manager_filter.scan_prefilter_margin_add_hostile = parseCostParam(
+        phase3_manager_filter_node,
+        "scan_prefilter_margin_add_hostile",
+        0.015,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.scan_prefilter_margin_add_trending_up = parseCostParam(
+        phase3_manager_filter_node,
+        "scan_prefilter_margin_add_trending_up",
+        -0.005,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.scan_prefilter_margin_clamp_min = parseCostParam(
+        phase3_manager_filter_node,
+        "scan_prefilter_margin_clamp_min",
+        -0.30,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.scan_prefilter_margin_clamp_max = parseCostParam(
+        phase3_manager_filter_node,
+        "scan_prefilter_margin_clamp_max",
+        0.15,
+        -1.0,
+        1.0
+    );
+    if (phase3_policy_.manager_filter.scan_prefilter_margin_clamp_max <
+        phase3_policy_.manager_filter.scan_prefilter_margin_clamp_min) {
+        std::swap(
+            phase3_policy_.manager_filter.scan_prefilter_margin_clamp_min,
+            phase3_policy_.manager_filter.scan_prefilter_margin_clamp_max
+        );
+    }
+    phase3_policy_.manager_filter.scan_prefilter_margin_with_regime_clamp_min = parseCostParam(
+        phase3_manager_filter_node,
+        "scan_prefilter_margin_with_regime_clamp_min",
+        -0.30,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.scan_prefilter_margin_with_regime_clamp_max = parseCostParam(
+        phase3_manager_filter_node,
+        "scan_prefilter_margin_with_regime_clamp_max",
+        0.30,
+        -1.0,
+        1.0
+    );
+    if (phase3_policy_.manager_filter.scan_prefilter_margin_with_regime_clamp_max <
+        phase3_policy_.manager_filter.scan_prefilter_margin_with_regime_clamp_min) {
+        std::swap(
+            phase3_policy_.manager_filter.scan_prefilter_margin_with_regime_clamp_min,
+            phase3_policy_.manager_filter.scan_prefilter_margin_with_regime_clamp_max
+        );
+    }
     phase3_policy_.manager_filter.hostile_strength_add_scale = parseCostParam(
         phase3_manager_filter_node,
         "hostile_strength_add_scale",
@@ -2048,6 +2399,102 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         -0.20,
         0.20
     );
+    phase3_policy_.manager_filter.probabilistic_confidence_prob_shift = parseCostParam(
+        phase3_manager_filter_node,
+        "probabilistic_confidence_prob_shift",
+        0.50,
+        -1.0,
+        2.0
+    );
+    phase3_policy_.manager_filter.probabilistic_confidence_prob_scale = parseCostParam(
+        phase3_manager_filter_node,
+        "probabilistic_confidence_prob_scale",
+        0.25,
+        1e-6,
+        10.0
+    );
+    phase3_policy_.manager_filter.probabilistic_confidence_margin_shift = parseCostParam(
+        phase3_manager_filter_node,
+        "probabilistic_confidence_margin_shift",
+        0.02,
+        -1.0,
+        2.0
+    );
+    phase3_policy_.manager_filter.probabilistic_confidence_margin_scale = parseCostParam(
+        phase3_manager_filter_node,
+        "probabilistic_confidence_margin_scale",
+        0.12,
+        1e-6,
+        10.0
+    );
+    phase3_policy_.manager_filter.probabilistic_confidence_prob_weight = parseCostParam(
+        phase3_manager_filter_node,
+        "probabilistic_confidence_prob_weight",
+        0.40,
+        0.0,
+        10.0
+    );
+    phase3_policy_.manager_filter.probabilistic_confidence_margin_weight = parseCostParam(
+        phase3_manager_filter_node,
+        "probabilistic_confidence_margin_weight",
+        0.60,
+        0.0,
+        10.0
+    );
+    phase3_policy_.manager_filter.probabilistic_high_confidence_threshold = parseCostParam(
+        phase3_manager_filter_node,
+        "probabilistic_high_confidence_threshold",
+        0.65,
+        0.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.history_gate_min_win_rate_base = parseCostParam(
+        phase3_manager_filter_node,
+        "history_gate_min_win_rate_base",
+        0.50,
+        0.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.history_gate_min_profit_factor_base = parseCostParam(
+        phase3_manager_filter_node,
+        "history_gate_min_profit_factor_base",
+        1.10,
+        0.0,
+        100.0
+    );
+    phase3_policy_.manager_filter.history_gate_min_sample_trades_base = std::clamp(
+        phase3_manager_filter_node.value("history_gate_min_sample_trades_base", 16),
+        1,
+        1000000
+    );
+    phase3_policy_.manager_filter.history_gate_win_rate_add_trending_down = parseCostParam(
+        phase3_manager_filter_node,
+        "history_gate_win_rate_add_trending_down",
+        0.03,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.history_gate_profit_factor_add_trending_down = parseCostParam(
+        phase3_manager_filter_node,
+        "history_gate_profit_factor_add_trending_down",
+        0.05,
+        -100.0,
+        100.0
+    );
+    phase3_policy_.manager_filter.history_gate_win_rate_add_high_volatility = parseCostParam(
+        phase3_manager_filter_node,
+        "history_gate_win_rate_add_high_volatility",
+        0.02,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.history_gate_profit_factor_add_high_volatility = parseCostParam(
+        phase3_manager_filter_node,
+        "history_gate_profit_factor_add_high_volatility",
+        0.04,
+        -100.0,
+        100.0
+    );
     phase3_policy_.manager_filter.history_min_sample_hostile = std::clamp(
         phase3_manager_filter_node.value("history_min_sample_hostile", 18),
         1,
@@ -2057,6 +2504,39 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         phase3_manager_filter_node.value("history_min_sample_calm", 36),
         1,
         1000000
+    );
+    phase3_policy_.manager_filter.history_severe_win_rate_shortfall = parseCostParam(
+        phase3_manager_filter_node,
+        "history_severe_win_rate_shortfall",
+        0.08,
+        0.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.history_severe_profit_factor_shortfall = parseCostParam(
+        phase3_manager_filter_node,
+        "history_severe_profit_factor_shortfall",
+        0.30,
+        0.0,
+        10.0
+    );
+    phase3_policy_.manager_filter.history_relief_max_trade_count = std::clamp(
+        phase3_manager_filter_node.value("history_relief_max_trade_count", 52),
+        1,
+        1000000
+    );
+    phase3_policy_.manager_filter.history_relief_min_h5_calibrated = parseCostParam(
+        phase3_manager_filter_node,
+        "history_relief_min_h5_calibrated",
+        0.48,
+        0.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.history_relief_min_h5_margin = parseCostParam(
+        phase3_manager_filter_node,
+        "history_relief_min_h5_margin",
+        -0.012,
+        -1.0,
+        1.0
     );
     phase3_policy_.manager_filter.history_guard_scale_base = parseCostParam(
         phase3_manager_filter_node,
@@ -2232,6 +2712,20 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         0.00006,
         -0.20,
         0.20
+    );
+    phase3_policy_.manager_filter.frontier_uncertainty_prob_weight = parseCostParam(
+        phase3_manager_filter_node,
+        "frontier_uncertainty_prob_weight",
+        0.60,
+        0.0,
+        10.0
+    );
+    phase3_policy_.manager_filter.frontier_uncertainty_ev_weight = parseCostParam(
+        phase3_manager_filter_node,
+        "frontier_uncertainty_ev_weight",
+        0.40,
+        0.0,
+        10.0
     );
 
     phase3_policy_.diagnostics_v2.enabled = phase3_policy_.phase3_diagnostics_v2_enabled;

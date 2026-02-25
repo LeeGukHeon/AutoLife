@@ -86,6 +86,7 @@ public:
         double trend_bonus = 0.08;
         double ranging_penalty = 0.06;
         double hostile_penalty = 0.08;
+        double high_confidence_threshold = 0.72;
         double high_confidence_bonus = 0.05;
         double low_confidence_penalty = 0.10;
         double cost_penalty = 0.06;
@@ -153,6 +154,37 @@ public:
 
     struct Phase3PrimaryDecisionProfilePolicy {
         bool enabled = false;
+        double confidence_prob_shift = 0.50;
+        double confidence_prob_scale = 0.20;
+        double confidence_margin_shift = 0.01;
+        double confidence_margin_scale = 0.08;
+        double confidence_prob_weight = 0.65;
+        double confidence_margin_weight = 0.35;
+        double target_strength_base = 0.22;
+        double target_strength_prob_weight = 0.60;
+        double target_strength_margin_weight = 1.80;
+        double target_strength_min_hostile = 0.26;
+        double target_strength_min_calm = 0.18;
+        double target_strength_max = 0.98;
+        double strength_blend_old_weight = 0.25;
+        double strength_blend_target_weight = 0.75;
+        double target_filter_base = 0.42;
+        double target_filter_prob_weight = 0.40;
+        double target_filter_margin_weight = 0.70;
+        double target_filter_min = 0.20;
+        double target_filter_max = 0.95;
+        double filter_blend_old_weight = 0.30;
+        double filter_blend_target_weight = 0.70;
+        double implied_win_margin_weight = 0.45;
+        double implied_win_threshold_gap_weight = 0.35;
+        double implied_win_min_hostile = 0.44;
+        double implied_win_min_calm = 0.40;
+        double implied_win_max = 0.86;
+        double probabilistic_edge_floor_margin_weight = 0.0012;
+        double probabilistic_edge_floor_prob_weight = 0.0010;
+        double probabilistic_edge_floor_prob_center = 0.50;
+        double probabilistic_edge_floor_penalty_hostile = 0.00045;
+        double probabilistic_edge_floor_penalty_calm = 0.00030;
         double current_risk_min = 0.0010;
         double current_risk_max = 0.0500;
         double target_risk_base_hostile = 0.0026;
@@ -196,6 +228,13 @@ public:
         double size_hostile_multiplier = 0.88;
         double size_min = 0.30;
         double size_max = 1.35;
+        double score_margin_boost_cap = 0.12;
+        double filter_margin_boost_scale = 0.10;
+        double edge_clip_abs_pct = 0.05;
+        double primary_nudge_base = 0.20;
+        double primary_nudge_blend_scale = 0.25;
+        double primary_filter_nudge_base = 0.10;
+        double primary_filter_nudge_blend_scale = 0.10;
     };
 
     struct Phase3ManagerFilterPolicy {
@@ -205,6 +244,19 @@ public:
         double base_min_strength_high_volatility = 0.48;
         double base_min_strength_trending_down = 0.52;
         double base_min_expected_value = 0.0;
+        double scan_prefilter_margin_add_hostile = 0.015;
+        double scan_prefilter_margin_add_trending_up = -0.005;
+        double scan_prefilter_margin_clamp_min = -0.30;
+        double scan_prefilter_margin_clamp_max = 0.15;
+        double scan_prefilter_margin_with_regime_clamp_min = -0.30;
+        double scan_prefilter_margin_with_regime_clamp_max = 0.30;
+        double history_gate_min_win_rate_base = 0.50;
+        double history_gate_min_profit_factor_base = 1.10;
+        int history_gate_min_sample_trades_base = 16;
+        double history_gate_win_rate_add_trending_down = 0.03;
+        double history_gate_profit_factor_add_trending_down = 0.05;
+        double history_gate_win_rate_add_high_volatility = 0.02;
+        double history_gate_profit_factor_add_high_volatility = 0.04;
 
         double hostile_strength_add_scale = 0.18;
         double hostile_strength_add_cap = 0.08;
@@ -268,9 +320,21 @@ public:
 
         double probabilistic_confidence_strength_relief_scale = 0.03;
         double probabilistic_confidence_expected_value_relief_scale = 0.00010;
+        double probabilistic_confidence_prob_shift = 0.50;
+        double probabilistic_confidence_prob_scale = 0.25;
+        double probabilistic_confidence_margin_shift = 0.02;
+        double probabilistic_confidence_margin_scale = 0.12;
+        double probabilistic_confidence_prob_weight = 0.40;
+        double probabilistic_confidence_margin_weight = 0.60;
+        double probabilistic_high_confidence_threshold = 0.65;
 
         int history_min_sample_hostile = 18;
         int history_min_sample_calm = 36;
+        double history_severe_win_rate_shortfall = 0.08;
+        double history_severe_profit_factor_shortfall = 0.30;
+        int history_relief_max_trade_count = 52;
+        double history_relief_min_h5_calibrated = 0.48;
+        double history_relief_min_h5_margin = -0.012;
         double history_guard_scale_base = 0.45;
         double history_guard_scale_confidence_scale = 0.35;
         double history_guard_scale_min_hostile = 0.18;
@@ -294,6 +358,8 @@ public:
         double rr_guard_strength_add = 0.03;
         double rr_guard_expected_value_add_core = 0.00003;
         double rr_guard_expected_value_add_other = 0.00006;
+        double frontier_uncertainty_prob_weight = 0.60;
+        double frontier_uncertainty_ev_weight = 0.40;
     };
 
     struct Phase3DiagnosticsPolicy {

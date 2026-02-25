@@ -33,29 +33,95 @@ FilterDecision evaluateFilter(const FilterInput& input) {
     out.required_strength = input.min_strength;
     out.required_expected_value = input.min_expected_value;
     out.reward_risk_ratio = rewardRiskRatio(signal);
+    const auto& manager_policy = signal.phase3.manager_filter;
+    const auto defaults = Signal::Phase3PolicySnapshot::ManagerFilterPolicy{};
+    const bool use_manager_policy = manager_policy.enabled;
+    const auto manager_pick = [&](double policy_value, double fallback_value) {
+        return use_manager_policy ? policy_value : fallback_value;
+    };
+    const auto manager_pick_int = [&](int policy_value, int fallback_value) {
+        return use_manager_policy ? policy_value : fallback_value;
+    };
     const bool probabilistic_primary_signal = signal.probabilistic_runtime_applied;
     const double probabilistic_confidence = probabilistic_primary_signal
         ? std::clamp(
-              (std::clamp((signal.probabilistic_h5_margin + 0.02) / 0.12, 0.0, 1.0) * 0.60) +
-              (std::clamp((signal.probabilistic_h5_calibrated - 0.50) / 0.25, 0.0, 1.0) * 0.40),
+              ((std::clamp(
+                    (signal.probabilistic_h5_margin +
+                     manager_pick(
+                         manager_policy.probabilistic_confidence_margin_shift,
+                         defaults.probabilistic_confidence_margin_shift
+                     )) /
+                        std::max(
+                            1e-6,
+                            manager_pick(
+                                manager_policy.probabilistic_confidence_margin_scale,
+                                defaults.probabilistic_confidence_margin_scale
+                            )
+                        ),
+                    0.0,
+                    1.0
+                ) *
+                std::max(
+                    0.0,
+                    manager_pick(
+                        manager_policy.probabilistic_confidence_margin_weight,
+                        defaults.probabilistic_confidence_margin_weight
+                    )
+                )) +
+               (std::clamp(
+                    (signal.probabilistic_h5_calibrated -
+                     manager_pick(
+                         manager_policy.probabilistic_confidence_prob_shift,
+                         defaults.probabilistic_confidence_prob_shift
+                     )) /
+                        std::max(
+                            1e-6,
+                            manager_pick(
+                                manager_policy.probabilistic_confidence_prob_scale,
+                                defaults.probabilistic_confidence_prob_scale
+                            )
+                        ),
+                    0.0,
+                    1.0
+                ) *
+                std::max(
+                    0.0,
+                    manager_pick(
+                        manager_policy.probabilistic_confidence_prob_weight,
+                        defaults.probabilistic_confidence_prob_weight
+                    )
+                ))) /
+                  std::max(
+                      1e-6,
+                      std::max(
+                          0.0,
+                          manager_pick(
+                              manager_policy.probabilistic_confidence_margin_weight,
+                              defaults.probabilistic_confidence_margin_weight
+                          )
+                      ) +
+                          std::max(
+                              0.0,
+                              manager_pick(
+                                  manager_policy.probabilistic_confidence_prob_weight,
+                                  defaults.probabilistic_confidence_prob_weight
+                              )
+                          )
+                  ),
               0.0,
               1.0
           )
         : 0.0;
-    const bool probabilistic_high_confidence = probabilistic_confidence >= 0.65;
+    const bool probabilistic_high_confidence =
+        probabilistic_confidence >= manager_pick(
+            manager_policy.probabilistic_high_confidence_threshold,
+            defaults.probabilistic_high_confidence_threshold
+        );
     out.probabilistic_confidence = probabilistic_confidence;
     out.ev_confidence = std::clamp(signal.phase3.ev_confidence, 0.0, 1.0);
     out.frontier_enabled = signal.phase3.frontier_enabled;
-    const auto& manager_policy = signal.phase3.manager_filter;
-    const bool use_manager_policy = manager_policy.enabled;
-    const auto manager_pick = [&](double policy_value, double legacy_value) {
-        return use_manager_policy ? policy_value : legacy_value;
-    };
-    const auto manager_pick_int = [&](int policy_value, int legacy_value) {
-        return use_manager_policy ? policy_value : legacy_value;
-    };
     const double required_strength_cap = std::clamp(
-        manager_pick(manager_policy.required_strength_cap, 0.95),
+        manager_pick(manager_policy.required_strength_cap, defaults.required_strength_cap),
         0.0,
         1.0
     );
@@ -69,42 +135,75 @@ FilterDecision evaluateFilter(const FilterInput& input) {
         out.required_strength = std::max(
             0.0,
             out.required_strength -
-                manager_pick(manager_policy.core_signal_ownership_strength_relief, 0.02)
+                manager_pick(
+                    manager_policy.core_signal_ownership_strength_relief,
+                    defaults.core_signal_ownership_strength_relief
+                )
         );
         out.required_expected_value = std::min(
             out.required_expected_value,
-            manager_pick(manager_policy.core_signal_ownership_expected_value_floor, -0.00005)
+            manager_pick(
+                manager_policy.core_signal_ownership_expected_value_floor,
+                defaults.core_signal_ownership_expected_value_floor
+            )
         );
     }
 
     if (input.policy_hold) {
         out.required_strength = std::min(
             required_strength_cap,
-            out.required_strength + manager_pick(manager_policy.policy_hold_strength_add, 0.05)
+            out.required_strength + manager_pick(
+                manager_policy.policy_hold_strength_add,
+                defaults.policy_hold_strength_add
+            )
         );
         out.required_expected_value += input.core_signal_ownership
-            ? manager_pick(manager_policy.policy_hold_expected_value_add_core, 0.00010)
-            : manager_pick(manager_policy.policy_hold_expected_value_add_other, 0.00018);
+            ? manager_pick(
+                manager_policy.policy_hold_expected_value_add_core,
+                defaults.policy_hold_expected_value_add_core
+            )
+            : manager_pick(
+                manager_policy.policy_hold_expected_value_add_other,
+                defaults.policy_hold_expected_value_add_other
+            );
     }
 
     if (input.off_trend_regime) {
         out.required_strength = std::min(
             required_strength_cap,
-            out.required_strength + manager_pick(manager_policy.off_trend_strength_add, 0.06)
+            out.required_strength + manager_pick(
+                manager_policy.off_trend_strength_add,
+                defaults.off_trend_strength_add
+            )
         );
         out.required_expected_value += input.core_signal_ownership
-            ? manager_pick(manager_policy.off_trend_expected_value_add_core, 0.00009)
-            : manager_pick(manager_policy.off_trend_expected_value_add_other, 0.00015);
+            ? manager_pick(
+                manager_policy.off_trend_expected_value_add_core,
+                defaults.off_trend_expected_value_add_core
+            )
+            : manager_pick(
+                manager_policy.off_trend_expected_value_add_other,
+                defaults.off_trend_expected_value_add_other
+            );
     }
 
     if (input.hostile_regime) {
         out.required_strength = std::min(
             required_strength_cap,
-            out.required_strength + manager_pick(manager_policy.hostile_regime_strength_add, 0.03)
+            out.required_strength + manager_pick(
+                manager_policy.hostile_regime_strength_add,
+                defaults.hostile_regime_strength_add
+            )
         );
         out.required_expected_value += input.core_signal_ownership
-            ? manager_pick(manager_policy.hostile_regime_expected_value_add_core, 0.00005)
-            : manager_pick(manager_policy.hostile_regime_expected_value_add_other, 0.00008);
+            ? manager_pick(
+                manager_policy.hostile_regime_expected_value_add_core,
+                defaults.hostile_regime_expected_value_add_core
+            )
+            : manager_pick(
+                manager_policy.hostile_regime_expected_value_add_other,
+                defaults.hostile_regime_expected_value_add_other
+            );
     }
 
     if (probabilistic_primary_signal) {
@@ -115,14 +214,14 @@ FilterDecision evaluateFilter(const FilterInput& input) {
             out.required_strength -
                 (manager_pick(
                      manager_policy.probabilistic_confidence_strength_relief_scale,
-                     0.03
+                     defaults.probabilistic_confidence_strength_relief_scale
                  ) *
                  probabilistic_confidence)
         );
         out.required_expected_value -=
             manager_pick(
                 manager_policy.probabilistic_confidence_expected_value_relief_scale,
-                0.00010
+                defaults.probabilistic_confidence_expected_value_relief_scale
             ) *
             probabilistic_confidence;
     }
@@ -133,8 +232,14 @@ FilterDecision evaluateFilter(const FilterInput& input) {
         effective_history_sample = std::max(
             effective_history_sample,
             input.hostile_regime
-                ? manager_pick_int(manager_policy.history_min_sample_hostile, 18)
-                : manager_pick_int(manager_policy.history_min_sample_calm, 36)
+                ? manager_pick_int(
+                    manager_policy.history_min_sample_hostile,
+                    defaults.history_min_sample_hostile
+                )
+                : manager_pick_int(
+                    manager_policy.history_min_sample_calm,
+                    defaults.history_min_sample_calm
+                )
         );
     }
     if (signal.strategy_trade_count >= effective_history_sample) {
@@ -147,14 +252,30 @@ FilterDecision evaluateFilter(const FilterInput& input) {
             input.min_history_profit_factor - signal.strategy_profit_factor
         );
         const bool severe_history_underperformance =
-            win_rate_shortfall >= 0.08 ||
-            profit_factor_shortfall >= 0.30;
+            win_rate_shortfall >= manager_pick(
+                manager_policy.history_severe_win_rate_shortfall,
+                defaults.history_severe_win_rate_shortfall
+            ) ||
+            profit_factor_shortfall >= manager_pick(
+                manager_policy.history_severe_profit_factor_shortfall,
+                defaults.history_severe_profit_factor_shortfall
+            );
         const bool probabilistic_history_relief =
             probabilistic_primary_signal &&
             !input.hostile_regime &&
-            signal.strategy_trade_count < 52 &&
-            signal.probabilistic_h5_calibrated >= 0.48 &&
-            signal.probabilistic_h5_margin >= -0.012;
+            signal.strategy_trade_count <
+                manager_pick_int(
+                    manager_policy.history_relief_max_trade_count,
+                    defaults.history_relief_max_trade_count
+                ) &&
+            signal.probabilistic_h5_calibrated >= manager_pick(
+                manager_policy.history_relief_min_h5_calibrated,
+                defaults.history_relief_min_h5_calibrated
+            ) &&
+            signal.probabilistic_h5_margin >= manager_pick(
+                manager_policy.history_relief_min_h5_margin,
+                defaults.history_relief_min_h5_margin
+            );
         if (signal.strategy_win_rate < input.min_history_win_rate ||
             signal.strategy_profit_factor < input.min_history_profit_factor) {
             if (probabilistic_primary_signal &&
@@ -166,29 +287,62 @@ FilterDecision evaluateFilter(const FilterInput& input) {
                 history_guard_active = true;
                 const double history_guard_scale = probabilistic_primary_signal
                     ? std::clamp(
-                          manager_pick(manager_policy.history_guard_scale_base, 0.45) -
+                          manager_pick(
+                              manager_policy.history_guard_scale_base,
+                              defaults.history_guard_scale_base
+                          ) -
                               (manager_pick(
                                    manager_policy.history_guard_scale_confidence_scale,
-                                   0.35
+                                   defaults.history_guard_scale_confidence_scale
                                ) *
                                probabilistic_confidence),
                           input.hostile_regime
-                              ? manager_pick(manager_policy.history_guard_scale_min_hostile, 0.18)
-                              : manager_pick(manager_policy.history_guard_scale_min_calm, 0.10),
+                              ? manager_pick(
+                                  manager_policy.history_guard_scale_min_hostile,
+                                  defaults.history_guard_scale_min_hostile
+                              )
+                              : manager_pick(
+                                  manager_policy.history_guard_scale_min_calm,
+                                  defaults.history_guard_scale_min_calm
+                              ),
                           input.hostile_regime
-                              ? manager_pick(manager_policy.history_guard_scale_max_hostile, 0.60)
-                              : manager_pick(manager_policy.history_guard_scale_max_calm, 0.45)
+                              ? manager_pick(
+                                  manager_policy.history_guard_scale_max_hostile,
+                                  defaults.history_guard_scale_max_hostile
+                              )
+                              : manager_pick(
+                                  manager_policy.history_guard_scale_max_calm,
+                                  defaults.history_guard_scale_max_calm
+                              )
                       )
                     : 1.0;
                 const double strength_bump = probabilistic_primary_signal
-                    ? manager_pick(manager_policy.history_strength_bump_prob, 0.012)
-                    : manager_pick(manager_policy.history_strength_bump_non_prob, 0.05);
+                    ? manager_pick(
+                        manager_policy.history_strength_bump_prob,
+                        defaults.history_strength_bump_prob
+                    )
+                    : manager_pick(
+                        manager_policy.history_strength_bump_non_prob,
+                        defaults.history_strength_bump_non_prob
+                    );
                 const double edge_bump_core = probabilistic_primary_signal
-                    ? manager_pick(manager_policy.history_edge_bump_core_prob, 0.00002)
-                    : manager_pick(manager_policy.history_edge_bump_core_non_prob, 0.00005);
+                    ? manager_pick(
+                        manager_policy.history_edge_bump_core_prob,
+                        defaults.history_edge_bump_core_prob
+                    )
+                    : manager_pick(
+                        manager_policy.history_edge_bump_core_non_prob,
+                        defaults.history_edge_bump_core_non_prob
+                    );
                 const double edge_bump_other = probabilistic_primary_signal
-                    ? manager_pick(manager_policy.history_edge_bump_other_prob, 0.00003)
-                    : manager_pick(manager_policy.history_edge_bump_other_non_prob, 0.00010);
+                    ? manager_pick(
+                        manager_policy.history_edge_bump_other_prob,
+                        defaults.history_edge_bump_other_prob
+                    )
+                    : manager_pick(
+                        manager_policy.history_edge_bump_other_non_prob,
+                        defaults.history_edge_bump_other_non_prob
+                    );
                 out.required_strength = std::min(
                     required_strength_cap,
                     out.required_strength + (strength_bump * history_guard_scale)
@@ -201,36 +355,49 @@ FilterDecision evaluateFilter(const FilterInput& input) {
 
     bool rr_guard_active = false;
     const double rr_guard_floor = input.hostile_regime
-        ? manager_pick(manager_policy.rr_guard_floor_hostile, 1.12)
-        : manager_pick(manager_policy.rr_guard_floor_calm, 1.08);
+        ? manager_pick(manager_policy.rr_guard_floor_hostile, defaults.rr_guard_floor_hostile)
+        : manager_pick(manager_policy.rr_guard_floor_calm, defaults.rr_guard_floor_calm);
     if (out.reward_risk_ratio > 0.0 && out.reward_risk_ratio < rr_guard_floor) {
         const bool rr_guard_skip =
             probabilistic_high_confidence &&
-            out.reward_risk_ratio >= manager_pick(manager_policy.rr_guard_skip_min_rr, 0.95) &&
+            out.reward_risk_ratio >= manager_pick(
+                manager_policy.rr_guard_skip_min_rr,
+                defaults.rr_guard_skip_min_rr
+            ) &&
             !input.hostile_regime;
         if (!rr_guard_skip) {
             rr_guard_active = true;
             const double rr_guard_scale = probabilistic_primary_signal
                 ? std::clamp(
-                      manager_pick(manager_policy.rr_guard_scale_base, 0.90) -
+                      manager_pick(
+                          manager_policy.rr_guard_scale_base,
+                          defaults.rr_guard_scale_base
+                      ) -
                           (manager_pick(
-                               manager_policy.rr_guard_scale_confidence_scale,
-                               0.60
-                           ) *
-                           probabilistic_confidence),
-                      manager_pick(manager_policy.rr_guard_scale_min, 0.20),
-                      manager_pick(manager_policy.rr_guard_scale_max, 0.90)
+                                manager_policy.rr_guard_scale_confidence_scale,
+                                defaults.rr_guard_scale_confidence_scale
+                            ) *
+                            probabilistic_confidence),
+                      manager_pick(manager_policy.rr_guard_scale_min, defaults.rr_guard_scale_min),
+                      manager_pick(manager_policy.rr_guard_scale_max, defaults.rr_guard_scale_max)
                   )
                 : 1.0;
             out.required_strength = std::min(
                 required_strength_cap,
                 out.required_strength +
-                    (manager_pick(manager_policy.rr_guard_strength_add, 0.03) * rr_guard_scale)
+                    (manager_pick(manager_policy.rr_guard_strength_add, defaults.rr_guard_strength_add) *
+                     rr_guard_scale)
             );
             out.required_expected_value +=
                 (input.core_signal_ownership
-                     ? manager_pick(manager_policy.rr_guard_expected_value_add_core, 0.00003)
-                     : manager_pick(manager_policy.rr_guard_expected_value_add_other, 0.00006)) *
+                     ? manager_pick(
+                         manager_policy.rr_guard_expected_value_add_core,
+                         defaults.rr_guard_expected_value_add_core
+                     )
+                     : manager_pick(
+                         manager_policy.rr_guard_expected_value_add_other,
+                         defaults.rr_guard_expected_value_add_other
+                     )) *
                 rr_guard_scale;
         }
     }
@@ -243,10 +410,26 @@ FilterDecision evaluateFilter(const FilterInput& input) {
     if (out.frontier_enabled) {
         const double margin = std::clamp(signal.probabilistic_h5_margin, -1.0, 1.0);
         const double margin_floor = std::clamp(signal.phase3.frontier_margin_floor, -1.0, 1.0);
+        const double uncertainty_prob_weight = std::max(
+            0.0,
+            manager_pick(
+                manager_policy.frontier_uncertainty_prob_weight,
+                defaults.frontier_uncertainty_prob_weight
+            )
+        );
+        const double uncertainty_ev_weight = std::max(
+            0.0,
+            manager_pick(
+                manager_policy.frontier_uncertainty_ev_weight,
+                defaults.frontier_uncertainty_ev_weight
+            )
+        );
+        const double uncertainty_weight_denom = std::max(1e-6, uncertainty_prob_weight + uncertainty_ev_weight);
         out.margin_pass = margin >= margin_floor;
         out.uncertainty_term = std::clamp(
-            ((1.0 - probabilistic_confidence) * 0.60) +
-                ((1.0 - out.ev_confidence) * 0.40),
+            (((1.0 - probabilistic_confidence) * uncertainty_prob_weight) +
+             ((1.0 - out.ev_confidence) * uncertainty_ev_weight)) /
+                uncertainty_weight_denom,
             0.0,
             1.0
         );

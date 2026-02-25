@@ -77,6 +77,25 @@ Last updated: 2026-02-25
   - strict operational gate:
     - same strict parity command rerun
     - `CIGate PASSED`
+- Phase 2/3 direction-aligned manager/filter cleanup (`2026-02-25`, in-progress hardening):
+  - `StrategyManager` history performance gate constants moved to phase3 `manager_filter` policy keys
+    (`history_gate_min_*`, `history_gate_*_trending_down`, `history_gate_*_high_volatility`)
+  - `FoundationRiskPipeline` literal fallback values removed in favor of policy defaults
+  - dead manager helpers removed (`computeExpectedValueTighteningForManager`,
+    `estimateLossToWinRatioFromWinRateAndPf`)
+  - pre-filter duplicate EV retuning path removed in `StrategyManager`:
+    - removed manager-level heuristic recomputation (`computeImpliedWinProbForManager`,
+      `estimateSignalRoundTripCostPctForManager`)
+    - keep strategy-provided `expected_value`; apply only minimal fee-based fallback when absent
+  - `FoundationAdaptiveStrategy` high-impact hardcoding moved to config policy keys:
+    - exit policy (`foundation_exit_*`)
+    - position sizing budget/caps (`foundation_position_*`)
+    - low-liquidity context size multipliers (`foundation_position_mult_*`)
+  - `FoundationAdaptiveStrategy` risk/reward/quality constants moved to config policy keys:
+    - regime risk envelope (`foundation_risk_*`)
+    - regime base reward-risk (`foundation_reward_risk_*`)
+    - TP1/BE/trailing rr multipliers + strong-buy threshold
+    - implied-win and signal-filter shaping (`foundation_implied_win_*`, `foundation_signal_filter_*`)
 
 ## Scope
 - In scope:
@@ -1426,3 +1445,458 @@ Last updated: 2026-02-25
 - snapshot:
   - `sample_size_ready=false`
   - `next_step_hint=increase_overlap_exit_samples_before_mapping_decision`
+
+## Latest update (2026-02-25, v26)
+- scope:
+  - EntryGate/MTF hardcoded threshold cleanup split into:
+    - policyized core thresholds
+    - residual branch constants (next cleanup target)
+- code:
+  - `src/strategy/FoundationAdaptiveStrategy.cpp`
+    - MTF window/lookback/EMA/RSI/score/regime thresholds now read from `EngineConfig`
+    - EntryGate core liquidity/volume/spread/adaptive/narrow-relief/low-liq-relaxed thresholds now read from `EngineConfig`
+    - removed no-op branch: `downtrend_low_flow_rebound_path` strength `+= 0.00`
+  - `include/engine/EngineConfig.h`
+    - added `foundation_mtf_*` and `foundation_entry_*` policy fields
+  - `src/common/Config.cpp`
+    - parsing + clamp rules for new `foundation_mtf_*` and `foundation_entry_*` keys
+  - `config/config.json`
+    - default values for new `foundation_mtf_*` and `foundation_entry_*` keys
+- validation:
+  - build:
+    - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeTrading AutoLifeTest AutoLifeStateTest AutoLifeExecutionStateTest AutoLifeEventJournalTest`
+  - tests:
+    - `build/Release/AutoLifeTest.exe` pass
+    - `build/Release/AutoLifeStateTest.exe` pass
+    - `build/Release/AutoLifeExecutionStateTest.exe` pass
+    - `build/Release/AutoLifeEventJournalTest.exe` pass
+- next split target:
+  - residual EntryGate branch constants inside:
+    - `isLowLiquidityUptrendOpportunity`
+    - `isThinLiquidityAdaptiveOpportunity`
+    - `isRangingLowFlowOpportunity`
+    - `isDowntrendLowFlowReboundOpportunity`
+    - regime-structure guard block in `evaluateEntryGate`
+
+## Latest update (2026-02-25, v27)
+- scope:
+  - policyized remaining EntryGate helper-opportunity thresholds (low-liq uptrend / thin-liq adaptive / ranging low-flow / downtrend rebound).
+  - cleaned residual repeated config access by passing shared `EngineConfig` into helper evaluators.
+- code:
+  - `include/engine/EngineConfig.h`
+    - added `foundation_entry_low_liq_uptrend_*`
+    - added `foundation_entry_thin_liq_adaptive_*`
+    - added `foundation_entry_ranging_low_flow_*`
+    - added `foundation_entry_downtrend_rebound_*`
+  - `src/common/Config.cpp`
+    - parsing/clamp/swap guards for all newly added `foundation_entry_*` helper policy keys
+  - `config/config.json`
+    - default values for all newly added `foundation_entry_*` helper policy keys
+  - `src/strategy/FoundationAdaptiveStrategy.cpp`
+    - removed helper hardcoded thresholds by reading `EngineConfig` policy values
+    - removed repeated local `Config::getInstance()` lookups inside helper functions
+- validation:
+  - build:
+    - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeTrading AutoLifeTest AutoLifeStateTest AutoLifeExecutionStateTest AutoLifeEventJournalTest`
+  - tests:
+    - `build/Release/AutoLifeTest.exe` pass
+    - `build/Release/AutoLifeStateTest.exe` pass
+    - `build/Release/AutoLifeExecutionStateTest.exe` pass
+    - `build/Release/AutoLifeEventJournalTest.exe` pass
+- next target:
+  - `evaluateEntryGate` regime-structure block hardcoded constants (uptrend/ranging/hostile/unknown guards) policyization + dead-branch cleanup.
+
+## Latest update (2026-02-25, v28)
+- scope:
+  - policyized `evaluateEntryGate` regime-structure hardcoded thresholds (uptrend/ranging/hostile/unknown).
+  - cleaned duplicate thin-context condition reuse in uptrend guard flow.
+- code:
+  - `include/engine/EngineConfig.h`
+    - added `foundation_entry_uptrend_*` regime-structure policy keys
+    - added `foundation_entry_ranging_structure_*`, `foundation_entry_ranging_relief_*`
+    - added `foundation_entry_hostile_bear_rebound_*`
+    - added `foundation_entry_unknown_structure_*`
+  - `src/common/Config.cpp`
+    - parsing/clamp/swap guards for all new regime-structure policy keys
+  - `config/config.json`
+    - default values for all new regime-structure policy keys
+  - `src/strategy/FoundationAdaptiveStrategy.cpp`
+    - removed hardcoded thresholds in `evaluateEntryGate` regime switch; replaced by `EngineConfig` policy keys
+    - reused `thin_uptrend_structure_relief_context` for thin-context validation branch
+- validation:
+  - build:
+    - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeTrading AutoLifeTest AutoLifeStateTest AutoLifeExecutionStateTest AutoLifeEventJournalTest`
+  - tests:
+    - `build/Release/AutoLifeTest.exe` pass
+    - `build/Release/AutoLifeStateTest.exe` pass
+    - `build/Release/AutoLifeExecutionStateTest.exe` pass
+    - `build/Release/AutoLifeEventJournalTest.exe` pass
+- remaining target:
+  - EntryGate/MTF에서 정책화와 무관한 순수 안정성 숫자(예: epsilon/수학적 안전가드)만 남기고, 불필요 레거시 분기 유무 최종 점검.
+
+## Latest update (2026-02-25, v29)
+- scope:
+  - finalized EntryGate snapshot-stage hardcoded indicator/window constants into policy keys.
+  - removed residual internal-only field from EntryGate decision struct.
+- code:
+  - `include/engine/EngineConfig.h`
+    - added:
+      - `foundation_entry_snapshot_min_bars`
+      - `foundation_entry_snapshot_ema_fast_period`
+      - `foundation_entry_snapshot_ema_slow_period`
+      - `foundation_entry_snapshot_rsi_period`
+      - `foundation_entry_snapshot_bb_period`
+      - `foundation_entry_snapshot_bb_stddev`
+  - `src/common/Config.cpp`
+    - parsing/clamp for all `foundation_entry_snapshot_*` keys
+  - `config/config.json`
+    - default values for all `foundation_entry_snapshot_*` keys
+  - `src/strategy/FoundationAdaptiveStrategy.cpp`
+    - `evaluateEntrySnapshot` now uses `foundation_entry_snapshot_*` policies instead of hardcoded `60/12/48/14/20/2.0`
+    - removed `EntryGateDecision::core_liquidity_pass` field (local-only state reduced to function local variable)
+- validation:
+  - build:
+    - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeTrading AutoLifeTest AutoLifeStateTest AutoLifeExecutionStateTest AutoLifeEventJournalTest`
+  - tests:
+    - `build/Release/AutoLifeTest.exe` pass
+    - `build/Release/AutoLifeStateTest.exe` pass
+    - `build/Release/AutoLifeExecutionStateTest.exe` pass
+    - `build/Release/AutoLifeEventJournalTest.exe` pass
+
+## Latest update (2026-02-25, v30)
+- scope:
+  - addressed config-bloat concern by keeping policy default values code-side and avoiding `config.json` default-key expansion.
+  - policyized remaining `generateSignal` risk/reward adaptation constants (path/context/MTF/global clamp) into engine policy.
+- code:
+  - `include/engine/EngineConfig.h`
+    - added `foundation_signal_context_*`, `foundation_signal_path_*`, `foundation_signal_mtf_*`, `foundation_signal_risk/reward_*` keys
+  - `src/common/Config.cpp`
+    - parsing/clamp/swap guards for new `foundation_signal_*` keys
+  - `src/strategy/FoundationAdaptiveStrategy.cpp`
+    - replaced hardcoded values in:
+      - thin/hostile context detection thresholds
+      - path-specific risk/reward adjustment coefficients
+      - MTF-based risk/reward coupling and final clamp bounds
+    - behavior wiring remains deterministic and shared by live/backtest via same config path
+- config surface note:
+  - `config/config.json` remains slim (no mass default-key re-expansion); overrides can be added only when tuning is needed.
+- validation:
+  - build:
+    - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeTrading AutoLifeTest AutoLifeStateTest AutoLifeExecutionStateTest AutoLifeEventJournalTest`
+  - tests:
+    - `build/Release/AutoLifeTest.exe` pass
+    - `build/Release/AutoLifeStateTest.exe` pass
+    - `build/Release/AutoLifeExecutionStateTest.exe` pass
+    - `build/Release/AutoLifeEventJournalTest.exe` pass
+
+## Latest update (2026-02-25, v31)
+- scope:
+  - policyized remaining `generateSignal` strength hardcoded constants into engine policy keys.
+  - kept config surface lean by retaining defaults in `EngineConfig`/`Config.cpp` and avoiding mandatory `config.json` key expansion.
+- code:
+  - `include/engine/EngineConfig.h`
+    - added `foundation_signal_strength_*` keys for:
+      - base / ema-gap / rsi / liquidity components
+      - regime/path/context additive terms
+      - mtf coupling and final clamp bounds
+  - `src/common/Config.cpp`
+    - parsing/clamp/swap guards for all `foundation_signal_strength_*` keys
+  - `src/strategy/FoundationAdaptiveStrategy.cpp`
+    - replaced hardcoded strength values:
+      - `0.50`, `12.0`, `-0.10~0.20`, `55.0`, `120.0`, `50.0`, `350.0`
+      - regime/path/context additive literals
+      - mtf/final clamp literals (`0.30`, `-0.10~0.12`, `0.35~0.92`)
+    - behavior remains deterministic and shared by live/backtest
+- validation:
+  - build:
+    - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeTrading AutoLifeTest AutoLifeStateTest AutoLifeExecutionStateTest AutoLifeEventJournalTest`
+  - tests:
+    - `build/Release/AutoLifeTest.exe` pass
+    - `build/Release/AutoLifeStateTest.exe` pass
+    - `build/Release/AutoLifeExecutionStateTest.exe` pass
+    - `build/Release/AutoLifeEventJournalTest.exe` pass
+
+## Latest update (2026-02-25, v32)
+- scope:
+  - policyized residual hardcoded blend coefficients inside `applyProbabilisticPrimaryDecisionProfile`
+    (strength/filter blend and edge-floor probability center).
+  - applied identically to live/backtest runtime path to keep strict parity.
+- code:
+  - `include/analytics/ProbabilisticRuntimeModel.h`
+    - added primary-decision-profile policy fields:
+      - `strength_blend_old_weight`, `strength_blend_target_weight`
+      - `filter_blend_old_weight`, `filter_blend_target_weight`
+      - `probabilistic_edge_floor_prob_center`
+  - `src/analytics/ProbabilisticRuntimeModel.cpp`
+    - parser support for all new `phase3.primary_decision_profile.*` keys (optional, bundle-first)
+  - `src/runtime/LiveTradingRuntime.cpp`
+  - `src/runtime/BacktestRuntime.cpp`
+    - replaced hardcoded `0.25/0.75`, `0.30/0.70`, `(prob - 0.50)` with policy-driven values
+    - added normalized blend-denominator guard (`max(1e-6, sum_weights)`)
+- config surface note:
+  - no `config.json` default-key expansion; defaults remain code-side and bundle overrides are optional.
+- validation:
+  - build:
+    - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeTrading AutoLifeTest AutoLifeStateTest AutoLifeExecutionStateTest AutoLifeEventJournalTest`
+  - tests:
+    - `build/Release/AutoLifeTest.exe` pass
+    - `build/Release/AutoLifeStateTest.exe` pass
+    - `build/Release/AutoLifeExecutionStateTest.exe` pass
+    - `build/Release/AutoLifeEventJournalTest.exe` pass
+
+## Latest update (2026-02-25, v33)
+- scope:
+  - removed legacy archetype-specific micro-tuning blocks from shared signal policy
+    (`FOUNDATION_UPTREND_CONTINUATION` probability/margin threshold hacks and range-pullback optimistic boost).
+  - kept generic regime/archetype behavior and risk/reward balancing path intact.
+- code:
+  - `src/common/SignalPolicyShared.cpp`
+    - deleted hardcoded tuned branches:
+      - `constructive_uptrend_continuation_setup`
+      - `weak_uptrend_continuation_setup`
+      - low-liquidity uptrend win-prob bonus/penalty block
+      - range-pullback high-quality optimistic boost block
+      - low-liquidity uptrend cost-discount override
+- validation:
+  - build:
+    - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeTrading AutoLifeTest AutoLifeStateTest AutoLifeExecutionStateTest AutoLifeEventJournalTest`
+  - tests:
+    - `build/Release/AutoLifeTest.exe` pass
+    - `build/Release/AutoLifeStateTest.exe` pass
+    - `build/Release/AutoLifeExecutionStateTest.exe` pass
+    - `build/Release/AutoLifeEventJournalTest.exe` pass
+
+## Latest update (2026-02-25, v34)
+- scope:
+  - removed now-redundant no-op range-pullback branch and helper from shared signal policy.
+- code:
+  - `src/common/SignalPolicyShared.cpp`
+    - removed `isRangePullbackArchetype` helper
+    - removed `is_range_pullback` usage and empty branch
+- validation:
+  - build:
+    - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeTrading AutoLifeTest`
+  - tests:
+    - `build/Release/AutoLifeTest.exe` pass
+
+## Latest update (2026-02-25, v35)
+- scope:
+  - replaced live runtime paper/manual fallback TP/SL hardcoded literals with existing policy keys
+    (`foundation_exit_*`, `foundation_take_profit_1_rr_multiplier`).
+  - no new config keys added (config-bloat control).
+- code:
+  - `src/runtime/LiveTradingRuntime.cpp`
+    - paper buy fallback:
+      - stop-loss fallback `0.975` -> `1 - foundation_exit_stop_loss_pct`
+      - TP fallback `1.020/1.030` -> `foundation_exit_take_profit_pct` + `foundation_take_profit_1_rr_multiplier`
+    - recovered position fallback:
+      - stop-loss fallback `0.97` -> `1 - foundation_exit_stop_loss_pct`
+      - TP fallback `1.010/1.015` -> `foundation_exit_take_profit_pct` + `foundation_take_profit_1_rr_multiplier`
+    - added TP ordering guard (`tp2 >= tp1`)
+- validation:
+  - build:
+    - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeTrading AutoLifeTest AutoLifeStateTest AutoLifeExecutionStateTest AutoLifeEventJournalTest`
+  - tests:
+    - `build/Release/AutoLifeTest.exe` pass
+    - `build/Release/AutoLifeStateTest.exe` pass
+    - `build/Release/AutoLifeExecutionStateTest.exe` pass
+    - `build/Release/AutoLifeEventJournalTest.exe` pass
+
+## Latest update (2026-02-25, v36)
+- scope:
+  - replaced shared stop-loss normalization fixed regime ranges with existing foundation risk policy ranges.
+  - avoided new config surface by reusing `foundation_risk_floor_*` and `foundation_risk_cap_*`.
+- code:
+  - `src/common/SignalPolicyShared.cpp`
+    - `normalizeSignalStopLossByRegime`:
+      - removed fixed ranges (`0.0035~0.0150` family)
+      - switched to regime-mapped policy ranges from `EngineConfig`
+- validation:
+  - build:
+    - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeTrading AutoLifeTest`
+  - tests:
+    - `build/Release/AutoLifeTest.exe` pass
+
+## Latest update (2026-02-25, v37)
+- scope:
+  - reduced shared signal-policy legacy surface by shrinking public API and removing unused runtime imports.
+  - aligned calibrated-edge flow toward Phase3 by preferring probabilistic runtime probabilities when available.
+- code:
+  - `src/common/SignalPolicyShared.cpp`
+    - `computeCalibratedExpectedEdgePct`:
+      - probabilistic-runtime path now uses `probabilistic_h5_calibrated` + `margin` directly
+      - removed archetype-specific heuristic penalty/bonus branch family
+      - history prior applied only in non-probabilistic fallback path
+    - removed unused helper `isDefensiveFoundationArchetype`
+  - `include/common/SignalPolicyShared.h`
+    - removed internal-only helper declarations from public header
+  - `src/runtime/LiveTradingRuntime.cpp`
+  - `src/runtime/BacktestRuntime.cpp`
+    - removed unused `signal_policy` using-imports
+- validation:
+  - build:
+    - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeTrading AutoLifeTest AutoLifeStateTest AutoLifeExecutionStateTest AutoLifeEventJournalTest`
+  - tests:
+    - `build/Release/AutoLifeTest.exe` pass
+    - `build/Release/AutoLifeStateTest.exe` pass
+    - `build/Release/AutoLifeExecutionStateTest.exe` pass
+    - `build/Release/AutoLifeEventJournalTest.exe` pass
+
+## Latest update (2026-02-25, v38)
+- scope:
+  - removed residual sell-execution hardcoded fill/quantity constants in live runtime.
+  - reused existing fee-reserve policy for deterministic sell quantity/close-threshold calculation.
+- code:
+  - `src/runtime/LiveTradingRuntime.cpp`
+    - `executeSellOrder`:
+      - quantity multiplier `0.9999` -> policy-derived (`order_fee_reserve_pct`)
+      - full/partial close threshold `0.999` -> policy-derived (`order_fee_reserve_pct`)
+      - preserved round/truncation behavior (8dp floor)
+- validation:
+  - build:
+    - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeTrading AutoLifeTest`
+  - tests:
+    - `build/Release/AutoLifeTest.exe` pass
+    - `build/Release/AutoLifeStateTest.exe` pass
+    - `build/Release/AutoLifeExecutionStateTest.exe` pass
+    - `build/Release/AutoLifeEventJournalTest.exe` pass
+
+## Latest update (2026-02-25, v39)
+- scope:
+  - removed runtime-local forwarding wrappers for shared signal-policy helpers
+    (no logic change, path simplification only).
+- code:
+  - `src/runtime/LiveTradingRuntime.cpp`
+    - removed local `normalizeSignalStopLossByRegime` wrapper
+    - removed unused local `requiresTypedArchetype` wrapper
+    - switched call to direct `autolife::common::signal_policy::normalizeSignalStopLossByRegime(...)`
+  - `src/runtime/BacktestRuntime.cpp`
+    - removed local wrappers:
+      - `requiresTypedArchetype`
+      - `normalizeSignalStopLossByRegime`
+    - switched callsites to direct `autolife::common::signal_policy::*`
+- validation:
+  - build:
+    - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeTrading AutoLifeTest`
+  - tests:
+    - `build/Release/AutoLifeTest.exe` pass
+
+## Latest update (2026-02-25, v40)
+- scope:
+  - removed remaining hardcoded probabilistic scan prefilter margin tuning from runtime path.
+  - moved those coefficients/clamps into `phase3.manager_filter` policy so live/backtest share bundle-driven behavior.
+- code:
+  - `include/analytics/ProbabilisticRuntimeModel.h`
+    - added manager-filter policy keys:
+      - `scan_prefilter_margin_add_hostile`
+      - `scan_prefilter_margin_add_trending_up`
+      - `scan_prefilter_margin_clamp_min`
+      - `scan_prefilter_margin_clamp_max`
+      - `scan_prefilter_margin_with_regime_clamp_min`
+      - `scan_prefilter_margin_with_regime_clamp_max`
+  - `src/analytics/ProbabilisticRuntimeModel.cpp`
+    - added runtime bundle parse/validation for the new keys (with min/max swap guards).
+  - `src/runtime/LiveTradingRuntime.cpp`
+  - `src/runtime/BacktestRuntime.cpp`
+    - `effectiveProbabilisticScanPrefilterMargin` now uses phase3 manager policy (no fixed `+0.015/-0.005`, no fixed clamp).
+    - prefilter + regime combined clamp now also uses phase3 manager policy.
+    - propagated new fields into `signal.phase3.manager_filter` snapshot for diagnostics/audit parity.
+  - `include/strategy/IStrategy.h`
+    - expanded `Signal::Phase3PolicySnapshot::ManagerFilterPolicy` with the new prefilter policy fields.
+  - `scripts/export_probabilistic_runtime_bundle.py`
+  - `config/model/probabilistic_runtime_bundle_v2.json`
+    - added corresponding default keys into bundle export/static bundle.
+- validation:
+  - build:
+    - `D:\\MyApps\\vcpkg\\downloads\\tools\\cmake-3.31.10-windows\\cmake-3.31.10-windows-x86_64\\bin\\cmake.exe --build build --config Release --target AutoLifeTrading AutoLifeTest AutoLifeStateTest AutoLifeExecutionStateTest AutoLifeEventJournalTest`
+  - tests:
+    - `build/Release/AutoLifeTest.exe` pass
+    - `build/Release/AutoLifeStateTest.exe` pass
+    - `build/Release/AutoLifeExecutionStateTest.exe` pass
+    - `build/Release/AutoLifeEventJournalTest.exe` pass
+
+## Latest update (2026-02-25, v41)
+- scope:
+  - policyized realtime-entry-veto dynamic coefficients from `ExecutionGuardPolicyShared` into engine config.
+  - intentionally kept hard safety clamps (`std::clamp` bounds) as code-level guardrails, not tuning knobs.
+- code:
+  - `include/engine/EngineConfig.h`
+    - added `execution_guard_veto_*` policy keys for:
+      - quality relief normalization (strength/liquidity center/scale/weight)
+      - hostile tighten / uptrend relief gates
+      - veto threshold adaptation scales (drop/spread/imbalance)
+  - `src/common/Config.cpp`
+    - added parser/clamp handling for all new `execution_guard_veto_*` keys
+    - no mandatory `config.json` expansion (defaults remain code-side)
+  - `src/common/ExecutionGuardPolicyShared.cpp`
+    - `computeRealtimeEntryVetoThresholds` now reads the above policy keys
+    - removed direct hardcoded coefficients (`0.60/0.25/58/20/0.55/0.45`, `+0.12`, `+0.08`, `0.35/0.15`, `0.40/0.18`, `0.22/0.12`)
+- rationale (policyize vs delete):
+  - `policyize`: regime/quality coupling coefficients that materially shift entry veto sensitivity.
+  - `keep`: numerical safety limits and hard bound clamps to prevent invalid threshold explosions.
+
+## Latest update (2026-02-25, v42)
+- scope:
+  - policyized live scan prefilter dynamic coefficients from `ExecutionGuardPolicyShared`.
+  - kept existing clamp guardrails as hard safety boundaries.
+- code:
+  - `include/engine/EngineConfig.h`
+    - added `execution_guard_live_scan_*` policy keys:
+      - base spread multiplier
+      - base floor KRW / min-order multiplier
+      - volume tighten base/scale
+      - universe anchor base/scale
+      - dynamic ceiling multipliers (base volume / p70)
+      - spread tighten scale
+      - ask-notional base/tighten/min/max multipliers
+  - `src/common/Config.cpp`
+    - parser/clamp/swap handling for all `execution_guard_live_scan_*` keys
+    - no forced `config.json` expansion (default values stay code-side)
+  - `src/common/ExecutionGuardPolicyShared.cpp`
+    - `computeLiveScanPrefilterThresholds` now uses `execution_guard_live_scan_*` values
+    - removed direct hardcoded coefficients (`1.25`, `50000000`, `2000`, `0.80`, `0.45`, `0.85`, `0.20`, `2.0`, `1.40`, `0.30`, `5.0`, `2.0`, `3.0`, `12.0`)
+- rationale (policyize vs delete):
+  - `policyize`: dynamic scan gate sensitivity coefficients that materially change candidate throughput.
+  - `keep`: fixed clamp limits and finite checks as runtime safety constraints.
+
+## Latest update (2026-02-25, v43)
+- scope:
+  - policyized dynamic slippage adaptation coefficients in `ExecutionGuardPolicyShared`.
+  - preserved safety clamp bands and urgent/non-urgent cap guards.
+- code:
+  - `include/engine/EngineConfig.h`
+    - added `execution_guard_slippage_*` policy keys for:
+      - buy-side tighten/quality terms
+      - sell-side relax terms
+      - guard multiplier and urgent/non-urgent caps
+  - `src/common/Config.cpp`
+    - added parser/clamp/swap guards for all `execution_guard_slippage_*` keys
+  - `src/common/ExecutionGuardPolicyShared.cpp`
+    - `computeDynamicSlippageThresholds` now uses `execution_guard_slippage_*` policy values
+    - removed direct hardcoded coefficients (buy `0.15/55/25/0.25/0.10/0.65/0.25/0.20/60/20/0.15/0.0004/0.0010/0.12/0.60/0.35/0.18`, sell `0.15/0.45/50/0.10/65/0.05/-0.15/1.20`, guard `1.5`)
+- rationale (policyize vs delete):
+  - `policyize`: slippage response curves that alter realized fill quality and entry/exit acceptance.
+  - `keep`: hard lower/upper clamps and urgent-exit branch logic for execution safety.
+
+## Latest update (2026-02-25, v44)
+- scope:
+  - completed "config-first central control" pass for `ExecutionGuardPolicyShared` by moving remaining tunable constants into `EngineConfig`.
+  - added configurable bounds for hostility-tighten shaping, live-scan quantiles/clamps, veto final clamps, and slippage clamp bands.
+- code:
+  - `include/engine/EngineConfig.h`
+    - added:
+      - `execution_guard_tighten_*`
+      - `execution_guard_live_scan_*` (quantile + clamp extension)
+      - `execution_guard_veto_*_clamp_*`
+      - `execution_guard_slippage_*_clamp_*`
+  - `src/common/Config.cpp`
+    - parser/clamp/swap handling for all newly added keys
+  - `src/common/ExecutionGuardPolicyShared.cpp`
+    - replaced remaining fixed literals in:
+      - `computeHostilityTightenPressure`
+      - `computeLiveScanPrefilterThresholds`
+      - `computeRealtimeEntryVetoThresholds`
+      - `computeDynamicSlippageThresholds`
+- policy direction:
+  - config growth is accepted for this phase to maximize one-place runtime control.
+  - only epsilon-level numerical safety constants remain hardcoded.

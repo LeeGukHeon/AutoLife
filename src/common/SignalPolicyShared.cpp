@@ -28,12 +28,6 @@ std::string normalizeStrategyToken(std::string value) {
         value == "foundation adaptive strategy") {
         return "foundation_adaptive";
     }
-    if (value == "grid" ||
-        value == "grid_trading" ||
-        value == "grid_trading_strategy" ||
-        value == "grid trading strategy") {
-        return "grid_trading";
-    }
     return value;
 }
 
@@ -63,16 +57,6 @@ bool isConsolidationBreakArchetype(const std::string& archetype) {
     return archetype == "CONSOLIDATION_BREAK";
 }
 
-bool isRangePullbackArchetype(const std::string& archetype) {
-    return archetype == "FOUNDATION_RANGE_PULLBACK";
-}
-
-bool isDefensiveFoundationArchetype(const std::string& archetype) {
-    return archetype == "FOUNDATION_DOWNTREND_BOUNCE" ||
-           archetype == "FOUNDATION_HIGH_VOL_GUARDED" ||
-           archetype == "FOUNDATION_UNKNOWN_GUARDED";
-}
-
 bool isHostileRegime(analytics::MarketRegime regime) {
     return regime == analytics::MarketRegime::HIGH_VOLATILITY ||
            regime == analytics::MarketRegime::TRENDING_DOWN;
@@ -84,10 +68,7 @@ bool isTrendContinuationStyleSignal(const strategy::Signal& signal) {
         isConsolidationBreakArchetype(signal.entry_archetype)) {
         return true;
     }
-
-    const std::string normalized_strategy = normalizeStrategyToken(signal.strategy_name);
-    return normalized_strategy.find("momentum") != std::string::npos ||
-           normalized_strategy.find("breakout") != std::string::npos;
+    return false;
 }
 
 double computeTargetRewardRisk(double strength, const engine::EngineConfig& cfg) {
@@ -228,24 +209,6 @@ bool rebalanceSignalRiskReward(strategy::Signal& signal, const engine::EngineCon
         const double rr_boost = (favorable_regime ? 0.12 : 0.08) + (0.22 * asymmetry_pressure);
         target_rr = std::min(target_rr + rr_boost, base_target_rr + 1.10);
     }
-    const bool constructive_uptrend_continuation_setup =
-        signal.entry_archetype == "FOUNDATION_UPTREND_CONTINUATION" &&
-        signal.market_regime == analytics::MarketRegime::TRENDING_UP &&
-        signal.probabilistic_h5_calibrated >= 0.408 &&
-        signal.probabilistic_h5_margin >= -0.016 &&
-        signal.strength >= 0.46;
-    if (constructive_uptrend_continuation_setup) {
-        target_rr += 0.05;
-    }
-    const bool weak_uptrend_continuation_setup =
-        signal.entry_archetype == "FOUNDATION_UPTREND_CONTINUATION" &&
-        signal.market_regime == analytics::MarketRegime::TRENDING_UP &&
-        signal.probabilistic_h5_calibrated < 0.406 &&
-        signal.probabilistic_h5_margin < -0.018;
-    if (weak_uptrend_continuation_setup) {
-        risk_price *= 0.90;
-        signal.stop_loss = signal.entry_price - risk_price;
-    }
     target_rr = std::min(target_rr, base_target_rr + 1.10);
     const double current_rr = (signal.take_profit_2 - signal.entry_price) / risk_price;
     if (current_rr + 1e-9 < target_rr) {
@@ -301,31 +264,6 @@ double computeEffectiveRoundTripCostPct(const strategy::Signal& signal, const en
     return (fee_rate_per_side * 2.0) + (slippage_per_side * 2.0) + spread_buffer;
 }
 
-double computeStrategyHistoryWinProbPrior(const strategy::Signal& signal, const engine::EngineConfig& cfg) {
-    const int min_sample = std::max(8, cfg.min_strategy_trades_for_ev / 2);
-    if (signal.strategy_trade_count < min_sample || !std::isfinite(signal.strategy_win_rate)) {
-        return 0.0;
-    }
-
-    const double history_win = std::clamp(signal.strategy_win_rate, 0.20, 0.82);
-    const double history_pf = (signal.strategy_profit_factor > 0.0)
-        ? std::clamp(signal.strategy_profit_factor, 0.50, 2.20)
-        : 1.0;
-
-    double prior = ((history_win - 0.50) * 0.22) + ((history_pf - 1.0) * 0.05);
-    if (signal.strategy_win_rate < 0.42) {
-        prior -= 0.02;
-    }
-    if (signal.strategy_profit_factor > 0.0 && signal.strategy_profit_factor < cfg.min_strategy_profit_factor) {
-        prior -= 0.02;
-    }
-    if (signal.strategy_win_rate > 0.56 && signal.strategy_profit_factor >= 1.20) {
-        prior += 0.01;
-    }
-
-    return std::clamp(prior, -0.10, 0.07);
-}
-
 double computeCalibratedExpectedEdgePct(const strategy::Signal& signal, const engine::EngineConfig& cfg) {
     const double entry_price = signal.entry_price;
     const double take_profit_price = (signal.take_profit_2 > 0.0) ? signal.take_profit_2 : signal.take_profit_1;
@@ -341,100 +279,41 @@ double computeCalibratedExpectedEdgePct(const strategy::Signal& signal, const en
         return std::numeric_limits<double>::lowest();
     }
 
-    const double rr = gross_reward_pct / gross_risk_pct;
-    double win_prob = std::clamp(0.24 + (signal.strength * 0.50), 0.20, 0.78);
-    if (signal.liquidity_score > 0.0) {
-        win_prob += std::clamp((signal.liquidity_score - 60.0) / 220.0, -0.04, 0.05);
-    }
-    if (signal.volatility > 0.0) {
-        win_prob -= std::clamp((signal.volatility - 2.0) / 30.0, 0.0, 0.08);
-    }
-    if (rr > 1.60) {
-        win_prob += std::min(0.05, (rr - 1.60) * 0.04);
-    } else if (rr < 1.20) {
-        win_prob -= std::min(0.06, (1.20 - rr) * 0.10);
-    }
-
-    switch (signal.market_regime) {
-        case analytics::MarketRegime::TRENDING_UP:
-            win_prob += 0.02;
-            break;
-        case analytics::MarketRegime::RANGING:
-            win_prob -= 0.02;
-            break;
-        case analytics::MarketRegime::HIGH_VOLATILITY:
-            win_prob -= 0.04;
-            break;
-        case analytics::MarketRegime::TRENDING_DOWN:
-            win_prob -= 0.05;
-            break;
-        default:
-            break;
-    }
-    const bool low_liq_uptrend_signal =
-        signal.reason == "foundation_adaptive_regime_entry_low_liq_uptrend";
-    if (low_liq_uptrend_signal) {
-        if (signal.market_regime == analytics::MarketRegime::TRENDING_UP) {
-            win_prob += 0.04;
+    double win_prob = 0.50;
+    if (signal.probabilistic_runtime_applied &&
+        std::isfinite(signal.probabilistic_h5_calibrated) &&
+        signal.probabilistic_h5_calibrated > 0.0) {
+        const double prob = std::clamp(signal.probabilistic_h5_calibrated, 0.0, 1.0);
+        const double margin = std::clamp(signal.probabilistic_h5_margin, -1.0, 1.0);
+        win_prob = std::clamp(prob + (margin * 0.35), 0.12, 0.88);
+    } else {
+        if (std::isfinite(signal.expected_value) && std::abs(signal.expected_value) > 1e-9) {
+            const double implied_win_from_edge =
+                (signal.expected_value + gross_risk_pct) / (gross_reward_pct + gross_risk_pct);
+            win_prob = std::clamp(implied_win_from_edge, 0.12, 0.88);
         } else {
-            win_prob -= 0.02;
-        }
-        if (signal.strength >= 0.68) {
-            win_prob += 0.01;
-        }
-        if (signal.volatility > 0.0 && signal.volatility <= 2.0) {
-            win_prob += 0.01;
-        }
-        if (signal.liquidity_score > 0.0 && signal.liquidity_score < 42.0) {
-            win_prob -= 0.01;
-        }
-    }
-    const bool is_breakout_cont = isBreakoutContinuationArchetype(signal.entry_archetype);
-    const bool is_trend_reacc = isTrendReaccelerationArchetype(signal.entry_archetype);
-    const bool is_consolidation_break = isConsolidationBreakArchetype(signal.entry_archetype);
-    const bool is_range_pullback = isRangePullbackArchetype(signal.entry_archetype);
-    const bool is_defensive_foundation = isDefensiveFoundationArchetype(signal.entry_archetype);
-
-    if (is_breakout_cont && signal.market_regime == analytics::MarketRegime::TRENDING_DOWN) {
-        win_prob -= 0.12;
-    } else if (is_breakout_cont && signal.market_regime == analytics::MarketRegime::RANGING) {
-        win_prob -= 0.08;
-    }
-    if (is_trend_reacc && signal.market_regime != analytics::MarketRegime::TRENDING_UP) {
-        win_prob -= 0.07;
-    }
-    if (is_consolidation_break && signal.market_regime == analytics::MarketRegime::HIGH_VOLATILITY) {
-        win_prob -= 0.06;
-    }
-    if (is_range_pullback && signal.market_regime == analytics::MarketRegime::RANGING) {
-        const bool high_quality_range_pullback =
-            signal.strength >= 0.62 &&
-            signal.probabilistic_h5_calibrated >= 0.58 &&
-            signal.probabilistic_h5_margin >= 0.012 &&
-            signal.liquidity_score >= 45.0 &&
-            ((signal.volatility <= 0.0) || (signal.volatility <= 2.6));
-        if (high_quality_range_pullback) {
-            win_prob += 0.02;
-        } else {
-            // Keep neutral baseline (no optimistic boost) for non-strong setups.
-            // This avoids legacy optimistic bias without suppressing sample excessively.
+            double implied = std::clamp(
+                std::clamp(cfg.foundation_implied_win_base, 0.0, 1.0) +
+                    (signal.strength *
+                     std::clamp(cfg.foundation_implied_win_strength_scale, -10.0, 10.0)),
+                std::clamp(cfg.foundation_implied_win_preclamp_min, 0.0, 1.0),
+                std::clamp(cfg.foundation_implied_win_preclamp_max, 0.0, 1.0)
+            );
+            if (signal.market_regime == analytics::MarketRegime::HIGH_VOLATILITY ||
+                signal.market_regime == analytics::MarketRegime::TRENDING_DOWN) {
+                implied = std::clamp(
+                    implied -
+                        std::clamp(cfg.foundation_implied_win_hostile_uptrend_penalty, -1.0, 1.0),
+                    std::clamp(cfg.foundation_implied_win_hostile_min, 0.0, 1.0),
+                    std::clamp(cfg.foundation_implied_win_hostile_max, 0.0, 1.0)
+                );
+            }
+            win_prob = implied;
         }
     }
-    if (is_defensive_foundation &&
-        (signal.market_regime == analytics::MarketRegime::TRENDING_DOWN ||
-         signal.market_regime == analytics::MarketRegime::HIGH_VOLATILITY)) {
-        win_prob += 0.02;
-    }
-
-    win_prob += computeStrategyHistoryWinProbPrior(signal, cfg);
     win_prob = std::clamp(win_prob, 0.12, 0.88);
 
-    double round_trip_cost_pct = computeEffectiveRoundTripCostPct(signal, cfg);
-    if (low_liq_uptrend_signal &&
-        signal.market_regime == analytics::MarketRegime::TRENDING_UP &&
-        signal.liquidity_score >= 42.0) {
-        round_trip_cost_pct *= 0.95;
-    }
+    const double round_trip_cost_pct = computeEffectiveRoundTripCostPct(signal, cfg);
     const double expected_gross_pct = (win_prob * gross_reward_pct) - ((1.0 - win_prob) * gross_risk_pct);
     return expected_gross_pct - round_trip_cost_pct;
 }
@@ -458,14 +337,26 @@ void normalizeSignalStopLossByRegime(strategy::Signal& signal, analytics::Market
         return;
     }
 
-    double min_risk_pct = 0.0035;
-    double max_risk_pct = 0.0100;
-    if (regime == analytics::MarketRegime::HIGH_VOLATILITY) {
-        min_risk_pct = 0.0060;
-        max_risk_pct = 0.0150;
-    } else if (regime == analytics::MarketRegime::TRENDING_DOWN) {
-        min_risk_pct = 0.0050;
-        max_risk_pct = 0.0120;
+    const auto& cfg = Config::getInstance().getEngineConfig();
+    double min_risk_pct = std::clamp(cfg.foundation_risk_floor_unknown, 0.0, 1.0);
+    double max_risk_pct = std::clamp(cfg.foundation_risk_cap_unknown, 0.0, 1.0);
+    switch (regime) {
+        case analytics::MarketRegime::TRENDING_UP:
+            min_risk_pct = std::clamp(cfg.foundation_risk_floor_uptrend, 0.0, 1.0);
+            max_risk_pct = std::clamp(cfg.foundation_risk_cap_uptrend, 0.0, 1.0);
+            break;
+        case analytics::MarketRegime::RANGING:
+            min_risk_pct = std::clamp(cfg.foundation_risk_floor_ranging, 0.0, 1.0);
+            max_risk_pct = std::clamp(cfg.foundation_risk_cap_ranging, 0.0, 1.0);
+            break;
+        case analytics::MarketRegime::HIGH_VOLATILITY:
+        case analytics::MarketRegime::TRENDING_DOWN:
+            min_risk_pct = std::clamp(cfg.foundation_risk_floor_hostile, 0.0, 1.0);
+            max_risk_pct = std::clamp(cfg.foundation_risk_cap_hostile, 0.0, 1.0);
+            break;
+        case analytics::MarketRegime::UNKNOWN:
+        default:
+            break;
     }
 
     const double strength_t = std::clamp((signal.strength - 0.40) / 0.60, 0.0, 1.0);
