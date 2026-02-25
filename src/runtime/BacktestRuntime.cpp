@@ -270,80 +270,6 @@ struct ProbabilisticRuntimeSnapshot {
     bool regime_block_new_entries = false;
 };
 
-struct ProbabilisticOnlineLearningState {
-    bool active = false;
-    double margin_bias = 0.0;
-    double strength_gain = 1.0;
-};
-
-ProbabilisticOnlineLearningState computeProbabilisticOnlineLearningState(
-    const std::vector<autolife::risk::TradeHistory>& history,
-    const autolife::engine::EngineConfig& cfg,
-    const std::string& market,
-    autolife::analytics::MarketRegime regime
-) {
-    ProbabilisticOnlineLearningState out;
-    if (!cfg.probabilistic_runtime_online_learning_enabled ||
-        !cfg.enable_probabilistic_runtime_model ||
-        !cfg.probabilistic_runtime_primary_mode) {
-        return out;
-    }
-    if (history.empty()) {
-        return out;
-    }
-
-    const int window = std::max(10, cfg.probabilistic_runtime_online_learning_window);
-    const int min_samples = std::max(3, cfg.probabilistic_runtime_online_learning_min_samples);
-    const double max_bias = std::max(0.0, cfg.probabilistic_runtime_online_learning_max_margin_bias);
-    const double gain_band = std::clamp(cfg.probabilistic_runtime_online_learning_strength_gain, 0.0, 1.0);
-
-    int sampled = 0;
-    int scanned = 0;
-    double weighted_alignment_sum = 0.0;
-    double weight_sum = 0.0;
-    double recency_weight = 1.0;
-    for (auto it = history.rbegin(); it != history.rend() && scanned < window; ++it, ++scanned) {
-        if (!it->probabilistic_runtime_applied) {
-            recency_weight *= 0.985;
-            continue;
-        }
-        const double outcome = (it->profit_loss > 0.0) ? 1.0 : (it->profit_loss < 0.0 ? -1.0 : 0.0);
-        if (std::abs(outcome) <= 1e-12) {
-            recency_weight *= 0.985;
-            continue;
-        }
-        const double margin_dir = (it->probabilistic_h5_margin >= 0.0) ? 1.0 : -1.0;
-        const double alignment = outcome * margin_dir;
-
-        double relevance = 1.0;
-        if (it->market == market) {
-            relevance *= 1.25;
-        }
-        if (it->market_regime == regime) {
-            relevance *= 1.20;
-        }
-        const double pnl_weight = std::clamp(std::abs(it->profit_loss_pct) / 0.02, 0.40, 1.80);
-        const double weight = recency_weight * relevance * pnl_weight;
-        weighted_alignment_sum += alignment * weight;
-        weight_sum += weight;
-        sampled++;
-        recency_weight *= 0.985;
-    }
-
-    if (sampled < min_samples || weight_sum <= 1e-9) {
-        return out;
-    }
-    const double normalized_alignment = std::clamp(weighted_alignment_sum / weight_sum, -1.0, 1.0);
-    out.active = true;
-    out.margin_bias = std::clamp(normalized_alignment * max_bias, -max_bias, max_bias);
-    out.strength_gain = std::clamp(
-        1.0 + (normalized_alignment * gain_band),
-        std::max(0.60, 1.0 - gain_band),
-        1.0 + gain_band
-    );
-    return out;
-}
-
 double effectiveProbabilisticScanPrefilterMargin(
     const autolife::engine::EngineConfig& cfg,
     autolife::analytics::MarketRegime regime
@@ -431,7 +357,6 @@ bool inferProbabilisticRuntimeSnapshot(
     const autolife::analytics::CoinMetrics& metrics,
     const std::string& market,
     autolife::analytics::MarketRegime regime,
-    const ProbabilisticOnlineLearningState* online_learning_state,
     ProbabilisticRuntimeSnapshot& out_snapshot,
     std::string* reject_reason
 ) {
@@ -547,15 +472,6 @@ bool inferProbabilisticRuntimeSnapshot(
         -1.0,
         1.0
     );
-    if (online_learning_state != nullptr && online_learning_state->active) {
-        out_snapshot.online_margin_bias = online_learning_state->margin_bias;
-        out_snapshot.online_strength_gain = online_learning_state->strength_gain;
-        out_snapshot.margin_h5 = std::clamp(
-            out_snapshot.margin_h5 + out_snapshot.online_margin_bias,
-            -1.0,
-            1.0
-        );
-    }
 
     const auto regime_ext = autolife::common::probabilistic_regime::analyze(
         metrics.candles,
@@ -826,46 +742,6 @@ bool applyProbabilisticRuntimeAdjustment(
         return false;
     }
     return true;
-}
-
-double probabilisticPositionScaleForEntry(
-    const autolife::engine::EngineConfig& cfg,
-    const autolife::strategy::Signal& signal,
-    const ProbabilisticRuntimeSnapshot* snapshot
-) {
-    if (!cfg.probabilistic_runtime_primary_mode || !signal.probabilistic_runtime_applied) {
-        return 1.0;
-    }
-    const double weight = std::clamp(cfg.probabilistic_runtime_position_scale_weight, 0.0, 1.0);
-    if (weight <= 1e-9) {
-        return 1.0;
-    }
-    const double normalized_margin = std::clamp(signal.probabilistic_h5_margin / 0.10, -1.0, 1.0);
-    double scale = 1.0 + (normalized_margin * 0.55 * weight);
-    if ((signal.market_regime == autolife::analytics::MarketRegime::TRENDING_DOWN ||
-         signal.market_regime == autolife::analytics::MarketRegime::HIGH_VOLATILITY) &&
-        signal.probabilistic_h5_margin < 0.0) {
-        scale *= 0.92;
-    }
-    int ensemble_member_count = signal.probabilistic_ensemble_member_count;
-    double uncertainty_std = std::max(0.0, signal.probabilistic_h5_uncertainty_std);
-    if (snapshot != nullptr) {
-        ensemble_member_count = std::max(ensemble_member_count, snapshot->ensemble_member_count);
-        uncertainty_std = std::max(uncertainty_std, snapshot->prob_h5_std);
-    }
-    if (cfg.probabilistic_uncertainty_ensemble_enabled && ensemble_member_count >= 2) {
-        ProbabilisticRuntimeSnapshot temp_snapshot;
-        temp_snapshot.prob_h5_std = uncertainty_std;
-        temp_snapshot.ensemble_member_count = ensemble_member_count;
-        scale *= probabilisticUncertaintySizeScale(cfg, temp_snapshot);
-    }
-    if (snapshot != nullptr && cfg.probabilistic_regime_spec_enabled) {
-        scale *= std::clamp(snapshot->regime_size_multiplier, 0.01, 1.0);
-    }
-    const double min_scale = (cfg.probabilistic_uncertainty_ensemble_enabled && ensemble_member_count >= 2)
-        ? cfg.probabilistic_uncertainty_min_scale
-        : 0.45;
-    return std::clamp(scale, min_scale, 1.45);
 }
 
 void applyProbabilisticPrimaryDecisionProfile(
@@ -2326,12 +2202,6 @@ void BacktestEngine::processCandle(const Candle& candle) {
         };
         strategy::StrategyManager::CollectDiagnostics collect_diag;
         ProbabilisticRuntimeSnapshot probabilistic_snapshot;
-        const auto probabilistic_online_state = computeProbabilisticOnlineLearningState(
-            risk_manager_->getTradeHistory(),
-            engine_config_,
-            market_name_,
-            regime.regime
-        );
         std::string probabilistic_prefilter_reason;
         std::vector<strategy::Signal> signals;
         if (!inferProbabilisticRuntimeSnapshot(
@@ -2340,7 +2210,6 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 metrics,
                 market_name_,
                 regime.regime,
-                &probabilistic_online_state,
                 probabilistic_snapshot,
                 &probabilistic_prefilter_reason)) {
             entry_funnel_.no_signal_generated++;
@@ -2727,23 +2596,6 @@ void BacktestEngine::processCandle(const Candle& candle) {
                             entry_funnel_.blocked_risk_gate_entry_quality_invalid_levels++;
                             markEntryReject("blocked_risk_gate_entry_quality_invalid_levels");
                         } else {
-                            const double probabilistic_position_scale =
-                                probabilisticPositionScaleForEntry(
-                                    engine_config_,
-                                    best_signal,
-                                    &probabilistic_snapshot
-                                );
-                            if (std::fabs(probabilistic_position_scale - 1.0) > 1e-6) {
-                                best_signal.position_size *= probabilistic_position_scale;
-                                LOG_INFO(
-                                    "{} probabilistic entry size scale [{}]: margin={:+.4f}, scale={:.3f}, pos={:.4f}",
-                                    market_name_,
-                                    best_signal.strategy_name,
-                                    best_signal.probabilistic_h5_margin,
-                                    probabilistic_position_scale,
-                                    best_signal.position_size
-                                );
-                            }
                             const auto dynamic_buy_slippage = computeDynamicSlippageThresholds(
                                 engine_config_,
                                 market_hostility_ewma_,

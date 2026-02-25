@@ -322,33 +322,6 @@ void Config::load(const std::string& path) {
                 0.0,
                 1.0
             );
-            engine_config_.probabilistic_runtime_position_scale_weight = std::clamp(
-                t.value("probabilistic_runtime_position_scale_weight", 0.35),
-                0.0,
-                1.0
-            );
-            engine_config_.probabilistic_runtime_online_learning_enabled =
-                t.value("probabilistic_runtime_online_learning_enabled", true);
-            engine_config_.probabilistic_runtime_online_learning_window = std::clamp(
-                t.value("probabilistic_runtime_online_learning_window", 80),
-                10,
-                500
-            );
-            engine_config_.probabilistic_runtime_online_learning_min_samples = std::clamp(
-                t.value("probabilistic_runtime_online_learning_min_samples", 12),
-                3,
-                200
-            );
-            engine_config_.probabilistic_runtime_online_learning_max_margin_bias = std::clamp(
-                t.value("probabilistic_runtime_online_learning_max_margin_bias", 0.02),
-                0.0,
-                0.10
-            );
-            engine_config_.probabilistic_runtime_online_learning_strength_gain = std::clamp(
-                t.value("probabilistic_runtime_online_learning_strength_gain", 0.35),
-                0.0,
-                1.0
-            );
             engine_config_.probabilistic_uncertainty_ensemble_enabled =
                 t.value("probabilistic_uncertainty_ensemble_enabled", false);
             engine_config_.probabilistic_uncertainty_size_mode = trimCopy(

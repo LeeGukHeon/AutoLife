@@ -74,12 +74,6 @@ struct EngineConfig {
     bool probabilistic_runtime_scan_prefilter_enabled = true;
     double probabilistic_runtime_scan_prefilter_margin = -0.10;
     double probabilistic_runtime_strength_blend = 0.45;
-    double probabilistic_runtime_position_scale_weight = 0.35;
-    bool probabilistic_runtime_online_learning_enabled = true;
-    int probabilistic_runtime_online_learning_window = 80;
-    int probabilistic_runtime_online_learning_min_samples = 12;
-    double probabilistic_runtime_online_learning_max_margin_bias = 0.02;
-    double probabilistic_runtime_online_learning_strength_gain = 0.35;
     // EXT-53 (default OFF): uncertainty-aware sizing from ensemble disagreement.
     bool probabilistic_uncertainty_ensemble_enabled = false;
     std::string probabilistic_uncertainty_size_mode = "linear"; // linear | exp
