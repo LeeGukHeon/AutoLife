@@ -37,24 +37,6 @@ public:
         std::map<std::string, int> rejection_reason_counts;
     };
 
-    struct SelectionDiagnostics {
-        int input_count = 0;
-        int directional_candidate_count = 0;
-        int scored_candidate_count = 0;
-        std::map<std::string, int> rejection_reason_counts;
-        int live_hint_adjusted_candidate_count = 0;
-        std::map<std::string, int> live_hint_adjustment_counts;
-    };
-
-    struct LiveSignalBottleneckHint {
-        bool enabled = false;
-        std::string top_group;
-        bool no_trade_bias_active = false;
-        double signal_generation_share = 0.0;
-        double manager_prefilter_share = 0.0;
-        double position_state_share = 0.0;
-    };
-
     StrategyManager(std::shared_ptr<network::UpbitHttpClient> client);
 
     void registerStrategy(std::shared_ptr<IStrategy> strategy);
@@ -70,13 +52,6 @@ public:
         CollectDiagnostics* diagnostics = nullptr
     );
 
-    Signal selectBestSignal(const std::vector<Signal>& signals);
-    Signal selectRobustSignalWithDiagnostics(
-        const std::vector<Signal>& signals,
-        analytics::MarketRegime regime,
-        SelectionDiagnostics* diagnostics
-    );
-
     std::vector<Signal> filterSignalsWithDiagnostics(
         const std::vector<Signal>& signals,
         double min_strength,
@@ -87,8 +62,6 @@ public:
 
     std::map<std::string, IStrategy::Statistics> getAllStatistics() const;
     std::vector<std::shared_ptr<IStrategy>> getStrategies() const;
-    void setLiveSignalBottleneckHint(const LiveSignalBottleneckHint& hint);
-    LiveSignalBottleneckHint getLiveSignalBottleneckHint() const;
     void refreshStrategyStatesFromHistory(
         const std::vector<risk::TradeHistory>& history,
         analytics::MarketRegime dominant_regime,
@@ -135,7 +108,6 @@ private:
     std::vector<std::shared_ptr<IStrategy>> strategies_;
     std::shared_ptr<network::UpbitHttpClient> client_;
     mutable std::mutex mutex_;
-    LiveSignalBottleneckHint live_bottleneck_hint_;
 
     double calculateSignalScore(const Signal& signal) const;
     StrategyRole detectStrategyRole(const std::string& strategy_name) const;

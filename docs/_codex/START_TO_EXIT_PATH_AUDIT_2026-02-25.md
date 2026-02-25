@@ -78,8 +78,10 @@ These are expected differences for simulation correctness and should not be forc
 - Live execution gate and scan profile still rely on many fixed constants (`src/runtime/LiveTradingRuntime.cpp:2987`, `src/runtime/LiveTradingRuntime.cpp:3042`, `src/runtime/LiveTradingRuntime.cpp:3174`, `src/runtime/LiveTradingRuntime.cpp:6316`).
 - Backtest mirrors equivalent heuristic profile (`src/runtime/BacktestRuntime.cpp:2427`, `src/runtime/BacktestRuntime.cpp:2447`).
 
-2) Legacy/pre-cat config surface remains loaded
-- Large `strategy_ev_pre_cat_*` policy set is still parsed (`src/common/Config.cpp:593` onwards) though mostly OFF in `config/config.json`.
+2) Legacy/pre-cat config surface
+- `strategy_ev_pre_cat_*` surface has been removed from active config/runtime path:
+  - parser no longer reads it
+  - `config/config.json` no longer carries these keys
 
 ## Small cleanup applied during this audit
 - removed unused local in risk pipeline:
@@ -97,4 +99,4 @@ These are expected differences for simulation correctness and should not be forc
 
 ## Recommended next cleanup order (if you want residual tuning removal next)
 1) Move remaining hardcoded runtime thresholds into single bundle/policy source, then delete duplicated constants.
-2) Trim inactive `strategy_ev_pre_cat_*` policy surface after final Phase 3 baseline lock.
+2) Continue trimming remaining hardcoded runtime constants in live/backtest scoring/profile gates.

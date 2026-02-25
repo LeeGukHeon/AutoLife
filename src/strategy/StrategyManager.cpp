@@ -1,13 +1,11 @@
 #include "strategy/StrategyManager.h"
 #include "strategy/FoundationRiskPipeline.h"
-#include "analytics/TechnicalIndicators.h"
 #include "common/Logger.h"
 #include "common/Config.h"
 #include "common/RuntimeDiagnosticsShared.h"
 #include "risk/RiskManager.h"
 #include <algorithm>
 #include <cctype>
-#include <chrono>
 #include <cmath>
 #include <map>
 
@@ -22,19 +20,6 @@ std::string toLowerCopy(const std::string& s) {
     std::transform(out.begin(), out.end(), out.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return out;
-}
-
-int directionFromType(SignalType type) {
-    switch (type) {
-        case SignalType::BUY:
-        case SignalType::STRONG_BUY:
-            return 1;
-        case SignalType::SELL:
-        case SignalType::STRONG_SELL:
-            return -1;
-        default:
-            return 0;
-    }
 }
 
 struct StrategyEdgeStats {
@@ -176,198 +161,6 @@ bool coreSignalOwnershipEnabledForManager() {
     return cfg.enable_core_plane_bridge && cfg.enable_core_risk_plane;
 }
 
-double computeCoreRescueStrength(
-    const analytics::CoinMetrics& metrics,
-    analytics::MarketRegime regime
-) {
-    double strength = 0.44;
-    strength += std::clamp((metrics.liquidity_score - 55.0) / 220.0, -0.06, 0.10);
-    strength += std::clamp((metrics.volume_surge_ratio - 1.0) * 0.05, -0.03, 0.08);
-    strength += std::clamp(metrics.order_book_imbalance * 0.07, -0.05, 0.06);
-
-    switch (regime) {
-        case analytics::MarketRegime::TRENDING_UP:
-            strength += 0.05;
-            break;
-        case analytics::MarketRegime::RANGING:
-            strength += 0.02;
-            break;
-        case analytics::MarketRegime::TRENDING_DOWN:
-            strength -= 0.04;
-            break;
-        case analytics::MarketRegime::HIGH_VOLATILITY:
-            strength -= 0.02;
-            break;
-        default:
-            break;
-    }
-
-    return std::clamp(strength, 0.36, 0.78);
-}
-
-bool isCoreRescueReasonEligible(const std::string& reason) {
-    return (
-        reason == "foundation_no_signal_liquidity_volume_gate" ||
-        reason == "foundation_no_signal_ranging_structure" ||
-        reason == "foundation_no_signal_bear_rebound_guard" ||
-        reason == "foundation_no_signal_uptrend_thin_context" ||
-        reason == "foundation_no_signal_uptrend_exhaustion_guard"
-    );
-}
-
-bool passesCoreRescueSafetyFloor(
-    const analytics::CoinMetrics& metrics,
-    const std::vector<Candle>& candles,
-    double current_price,
-    const analytics::RegimeAnalysis& regime
-) {
-    if (candles.size() < 80 || current_price <= 0.0) {
-        return false;
-    }
-    if (metrics.liquidity_score < 32.0 || metrics.volume_surge_ratio < 0.40) {
-        return false;
-    }
-    if (metrics.volatility > 0.0 && metrics.volatility > 7.8) {
-        return false;
-    }
-    if (metrics.orderbook_snapshot.valid && metrics.orderbook_snapshot.spread_pct > 0.0035) {
-        return false;
-    }
-
-    if (metrics.buy_pressure > 0.0 || metrics.sell_pressure > 0.0) {
-        const double sell_guard = std::max(1e-9, metrics.sell_pressure);
-        const double buy_sell_ratio = metrics.buy_pressure / sell_guard;
-        if (buy_sell_ratio < 0.80) {
-            return false;
-        }
-    }
-
-    if (regime.regime == analytics::MarketRegime::TRENDING_DOWN ||
-        regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
-        if (metrics.order_book_imbalance < -0.16) {
-            return false;
-        }
-        if (metrics.buy_pressure < metrics.sell_pressure * 0.92) {
-            return false;
-        }
-    }
-
-    const auto closes = analytics::TechnicalIndicators::extractClosePrices(candles);
-    if (closes.size() < 24) {
-        return false;
-    }
-    const double close_now = closes.back();
-    const double close_8 = closes[closes.size() - 9];
-    const double close_20 = closes[closes.size() - 21];
-    if (close_now <= 0.0 || close_8 <= 0.0 || close_20 <= 0.0) {
-        return false;
-    }
-    const double ret8 = (close_now - close_8) / close_8;
-    const double ret20 = (close_now - close_20) / close_20;
-    if (ret20 < -0.028 || ret8 < -0.015) {
-        return false;
-    }
-
-    return true;
-}
-
-Signal buildCoreRescueCandidate(
-    const std::shared_ptr<IStrategy>& strategy,
-    const std::string& market,
-    const analytics::CoinMetrics& metrics,
-    const std::vector<Candle>& candles,
-    double current_price,
-    double available_capital,
-    const analytics::RegimeAnalysis& regime,
-    const std::string& upstream_no_signal_reason
-) {
-    Signal out;
-    if (!strategy || candles.size() < 20 || current_price <= 0.0 || available_capital <= 0.0) {
-        return out;
-    }
-
-    const auto info = strategy->getInfo();
-    const bool is_foundation_strategy = (toLowerCopy(info.name).find("foundation") != std::string::npos);
-
-    if (is_foundation_strategy) {
-        // Rescue path should only activate for known bottleneck rejections and still pass a strict safety floor.
-        if (!isCoreRescueReasonEligible(upstream_no_signal_reason)) {
-            return out;
-        }
-        if (!passesCoreRescueSafetyFloor(metrics, candles, current_price, regime)) {
-            return out;
-        }
-    } else if (!strategy->shouldEnter(market, metrics, candles, current_price, regime)) {
-        return out;
-    }
-
-    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()
-    ).count();
-    if (!candles.empty() && candles.back().timestamp > 0) {
-        now_ms = candles.back().timestamp;
-    }
-
-    const double entry_price = current_price;
-    double stop_loss = strategy->calculateStopLoss(entry_price, candles);
-    if (!(stop_loss > 0.0) || stop_loss >= entry_price) {
-        stop_loss = entry_price * 0.992;
-    }
-
-    double take_profit_2 = strategy->calculateTakeProfit(entry_price, candles);
-    if (!(take_profit_2 > entry_price)) {
-        take_profit_2 = entry_price * 1.012;
-    }
-    double take_profit_1 = entry_price + ((take_profit_2 - entry_price) * 0.55);
-    if (!(take_profit_1 > entry_price) || take_profit_1 > take_profit_2) {
-        take_profit_1 = entry_price + ((take_profit_2 - entry_price) * 0.45);
-    }
-
-    double position_size = strategy->calculatePositionSize(
-        available_capital,
-        entry_price,
-        stop_loss,
-        metrics
-    );
-    if (!(position_size > 0.0)) {
-        const double min_lot = 5000.0 / std::max(1.0, available_capital);
-        position_size = std::clamp(min_lot, 0.01, 0.06);
-    }
-    // Rescue path is uncertainty-heavy by design; keep size conservative
-    // and let probabilistic confidence promote higher sizing later.
-    position_size *= 0.65;
-    position_size = std::min(position_size, 0.04);
-    position_size = std::clamp(position_size, 0.0, 1.0);
-
-    out.type = SignalType::BUY;
-    out.market = market;
-    out.strategy_name = info.name;
-    out.timestamp = now_ms;
-    out.strength = computeCoreRescueStrength(metrics, regime.regime);
-    out.signal_filter = out.strength;
-    out.entry_price = entry_price;
-    out.stop_loss = stop_loss;
-    out.take_profit_1 = take_profit_1;
-    out.take_profit_2 = take_profit_2;
-    out.position_size = position_size;
-    out.buy_order_type = OrderTypePolicy::LIMIT_WITH_FALLBACK;
-    out.sell_order_type = OrderTypePolicy::LIMIT_WITH_FALLBACK;
-    out.max_retries = 2;
-    out.retry_wait_ms = 700;
-    out.market_regime = regime.regime;
-    out.entry_archetype = "CORE_RESCUE_SHOULD_ENTER";
-    out.reason = "core_rescue_candidate";
-    out.used_preloaded_tf_5m =
-        (metrics.candles_by_tf.find("5m") != metrics.candles_by_tf.end() &&
-         metrics.candles_by_tf.at("5m").size() >= 20);
-    out.used_preloaded_tf_1h =
-        (metrics.candles_by_tf.find("1h") != metrics.candles_by_tf.end() &&
-         metrics.candles_by_tf.at("1h").size() >= 10);
-    out.used_resampled_tf_fallback = !out.used_preloaded_tf_5m;
-
-    return out;
-}
-
 void incrementRejectionReason(std::map<std::string, int>* bucket, const char* reason) {
     if (bucket == nullptr || reason == nullptr || reason[0] == '\0') {
         return;
@@ -479,16 +272,6 @@ StrategyManager::StrategyManager(std::shared_ptr<network::UpbitHttpClient> clien
     LOG_INFO("StrategyManager initialized");
 }
 
-void StrategyManager::setLiveSignalBottleneckHint(const LiveSignalBottleneckHint& hint) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    live_bottleneck_hint_ = hint;
-}
-
-StrategyManager::LiveSignalBottleneckHint StrategyManager::getLiveSignalBottleneckHint() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return live_bottleneck_hint_;
-}
-
 void StrategyManager::registerStrategy(std::shared_ptr<IStrategy> strategy) {
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -523,29 +306,7 @@ Signal StrategyManager::processStrategySignal(
             return signal;
         }
 
-        const bool core_signal_ownership = coreSignalOwnershipEnabledForManager();
         signal = strategy->generateSignal(market, metrics, candles, current_price, available_capital, regime);
-        std::string no_signal_reason = signal.reason;
-        if (signal.type == SignalType::NONE && core_signal_ownership) {
-            Signal rescue_signal = buildCoreRescueCandidate(
-                strategy,
-                market,
-                metrics,
-                candles,
-                current_price,
-                available_capital,
-                regime,
-                no_signal_reason
-            );
-            if (rescue_signal.type != SignalType::NONE) {
-                signal = std::move(rescue_signal);
-            } else if (no_signal_reason.empty() && !rescue_signal.reason.empty()) {
-                no_signal_reason = rescue_signal.reason;
-            }
-        }
-        if (signal.type == SignalType::NONE && !no_signal_reason.empty()) {
-            signal.reason = no_signal_reason;
-        }
 
         if (signal.type != SignalType::NONE) {
             auto stats = strategy->getStatistics();
@@ -577,10 +338,6 @@ Signal StrategyManager::processStrategySignal(
             }
 
             signal.score = calculateSignalScore(signal);
-            if (signal.reason == "core_rescue_candidate") {
-                LOG_INFO("{} - {} core rescue candidate generated (strength {:.2f}, archetype {})",
-                         market, signal.strategy_name, signal.strength, signal.entry_archetype);
-            }
         }
     } catch (const std::exception& e) {
         LOG_ERROR("{} - {} analysis failed: {}", market, strategy->getInfo().name, e.what());
@@ -675,180 +432,6 @@ std::vector<Signal> StrategyManager::collectSignals(
     return signals;
 }
 
-Signal StrategyManager::selectBestSignal(const std::vector<Signal>& signals) {
-    if (signals.empty()) {
-        return Signal();
-    }
-
-    auto best = std::max_element(signals.begin(), signals.end(),
-        [this](const Signal& a, const Signal& b) {
-            return calculateSignalScore(a) < calculateSignalScore(b);
-        }
-    );
-
-    return *best;
-}
-
-Signal StrategyManager::selectRobustSignalWithDiagnostics(
-    const std::vector<Signal>& signals,
-    analytics::MarketRegime regime,
-    SelectionDiagnostics* diagnostics
-) {
-    if (diagnostics != nullptr) {
-        diagnostics->input_count = static_cast<int>(signals.size());
-        diagnostics->directional_candidate_count = 0;
-        diagnostics->scored_candidate_count = 0;
-        diagnostics->rejection_reason_counts.clear();
-        diagnostics->live_hint_adjusted_candidate_count = 0;
-        diagnostics->live_hint_adjustment_counts.clear();
-    }
-
-    const LiveSignalBottleneckHint foundation_live_hint = getLiveSignalBottleneckHint();
-    const bool foundation_core_signal_ownership = coreSignalOwnershipEnabledForManager();
-
-    if (signals.empty()) {
-        incrementRejectionReason(
-            diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
-            "no_best_signal_no_candidates"
-        );
-        return Signal();
-    }
-
-    std::map<int, int> direction_votes;
-    std::map<StrategyRole, int> role_votes;
-    for (const auto& signal : signals) {
-        const int direction = directionFromType(signal.type);
-        if (direction != 0) {
-            direction_votes[direction]++;
-        }
-        role_votes[detectStrategyRole(signal.strategy_name)]++;
-    }
-
-    Signal foundation_best_signal;
-    double foundation_best_score = -std::numeric_limits<double>::infinity();
-    for (const auto& signal : signals) {
-        const int direction = directionFromType(signal.type);
-        if (direction <= 0) {
-            incrementRejectionReason(
-                diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
-                "no_best_signal_non_long_direction"
-            );
-            continue;
-        }
-        if (diagnostics != nullptr) {
-            diagnostics->directional_candidate_count++;
-        }
-
-        const StrategyRole role = detectStrategyRole(signal.strategy_name);
-        const RegimePolicy policy = getRegimePolicy(role, regime);
-        const bool trend_role = (role == StrategyRole::MOMENTUM || role == StrategyRole::BREAKOUT);
-        const bool off_trend_regime = trend_role && regime != analytics::MarketRegime::TRENDING_UP;
-        const bool hostile_regime =
-            regime == analytics::MarketRegime::HIGH_VOLATILITY ||
-            regime == analytics::MarketRegime::TRENDING_DOWN;
-
-        if (policy == RegimePolicy::BLOCK && !foundation_core_signal_ownership) {
-            incrementRejectionReason(
-                diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
-                "no_best_signal_policy_block"
-            );
-            continue;
-        }
-
-        double score = calculateSignalScore(signal);
-        if (policy == RegimePolicy::ALLOW) {
-            score *= 1.05;
-        } else if (policy == RegimePolicy::HOLD) {
-            score *= 0.94;
-        } else {
-            score *= 0.80;
-            incrementRejectionReason(
-                diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
-                "softened_policy_block_core_mode"
-            );
-        }
-
-        const PerformanceGate gate = getPerformanceGate(role, regime);
-        if (signal.strategy_trade_count >= gate.min_sample_trades) {
-            if (signal.strategy_win_rate < gate.min_win_rate ||
-                signal.strategy_profit_factor < gate.min_profit_factor) {
-                score *= 0.82;
-                incrementRejectionReason(
-                    diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
-                    "no_best_signal_history_guard"
-                );
-            } else {
-                score *= 1.04;
-            }
-        }
-
-        const double rr = foundation::rewardRiskRatio(signal);
-        if (rr > 0.0 && rr < 1.10) {
-            score *= 0.82;
-            incrementRejectionReason(
-                diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
-                "no_best_signal_low_reward_risk"
-            );
-        } else if (rr >= 1.30) {
-            score *= 1.04;
-        }
-
-        if (off_trend_regime) {
-            score *= 0.88;
-            if (signal.expected_value < 0.0002) {
-                incrementRejectionReason(
-                    diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
-                    "no_best_signal_trend_off_regime_low_edge"
-                );
-            }
-        }
-        if (hostile_regime) {
-            score *= 0.93;
-        }
-        if (signal.expected_value < 0.0) {
-            score *= 0.78;
-            incrementRejectionReason(
-                diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
-                "no_best_signal_negative_expected_value"
-            );
-        }
-        if (foundation_live_hint.enabled &&
-            foundation_live_hint.no_trade_bias_active &&
-            signal.expected_value < 0.0002) {
-            score *= 0.85;
-            incrementRejectionReason(
-                diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
-                "no_best_signal_no_trade_bias_low_edge"
-            );
-        }
-
-        if (direction_votes[direction] >= 2) {
-            score *= 1.03;
-        }
-        if (role_votes[role] >= 2) {
-            score *= 1.02;
-        }
-
-        if (diagnostics != nullptr) {
-            diagnostics->scored_candidate_count++;
-        }
-
-        if (score > foundation_best_score) {
-            foundation_best_score = score;
-            foundation_best_signal = signal;
-            foundation_best_signal.score = score;
-        }
-    }
-
-    if (foundation_best_signal.type == SignalType::NONE) {
-        incrementRejectionReason(
-            diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
-            "no_best_signal_no_scored_candidates"
-        );
-    }
-    return foundation_best_signal;
-}
-
 std::vector<Signal> StrategyManager::filterSignalsWithDiagnostics(
     const std::vector<Signal>& signals,
     double min_strength,
@@ -858,7 +441,6 @@ std::vector<Signal> StrategyManager::filterSignalsWithDiagnostics(
 ) {
     std::vector<Signal> filtered;
     const bool core_signal_ownership = coreSignalOwnershipEnabledForManager();
-    const LiveSignalBottleneckHint live_hint = getLiveSignalBottleneckHint();
     if (diagnostics != nullptr) {
         diagnostics->input_count = static_cast<int>(signals.size());
         diagnostics->output_count = 0;
@@ -878,7 +460,6 @@ std::vector<Signal> StrategyManager::filterSignalsWithDiagnostics(
             regime == analytics::MarketRegime::TRENDING_DOWN;
 
         const PerformanceGate gate = getPerformanceGate(role, regime);
-        const bool no_trade_bias_active = live_hint.enabled && live_hint.no_trade_bias_active;
 
         foundation::FilterInput input;
         input.signal = &signal;
@@ -891,7 +472,6 @@ std::vector<Signal> StrategyManager::filterSignalsWithDiagnostics(
             ((policy == RegimePolicy::BLOCK) && core_signal_ownership);
         input.off_trend_regime = off_trend_regime;
         input.hostile_regime = hostile_regime;
-        input.no_trade_bias_active = no_trade_bias_active;
         input.min_history_sample = gate.min_sample_trades;
         input.min_history_win_rate = gate.min_win_rate;
         input.min_history_profit_factor = gate.min_profit_factor;

@@ -17,7 +17,6 @@ struct FilterInput {
     bool policy_hold = false;
     bool off_trend_regime = false;
     bool hostile_regime = false;
-    bool no_trade_bias_active = false;
     int min_history_sample = 0;
     double min_history_win_rate = 0.0;
     double min_history_profit_factor = 0.0;

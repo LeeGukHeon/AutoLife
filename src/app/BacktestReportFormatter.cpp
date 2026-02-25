@@ -57,44 +57,6 @@ void printEntryFunnelSummary(const EntryFunnel& f, std::ostream& out) {
         << ", catastrophic=" << f.blocked_risk_gate_strategy_ev_catastrophic_history
         << ", asym=" << f.blocked_risk_gate_strategy_ev_loss_asymmetry
         << ", unknown=" << f.blocked_risk_gate_strategy_ev_unknown
-        << ", pre_diag={obs=" << f.strategy_ev_pre_cat_observed
-        << ", q_ctx=" << f.strategy_ev_pre_cat_recovery_quality_context
-        << ", rec_any=" << f.strategy_ev_pre_cat_recovery_evidence_any
-        << ", rec_relaxed_any=" << f.strategy_ev_pre_cat_recovery_evidence_relaxed_any
-        << ", rec_relaxed_rr=" << f.strategy_ev_pre_cat_recovery_evidence_relaxed_recent_regime
-        << ", rec_relaxed_full=" << f.strategy_ev_pre_cat_recovery_evidence_relaxed_full_history
-        << ", rec_soften=" << f.strategy_ev_pre_cat_recovery_evidence_for_soften
-        << ", rec_bridge=" << f.strategy_ev_pre_cat_recovery_evidence_bridge
-        << ", rec_bridge_surr=" << f.strategy_ev_pre_cat_recovery_evidence_bridge_surrogate
-        << ", rec_hyst=" << f.strategy_ev_pre_cat_recovery_evidence_hysteresis_override
-        << ", q_hyst=" << f.strategy_ev_pre_cat_quality_hysteresis_override
-        << ", q_relaxed_overlap=" << f.strategy_ev_pre_cat_quality_context_relaxed_overlap
-        << ", q_fail_regime=" << f.strategy_ev_pre_cat_quality_fail_regime
-        << ", q_fail_strength=" << f.strategy_ev_pre_cat_quality_fail_strength
-        << ", q_fail_ev=" << f.strategy_ev_pre_cat_quality_fail_expected_value
-        << ", q_fail_liq=" << f.strategy_ev_pre_cat_quality_fail_liquidity
-        << ", soften_ready=" << f.strategy_ev_pre_cat_soften_ready
-        << ", cand_qe=" << f.strategy_ev_pre_cat_soften_candidate_quality_and_evidence
-        << ", cand_ns=" << f.strategy_ev_pre_cat_soften_candidate_non_severe
-        << ", cand_nh=" << f.strategy_ev_pre_cat_soften_candidate_non_hostile
-        << ", cand_rr=" << f.strategy_ev_pre_cat_soften_candidate_rr_ok
-        << ", severe_baseline=" << f.strategy_ev_pre_cat_severe_baseline_hits
-        << ", severe_composite=" << f.strategy_ev_pre_cat_severe_composite_hits
-        << ", severe_cmp_cat=" << f.strategy_ev_pre_cat_severe_composite_catastrophic_hits
-        << ", severe_cmp_axis=" << f.strategy_ev_pre_cat_severe_composite_pressure_axis_hits
-        << ", severe_cmp_pressure_only=" << f.strategy_ev_pre_cat_severe_composite_pressure_only_hits
-        << ", severe_ctx_downgrade=" << f.strategy_ev_pre_cat_contextual_severe_downgrade_hits
-        << ", severe_active=" << f.strategy_ev_pre_cat_severe_active_hits
-        << ", soft_ctx=" << f.strategy_ev_pre_cat_softened_contextual
-        << ", soft_ovr=" << f.strategy_ev_pre_cat_softened_override
-        << ", soft_no_soft_q_relief=" << f.strategy_ev_pre_cat_softened_no_soft_quality_relief
-        << ", soft_rr_failsafe=" << f.strategy_ev_pre_cat_softened_candidate_rr_failsafe
-        << ", soft_pressure_rebound=" << f.strategy_ev_pre_cat_softened_pressure_rebound_relief
-        << ", nh_quarantine_set=" << f.strategy_ev_pre_cat_negative_history_quarantine_set
-        << ", nh_quarantine_active=" << f.strategy_ev_pre_cat_negative_history_quarantine_active
-        << ", blk_severe=" << f.strategy_ev_pre_cat_blocked_severe_sync
-        << ", blk_other=" << f.strategy_ev_pre_cat_blocked_no_soft_path
-        << "}"
         << "}"
         << ", regime=" << f.blocked_risk_gate_regime
         << ", invalid_levels=" << f.blocked_risk_gate_entry_quality_invalid_levels
