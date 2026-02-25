@@ -18,6 +18,7 @@ Last updated: 2026-02-25
   - `docs/_codex/WORKSPACE_STRUCTURE_AUDIT_2026-02-25.md`
   - confirmed `backtest/DataHistory.*` is active via BacktestRuntime load path
   - aligned CI configure flags with required build targets
+  - reduced CI exe over-generation via probe-only tool build option
 
 ## Active ticket
 - Source of truth: `docs/_codex/ACTIVE_TICKET.md`

@@ -21,19 +21,27 @@ Last updated: 2026-02-25
    - configure steps now explicitly set `AUTOLIFE_BUILD_*` options.
 5. Strict live workflow probe gate mismatch fixed:
    - `run_ci_operational_gate.py -RunLiveProbe` now includes `-AllowLiveProbeOrder`.
+6. EXE over-generation path narrowed:
+   - strict-live now builds probe-only tool binary instead of full tool bundle.
+   - probabilistic bundle contract test moved out of gate-test bundle.
 
 ## Changes Applied
 - `CMakeLists.txt`
   - release compile option made config-aware
+  - added `AUTOLIFE_BUILD_LIVE_PROBE_TOOL` option
+  - `AutoLifeLiveExecutionProbe` can be built independently from other tool binaries
+  - `AutoLifeProbBundleContractTest` moved to `AUTOLIFE_BUILD_EXTRA_TESTS`
 - `.github/workflows/ci-pr-gate.yml`
   - configure now forces:
     - `AUTOLIFE_BUILD_GATE_TESTS=ON`
     - `AUTOLIFE_BUILD_TOOL_BINARIES=OFF`
+    - `AUTOLIFE_BUILD_LIVE_PROBE_TOOL=OFF`
     - `AUTOLIFE_BUILD_EXTRA_TESTS=OFF`
 - `.github/workflows/ci-strict-live-gate.yml`
   - configure now forces:
     - `AUTOLIFE_BUILD_GATE_TESTS=ON`
-    - `AUTOLIFE_BUILD_TOOL_BINARIES=ON`
+    - `AUTOLIFE_BUILD_TOOL_BINARIES=OFF`
+    - `AUTOLIFE_BUILD_LIVE_PROBE_TOOL=ON`
     - `AUTOLIFE_BUILD_EXTRA_TESTS=OFF`
   - strict gate command now includes `-AllowLiveProbeOrder`
 

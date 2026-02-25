@@ -27,10 +27,12 @@ find_package(Boost REQUIRED COMPONENTS system thread)
 include_directories(${CMAKE_SOURCE_DIR}/include)
 
 option(AUTOLIFE_BUILD_TOOL_BINARIES "Build optional operational tool binaries" OFF)
+option(AUTOLIFE_BUILD_LIVE_PROBE_TOOL "Build live execution probe tool binary" OFF)
 option(AUTOLIFE_BUILD_GATE_TESTS "Build core gate validation tests" OFF)
 option(AUTOLIFE_BUILD_EXTRA_TESTS "Build extra diagnostic tests" OFF)
 
 message(STATUS "AUTOLIFE_BUILD_TOOL_BINARIES=${AUTOLIFE_BUILD_TOOL_BINARIES}")
+message(STATUS "AUTOLIFE_BUILD_LIVE_PROBE_TOOL=${AUTOLIFE_BUILD_LIVE_PROBE_TOOL}")
 message(STATUS "AUTOLIFE_BUILD_GATE_TESTS=${AUTOLIFE_BUILD_GATE_TESTS}")
 message(STATUS "AUTOLIFE_BUILD_EXTRA_TESTS=${AUTOLIFE_BUILD_EXTRA_TESTS}")
 
@@ -118,6 +120,43 @@ if(AUTOLIFE_BUILD_TOOL_BINARIES)
         src/execution/RateLimiter.cpp
     )
     add_executable(
+        AutoLifeLiveQuotationProbe
+        src/tools/LiveQuotationProbe.cpp
+        src/common/Config.cpp
+        src/common/PathUtils.cpp
+        src/common/Logger.cpp
+        src/network/JwtGenerator.cpp
+        src/network/UpbitHttpClient.cpp
+        src/execution/RateLimiter.cpp
+    )
+
+    target_compile_definitions(AutoLifeLiveQuotationProbe PRIVATE
+        _WIN32_WINNT=0x0A00
+        NOMINMAX
+    )
+
+    target_link_libraries(AutoLifeCancelOrder PRIVATE
+        CURL::libcurl
+        OpenSSL::SSL
+        OpenSSL::Crypto
+        nlohmann_json::nlohmann_json
+        spdlog::spdlog
+    )
+    target_link_libraries(AutoLifeLiveQuotationProbe PRIVATE
+        CURL::libcurl
+        OpenSSL::SSL
+        OpenSSL::Crypto
+        nlohmann_json::nlohmann_json
+        spdlog::spdlog
+    )
+    if(WIN32)
+        target_link_libraries(AutoLifeCancelOrder PRIVATE ws2_32 wsock32)
+        target_link_libraries(AutoLifeLiveQuotationProbe PRIVATE ws2_32 wsock32)
+    endif()
+endif()
+
+if(AUTOLIFE_BUILD_TOOL_BINARIES OR AUTOLIFE_BUILD_LIVE_PROBE_TOOL)
+    add_executable(
         AutoLifeLiveExecutionProbe
         src/tools/LiveExecutionProbe.cpp
         src/common/Config.cpp
@@ -131,32 +170,9 @@ if(AUTOLIFE_BUILD_TOOL_BINARIES)
         src/execution/OrderStateMapper.cpp
         src/execution/OrderLifecycleStateMachine.cpp
     )
-    add_executable(
-        AutoLifeLiveQuotationProbe
-        src/tools/LiveQuotationProbe.cpp
-        src/common/Config.cpp
-        src/common/PathUtils.cpp
-        src/common/Logger.cpp
-        src/network/JwtGenerator.cpp
-        src/network/UpbitHttpClient.cpp
-        src/execution/RateLimiter.cpp
-    )
-
     target_compile_definitions(AutoLifeLiveExecutionProbe PRIVATE
         _WIN32_WINNT=0x0A00
         NOMINMAX
-    )
-    target_compile_definitions(AutoLifeLiveQuotationProbe PRIVATE
-        _WIN32_WINNT=0x0A00
-        NOMINMAX
-    )
-
-    target_link_libraries(AutoLifeCancelOrder PRIVATE
-        CURL::libcurl
-        OpenSSL::SSL
-        OpenSSL::Crypto
-        nlohmann_json::nlohmann_json
-        spdlog::spdlog
     )
     target_link_libraries(AutoLifeLiveExecutionProbe PRIVATE
         CURL::libcurl
@@ -167,17 +183,8 @@ if(AUTOLIFE_BUILD_TOOL_BINARIES)
         Boost::system
         Boost::thread
     )
-    target_link_libraries(AutoLifeLiveQuotationProbe PRIVATE
-        CURL::libcurl
-        OpenSSL::SSL
-        OpenSSL::Crypto
-        nlohmann_json::nlohmann_json
-        spdlog::spdlog
-    )
     if(WIN32)
-        target_link_libraries(AutoLifeCancelOrder PRIVATE ws2_32 wsock32)
         target_link_libraries(AutoLifeLiveExecutionProbe PRIVATE ws2_32 wsock32)
-        target_link_libraries(AutoLifeLiveQuotationProbe PRIVATE ws2_32 wsock32)
     endif()
 endif()
 
@@ -223,15 +230,16 @@ if(AUTOLIFE_BUILD_GATE_TESTS)
     )
     target_link_libraries(AutoLifeExecutionStateTest PRIVATE nlohmann_json::nlohmann_json)
 
+endif()
+
+if(AUTOLIFE_BUILD_EXTRA_TESTS)
     add_executable(
         AutoLifeProbBundleContractTest
         tests/TestProbabilisticRuntimeBundleContract.cpp
         src/analytics/ProbabilisticRuntimeModel.cpp
     )
     target_link_libraries(AutoLifeProbBundleContractTest PRIVATE nlohmann_json::nlohmann_json)
-endif()
 
-if(AUTOLIFE_BUILD_EXTRA_TESTS)
     add_executable(
         AutoLifeRateLimiterComplianceTest
         tests/TestRateLimiterComplianceTelemetry.cpp
