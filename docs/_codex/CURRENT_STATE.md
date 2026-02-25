@@ -14,6 +14,10 @@ Last updated: 2026-02-25
 - Python cleanup (unreferenced helper scripts) applied:
   - removed `scripts/run_probabilistic_fetch_live.py`
   - removed `scripts/watch_probabilistic_progress.py`
+- Workspace structure/CMake audit completed:
+  - `docs/_codex/WORKSPACE_STRUCTURE_AUDIT_2026-02-25.md`
+  - confirmed `backtest/DataHistory.*` is active via BacktestRuntime load path
+  - aligned CI configure flags with required build targets
 
 ## Active ticket
 - Source of truth: `docs/_codex/ACTIVE_TICKET.md`

@@ -15,7 +15,9 @@ Last updated: 2026-02-25
    - `docs/_codex/PHASE2_CLOSURE_2026-02-25.md` (current Phase 2 closure baseline)
 6. If ticket touches migration cleanup for Phase 2/3 paths, read:
    - `docs/_codex/PHASE23_MIGRATION_CLEANUP_2026-02-25.md`
-7. Check `docs/_codex/PR_CHECKLIST.md` before finalizing changes.
+7. If ticket touches folder/build structure cleanup, read:
+   - `docs/_codex/WORKSPACE_STRUCTURE_AUDIT_2026-02-25.md`
+8. Check `docs/_codex/PR_CHECKLIST.md` before finalizing changes.
 
 ## Immediate commands
 ```powershell

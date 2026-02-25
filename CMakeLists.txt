@@ -15,9 +15,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if(MSVC)
     add_compile_options(/W4 /EHsc /utf-8)
-    if(CMAKE_BUILD_TYPE STREQUAL "Release")
-        add_compile_options(/O2)
-    endif()
+    add_compile_options($<$<CONFIG:Release>:/O2>)
 endif()
 
 find_package(CURL CONFIG REQUIRED)

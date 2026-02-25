@@ -27,6 +27,10 @@ Last updated: 2026-02-25
 - Unreferenced Python helper scripts removed:
   - `scripts/run_probabilistic_fetch_live.py`
   - `scripts/watch_probabilistic_progress.py`
+- Workspace/CMake workflow audit applied:
+  - `docs/_codex/WORKSPACE_STRUCTURE_AUDIT_2026-02-25.md`
+  - CI configure now pins required `AUTOLIFE_BUILD_*` flags
+  - strict-live gate command aligns with live-probe option contract
 - Profitability tuning remains deferred by policy until Phase 3/4 rollout completion.
 
 ## Scope
