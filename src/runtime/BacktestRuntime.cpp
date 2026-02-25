@@ -73,28 +73,6 @@ bool containsToken(const std::string& value, const std::string& token) {
     return value.find(token) != std::string::npos;
 }
 
-std::string edgeGapBucket(double edge_gap) {
-    if (!std::isfinite(edge_gap)) {
-        return "edge_gap_invalid";
-    }
-    if (edge_gap <= 0.0) {
-        return "edge_gap_le_0";
-    }
-    if (edge_gap <= 0.00002) {
-        return "edge_gap_0_0p2bp";
-    }
-    if (edge_gap <= 0.00005) {
-        return "edge_gap_0p2_0p5bp";
-    }
-    if (edge_gap <= 0.00010) {
-        return "edge_gap_0p5_1p0bp";
-    }
-    if (edge_gap <= 0.00020) {
-        return "edge_gap_1p0_2p0bp";
-    }
-    return "edge_gap_gt_2p0bp";
-}
-
 int adaptivePartialRatioHistogramIndex(double ratio) {
     if (ratio < 0.45) {
         return 0; // 0.35~0.44

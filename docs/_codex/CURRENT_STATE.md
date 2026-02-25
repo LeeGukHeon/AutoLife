@@ -3,7 +3,7 @@ Last updated: 2026-02-25
 
 ## Repository
 - Branch: `main`
-- Commit snapshot (pushed): `e0bb06c`
+- Commit snapshot (pushed): `d2a5568`
 
 ## Active ticket
 - Source of truth: `docs/_codex/ACTIVE_TICKET.md`
@@ -466,6 +466,30 @@ Last updated: 2026-02-25
     - artifacts:
       - `build/Release/logs/source_encoding_check_20260225.json`
       - `build/Release/logs/source_encoding_check_ci.json`
+  - exit parity / validation accuracy recheck (`2026-02-25`):
+    - backtest-live exit reason gap:
+      - status: `해결중`
+      - artifact:
+        - `build/Release/logs/exit_reason_mapping_gap_20260225_recheck_v5_overlap.json`
+      - snapshot:
+        - `mapping_gap_observed=true`
+        - live reason set: `stop_loss`, `take_profit_full_due_to_min_order`
+        - backtest runtime sample reason set: `BacktestEOD`
+    - delta aggregation consistency risk:
+      - status: `해결중`
+      - evidence:
+        - daily gate report:
+          - `evaluated_day_count=19`, `nonpositive_day_count=7`
+          - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v22_rename_off_5set_3m7d_20260225.json`
+        - delta workflow summary:
+          - `day_count=35`, `baseline_nonpositive_day_count=23`
+          - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v22_rename_on_vs_off_5set_20260225.json`
+      - note:
+        - gate와 delta의 집계 대상(평가일 vs 전체 day-row) 차이로 해석 리스크 존재.
+    - unused function cleanup:
+      - status: `완료`
+      - removed:
+        - `src/runtime/BacktestRuntime.cpp` `edgeGapBucket`
   - live execution update 로그 수집 선행조건은 충족됨
     (`execution_updates_live.jsonl` 생성 확인).
   - live parity path hardening landed:

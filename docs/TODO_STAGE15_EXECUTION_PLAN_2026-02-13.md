@@ -2013,6 +2013,25 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
           - 산출물:
             - `build/Release/logs/source_encoding_check_20260225.json`
             - `build/Release/logs/source_encoding_check_ci.json`
+        - 백-라이브 엑시트/검증정확도 재점검 (`2026-02-25`):
+          - 엑시트 reason mapping gap:
+            - 상태: `해결중`
+            - `build/Release/logs/exit_reason_mapping_gap_20260225_recheck_v5_overlap.json`
+            - snapshot:
+              - `mapping_gap_observed=true`
+              - live reason set: `stop_loss`, `take_profit_full_due_to_min_order`
+              - backtest runtime sample reason set: `BacktestEOD`
+          - delta 집계 정합성 리스크:
+            - 상태: `해결중`
+            - gate report(평가일):
+              - `evaluated_day_count=19`, `nonpositive_day_count=7`
+            - delta summary(전체 day-row):
+              - `day_count=35`, `baseline_nonpositive_day_count=23`
+            - 조치:
+              - delta/spillover workflow에 평가일 기준 집계를 추가해 병행 리포팅.
+          - 미사용 함수 정리:
+            - 상태: `완료`
+            - `src/runtime/BacktestRuntime.cpp` 미사용 `edgeGapBucket` 제거.
 0. 대용량 수집 종료 시, 아래 순서를 우선 적용:
    - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
      `8. 수집 완료 후 표준 실행 순서`를 단일 기준으로 사용.

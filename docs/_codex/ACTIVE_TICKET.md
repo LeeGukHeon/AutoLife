@@ -1188,6 +1188,34 @@ Last updated: 2026-02-25
     - `enable_uptrend_rescue_prefilter_tail_guard=false` (default)
   - 승격 준비는 완료되었고, 실제 정책 ON 전 마지막 단계는 운영 캡/모니터링 템플릿에 맞춘 staged 적용.
 
+## Exit parity recheck (2026-02-25)
+- 1) 백-라이브 엑시트 로직 괴리:
+  - status: `해결중`
+  - recheck artifact:
+    - `build/Release/logs/exit_reason_mapping_gap_20260225_recheck_v5_overlap.json`
+  - snapshot:
+    - `mapping_gap_observed=true`
+    - live reason: `stop_loss`, `take_profit_full_due_to_min_order`
+    - backtest runtime sample reason: `BacktestEOD`
+  - next:
+    - `narrow_correctness_patch_scope_to_runtime_strategyless_exit_mapping`
+- 2) 검증 정확도 리스크(일별 델타 집계 기준):
+  - status: `해결중`
+  - observed mismatch:
+    - daily gate report 기준: `evaluated_day_count=19`, `nonpositive_day_count=7`
+      (`daily_oos_stability_report_correctness_runtime_mapping_on_guard_v22_rename_off_5set_3m7d_20260225.json`)
+    - delta workflow 기준: `day_count=35`, `baseline_nonpositive_day_count=23`
+      (`daily_oos_delta_correctness_runtime_mapping_on_guard_v22_rename_on_vs_off_5set_20260225.json`)
+  - interpretation:
+    - gate는 평가일 중심, delta는 전체 day-row(무거래일 포함) 중심 집계라
+      수치 해석 차이가 발생할 수 있음.
+  - next:
+    - delta/spillover workflow에 평가일 기준 집계 옵션 추가 후 병행 보고.
+- 3) 미사용 함수 정리:
+  - status: `완료`
+  - removed:
+    - `src/runtime/BacktestRuntime.cpp`의 `edgeGapBucket` (미사용 함수)
+
 ## DoD
 - [x] residual negative-day trade-level evidence captured.
 - [x] first narrow candidate tested with strict metrics.
