@@ -52,8 +52,7 @@ void printEntryFunnelSummary(const EntryFunnel& f, std::ostream& out) {
         << ", rr_drop=" << f.blocked_rr_rebalance
         << ", risk_drop=" << f.blocked_risk_gate
         << " [ev=" << f.blocked_risk_gate_strategy_ev
-        << " {pre_cat=" << f.blocked_risk_gate_strategy_ev_pre_catastrophic
-        << ", severe=" << f.blocked_risk_gate_strategy_ev_severe_threshold
+        << " {severe=" << f.blocked_risk_gate_strategy_ev_severe_threshold
         << ", catastrophic=" << f.blocked_risk_gate_strategy_ev_catastrophic_history
         << ", asym=" << f.blocked_risk_gate_strategy_ev_loss_asymmetry
         << ", unknown=" << f.blocked_risk_gate_strategy_ev_unknown

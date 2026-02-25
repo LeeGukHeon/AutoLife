@@ -1494,7 +1494,6 @@ void BacktestEngine::init(const Config& config) {
     loaded_tf_cursors_.clear();
     entry_funnel_ = Result::EntryFunnelSummary{};
     shadow_funnel_ = Result::ShadowFunnelSummary{};
-    pre_cat_feature_snapshot_ = Result::PreCatFeatureSnapshot{};
     strategy_generated_counts_.clear();
     strategy_selected_best_counts_.clear();
     strategy_blocked_by_risk_manager_counts_.clear();
@@ -1507,12 +1506,6 @@ void BacktestEngine::init(const Config& config) {
     entry_quality_edge_gap_buckets_.clear();
     intrabar_stop_tp_collision_count_ = 0;
     intrabar_collision_by_strategy_.clear();
-    pre_cat_recovery_hysteresis_hold_by_key_.clear();
-    pre_cat_recovery_bridge_activation_by_key_.clear();
-    pre_cat_no_soft_quality_relief_activation_by_key_.clear();
-    pre_cat_candidate_rr_failsafe_activation_by_key_.clear();
-    pre_cat_pressure_rebound_relief_activation_by_key_.clear();
-    pre_cat_negative_history_quarantine_hold_by_key_.clear();
     adaptive_stop_update_count_ = 0;
     adaptive_tp_recalibration_count_ = 0;
     adaptive_partial_ratio_samples_ = 0;
@@ -3412,7 +3405,6 @@ BacktestEngine::Result BacktestEngine::getResult() const {
         result.shadow_funnel.avg_manager_supply_lift = 0.0;
         result.shadow_funnel.avg_policy_supply_lift = 0.0;
     }
-    result.pre_cat_feature_snapshot = pre_cat_feature_snapshot_;
     result.post_entry_risk_telemetry.adaptive_stop_updates = adaptive_stop_update_count_;
     result.post_entry_risk_telemetry.adaptive_tp_recalibration_updates = adaptive_tp_recalibration_count_;
     result.post_entry_risk_telemetry.adaptive_partial_ratio_samples = adaptive_partial_ratio_samples_;

@@ -98,7 +98,6 @@ public:
             int blocked_rr_rebalance = 0;
             int blocked_risk_gate = 0;
             int blocked_risk_gate_strategy_ev = 0;
-            int blocked_risk_gate_strategy_ev_pre_catastrophic = 0;
             int blocked_risk_gate_strategy_ev_severe_threshold = 0;
             int blocked_risk_gate_strategy_ev_catastrophic_history = 0;
             int blocked_risk_gate_strategy_ev_loss_asymmetry = 0;
@@ -125,39 +124,6 @@ public:
             double policy_supply_lift_sum = 0.0;
             double avg_manager_supply_lift = 0.0;
             double avg_policy_supply_lift = 0.0;
-        };
-        struct PreCatFeatureSnapshotBranch {
-            int samples = 0;
-            int recovery_quality_context_hits = 0;
-            int recovery_evidence_hits = 0;
-            int recovery_evidence_relaxed_hits = 0;
-            int recovery_evidence_hysteresis_hits = 0;
-            int non_hostile_regime_hits = 0;
-            int severe_active_hits = 0;
-            int contextual_downgrade_hits = 0;
-            int soften_ready_hits = 0;
-            int soften_candidate_rr_ok_hits = 0;
-            int severe_axis_ge_threshold_hits = 0;
-            double avg_signal_strength = 0.0;
-            double avg_signal_expected_value = 0.0;
-            double avg_signal_liquidity = 0.0;
-            double avg_signal_reward_risk = 0.0;
-            double avg_history_expectancy_krw = 0.0;
-            double avg_history_profit_factor = 0.0;
-            double avg_history_win_rate = 0.0;
-            double avg_history_trades = 0.0;
-            double avg_history_loss_to_win = 0.0;
-            double avg_full_history_pressure = 0.0;
-            double avg_recent_history_pressure = 0.0;
-            double avg_regime_history_pressure = 0.0;
-            double avg_severe_axis_count = 0.0;
-        };
-        struct PreCatFeatureSnapshot {
-            PreCatFeatureSnapshotBranch observed;
-            PreCatFeatureSnapshotBranch softened_contextual;
-            PreCatFeatureSnapshotBranch softened_override;
-            PreCatFeatureSnapshotBranch blocked_severe_sync;
-            PreCatFeatureSnapshotBranch blocked_no_soft_path;
         };
         struct StrategySignalFunnel {
             std::string strategy_name;
@@ -207,7 +173,6 @@ public:
         int strategy_collect_exception_count = 0;
         EntryFunnelSummary entry_funnel;
         ShadowFunnelSummary shadow_funnel;
-        PreCatFeatureSnapshot pre_cat_feature_snapshot;
         PostEntryRiskTelemetry post_entry_risk_telemetry;
         int strategyless_position_checks = 0;
         int strategyless_runtime_archetype_checks = 0;
@@ -262,7 +227,6 @@ private:
     int total_trades_;
     int winning_trades_;
     Result::EntryFunnelSummary entry_funnel_;
-    Result::PreCatFeatureSnapshot pre_cat_feature_snapshot_;
     std::map<std::string, int> strategy_generated_counts_;
     std::map<std::string, int> strategy_selected_best_counts_;
     std::map<std::string, int> strategy_blocked_by_risk_manager_counts_;
@@ -275,12 +239,6 @@ private:
     std::map<std::string, int> entry_quality_edge_gap_buckets_;
     int intrabar_stop_tp_collision_count_ = 0;
     std::map<std::string, int> intrabar_collision_by_strategy_;
-    std::map<std::string, int> pre_cat_recovery_hysteresis_hold_by_key_;
-    std::map<std::string, int> pre_cat_recovery_bridge_activation_by_key_;
-    std::map<std::string, int> pre_cat_no_soft_quality_relief_activation_by_key_;
-    std::map<std::string, int> pre_cat_candidate_rr_failsafe_activation_by_key_;
-    std::map<std::string, int> pre_cat_pressure_rebound_relief_activation_by_key_;
-    std::map<std::string, int> pre_cat_negative_history_quarantine_hold_by_key_;
     int adaptive_stop_update_count_ = 0;
     int adaptive_tp_recalibration_count_ = 0;
     int adaptive_partial_ratio_samples_ = 0;

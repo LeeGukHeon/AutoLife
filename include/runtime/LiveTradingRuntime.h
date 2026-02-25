@@ -310,12 +310,6 @@ private:
     bool live_warmup_done_ = false;
     std::chrono::steady_clock::time_point last_live_mtf_capture_time_{};
     std::map<std::string, long long> live_mtf_capture_last_timestamp_by_file_;
-    std::map<std::string, int> pre_cat_recovery_hysteresis_hold_by_key_;
-    std::map<std::string, int> pre_cat_recovery_bridge_activation_by_key_;
-    std::map<std::string, int> pre_cat_no_soft_quality_relief_activation_by_key_;
-    std::map<std::string, int> pre_cat_candidate_rr_failsafe_activation_by_key_;
-    std::map<std::string, int> pre_cat_pressure_rebound_relief_activation_by_key_;
-    std::map<std::string, int> pre_cat_negative_history_quarantine_hold_by_key_;
     
     // [NEW] Prometheus HTTP ?쒕쾭 愿??
     int prometheus_server_port_ = 8080;  // HTTP ?쒕쾭 ?ы듃 (湲곕낯媛? 8080)

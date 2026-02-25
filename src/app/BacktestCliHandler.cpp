@@ -108,35 +108,6 @@ static void printCompanionRequirementError(const std::string& csv_path, const Co
     }
 }
 
-nlohmann::json preCatSnapshotBranchToJson(const BacktestResult::PreCatFeatureSnapshotBranch& branch) {
-    return nlohmann::json{
-        {"samples", branch.samples},
-        {"recovery_quality_context_hits", branch.recovery_quality_context_hits},
-        {"recovery_evidence_hits", branch.recovery_evidence_hits},
-        {"recovery_evidence_relaxed_hits", branch.recovery_evidence_relaxed_hits},
-        {"recovery_evidence_hysteresis_hits", branch.recovery_evidence_hysteresis_hits},
-        {"non_hostile_regime_hits", branch.non_hostile_regime_hits},
-        {"severe_active_hits", branch.severe_active_hits},
-        {"contextual_downgrade_hits", branch.contextual_downgrade_hits},
-        {"soften_ready_hits", branch.soften_ready_hits},
-        {"soften_candidate_rr_ok_hits", branch.soften_candidate_rr_ok_hits},
-        {"severe_axis_ge_threshold_hits", branch.severe_axis_ge_threshold_hits},
-        {"avg_signal_strength", branch.avg_signal_strength},
-        {"avg_signal_expected_value", branch.avg_signal_expected_value},
-        {"avg_signal_liquidity", branch.avg_signal_liquidity},
-        {"avg_signal_reward_risk", branch.avg_signal_reward_risk},
-        {"avg_history_expectancy_krw", branch.avg_history_expectancy_krw},
-        {"avg_history_profit_factor", branch.avg_history_profit_factor},
-        {"avg_history_win_rate", branch.avg_history_win_rate},
-        {"avg_history_trades", branch.avg_history_trades},
-        {"avg_history_loss_to_win", branch.avg_history_loss_to_win},
-        {"avg_full_history_pressure", branch.avg_full_history_pressure},
-        {"avg_recent_history_pressure", branch.avg_recent_history_pressure},
-        {"avg_regime_history_pressure", branch.avg_regime_history_pressure},
-        {"avg_severe_axis_count", branch.avg_severe_axis_count}
-    };
-}
-
 nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
     nlohmann::json j;
     j["final_balance"] = result.final_balance;
@@ -196,7 +167,6 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
         {"blocked_rr_rebalance", result.entry_funnel.blocked_rr_rebalance},
         {"blocked_risk_gate", result.entry_funnel.blocked_risk_gate},
         {"blocked_risk_gate_strategy_ev", result.entry_funnel.blocked_risk_gate_strategy_ev},
-        {"blocked_risk_gate_strategy_ev_pre_catastrophic", result.entry_funnel.blocked_risk_gate_strategy_ev_pre_catastrophic},
         {"blocked_risk_gate_strategy_ev_severe_threshold", result.entry_funnel.blocked_risk_gate_strategy_ev_severe_threshold},
         {"blocked_risk_gate_strategy_ev_catastrophic_history", result.entry_funnel.blocked_risk_gate_strategy_ev_catastrophic_history},
         {"blocked_risk_gate_strategy_ev_loss_asymmetry", result.entry_funnel.blocked_risk_gate_strategy_ev_loss_asymmetry},
@@ -223,14 +193,6 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
         {"policy_supply_lift_sum", result.shadow_funnel.policy_supply_lift_sum},
         {"avg_manager_supply_lift", result.shadow_funnel.avg_manager_supply_lift},
         {"avg_policy_supply_lift", result.shadow_funnel.avg_policy_supply_lift}
-    };
-
-    j["pre_cat_feature_snapshot"] = {
-        {"observed", preCatSnapshotBranchToJson(result.pre_cat_feature_snapshot.observed)},
-        {"softened_contextual", preCatSnapshotBranchToJson(result.pre_cat_feature_snapshot.softened_contextual)},
-        {"softened_override", preCatSnapshotBranchToJson(result.pre_cat_feature_snapshot.softened_override)},
-        {"blocked_severe_sync", preCatSnapshotBranchToJson(result.pre_cat_feature_snapshot.blocked_severe_sync)},
-        {"blocked_no_soft_path", preCatSnapshotBranchToJson(result.pre_cat_feature_snapshot.blocked_no_soft_path)}
     };
 
     j["strategy_signal_funnel"] = nlohmann::json::array();

@@ -1904,12 +1904,6 @@ bool TradingEngine::start() {
     LOG_INFO("========================================");
     LOG_INFO("AutoLife trading engine start requested");
     LOG_INFO("========================================");
-    pre_cat_recovery_hysteresis_hold_by_key_.clear();
-    pre_cat_recovery_bridge_activation_by_key_.clear();
-    pre_cat_no_soft_quality_relief_activation_by_key_.clear();
-    pre_cat_candidate_rr_failsafe_activation_by_key_.clear();
-    pre_cat_pressure_rebound_relief_activation_by_key_.clear();
-    pre_cat_negative_history_quarantine_hold_by_key_.clear();
     live_warmup_scans_completed_ = 0;
     live_warmup_done_ = !config_.enable_live_cache_warmup;
     if (config_.mode == TradingMode::LIVE) {
