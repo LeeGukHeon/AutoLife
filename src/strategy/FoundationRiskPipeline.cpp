@@ -50,6 +50,16 @@ FilterDecision evaluateFilter(const FilterInput& input) {
     out.probabilistic_confidence = probabilistic_confidence;
     out.ev_confidence = std::clamp(signal.phase3.ev_confidence, 0.0, 1.0);
     out.frontier_enabled = signal.phase3.frontier_enabled;
+    const auto& manager_policy = signal.phase3.manager_filter;
+    const bool use_manager_policy = manager_policy.enabled;
+    const auto manager_pick = [&](double policy_value, double legacy_value) {
+        return use_manager_policy ? policy_value : legacy_value;
+    };
+    const double required_strength_cap = std::clamp(
+        manager_pick(manager_policy.required_strength_cap, 0.95),
+        0.0,
+        1.0
+    );
 
     if (input.policy_block) {
         out.reject_reason = "filtered_out_by_manager_policy_block";
@@ -57,23 +67,45 @@ FilterDecision evaluateFilter(const FilterInput& input) {
     }
 
     if (input.core_signal_ownership) {
-        out.required_strength = std::max(0.0, out.required_strength - 0.02);
-        out.required_expected_value = std::min(out.required_expected_value, -0.00005);
+        out.required_strength = std::max(
+            0.0,
+            out.required_strength -
+                manager_pick(manager_policy.core_signal_ownership_strength_relief, 0.02)
+        );
+        out.required_expected_value = std::min(
+            out.required_expected_value,
+            manager_pick(manager_policy.core_signal_ownership_expected_value_floor, -0.00005)
+        );
     }
 
     if (input.policy_hold) {
-        out.required_strength = std::min(0.95, out.required_strength + 0.05);
-        out.required_expected_value += input.core_signal_ownership ? 0.00010 : 0.00018;
+        out.required_strength = std::min(
+            required_strength_cap,
+            out.required_strength + manager_pick(manager_policy.policy_hold_strength_add, 0.05)
+        );
+        out.required_expected_value += input.core_signal_ownership
+            ? manager_pick(manager_policy.policy_hold_expected_value_add_core, 0.00010)
+            : manager_pick(manager_policy.policy_hold_expected_value_add_other, 0.00018);
     }
 
     if (input.off_trend_regime) {
-        out.required_strength = std::min(0.95, out.required_strength + 0.06);
-        out.required_expected_value += input.core_signal_ownership ? 0.00009 : 0.00015;
+        out.required_strength = std::min(
+            required_strength_cap,
+            out.required_strength + manager_pick(manager_policy.off_trend_strength_add, 0.06)
+        );
+        out.required_expected_value += input.core_signal_ownership
+            ? manager_pick(manager_policy.off_trend_expected_value_add_core, 0.00009)
+            : manager_pick(manager_policy.off_trend_expected_value_add_other, 0.00015);
     }
 
     if (input.hostile_regime) {
-        out.required_strength = std::min(0.95, out.required_strength + 0.03);
-        out.required_expected_value += input.core_signal_ownership ? 0.00005 : 0.00008;
+        out.required_strength = std::min(
+            required_strength_cap,
+            out.required_strength + manager_pick(manager_policy.hostile_regime_strength_add, 0.03)
+        );
+        out.required_expected_value += input.core_signal_ownership
+            ? manager_pick(manager_policy.hostile_regime_expected_value_add_core, 0.00005)
+            : manager_pick(manager_policy.hostile_regime_expected_value_add_other, 0.00008);
     }
 
     if (probabilistic_primary_signal) {
@@ -123,28 +155,6 @@ FilterDecision evaluateFilter(const FilterInput& input) {
         }
     }
 
-    const bool probabilistic_decision_path = probabilistic_primary_signal && (
-        (
-            input.hostile_regime &&
-            signal.probabilistic_h5_calibrated >= 0.55 &&
-            signal.probabilistic_h5_margin >= 0.005 &&
-            signal.liquidity_score >= 45.0 &&
-            signal.strength >= 0.24 &&
-            (out.reward_risk_ratio <= 0.0 || out.reward_risk_ratio >= 1.00)
-        ) ||
-        (
-            !input.hostile_regime &&
-            signal.probabilistic_h5_calibrated >= 0.36 &&
-            signal.probabilistic_h5_margin >= -0.030 &&
-            signal.liquidity_score >= 10.0 &&
-            signal.strength >= 0.08
-        )
-    );
-    if (probabilistic_decision_path && !out.frontier_enabled) {
-        out.pass = true;
-        return out;
-    }
-
     bool history_guard_active = false;
     int effective_history_sample = std::max(1, input.min_history_sample);
     if (probabilistic_primary_signal) {
@@ -190,7 +200,10 @@ FilterDecision evaluateFilter(const FilterInput& input) {
             const double strength_bump = probabilistic_primary_signal ? 0.012 : 0.05;
             const double edge_bump_core = probabilistic_primary_signal ? 0.00002 : 0.00005;
             const double edge_bump_other = probabilistic_primary_signal ? 0.00003 : 0.00010;
-            out.required_strength = std::min(0.95, out.required_strength + (strength_bump * history_guard_scale));
+            out.required_strength = std::min(
+                required_strength_cap,
+                out.required_strength + (strength_bump * history_guard_scale)
+            );
             out.required_expected_value +=
                 (input.core_signal_ownership ? edge_bump_core : edge_bump_other) * history_guard_scale;
             }
@@ -209,18 +222,13 @@ FilterDecision evaluateFilter(const FilterInput& input) {
             const double rr_guard_scale = probabilistic_primary_signal
                 ? std::clamp(0.90 - (0.60 * probabilistic_confidence), 0.20, 0.90)
                 : 1.0;
-            out.required_strength = std::min(0.95, out.required_strength + (0.03 * rr_guard_scale));
+            out.required_strength = std::min(
+                required_strength_cap,
+                out.required_strength + (0.03 * rr_guard_scale)
+            );
             out.required_expected_value +=
                 (input.core_signal_ownership ? 0.00003 : 0.00006) * rr_guard_scale;
         }
-    }
-
-    if (input.no_trade_bias_active) {
-        const double no_trade_bias_scale = probabilistic_primary_signal
-            ? std::clamp(1.0 - (0.45 * probabilistic_confidence), 0.40, 1.0)
-            : 1.0;
-        out.required_strength = std::min(0.95, out.required_strength + (0.02 * no_trade_bias_scale));
-        out.required_expected_value += 0.00005 * no_trade_bias_scale;
     }
 
     const bool low_vol_low_liq_context =
@@ -315,21 +323,6 @@ FilterDecision evaluateFilter(const FilterInput& input) {
         const double cost_tail_threshold =
             std::clamp(signal.phase3.frontier_cost_tail_reject_threshold_pct, 0.0, 1.0);
         out.cost_tail_pass = out.cost_tail_term <= cost_tail_threshold;
-    }
-
-    const bool probabilistic_primary_override =
-        probabilistic_primary_signal &&
-        !out.frontier_enabled &&
-        !input.hostile_regime &&
-        signal.probabilistic_h5_calibrated >= 0.56 &&
-        signal.probabilistic_h5_margin >= -0.002 &&
-        signal.liquidity_score >= 20.0 &&
-        signal.strength >= 0.26 &&
-        signal.expected_value >= -0.00035 &&
-        (out.reward_risk_ratio <= 0.0 || out.reward_risk_ratio >= 0.92);
-    if (probabilistic_primary_override) {
-        out.pass = true;
-        return out;
     }
 
     out.strength_pass = signal.strength >= out.required_strength;

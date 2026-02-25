@@ -1,11 +1,8 @@
-# Runtime Bundle Contract (v1)
+# Runtime Bundle Contract (v2)
 Last updated: 2026-02-25
 
 ## Canonical bundle
-- `config/model/probabilistic_runtime_bundle_v1.json`
-
-## Optional draft bundle (not active)
-- `config/model/probabilistic_runtime_bundle_v2.json` (MODE B kickoff draft)
+- `config/model/probabilistic_runtime_bundle_v2.json`
 
 ## Export tool
 - `scripts/export_probabilistic_runtime_bundle.py`
@@ -48,20 +45,16 @@ Last updated: 2026-02-25
   - `runtime_bundle_contract_version=v2_draft`
 - Missing v2 strict fields are treated as fail-closed runtime load errors.
 
-## Phase3 extension block (v1-compatible, default OFF)
-- Optional top-level keys:
-  - `phase3_frontier_enabled=false`
-  - `phase3_ev_calibration_enabled=false`
-  - `phase3_cost_tail_enabled=false`
-  - `phase3_adaptive_ev_blend_enabled=false`
-  - `phase3_diagnostics_v2_enabled=false`
-- Optional nested object:
+## Phase3 extension block
+- Canonical nested object:
   - `phase3.frontier`
   - `phase3.ev_calibration`
   - `phase3.cost_model`
   - `phase3.adaptive_ev_blend`
+  - `phase3.primary_minimums`
+  - `phase3.primary_priority`
+  - `phase3.manager_filter`
   - `phase3.diagnostics_v2`
 - Runtime rules:
   - Missing `phase3` block must behave as legacy/identity fallback.
-  - Nested `*.enabled` and top-level `phase3_*_enabled` are synchronized at export/load.
   - OFF path must preserve baseline outputs.

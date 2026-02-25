@@ -641,38 +641,16 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
     const auto phase3_ev_calibration_node = phase3_root.value("ev_calibration", nlohmann::json::object());
     const auto phase3_cost_node = phase3_root.value("cost_model", nlohmann::json::object());
     const auto phase3_blend_node = phase3_root.value("adaptive_ev_blend", nlohmann::json::object());
+    const auto phase3_primary_minimums_node = phase3_root.value("primary_minimums", nlohmann::json::object());
+    const auto phase3_primary_priority_node = phase3_root.value("primary_priority", nlohmann::json::object());
+    const auto phase3_manager_filter_node = phase3_root.value("manager_filter", nlohmann::json::object());
     const auto phase3_diag_node = phase3_root.value("diagnostics_v2", nlohmann::json::object());
 
-    const auto parsePhase3Flag = [&](const char* key, bool fallback) {
-        if (root.contains(key)) {
-            return root.value(key, fallback);
-        }
-        if (phase3_root.contains(key)) {
-            return phase3_root.value(key, fallback);
-        }
-        return fallback;
-    };
-
-    phase3_policy_.phase3_frontier_enabled = parsePhase3Flag(
-        "phase3_frontier_enabled",
-        phase3_frontier_node.value("enabled", false)
-    );
-    phase3_policy_.phase3_ev_calibration_enabled = parsePhase3Flag(
-        "phase3_ev_calibration_enabled",
-        phase3_ev_calibration_node.value("enabled", false)
-    );
-    phase3_policy_.phase3_cost_tail_enabled = parsePhase3Flag(
-        "phase3_cost_tail_enabled",
-        phase3_cost_node.value("enabled", false)
-    );
-    phase3_policy_.phase3_adaptive_ev_blend_enabled = parsePhase3Flag(
-        "phase3_adaptive_ev_blend_enabled",
-        phase3_blend_node.value("enabled", false)
-    );
-    phase3_policy_.phase3_diagnostics_v2_enabled = parsePhase3Flag(
-        "phase3_diagnostics_v2_enabled",
-        phase3_diag_node.value("enabled", false)
-    );
+    phase3_policy_.phase3_frontier_enabled = phase3_frontier_node.value("enabled", false);
+    phase3_policy_.phase3_ev_calibration_enabled = phase3_ev_calibration_node.value("enabled", false);
+    phase3_policy_.phase3_cost_tail_enabled = phase3_cost_node.value("enabled", false);
+    phase3_policy_.phase3_adaptive_ev_blend_enabled = phase3_blend_node.value("enabled", false);
+    phase3_policy_.phase3_diagnostics_v2_enabled = phase3_diag_node.value("enabled", false);
 
     phase3_policy_.frontier.enabled = phase3_policy_.phase3_frontier_enabled;
     phase3_policy_.frontier.k_margin = parseCostParam(phase3_frontier_node, "k_margin", 0.0, -100.0, 100.0);
@@ -904,6 +882,747 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         parseCostParam(phase3_blend_node, "low_confidence_penalty", 0.10, -1.0, 1.0);
     phase3_policy_.adaptive_ev_blend.cost_penalty =
         parseCostParam(phase3_blend_node, "cost_penalty", 0.06, -1.0, 1.0);
+
+    phase3_policy_.primary_minimums.enabled = phase3_primary_minimums_node.value("enabled", false);
+    phase3_policy_.primary_minimums.min_h5_calibrated = parseCostParam(
+        phase3_primary_minimums_node,
+        "min_h5_calibrated",
+        0.48,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_minimums.min_h5_margin = parseCostParam(
+        phase3_primary_minimums_node,
+        "min_h5_margin",
+        -0.03,
+        -0.50,
+        0.20
+    );
+    phase3_policy_.primary_minimums.min_liquidity_score = parseCostParam(
+        phase3_primary_minimums_node,
+        "min_liquidity_score",
+        42.0,
+        0.0,
+        100.0
+    );
+    phase3_policy_.primary_minimums.min_signal_strength = parseCostParam(
+        phase3_primary_minimums_node,
+        "min_signal_strength",
+        0.34,
+        0.0,
+        1.0
+    );
+
+    phase3_policy_.primary_priority.enabled = phase3_primary_priority_node.value("enabled", false);
+    phase3_policy_.primary_priority.conf_prob_shift = parseCostParam(
+        phase3_primary_priority_node,
+        "conf_prob_shift",
+        0.50,
+        -1.0,
+        2.0
+    );
+    phase3_policy_.primary_priority.conf_prob_scale = parseCostParam(
+        phase3_primary_priority_node,
+        "conf_prob_scale",
+        0.25,
+        1e-6,
+        10.0
+    );
+    phase3_policy_.primary_priority.conf_margin_shift = parseCostParam(
+        phase3_primary_priority_node,
+        "conf_margin_shift",
+        0.02,
+        -1.0,
+        2.0
+    );
+    phase3_policy_.primary_priority.conf_margin_scale = parseCostParam(
+        phase3_primary_priority_node,
+        "conf_margin_scale",
+        0.12,
+        1e-6,
+        10.0
+    );
+    phase3_policy_.primary_priority.conf_prob_weight = parseCostParam(
+        phase3_primary_priority_node,
+        "conf_prob_weight",
+        0.65,
+        0.0,
+        10.0
+    );
+    phase3_policy_.primary_priority.conf_margin_weight = parseCostParam(
+        phase3_primary_priority_node,
+        "conf_margin_weight",
+        0.35,
+        0.0,
+        10.0
+    );
+    phase3_policy_.primary_priority.margin_score_shift = parseCostParam(
+        phase3_primary_priority_node,
+        "margin_score_shift",
+        0.10,
+        -1.0,
+        2.0
+    );
+    phase3_policy_.primary_priority.margin_score_scale = parseCostParam(
+        phase3_primary_priority_node,
+        "margin_score_scale",
+        0.20,
+        1e-6,
+        10.0
+    );
+    phase3_policy_.primary_priority.edge_score_shift = parseCostParam(
+        phase3_primary_priority_node,
+        "edge_score_shift",
+        0.0005,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.primary_priority.edge_score_scale = parseCostParam(
+        phase3_primary_priority_node,
+        "edge_score_scale",
+        0.0025,
+        1e-6,
+        1.0
+    );
+    phase3_policy_.primary_priority.prob_weight = parseCostParam(
+        phase3_primary_priority_node,
+        "prob_weight",
+        0.50,
+        -10.0,
+        10.0
+    );
+    phase3_policy_.primary_priority.margin_weight = parseCostParam(
+        phase3_primary_priority_node,
+        "margin_weight",
+        0.22,
+        -10.0,
+        10.0
+    );
+    phase3_policy_.primary_priority.liquidity_weight = parseCostParam(
+        phase3_primary_priority_node,
+        "liquidity_weight",
+        0.10,
+        -10.0,
+        10.0
+    );
+    phase3_policy_.primary_priority.strength_weight = parseCostParam(
+        phase3_primary_priority_node,
+        "strength_weight",
+        0.10,
+        -10.0,
+        10.0
+    );
+    phase3_policy_.primary_priority.edge_weight = parseCostParam(
+        phase3_primary_priority_node,
+        "edge_weight",
+        0.08,
+        -10.0,
+        10.0
+    );
+    phase3_policy_.primary_priority.hostile_prob_weight = parseCostParam(
+        phase3_primary_priority_node,
+        "hostile_prob_weight",
+        0.54,
+        -10.0,
+        10.0
+    );
+    phase3_policy_.primary_priority.hostile_margin_weight = parseCostParam(
+        phase3_primary_priority_node,
+        "hostile_margin_weight",
+        0.22,
+        -10.0,
+        10.0
+    );
+    phase3_policy_.primary_priority.hostile_liquidity_weight = parseCostParam(
+        phase3_primary_priority_node,
+        "hostile_liquidity_weight",
+        0.11,
+        -10.0,
+        10.0
+    );
+    phase3_policy_.primary_priority.hostile_strength_weight = parseCostParam(
+        phase3_primary_priority_node,
+        "hostile_strength_weight",
+        0.09,
+        -10.0,
+        10.0
+    );
+    phase3_policy_.primary_priority.hostile_edge_weight = parseCostParam(
+        phase3_primary_priority_node,
+        "hostile_edge_weight",
+        0.04,
+        -10.0,
+        10.0
+    );
+    phase3_policy_.primary_priority.strong_buy_bonus = parseCostParam(
+        phase3_primary_priority_node,
+        "strong_buy_bonus",
+        0.02,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.primary_priority.margin_bonus_scale = parseCostParam(
+        phase3_primary_priority_node,
+        "margin_bonus_scale",
+        0.08,
+        -10.0,
+        10.0
+    );
+    phase3_policy_.primary_priority.margin_bonus_cap = parseCostParam(
+        phase3_primary_priority_node,
+        "margin_bonus_cap",
+        0.03,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_priority.rescue_penalty = parseCostParam(
+        phase3_primary_priority_node,
+        "rescue_penalty",
+        0.16,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_priority.rescue_bonus = parseCostParam(
+        phase3_primary_priority_node,
+        "rescue_bonus",
+        0.02,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.primary_priority.rescue_confidence_floor = parseCostParam(
+        phase3_primary_priority_node,
+        "rescue_confidence_floor",
+        0.72,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_priority.rescue_strength_floor = parseCostParam(
+        phase3_primary_priority_node,
+        "rescue_strength_floor",
+        0.46,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_priority.rescue_margin_floor = parseCostParam(
+        phase3_primary_priority_node,
+        "rescue_margin_floor",
+        0.002,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.primary_priority.range_penalty = parseCostParam(
+        phase3_primary_priority_node,
+        "range_penalty",
+        0.11,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_priority.range_bonus = parseCostParam(
+        phase3_primary_priority_node,
+        "range_bonus",
+        0.03,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.primary_priority.range_penalty_strength_floor = parseCostParam(
+        phase3_primary_priority_node,
+        "range_penalty_strength_floor",
+        0.50,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_priority.range_penalty_margin_floor = parseCostParam(
+        phase3_primary_priority_node,
+        "range_penalty_margin_floor",
+        0.008,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.primary_priority.range_penalty_prob_floor = parseCostParam(
+        phase3_primary_priority_node,
+        "range_penalty_prob_floor",
+        0.54,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_priority.range_bonus_margin_floor = parseCostParam(
+        phase3_primary_priority_node,
+        "range_bonus_margin_floor",
+        0.012,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.primary_priority.range_bonus_prob_floor = parseCostParam(
+        phase3_primary_priority_node,
+        "range_bonus_prob_floor",
+        0.57,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_priority.uptrend_bonus = parseCostParam(
+        phase3_primary_priority_node,
+        "uptrend_bonus",
+        0.03,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.primary_priority.uptrend_bonus_margin_floor = parseCostParam(
+        phase3_primary_priority_node,
+        "uptrend_bonus_margin_floor",
+        0.0,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.primary_priority.uptrend_bonus_prob_floor = parseCostParam(
+        phase3_primary_priority_node,
+        "uptrend_bonus_prob_floor",
+        0.52,
+        0.0,
+        1.0
+    );
+
+    phase3_policy_.manager_filter.enabled = phase3_manager_filter_node.value("enabled", false);
+    phase3_policy_.manager_filter.base_min_strength_default = parseCostParam(
+        phase3_manager_filter_node,
+        "base_min_strength_default",
+        0.40,
+        0.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.base_min_strength_ranging = parseCostParam(
+        phase3_manager_filter_node,
+        "base_min_strength_ranging",
+        0.43,
+        0.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.base_min_strength_high_volatility = parseCostParam(
+        phase3_manager_filter_node,
+        "base_min_strength_high_volatility",
+        0.48,
+        0.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.base_min_strength_trending_down = parseCostParam(
+        phase3_manager_filter_node,
+        "base_min_strength_trending_down",
+        0.52,
+        0.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.base_min_expected_value = parseCostParam(
+        phase3_manager_filter_node,
+        "base_min_expected_value",
+        0.0,
+        -0.20,
+        0.20
+    );
+    phase3_policy_.manager_filter.hostile_strength_add_scale = parseCostParam(
+        phase3_manager_filter_node,
+        "hostile_strength_add_scale",
+        0.18,
+        -10.0,
+        10.0
+    );
+    phase3_policy_.manager_filter.hostile_strength_add_cap = parseCostParam(
+        phase3_manager_filter_node,
+        "hostile_strength_add_cap",
+        0.08,
+        0.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.hostile_ev_add_scale = parseCostParam(
+        phase3_manager_filter_node,
+        "hostile_ev_add_scale",
+        0.0008,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.hostile_ev_add_cap = parseCostParam(
+        phase3_manager_filter_node,
+        "hostile_ev_add_cap",
+        0.00035,
+        0.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.hostile_pause_min_strength = parseCostParam(
+        phase3_manager_filter_node,
+        "hostile_pause_min_strength",
+        0.96,
+        0.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.hostile_pause_min_expected_value = parseCostParam(
+        phase3_manager_filter_node,
+        "hostile_pause_min_expected_value",
+        0.0040,
+        -0.20,
+        0.20
+    );
+    phase3_policy_.manager_filter.min_strength_floor = parseCostParam(
+        phase3_manager_filter_node,
+        "min_strength_floor",
+        0.35,
+        0.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.min_strength_cap = parseCostParam(
+        phase3_manager_filter_node,
+        "min_strength_cap",
+        0.98,
+        0.0,
+        1.0
+    );
+    if (phase3_policy_.manager_filter.min_strength_cap <
+        phase3_policy_.manager_filter.min_strength_floor) {
+        std::swap(
+            phase3_policy_.manager_filter.min_strength_floor,
+            phase3_policy_.manager_filter.min_strength_cap
+        );
+    }
+    phase3_policy_.manager_filter.min_expected_value_floor = parseCostParam(
+        phase3_manager_filter_node,
+        "min_expected_value_floor",
+        -0.0002,
+        -0.20,
+        0.20
+    );
+    phase3_policy_.manager_filter.min_expected_value_cap = parseCostParam(
+        phase3_manager_filter_node,
+        "min_expected_value_cap",
+        0.0050,
+        -0.20,
+        0.20
+    );
+    if (phase3_policy_.manager_filter.min_expected_value_cap <
+        phase3_policy_.manager_filter.min_expected_value_floor) {
+        std::swap(
+            phase3_policy_.manager_filter.min_expected_value_floor,
+            phase3_policy_.manager_filter.min_expected_value_cap
+        );
+    }
+    phase3_policy_.manager_filter.no_snapshot_min_strength_hostile = parseCostParam(
+        phase3_manager_filter_node,
+        "no_snapshot_min_strength_hostile",
+        0.36,
+        0.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.no_snapshot_min_strength_calm = parseCostParam(
+        phase3_manager_filter_node,
+        "no_snapshot_min_strength_calm",
+        0.28,
+        0.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.no_snapshot_min_expected_value_hostile = parseCostParam(
+        phase3_manager_filter_node,
+        "no_snapshot_min_expected_value_hostile",
+        0.00002,
+        -0.20,
+        0.20
+    );
+    phase3_policy_.manager_filter.no_snapshot_min_expected_value_calm = parseCostParam(
+        phase3_manager_filter_node,
+        "no_snapshot_min_expected_value_calm",
+        -0.00030,
+        -0.20,
+        0.20
+    );
+    phase3_policy_.manager_filter.confidence_prob_shift = parseCostParam(
+        phase3_manager_filter_node,
+        "confidence_prob_shift",
+        0.50,
+        -1.0,
+        2.0
+    );
+    phase3_policy_.manager_filter.confidence_prob_scale = parseCostParam(
+        phase3_manager_filter_node,
+        "confidence_prob_scale",
+        0.20,
+        1e-6,
+        10.0
+    );
+    phase3_policy_.manager_filter.confidence_margin_shift = parseCostParam(
+        phase3_manager_filter_node,
+        "confidence_margin_shift",
+        0.01,
+        -1.0,
+        2.0
+    );
+    phase3_policy_.manager_filter.confidence_margin_scale = parseCostParam(
+        phase3_manager_filter_node,
+        "confidence_margin_scale",
+        0.08,
+        1e-6,
+        10.0
+    );
+    phase3_policy_.manager_filter.confidence_prob_weight = parseCostParam(
+        phase3_manager_filter_node,
+        "confidence_prob_weight",
+        0.65,
+        0.0,
+        10.0
+    );
+    phase3_policy_.manager_filter.confidence_margin_weight = parseCostParam(
+        phase3_manager_filter_node,
+        "confidence_margin_weight",
+        0.35,
+        0.0,
+        10.0
+    );
+    phase3_policy_.manager_filter.target_strength_hostile_base = parseCostParam(
+        phase3_manager_filter_node,
+        "target_strength_hostile_base",
+        0.34,
+        0.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.target_strength_hostile_confidence_scale = parseCostParam(
+        phase3_manager_filter_node,
+        "target_strength_hostile_confidence_scale",
+        0.08,
+        -10.0,
+        10.0
+    );
+    phase3_policy_.manager_filter.target_strength_calm_base = parseCostParam(
+        phase3_manager_filter_node,
+        "target_strength_calm_base",
+        0.24,
+        0.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.target_strength_calm_confidence_scale = parseCostParam(
+        phase3_manager_filter_node,
+        "target_strength_calm_confidence_scale",
+        0.14,
+        -10.0,
+        10.0
+    );
+    phase3_policy_.manager_filter.target_expected_value_hostile_base = parseCostParam(
+        phase3_manager_filter_node,
+        "target_expected_value_hostile_base",
+        0.00002,
+        -0.20,
+        0.20
+    );
+    phase3_policy_.manager_filter.target_expected_value_hostile_confidence_scale = parseCostParam(
+        phase3_manager_filter_node,
+        "target_expected_value_hostile_confidence_scale",
+        0.00008,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.target_expected_value_calm_base = parseCostParam(
+        phase3_manager_filter_node,
+        "target_expected_value_calm_base",
+        -0.00035,
+        -0.20,
+        0.20
+    );
+    phase3_policy_.manager_filter.target_expected_value_calm_confidence_scale = parseCostParam(
+        phase3_manager_filter_node,
+        "target_expected_value_calm_confidence_scale",
+        0.00035,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.negative_margin_strength_add_hostile = parseCostParam(
+        phase3_manager_filter_node,
+        "negative_margin_strength_add_hostile",
+        0.03,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.negative_margin_strength_add_calm = parseCostParam(
+        phase3_manager_filter_node,
+        "negative_margin_strength_add_calm",
+        0.02,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.negative_margin_expected_value_add_hostile = parseCostParam(
+        phase3_manager_filter_node,
+        "negative_margin_expected_value_add_hostile",
+        0.00005,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.negative_margin_expected_value_add_calm = parseCostParam(
+        phase3_manager_filter_node,
+        "negative_margin_expected_value_add_calm",
+        0.00010,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.target_strength_hostile_min = parseCostParam(
+        phase3_manager_filter_node,
+        "target_strength_hostile_min",
+        0.26,
+        0.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.target_strength_hostile_max = parseCostParam(
+        phase3_manager_filter_node,
+        "target_strength_hostile_max",
+        0.38,
+        0.0,
+        1.0
+    );
+    if (phase3_policy_.manager_filter.target_strength_hostile_max <
+        phase3_policy_.manager_filter.target_strength_hostile_min) {
+        std::swap(
+            phase3_policy_.manager_filter.target_strength_hostile_min,
+            phase3_policy_.manager_filter.target_strength_hostile_max
+        );
+    }
+    phase3_policy_.manager_filter.target_strength_calm_min = parseCostParam(
+        phase3_manager_filter_node,
+        "target_strength_calm_min",
+        0.12,
+        0.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.target_strength_calm_max = parseCostParam(
+        phase3_manager_filter_node,
+        "target_strength_calm_max",
+        0.24,
+        0.0,
+        1.0
+    );
+    if (phase3_policy_.manager_filter.target_strength_calm_max <
+        phase3_policy_.manager_filter.target_strength_calm_min) {
+        std::swap(
+            phase3_policy_.manager_filter.target_strength_calm_min,
+            phase3_policy_.manager_filter.target_strength_calm_max
+        );
+    }
+    phase3_policy_.manager_filter.target_expected_value_hostile_min = parseCostParam(
+        phase3_manager_filter_node,
+        "target_expected_value_hostile_min",
+        -0.00010,
+        -0.20,
+        0.20
+    );
+    phase3_policy_.manager_filter.target_expected_value_hostile_max = parseCostParam(
+        phase3_manager_filter_node,
+        "target_expected_value_hostile_max",
+        0.00008,
+        -0.20,
+        0.20
+    );
+    if (phase3_policy_.manager_filter.target_expected_value_hostile_max <
+        phase3_policy_.manager_filter.target_expected_value_hostile_min) {
+        std::swap(
+            phase3_policy_.manager_filter.target_expected_value_hostile_min,
+            phase3_policy_.manager_filter.target_expected_value_hostile_max
+        );
+    }
+    phase3_policy_.manager_filter.target_expected_value_calm_min = parseCostParam(
+        phase3_manager_filter_node,
+        "target_expected_value_calm_min",
+        -0.00080,
+        -0.20,
+        0.20
+    );
+    phase3_policy_.manager_filter.target_expected_value_calm_max = parseCostParam(
+        phase3_manager_filter_node,
+        "target_expected_value_calm_max",
+        -0.00020,
+        -0.20,
+        0.20
+    );
+    if (phase3_policy_.manager_filter.target_expected_value_calm_max <
+        phase3_policy_.manager_filter.target_expected_value_calm_min) {
+        std::swap(
+            phase3_policy_.manager_filter.target_expected_value_calm_min,
+            phase3_policy_.manager_filter.target_expected_value_calm_max
+        );
+    }
+    phase3_policy_.manager_filter.required_strength_cap = parseCostParam(
+        phase3_manager_filter_node,
+        "required_strength_cap",
+        0.95,
+        0.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.core_signal_ownership_strength_relief = parseCostParam(
+        phase3_manager_filter_node,
+        "core_signal_ownership_strength_relief",
+        0.02,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.core_signal_ownership_expected_value_floor = parseCostParam(
+        phase3_manager_filter_node,
+        "core_signal_ownership_expected_value_floor",
+        -0.00005,
+        -0.20,
+        0.20
+    );
+    phase3_policy_.manager_filter.policy_hold_strength_add = parseCostParam(
+        phase3_manager_filter_node,
+        "policy_hold_strength_add",
+        0.05,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.policy_hold_expected_value_add_core = parseCostParam(
+        phase3_manager_filter_node,
+        "policy_hold_expected_value_add_core",
+        0.00010,
+        -0.20,
+        0.20
+    );
+    phase3_policy_.manager_filter.policy_hold_expected_value_add_other = parseCostParam(
+        phase3_manager_filter_node,
+        "policy_hold_expected_value_add_other",
+        0.00018,
+        -0.20,
+        0.20
+    );
+    phase3_policy_.manager_filter.off_trend_strength_add = parseCostParam(
+        phase3_manager_filter_node,
+        "off_trend_strength_add",
+        0.06,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.off_trend_expected_value_add_core = parseCostParam(
+        phase3_manager_filter_node,
+        "off_trend_expected_value_add_core",
+        0.00009,
+        -0.20,
+        0.20
+    );
+    phase3_policy_.manager_filter.off_trend_expected_value_add_other = parseCostParam(
+        phase3_manager_filter_node,
+        "off_trend_expected_value_add_other",
+        0.00015,
+        -0.20,
+        0.20
+    );
+    phase3_policy_.manager_filter.hostile_regime_strength_add = parseCostParam(
+        phase3_manager_filter_node,
+        "hostile_regime_strength_add",
+        0.03,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.hostile_regime_expected_value_add_core = parseCostParam(
+        phase3_manager_filter_node,
+        "hostile_regime_expected_value_add_core",
+        0.00005,
+        -0.20,
+        0.20
+    );
+    phase3_policy_.manager_filter.hostile_regime_expected_value_add_other = parseCostParam(
+        phase3_manager_filter_node,
+        "hostile_regime_expected_value_add_other",
+        0.00008,
+        -0.20,
+        0.20
+    );
 
     phase3_policy_.diagnostics_v2.enabled = phase3_policy_.phase3_diagnostics_v2_enabled;
 

@@ -91,6 +91,125 @@ public:
         double cost_penalty = 0.06;
     };
 
+    struct Phase3PrimaryMinimumPolicy {
+        bool enabled = false;
+        double min_h5_calibrated = 0.48;
+        double min_h5_margin = -0.03;
+        double min_liquidity_score = 42.0;
+        double min_signal_strength = 0.34;
+    };
+
+    struct Phase3PrimaryPriorityPolicy {
+        bool enabled = false;
+        double conf_prob_shift = 0.50;
+        double conf_prob_scale = 0.25;
+        double conf_margin_shift = 0.02;
+        double conf_margin_scale = 0.12;
+        double conf_prob_weight = 0.65;
+        double conf_margin_weight = 0.35;
+        double margin_score_shift = 0.10;
+        double margin_score_scale = 0.20;
+        double edge_score_shift = 0.0005;
+        double edge_score_scale = 0.0025;
+        double prob_weight = 0.50;
+        double margin_weight = 0.22;
+        double liquidity_weight = 0.10;
+        double strength_weight = 0.10;
+        double edge_weight = 0.08;
+        double hostile_prob_weight = 0.54;
+        double hostile_margin_weight = 0.22;
+        double hostile_liquidity_weight = 0.11;
+        double hostile_strength_weight = 0.09;
+        double hostile_edge_weight = 0.04;
+        double strong_buy_bonus = 0.02;
+        double margin_bonus_scale = 0.08;
+        double margin_bonus_cap = 0.03;
+        double rescue_penalty = 0.16;
+        double rescue_bonus = 0.02;
+        double rescue_confidence_floor = 0.72;
+        double rescue_strength_floor = 0.46;
+        double rescue_margin_floor = 0.002;
+        double range_penalty = 0.11;
+        double range_bonus = 0.03;
+        double range_penalty_strength_floor = 0.50;
+        double range_penalty_margin_floor = 0.008;
+        double range_penalty_prob_floor = 0.54;
+        double range_bonus_margin_floor = 0.012;
+        double range_bonus_prob_floor = 0.57;
+        double uptrend_bonus = 0.03;
+        double uptrend_bonus_margin_floor = 0.0;
+        double uptrend_bonus_prob_floor = 0.52;
+    };
+
+    struct Phase3ManagerFilterPolicy {
+        bool enabled = false;
+        double base_min_strength_default = 0.40;
+        double base_min_strength_ranging = 0.43;
+        double base_min_strength_high_volatility = 0.48;
+        double base_min_strength_trending_down = 0.52;
+        double base_min_expected_value = 0.0;
+
+        double hostile_strength_add_scale = 0.18;
+        double hostile_strength_add_cap = 0.08;
+        double hostile_ev_add_scale = 0.0008;
+        double hostile_ev_add_cap = 0.00035;
+        double hostile_pause_min_strength = 0.96;
+        double hostile_pause_min_expected_value = 0.0040;
+
+        double min_strength_floor = 0.35;
+        double min_strength_cap = 0.98;
+        double min_expected_value_floor = -0.0002;
+        double min_expected_value_cap = 0.0050;
+
+        double no_snapshot_min_strength_hostile = 0.36;
+        double no_snapshot_min_strength_calm = 0.28;
+        double no_snapshot_min_expected_value_hostile = 0.00002;
+        double no_snapshot_min_expected_value_calm = -0.00030;
+
+        double confidence_prob_shift = 0.50;
+        double confidence_prob_scale = 0.20;
+        double confidence_margin_shift = 0.01;
+        double confidence_margin_scale = 0.08;
+        double confidence_prob_weight = 0.65;
+        double confidence_margin_weight = 0.35;
+
+        double target_strength_hostile_base = 0.34;
+        double target_strength_hostile_confidence_scale = 0.08;
+        double target_strength_calm_base = 0.24;
+        double target_strength_calm_confidence_scale = 0.14;
+        double target_expected_value_hostile_base = 0.00002;
+        double target_expected_value_hostile_confidence_scale = 0.00008;
+        double target_expected_value_calm_base = -0.00035;
+        double target_expected_value_calm_confidence_scale = 0.00035;
+
+        double negative_margin_strength_add_hostile = 0.03;
+        double negative_margin_strength_add_calm = 0.02;
+        double negative_margin_expected_value_add_hostile = 0.00005;
+        double negative_margin_expected_value_add_calm = 0.00010;
+
+        double target_strength_hostile_min = 0.26;
+        double target_strength_hostile_max = 0.38;
+        double target_strength_calm_min = 0.12;
+        double target_strength_calm_max = 0.24;
+        double target_expected_value_hostile_min = -0.00010;
+        double target_expected_value_hostile_max = 0.00008;
+        double target_expected_value_calm_min = -0.00080;
+        double target_expected_value_calm_max = -0.00020;
+
+        double required_strength_cap = 0.95;
+        double core_signal_ownership_strength_relief = 0.02;
+        double core_signal_ownership_expected_value_floor = -0.00005;
+        double policy_hold_strength_add = 0.05;
+        double policy_hold_expected_value_add_core = 0.00010;
+        double policy_hold_expected_value_add_other = 0.00018;
+        double off_trend_strength_add = 0.06;
+        double off_trend_expected_value_add_core = 0.00009;
+        double off_trend_expected_value_add_other = 0.00015;
+        double hostile_regime_strength_add = 0.03;
+        double hostile_regime_expected_value_add_core = 0.00005;
+        double hostile_regime_expected_value_add_other = 0.00008;
+    };
+
     struct Phase3DiagnosticsPolicy {
         bool enabled = false;
     };
@@ -105,6 +224,9 @@ public:
         Phase3EvCalibrationPolicy ev_calibration;
         Phase3CostPolicy cost_model;
         Phase3AdaptiveEvBlendPolicy adaptive_ev_blend;
+        Phase3PrimaryMinimumPolicy primary_minimums;
+        Phase3PrimaryPriorityPolicy primary_priority;
+        Phase3ManagerFilterPolicy manager_filter;
         Phase3DiagnosticsPolicy diagnostics_v2;
     };
 

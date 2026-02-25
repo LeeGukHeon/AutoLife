@@ -84,6 +84,7 @@ Default state: OFF (all phase3 flags)
   - `phase3.ev_calibration`
   - `phase3.cost_model`
   - `phase3.adaptive_ev_blend`
+  - `phase3.manager_filter`
   - `phase3.diagnostics_v2`
 - Compatibility:
   - missing `phase3` -> strict fallback to legacy behavior.

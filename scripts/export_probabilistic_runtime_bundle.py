@@ -64,11 +64,6 @@ def infer_train_summary_pipeline_version(summary: Dict[str, Any]) -> str:
 
 def default_phase3_bundle_config() -> Dict[str, Any]:
     return {
-        "phase3_frontier_enabled": True,
-        "phase3_ev_calibration_enabled": True,
-        "phase3_cost_tail_enabled": True,
-        "phase3_adaptive_ev_blend_enabled": True,
-        "phase3_diagnostics_v2_enabled": True,
         "frontier": {
             "enabled": True,
             "k_margin": 0.08,
@@ -130,6 +125,114 @@ def default_phase3_bundle_config() -> Dict[str, Any]:
             "low_confidence_penalty": 0.10,
             "cost_penalty": 0.06,
         },
+        "primary_minimums": {
+            "enabled": True,
+            "min_h5_calibrated": 0.48,
+            "min_h5_margin": -0.03,
+            "min_liquidity_score": 42.0,
+            "min_signal_strength": 0.34,
+        },
+        "primary_priority": {
+            "enabled": True,
+            "conf_prob_shift": 0.50,
+            "conf_prob_scale": 0.25,
+            "conf_margin_shift": 0.02,
+            "conf_margin_scale": 0.12,
+            "conf_prob_weight": 0.65,
+            "conf_margin_weight": 0.35,
+            "margin_score_shift": 0.10,
+            "margin_score_scale": 0.20,
+            "edge_score_shift": 0.0005,
+            "edge_score_scale": 0.0025,
+            "prob_weight": 0.50,
+            "margin_weight": 0.22,
+            "liquidity_weight": 0.10,
+            "strength_weight": 0.10,
+            "edge_weight": 0.08,
+            "hostile_prob_weight": 0.54,
+            "hostile_margin_weight": 0.22,
+            "hostile_liquidity_weight": 0.11,
+            "hostile_strength_weight": 0.09,
+            "hostile_edge_weight": 0.04,
+            "strong_buy_bonus": 0.02,
+            "margin_bonus_scale": 0.08,
+            "margin_bonus_cap": 0.03,
+            "rescue_penalty": 0.16,
+            "rescue_bonus": 0.02,
+            "rescue_confidence_floor": 0.72,
+            "rescue_strength_floor": 0.46,
+            "rescue_margin_floor": 0.002,
+            "range_penalty": 0.11,
+            "range_bonus": 0.03,
+            "range_penalty_strength_floor": 0.50,
+            "range_penalty_margin_floor": 0.008,
+            "range_penalty_prob_floor": 0.54,
+            "range_bonus_margin_floor": 0.012,
+            "range_bonus_prob_floor": 0.57,
+            "uptrend_bonus": 0.03,
+            "uptrend_bonus_margin_floor": 0.0,
+            "uptrend_bonus_prob_floor": 0.52,
+        },
+        "manager_filter": {
+            "enabled": True,
+            "base_min_strength_default": 0.40,
+            "base_min_strength_ranging": 0.43,
+            "base_min_strength_high_volatility": 0.48,
+            "base_min_strength_trending_down": 0.52,
+            "base_min_expected_value": 0.0,
+            "hostile_strength_add_scale": 0.18,
+            "hostile_strength_add_cap": 0.08,
+            "hostile_ev_add_scale": 0.0008,
+            "hostile_ev_add_cap": 0.00035,
+            "hostile_pause_min_strength": 0.96,
+            "hostile_pause_min_expected_value": 0.0040,
+            "min_strength_floor": 0.35,
+            "min_strength_cap": 0.98,
+            "min_expected_value_floor": -0.0002,
+            "min_expected_value_cap": 0.0050,
+            "no_snapshot_min_strength_hostile": 0.36,
+            "no_snapshot_min_strength_calm": 0.28,
+            "no_snapshot_min_expected_value_hostile": 0.00002,
+            "no_snapshot_min_expected_value_calm": -0.00030,
+            "confidence_prob_shift": 0.50,
+            "confidence_prob_scale": 0.20,
+            "confidence_margin_shift": 0.01,
+            "confidence_margin_scale": 0.08,
+            "confidence_prob_weight": 0.65,
+            "confidence_margin_weight": 0.35,
+            "target_strength_hostile_base": 0.34,
+            "target_strength_hostile_confidence_scale": 0.08,
+            "target_strength_calm_base": 0.24,
+            "target_strength_calm_confidence_scale": 0.14,
+            "target_expected_value_hostile_base": 0.00002,
+            "target_expected_value_hostile_confidence_scale": 0.00008,
+            "target_expected_value_calm_base": -0.00035,
+            "target_expected_value_calm_confidence_scale": 0.00035,
+            "negative_margin_strength_add_hostile": 0.03,
+            "negative_margin_strength_add_calm": 0.02,
+            "negative_margin_expected_value_add_hostile": 0.00005,
+            "negative_margin_expected_value_add_calm": 0.00010,
+            "target_strength_hostile_min": 0.26,
+            "target_strength_hostile_max": 0.38,
+            "target_strength_calm_min": 0.12,
+            "target_strength_calm_max": 0.24,
+            "target_expected_value_hostile_min": -0.00010,
+            "target_expected_value_hostile_max": 0.00008,
+            "target_expected_value_calm_min": -0.00080,
+            "target_expected_value_calm_max": -0.00020,
+            "required_strength_cap": 0.95,
+            "core_signal_ownership_strength_relief": 0.02,
+            "core_signal_ownership_expected_value_floor": -0.00005,
+            "policy_hold_strength_add": 0.05,
+            "policy_hold_expected_value_add_core": 0.00010,
+            "policy_hold_expected_value_add_other": 0.00018,
+            "off_trend_strength_add": 0.06,
+            "off_trend_expected_value_add_core": 0.00009,
+            "off_trend_expected_value_add_other": 0.00015,
+            "hostile_regime_strength_add": 0.03,
+            "hostile_regime_expected_value_add_core": 0.00005,
+            "hostile_regime_expected_value_add_other": 0.00008,
+        },
         "diagnostics_v2": {"enabled": True},
     }
 
@@ -151,30 +254,14 @@ def build_phase3_bundle_config(summary: Dict[str, Any]) -> Dict[str, Any]:
         raw = {}
     merged = merge_dicts(defaults, raw)
 
-    # Keep nested enabled fields aligned with top-level feature flags.
-    merged["frontier"]["enabled"] = bool(
-        merged.get("phase3_frontier_enabled", merged["frontier"].get("enabled", False))
-    )
-    merged["ev_calibration"]["enabled"] = bool(
-        merged.get("phase3_ev_calibration_enabled", merged["ev_calibration"].get("enabled", False))
-    )
-    merged["cost_model"]["enabled"] = bool(
-        merged.get("phase3_cost_tail_enabled", merged["cost_model"].get("enabled", False))
-    )
-    merged["adaptive_ev_blend"]["enabled"] = bool(
-        merged.get(
-            "phase3_adaptive_ev_blend_enabled",
-            merged["adaptive_ev_blend"].get("enabled", False),
-        )
-    )
-    merged["diagnostics_v2"]["enabled"] = bool(
-        merged.get("phase3_diagnostics_v2_enabled", merged["diagnostics_v2"].get("enabled", False))
-    )
-    merged["phase3_frontier_enabled"] = bool(merged["frontier"]["enabled"])
-    merged["phase3_ev_calibration_enabled"] = bool(merged["ev_calibration"]["enabled"])
-    merged["phase3_cost_tail_enabled"] = bool(merged["cost_model"]["enabled"])
-    merged["phase3_adaptive_ev_blend_enabled"] = bool(merged["adaptive_ev_blend"]["enabled"])
-    merged["phase3_diagnostics_v2_enabled"] = bool(merged["diagnostics_v2"]["enabled"])
+    merged["frontier"]["enabled"] = bool(merged["frontier"].get("enabled", False))
+    merged["ev_calibration"]["enabled"] = bool(merged["ev_calibration"].get("enabled", False))
+    merged["cost_model"]["enabled"] = bool(merged["cost_model"].get("enabled", False))
+    merged["adaptive_ev_blend"]["enabled"] = bool(merged["adaptive_ev_blend"].get("enabled", False))
+    merged["diagnostics_v2"]["enabled"] = bool(merged["diagnostics_v2"].get("enabled", False))
+    merged["primary_minimums"]["enabled"] = bool(merged["primary_minimums"].get("enabled", False))
+    merged["primary_priority"]["enabled"] = bool(merged["primary_priority"].get("enabled", False))
+    merged["manager_filter"]["enabled"] = bool(merged["manager_filter"].get("enabled", False))
     return merged
 
 
@@ -506,11 +593,6 @@ def main(argv=None) -> int:
         "markets": markets_out,
         "cost_model": summary.get("cost_model", {}),
         "phase3": phase3_bundle,
-        "phase3_frontier_enabled": bool(phase3_bundle.get("phase3_frontier_enabled", False)),
-        "phase3_ev_calibration_enabled": bool(phase3_bundle.get("phase3_ev_calibration_enabled", False)),
-        "phase3_cost_tail_enabled": bool(phase3_bundle.get("phase3_cost_tail_enabled", False)),
-        "phase3_adaptive_ev_blend_enabled": bool(phase3_bundle.get("phase3_adaptive_ev_blend_enabled", False)),
-        "phase3_diagnostics_v2_enabled": bool(phase3_bundle.get("phase3_diagnostics_v2_enabled", False)),
     }
     out["pipeline_version"] = str(pipeline_version)
     out["feature_contract_version"] = "v2_draft"

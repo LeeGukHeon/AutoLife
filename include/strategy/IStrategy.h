@@ -74,6 +74,64 @@ struct OrderResult {
 // 전략이 엔진으로 전달하는 표준 신호 객체
 struct Signal {
     struct Phase3PolicySnapshot {
+        struct PrimaryPriorityPolicy {
+            bool enabled = false;
+            double conf_prob_shift = 0.50;
+            double conf_prob_scale = 0.25;
+            double conf_margin_shift = 0.02;
+            double conf_margin_scale = 0.12;
+            double conf_prob_weight = 0.65;
+            double conf_margin_weight = 0.35;
+            double margin_score_shift = 0.10;
+            double margin_score_scale = 0.20;
+            double edge_score_shift = 0.0005;
+            double edge_score_scale = 0.0025;
+            double prob_weight = 0.50;
+            double margin_weight = 0.22;
+            double liquidity_weight = 0.10;
+            double strength_weight = 0.10;
+            double edge_weight = 0.08;
+            double hostile_prob_weight = 0.54;
+            double hostile_margin_weight = 0.22;
+            double hostile_liquidity_weight = 0.11;
+            double hostile_strength_weight = 0.09;
+            double hostile_edge_weight = 0.04;
+            double strong_buy_bonus = 0.02;
+            double margin_bonus_scale = 0.08;
+            double margin_bonus_cap = 0.03;
+            double rescue_penalty = 0.16;
+            double rescue_bonus = 0.02;
+            double rescue_confidence_floor = 0.72;
+            double rescue_strength_floor = 0.46;
+            double rescue_margin_floor = 0.002;
+            double range_penalty = 0.11;
+            double range_bonus = 0.03;
+            double range_penalty_strength_floor = 0.50;
+            double range_penalty_margin_floor = 0.008;
+            double range_penalty_prob_floor = 0.54;
+            double range_bonus_margin_floor = 0.012;
+            double range_bonus_prob_floor = 0.57;
+            double uptrend_bonus = 0.03;
+            double uptrend_bonus_margin_floor = 0.0;
+            double uptrend_bonus_prob_floor = 0.52;
+        };
+
+        struct ManagerFilterPolicy {
+            bool enabled = false;
+            double required_strength_cap = 0.95;
+            double core_signal_ownership_strength_relief = 0.02;
+            double core_signal_ownership_expected_value_floor = -0.00005;
+            double policy_hold_strength_add = 0.05;
+            double policy_hold_expected_value_add_core = 0.00010;
+            double policy_hold_expected_value_add_other = 0.00018;
+            double off_trend_strength_add = 0.06;
+            double off_trend_expected_value_add_core = 0.00009;
+            double off_trend_expected_value_add_other = 0.00015;
+            double hostile_regime_strength_add = 0.03;
+            double hostile_regime_expected_value_add_core = 0.00005;
+            double hostile_regime_expected_value_add_other = 0.00008;
+        };
+
         bool frontier_enabled = false;
         bool ev_calibration_enabled = false;
         bool cost_tail_enabled = false;
@@ -97,6 +155,13 @@ struct Signal {
         double frontier_margin_floor = -1.0;
         double frontier_ev_confidence_floor = 0.0;
         double frontier_cost_tail_reject_threshold_pct = 1.0;
+        bool primary_minimums_enabled = false;
+        double primary_min_h5_calibrated = 0.48;
+        double primary_min_h5_margin = -0.03;
+        double primary_min_liquidity_score = 42.0;
+        double primary_min_signal_strength = 0.34;
+        PrimaryPriorityPolicy primary_priority;
+        ManagerFilterPolicy manager_filter;
         std::string cost_mode = "mean_mode";
     };
 
