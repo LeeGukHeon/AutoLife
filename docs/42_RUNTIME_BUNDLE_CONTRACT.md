@@ -53,7 +53,7 @@ Last updated: 2026-02-25
   - `phase3.adaptive_ev_blend`
   - `phase3.primary_minimums`
   - `phase3.primary_priority`
-  - `phase3.manager_filter`
+  - `phase3.manager_filter` (includes base floors plus probabilistic relief/history-guard/rr-guard coefficients)
   - `phase3.diagnostics_v2`
 - Runtime rules:
   - Missing `phase3` block must behave as legacy/identity fallback.

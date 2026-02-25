@@ -746,6 +746,58 @@ bool applyProbabilisticRuntimeAdjustment(
         snapshot.phase3_manager_filter_policy.hostile_regime_expected_value_add_core;
     signal.phase3.manager_filter.hostile_regime_expected_value_add_other =
         snapshot.phase3_manager_filter_policy.hostile_regime_expected_value_add_other;
+    signal.phase3.manager_filter.probabilistic_confidence_strength_relief_scale =
+        snapshot.phase3_manager_filter_policy.probabilistic_confidence_strength_relief_scale;
+    signal.phase3.manager_filter.probabilistic_confidence_expected_value_relief_scale =
+        snapshot.phase3_manager_filter_policy.probabilistic_confidence_expected_value_relief_scale;
+    signal.phase3.manager_filter.history_min_sample_hostile =
+        snapshot.phase3_manager_filter_policy.history_min_sample_hostile;
+    signal.phase3.manager_filter.history_min_sample_calm =
+        snapshot.phase3_manager_filter_policy.history_min_sample_calm;
+    signal.phase3.manager_filter.history_guard_scale_base =
+        snapshot.phase3_manager_filter_policy.history_guard_scale_base;
+    signal.phase3.manager_filter.history_guard_scale_confidence_scale =
+        snapshot.phase3_manager_filter_policy.history_guard_scale_confidence_scale;
+    signal.phase3.manager_filter.history_guard_scale_min_hostile =
+        snapshot.phase3_manager_filter_policy.history_guard_scale_min_hostile;
+    signal.phase3.manager_filter.history_guard_scale_min_calm =
+        snapshot.phase3_manager_filter_policy.history_guard_scale_min_calm;
+    signal.phase3.manager_filter.history_guard_scale_max_hostile =
+        snapshot.phase3_manager_filter_policy.history_guard_scale_max_hostile;
+    signal.phase3.manager_filter.history_guard_scale_max_calm =
+        snapshot.phase3_manager_filter_policy.history_guard_scale_max_calm;
+    signal.phase3.manager_filter.history_strength_bump_prob =
+        snapshot.phase3_manager_filter_policy.history_strength_bump_prob;
+    signal.phase3.manager_filter.history_strength_bump_non_prob =
+        snapshot.phase3_manager_filter_policy.history_strength_bump_non_prob;
+    signal.phase3.manager_filter.history_edge_bump_core_prob =
+        snapshot.phase3_manager_filter_policy.history_edge_bump_core_prob;
+    signal.phase3.manager_filter.history_edge_bump_core_non_prob =
+        snapshot.phase3_manager_filter_policy.history_edge_bump_core_non_prob;
+    signal.phase3.manager_filter.history_edge_bump_other_prob =
+        snapshot.phase3_manager_filter_policy.history_edge_bump_other_prob;
+    signal.phase3.manager_filter.history_edge_bump_other_non_prob =
+        snapshot.phase3_manager_filter_policy.history_edge_bump_other_non_prob;
+    signal.phase3.manager_filter.rr_guard_floor_hostile =
+        snapshot.phase3_manager_filter_policy.rr_guard_floor_hostile;
+    signal.phase3.manager_filter.rr_guard_floor_calm =
+        snapshot.phase3_manager_filter_policy.rr_guard_floor_calm;
+    signal.phase3.manager_filter.rr_guard_skip_min_rr =
+        snapshot.phase3_manager_filter_policy.rr_guard_skip_min_rr;
+    signal.phase3.manager_filter.rr_guard_scale_base =
+        snapshot.phase3_manager_filter_policy.rr_guard_scale_base;
+    signal.phase3.manager_filter.rr_guard_scale_confidence_scale =
+        snapshot.phase3_manager_filter_policy.rr_guard_scale_confidence_scale;
+    signal.phase3.manager_filter.rr_guard_scale_min =
+        snapshot.phase3_manager_filter_policy.rr_guard_scale_min;
+    signal.phase3.manager_filter.rr_guard_scale_max =
+        snapshot.phase3_manager_filter_policy.rr_guard_scale_max;
+    signal.phase3.manager_filter.rr_guard_strength_add =
+        snapshot.phase3_manager_filter_policy.rr_guard_strength_add;
+    signal.phase3.manager_filter.rr_guard_expected_value_add_core =
+        snapshot.phase3_manager_filter_policy.rr_guard_expected_value_add_core;
+    signal.phase3.manager_filter.rr_guard_expected_value_add_other =
+        snapshot.phase3_manager_filter_policy.rr_guard_expected_value_add_other;
 
     const double score_weight = std::clamp(cfg.probabilistic_runtime_score_weight, 0.0, 1.0);
     signal.score += std::clamp(effective_margin * score_weight, -0.12, 0.12);

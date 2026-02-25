@@ -1623,6 +1623,205 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         -0.20,
         0.20
     );
+    phase3_policy_.manager_filter.probabilistic_confidence_strength_relief_scale = parseCostParam(
+        phase3_manager_filter_node,
+        "probabilistic_confidence_strength_relief_scale",
+        0.03,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.probabilistic_confidence_expected_value_relief_scale = parseCostParam(
+        phase3_manager_filter_node,
+        "probabilistic_confidence_expected_value_relief_scale",
+        0.00010,
+        -0.20,
+        0.20
+    );
+    phase3_policy_.manager_filter.history_min_sample_hostile = std::clamp(
+        phase3_manager_filter_node.value("history_min_sample_hostile", 18),
+        1,
+        1000000
+    );
+    phase3_policy_.manager_filter.history_min_sample_calm = std::clamp(
+        phase3_manager_filter_node.value("history_min_sample_calm", 36),
+        1,
+        1000000
+    );
+    phase3_policy_.manager_filter.history_guard_scale_base = parseCostParam(
+        phase3_manager_filter_node,
+        "history_guard_scale_base",
+        0.45,
+        0.0,
+        10.0
+    );
+    phase3_policy_.manager_filter.history_guard_scale_confidence_scale = parseCostParam(
+        phase3_manager_filter_node,
+        "history_guard_scale_confidence_scale",
+        0.35,
+        0.0,
+        10.0
+    );
+    phase3_policy_.manager_filter.history_guard_scale_min_hostile = parseCostParam(
+        phase3_manager_filter_node,
+        "history_guard_scale_min_hostile",
+        0.18,
+        0.0,
+        10.0
+    );
+    phase3_policy_.manager_filter.history_guard_scale_min_calm = parseCostParam(
+        phase3_manager_filter_node,
+        "history_guard_scale_min_calm",
+        0.10,
+        0.0,
+        10.0
+    );
+    phase3_policy_.manager_filter.history_guard_scale_max_hostile = parseCostParam(
+        phase3_manager_filter_node,
+        "history_guard_scale_max_hostile",
+        0.60,
+        0.0,
+        10.0
+    );
+    phase3_policy_.manager_filter.history_guard_scale_max_calm = parseCostParam(
+        phase3_manager_filter_node,
+        "history_guard_scale_max_calm",
+        0.45,
+        0.0,
+        10.0
+    );
+    if (phase3_policy_.manager_filter.history_guard_scale_max_hostile <
+        phase3_policy_.manager_filter.history_guard_scale_min_hostile) {
+        std::swap(
+            phase3_policy_.manager_filter.history_guard_scale_min_hostile,
+            phase3_policy_.manager_filter.history_guard_scale_max_hostile
+        );
+    }
+    if (phase3_policy_.manager_filter.history_guard_scale_max_calm <
+        phase3_policy_.manager_filter.history_guard_scale_min_calm) {
+        std::swap(
+            phase3_policy_.manager_filter.history_guard_scale_min_calm,
+            phase3_policy_.manager_filter.history_guard_scale_max_calm
+        );
+    }
+    phase3_policy_.manager_filter.history_strength_bump_prob = parseCostParam(
+        phase3_manager_filter_node,
+        "history_strength_bump_prob",
+        0.012,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.history_strength_bump_non_prob = parseCostParam(
+        phase3_manager_filter_node,
+        "history_strength_bump_non_prob",
+        0.05,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.history_edge_bump_core_prob = parseCostParam(
+        phase3_manager_filter_node,
+        "history_edge_bump_core_prob",
+        0.00002,
+        -0.20,
+        0.20
+    );
+    phase3_policy_.manager_filter.history_edge_bump_core_non_prob = parseCostParam(
+        phase3_manager_filter_node,
+        "history_edge_bump_core_non_prob",
+        0.00005,
+        -0.20,
+        0.20
+    );
+    phase3_policy_.manager_filter.history_edge_bump_other_prob = parseCostParam(
+        phase3_manager_filter_node,
+        "history_edge_bump_other_prob",
+        0.00003,
+        -0.20,
+        0.20
+    );
+    phase3_policy_.manager_filter.history_edge_bump_other_non_prob = parseCostParam(
+        phase3_manager_filter_node,
+        "history_edge_bump_other_non_prob",
+        0.00010,
+        -0.20,
+        0.20
+    );
+    phase3_policy_.manager_filter.rr_guard_floor_hostile = parseCostParam(
+        phase3_manager_filter_node,
+        "rr_guard_floor_hostile",
+        1.12,
+        0.0,
+        10.0
+    );
+    phase3_policy_.manager_filter.rr_guard_floor_calm = parseCostParam(
+        phase3_manager_filter_node,
+        "rr_guard_floor_calm",
+        1.08,
+        0.0,
+        10.0
+    );
+    phase3_policy_.manager_filter.rr_guard_skip_min_rr = parseCostParam(
+        phase3_manager_filter_node,
+        "rr_guard_skip_min_rr",
+        0.95,
+        0.0,
+        10.0
+    );
+    phase3_policy_.manager_filter.rr_guard_scale_base = parseCostParam(
+        phase3_manager_filter_node,
+        "rr_guard_scale_base",
+        0.90,
+        0.0,
+        10.0
+    );
+    phase3_policy_.manager_filter.rr_guard_scale_confidence_scale = parseCostParam(
+        phase3_manager_filter_node,
+        "rr_guard_scale_confidence_scale",
+        0.60,
+        0.0,
+        10.0
+    );
+    phase3_policy_.manager_filter.rr_guard_scale_min = parseCostParam(
+        phase3_manager_filter_node,
+        "rr_guard_scale_min",
+        0.20,
+        0.0,
+        10.0
+    );
+    phase3_policy_.manager_filter.rr_guard_scale_max = parseCostParam(
+        phase3_manager_filter_node,
+        "rr_guard_scale_max",
+        0.90,
+        0.0,
+        10.0
+    );
+    if (phase3_policy_.manager_filter.rr_guard_scale_max <
+        phase3_policy_.manager_filter.rr_guard_scale_min) {
+        std::swap(
+            phase3_policy_.manager_filter.rr_guard_scale_min,
+            phase3_policy_.manager_filter.rr_guard_scale_max
+        );
+    }
+    phase3_policy_.manager_filter.rr_guard_strength_add = parseCostParam(
+        phase3_manager_filter_node,
+        "rr_guard_strength_add",
+        0.03,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.rr_guard_expected_value_add_core = parseCostParam(
+        phase3_manager_filter_node,
+        "rr_guard_expected_value_add_core",
+        0.00003,
+        -0.20,
+        0.20
+    );
+    phase3_policy_.manager_filter.rr_guard_expected_value_add_other = parseCostParam(
+        phase3_manager_filter_node,
+        "rr_guard_expected_value_add_other",
+        0.00006,
+        -0.20,
+        0.20
+    );
 
     phase3_policy_.diagnostics_v2.enabled = phase3_policy_.phase3_diagnostics_v2_enabled;
 
