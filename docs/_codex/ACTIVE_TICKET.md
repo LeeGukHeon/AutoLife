@@ -1348,3 +1348,16 @@ Last updated: 2026-02-25
     - `backtest_strategyless_runtime_live_exit_mapping=false`
     - `backtest_strategyless_runtime_live_exit_mapping_hard_exit_only=false`
   - v24 probe code remains as default-OFF instrumentation only.
+
+## Latest update (2026-02-25, v25)
+- audit tooling hardening:
+  - `scripts/collect_strategyless_exit_audit.py`
+    - added `--skip-primary-live-runtime-log` to avoid implicit `autolife.log` contamination
+  - test added:
+    - `scripts/test_collect_strategyless_exit_audit.py::test_resolve_existing_log_paths_can_skip_primary`
+- artifact:
+  - `build/Release/logs/strategyless_exit_audit_5set_20260225_v25_skip_primary.json`
+  - `build/Release/logs/exit_reason_mapping_gap_20260225_v25_skip_primary_min10.json`
+- snapshot:
+  - `sample_size_ready=false`
+  - `next_step_hint=increase_overlap_exit_samples_before_mapping_decision`

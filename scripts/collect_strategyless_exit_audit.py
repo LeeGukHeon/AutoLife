@@ -85,6 +85,11 @@ def parse_args() -> argparse.Namespace:
         help="Primary live runtime text log path for exit reason scan (optional).",
     )
     parser.add_argument(
+        "--skip-primary-live-runtime-log",
+        action="store_true",
+        help="Skip primary --live-runtime-log and use only list/glob sources for live exit snapshot.",
+    )
+    parser.add_argument(
         "--live-runtime-log-list",
         default="",
         help="Optional comma-separated additional live runtime log paths.",
@@ -166,6 +171,7 @@ def resolve_existing_log_paths(
     primary_path: Path,
     path_list_csv: str,
     path_glob_csv: str,
+    include_primary: bool = True,
 ) -> List[Path]:
     candidates: List[Path] = []
     seen: set[str] = set()
@@ -177,7 +183,7 @@ def resolve_existing_log_paths(
         seen.add(norm)
         candidates.append(path_value)
 
-    if str(primary_path).strip():
+    if include_primary and str(primary_path).strip():
         add_path(primary_path)
 
     for token in parse_csv_tokens(path_list_csv):
@@ -548,6 +554,7 @@ def main() -> int:
         primary_path=live_runtime_log_path,
         path_list_csv=args.live_runtime_log_list,
         path_glob_csv=args.live_runtime_log_glob,
+        include_primary=(not bool(args.skip_primary_live_runtime_log)),
     )
     live_exit_reason_denylist = {x.lower() for x in parse_csv_tokens(args.live_exit_reason_denylist)}
     output_path = resolve_path(args.output_json)
@@ -673,6 +680,7 @@ def main() -> int:
             "live_execution_log_jsonl": str(live_execution_log_path),
             "backtest_execution_log_jsonl": str(backtest_execution_log_path),
             "live_runtime_logs": [str(path) for path in live_runtime_log_paths],
+            "skip_primary_live_runtime_log": bool(args.skip_primary_live_runtime_log),
             "live_exit_reason_denylist": sorted(live_exit_reason_denylist),
         },
         "dataset_results": dataset_results,

@@ -1029,6 +1029,20 @@ Last updated: 2026-02-25
   - keep both correctness probe flags default OFF (fail-closed).
   - do not promote v24 hard-only mode to baseline.
 
+## Latest update (2026-02-25, v25)
+- Collector accuracy hardening:
+  - `scripts/collect_strategyless_exit_audit.py`
+    - new switch `--skip-primary-live-runtime-log`
+    - purpose: prevent implicit `autolife.log` mixing during fixed-window probe comparisons
+  - tests:
+    - `scripts/test_collect_strategyless_exit_audit.py` updated
+- v25 artifacts:
+  - `build/Release/logs/strategyless_exit_audit_5set_20260225_v25_skip_primary.json`
+  - `build/Release/logs/exit_reason_mapping_gap_20260225_v25_skip_primary_min10.json`
+- v25 snapshot:
+  - strict threshold still `sample_size_ready=false`
+  - next action remains live overlap sample expansion.
+
 ## Detailed history references
 - `docs/TODO_STAGE15_EXECUTION_PLAN_2026-02-13.md`
 - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`

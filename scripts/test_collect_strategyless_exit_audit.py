@@ -49,6 +49,34 @@ class CollectStrategylessExitAuditTest(unittest.TestCase):
             self.assertEqual(1, int(reason_counts.get("take_profit_full_due_to_min_order", 0)))
             self.assertEqual(0, int(reason_counts.get("BacktestEOD", 0)))
 
+    def test_resolve_existing_log_paths_can_skip_primary(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            primary = root / "primary.log"
+            extra = root / "extra.log"
+            primary.write_text("x\n", encoding="utf-8")
+            extra.write_text("y\n", encoding="utf-8")
+
+            with_primary = audit_script.resolve_existing_log_paths(
+                primary_path=primary,
+                path_list_csv=str(extra),
+                path_glob_csv="",
+                include_primary=True,
+            )
+            without_primary = audit_script.resolve_existing_log_paths(
+                primary_path=primary,
+                path_list_csv=str(extra),
+                path_glob_csv="",
+                include_primary=False,
+            )
+
+            with_primary_str = [str(x) for x in with_primary]
+            without_primary_str = [str(x) for x in without_primary]
+            self.assertIn(str(primary.resolve()), with_primary_str)
+            self.assertIn(str(extra.resolve()), with_primary_str)
+            self.assertNotIn(str(primary.resolve()), without_primary_str)
+            self.assertIn(str(extra.resolve()), without_primary_str)
+
 
 if __name__ == "__main__":
     unittest.main()

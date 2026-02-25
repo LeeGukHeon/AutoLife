@@ -2129,6 +2129,19 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
 - decision:
   - fail-closed 유지. v24 하드온리 모드는 baseline 미적용(default OFF 유지).
 
+## 2026-02-25 v25 update (audit contamination guard)
+- collector update:
+  - `scripts/collect_strategyless_exit_audit.py`
+  - new option: `--skip-primary-live-runtime-log`
+  - intent: `autolife.log` 자동 포함으로 인한 live/bt 비교 오염 방지
+- test update:
+  - `scripts/test_collect_strategyless_exit_audit.py`
+- artifacts:
+  - `build/Release/logs/strategyless_exit_audit_5set_20260225_v25_skip_primary.json`
+  - `build/Release/logs/exit_reason_mapping_gap_20260225_v25_skip_primary_min10.json`
+- status:
+  - strict 기준에서는 아직 `sample_size_ready=false` (live overlap sample 추가 필요)
+
 ## Guardrails
 - Sequential only (`--max-workers 1` policy).
 - No coin hardcoding (pattern/regime only).
