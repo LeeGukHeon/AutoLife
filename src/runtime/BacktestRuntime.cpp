@@ -1008,9 +1008,10 @@ void applyProbabilisticManagerFloors(
         return;
     }
     const auto& policy = snapshot.phase3_manager_filter_policy;
+    const auto defaults = autolife::analytics::ProbabilisticRuntimeModel::Phase3ManagerFilterPolicy{};
     const bool use_policy = policy.enabled;
-    const auto pick = [&](double policy_value, double legacy_value) {
-        return use_policy ? policy_value : legacy_value;
+    const auto pick = [&](double policy_value, double default_value) {
+        return use_policy ? policy_value : default_value;
     };
     const bool hostile_regime =
         regime == autolife::analytics::MarketRegime::HIGH_VOLATILITY ||
@@ -1019,26 +1020,38 @@ void applyProbabilisticManagerFloors(
         *min_strength = std::min(
             *min_strength,
             hostile_regime
-                ? pick(policy.no_snapshot_min_strength_hostile, 0.36)
-                : pick(policy.no_snapshot_min_strength_calm, 0.28)
+                ? pick(policy.no_snapshot_min_strength_hostile, defaults.no_snapshot_min_strength_hostile)
+                : pick(policy.no_snapshot_min_strength_calm, defaults.no_snapshot_min_strength_calm)
         );
         *min_expected_value = std::min(
             *min_expected_value,
             hostile_regime
-                ? pick(policy.no_snapshot_min_expected_value_hostile, 0.00002)
-                : pick(policy.no_snapshot_min_expected_value_calm, -0.00030)
+                ? pick(
+                    policy.no_snapshot_min_expected_value_hostile,
+                    defaults.no_snapshot_min_expected_value_hostile
+                )
+                : pick(
+                    policy.no_snapshot_min_expected_value_calm,
+                    defaults.no_snapshot_min_expected_value_calm
+                )
         );
         return;
     }
 
     const double prob = std::clamp(snapshot.prob_h5_calibrated, 0.0, 1.0);
     const double margin = std::clamp(snapshot.margin_h5, -1.0, 1.0);
-    const double conf_prob_shift = pick(policy.confidence_prob_shift, 0.50);
-    const double conf_prob_scale = std::max(1e-6, pick(policy.confidence_prob_scale, 0.20));
-    const double conf_margin_shift = pick(policy.confidence_margin_shift, 0.01);
-    const double conf_margin_scale = std::max(1e-6, pick(policy.confidence_margin_scale, 0.08));
-    const double conf_prob_weight = std::max(0.0, pick(policy.confidence_prob_weight, 0.65));
-    const double conf_margin_weight = std::max(0.0, pick(policy.confidence_margin_weight, 0.35));
+    const double conf_prob_shift = pick(policy.confidence_prob_shift, defaults.confidence_prob_shift);
+    const double conf_prob_scale = std::max(1e-6, pick(policy.confidence_prob_scale, defaults.confidence_prob_scale));
+    const double conf_margin_shift = pick(policy.confidence_margin_shift, defaults.confidence_margin_shift);
+    const double conf_margin_scale = std::max(
+        1e-6,
+        pick(policy.confidence_margin_scale, defaults.confidence_margin_scale)
+    );
+    const double conf_prob_weight = std::max(0.0, pick(policy.confidence_prob_weight, defaults.confidence_prob_weight));
+    const double conf_margin_weight = std::max(
+        0.0,
+        pick(policy.confidence_margin_weight, defaults.confidence_margin_weight)
+    );
     const double conf_prob_component = std::clamp((prob - conf_prob_shift) / conf_prob_scale, 0.0, 1.0);
     const double conf_margin_component = std::clamp((margin + conf_margin_shift) / conf_margin_scale, 0.0, 1.0);
     const double conf_denom = std::max(1e-6, conf_prob_weight + conf_margin_weight);
@@ -1050,41 +1063,62 @@ void applyProbabilisticManagerFloors(
     );
 
     double target_strength = hostile_regime
-        ? (pick(policy.target_strength_hostile_base, 0.34) -
-           (confidence * pick(policy.target_strength_hostile_confidence_scale, 0.08)))
-        : (pick(policy.target_strength_calm_base, 0.24) -
-           (confidence * pick(policy.target_strength_calm_confidence_scale, 0.14)));
+        ? (pick(policy.target_strength_hostile_base, defaults.target_strength_hostile_base) -
+           (confidence * pick(
+               policy.target_strength_hostile_confidence_scale,
+               defaults.target_strength_hostile_confidence_scale
+           )))
+        : (pick(policy.target_strength_calm_base, defaults.target_strength_calm_base) -
+           (confidence * pick(
+               policy.target_strength_calm_confidence_scale,
+               defaults.target_strength_calm_confidence_scale
+           )));
     double target_edge = hostile_regime
-        ? (pick(policy.target_expected_value_hostile_base, 0.00002) -
-           (confidence * pick(policy.target_expected_value_hostile_confidence_scale, 0.00008)))
-        : (pick(policy.target_expected_value_calm_base, -0.00035) -
-           (confidence * pick(policy.target_expected_value_calm_confidence_scale, 0.00035)));
+        ? (pick(
+                policy.target_expected_value_hostile_base,
+                defaults.target_expected_value_hostile_base
+            ) -
+           (confidence * pick(
+               policy.target_expected_value_hostile_confidence_scale,
+               defaults.target_expected_value_hostile_confidence_scale
+           )))
+        : (pick(policy.target_expected_value_calm_base, defaults.target_expected_value_calm_base) -
+           (confidence * pick(
+               policy.target_expected_value_calm_confidence_scale,
+               defaults.target_expected_value_calm_confidence_scale
+           )));
     if (margin < 0.0) {
         target_strength += hostile_regime
-            ? pick(policy.negative_margin_strength_add_hostile, 0.03)
-            : pick(policy.negative_margin_strength_add_calm, 0.02);
+            ? pick(policy.negative_margin_strength_add_hostile, defaults.negative_margin_strength_add_hostile)
+            : pick(policy.negative_margin_strength_add_calm, defaults.negative_margin_strength_add_calm);
         target_edge += hostile_regime
-            ? pick(policy.negative_margin_expected_value_add_hostile, 0.00005)
-            : pick(policy.negative_margin_expected_value_add_calm, 0.00010);
+            ? pick(
+                policy.negative_margin_expected_value_add_hostile,
+                defaults.negative_margin_expected_value_add_hostile
+            )
+            : pick(
+                policy.negative_margin_expected_value_add_calm,
+                defaults.negative_margin_expected_value_add_calm
+            );
     }
 
     target_strength = std::clamp(
         target_strength,
         hostile_regime
-            ? pick(policy.target_strength_hostile_min, 0.26)
-            : pick(policy.target_strength_calm_min, 0.12),
+            ? pick(policy.target_strength_hostile_min, defaults.target_strength_hostile_min)
+            : pick(policy.target_strength_calm_min, defaults.target_strength_calm_min),
         hostile_regime
-            ? pick(policy.target_strength_hostile_max, 0.38)
-            : pick(policy.target_strength_calm_max, 0.24)
+            ? pick(policy.target_strength_hostile_max, defaults.target_strength_hostile_max)
+            : pick(policy.target_strength_calm_max, defaults.target_strength_calm_max)
     );
     target_edge = std::clamp(
         target_edge,
         hostile_regime
-            ? pick(policy.target_expected_value_hostile_min, -0.00010)
-            : pick(policy.target_expected_value_calm_min, -0.00080),
+            ? pick(policy.target_expected_value_hostile_min, defaults.target_expected_value_hostile_min)
+            : pick(policy.target_expected_value_calm_min, defaults.target_expected_value_calm_min),
         hostile_regime
-            ? pick(policy.target_expected_value_hostile_max, 0.00008)
-            : pick(policy.target_expected_value_calm_max, -0.00020)
+            ? pick(policy.target_expected_value_hostile_max, defaults.target_expected_value_hostile_max)
+            : pick(policy.target_expected_value_calm_max, defaults.target_expected_value_calm_max)
     );
     *min_strength = std::min(*min_strength, target_strength);
     *min_expected_value = std::min(*min_expected_value, target_edge);
@@ -2393,9 +2427,21 @@ void BacktestEngine::processCandle(const Candle& candle) {
             }
         }
         
-        // Dynamic Filter Simulation (Self-learning stub)
-        // If we had recent losses, filter might increase.
-        double filter_threshold = dynamic_filter_value_;
+        const auto& manager_policy = probabilistic_snapshot.phase3_manager_filter_policy;
+        const auto manager_defaults =
+            autolife::analytics::ProbabilisticRuntimeModel::Phase3ManagerFilterPolicy{};
+        const bool use_manager_policy = manager_policy.enabled;
+        const auto manager_pick = [&](double policy_value, double default_value) {
+            return use_manager_policy ? policy_value : default_value;
+        };
+        double filter_threshold = manager_pick(
+            manager_policy.base_min_strength_default,
+            manager_defaults.base_min_strength_default
+        );
+        double min_expected_value = manager_pick(
+            manager_policy.base_min_expected_value,
+            manager_defaults.base_min_expected_value
+        );
         const auto bt_metrics = risk_manager_->getRiskMetrics();
         const bool small_seed_mode =
             bt_metrics.total_capital > 0.0 &&
@@ -2498,43 +2544,44 @@ void BacktestEngine::processCandle(const Candle& candle) {
             hostile_entry_pause_candles_ = std::max(hostile_entry_pause_candles_, base_pause_candles);
         }
         
-        const auto& manager_policy = probabilistic_snapshot.phase3_manager_filter_policy;
-        const bool use_manager_policy = manager_policy.enabled;
-        const auto manager_pick = [&](double policy_value, double legacy_value) {
-            return use_manager_policy ? policy_value : legacy_value;
-        };
-        double min_expected_value = manager_pick(manager_policy.base_min_expected_value, 0.0);
         if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
             filter_threshold = std::max(
                 filter_threshold,
-                manager_pick(manager_policy.base_min_strength_high_volatility, 0.48)
+                manager_pick(
+                    manager_policy.base_min_strength_high_volatility,
+                    manager_defaults.base_min_strength_high_volatility
+                )
             );
         } else if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
             filter_threshold = std::max(
                 filter_threshold,
-                manager_pick(manager_policy.base_min_strength_trending_down, 0.52)
+                manager_pick(
+                    manager_policy.base_min_strength_trending_down,
+                    manager_defaults.base_min_strength_trending_down
+                )
             );
         } else if (regime.regime == analytics::MarketRegime::RANGING) {
             filter_threshold = std::max(
                 filter_threshold,
-                manager_pick(manager_policy.base_min_strength_ranging, 0.43)
+                manager_pick(
+                    manager_policy.base_min_strength_ranging,
+                    manager_defaults.base_min_strength_ranging
+                )
             );
-        } else if (use_manager_policy) {
-            filter_threshold = std::max(filter_threshold, manager_policy.base_min_strength_default);
         }
 
         if (hostile_market) {
             const double hostile_strength_scale =
-                manager_pick(manager_policy.hostile_strength_add_scale, 0.18);
+                manager_pick(manager_policy.hostile_strength_add_scale, manager_defaults.hostile_strength_add_scale);
             const double hostile_strength_cap = std::max(
                 0.0,
-                manager_pick(manager_policy.hostile_strength_add_cap, 0.08)
+                manager_pick(manager_policy.hostile_strength_add_cap, manager_defaults.hostile_strength_add_cap)
             );
             const double hostile_ev_scale =
-                manager_pick(manager_policy.hostile_ev_add_scale, 0.0008);
+                manager_pick(manager_policy.hostile_ev_add_scale, manager_defaults.hostile_ev_add_scale);
             const double hostile_ev_cap = std::max(
                 0.0,
-                manager_pick(manager_policy.hostile_ev_add_cap, 0.00035)
+                manager_pick(manager_policy.hostile_ev_add_cap, manager_defaults.hostile_ev_add_cap)
             );
             filter_threshold += std::clamp(
                 (effective_hostility - hostile_threshold) * hostile_strength_scale,
@@ -2550,11 +2597,14 @@ void BacktestEngine::processCandle(const Candle& candle) {
         if (hostile_entry_pause_candles_ > 0) {
             filter_threshold = std::max(
                 filter_threshold,
-                manager_pick(manager_policy.hostile_pause_min_strength, 0.96)
+                manager_pick(manager_policy.hostile_pause_min_strength, manager_defaults.hostile_pause_min_strength)
             );
             min_expected_value = std::max(
                 min_expected_value,
-                manager_pick(manager_policy.hostile_pause_min_expected_value, 0.0040)
+                manager_pick(
+                    manager_policy.hostile_pause_min_expected_value,
+                    manager_defaults.hostile_pause_min_expected_value
+                )
             );
             hostile_entry_pause_candles_--;
             LOG_INFO(
@@ -2564,15 +2614,21 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 market_hostility_ewma_
             );
         }
-        const double min_strength_floor = manager_pick(manager_policy.min_strength_floor, 0.35);
-        const double min_strength_cap = manager_pick(manager_policy.min_strength_cap, 0.98);
+        const double min_strength_floor = manager_pick(manager_policy.min_strength_floor, manager_defaults.min_strength_floor);
+        const double min_strength_cap = manager_pick(manager_policy.min_strength_cap, manager_defaults.min_strength_cap);
         filter_threshold = std::clamp(
             filter_threshold,
             std::min(min_strength_floor, min_strength_cap),
             std::max(min_strength_floor, min_strength_cap)
         );
-        const double min_expected_floor = manager_pick(manager_policy.min_expected_value_floor, -0.0002);
-        const double min_expected_cap = manager_pick(manager_policy.min_expected_value_cap, 0.0050);
+        const double min_expected_floor = manager_pick(
+            manager_policy.min_expected_value_floor,
+            manager_defaults.min_expected_value_floor
+        );
+        const double min_expected_cap = manager_pick(
+            manager_policy.min_expected_value_cap,
+            manager_defaults.min_expected_value_cap
+        );
         min_expected_value = std::clamp(
             min_expected_value,
             std::min(min_expected_floor, min_expected_cap),
@@ -3013,8 +3069,6 @@ void BacktestEngine::processCandle(const Candle& candle) {
         max_drawdown_ = drawdown;
     }
     
-    // 6. Self-Learning Update
-    updateDynamicFilter();
 }
 
 void BacktestEngine::checkOrders(const Candle& candle) {
@@ -3442,48 +3496,6 @@ BacktestEngine::Result BacktestEngine::getResult() const {
 }
 
 
-
-void BacktestEngine::updateDynamicFilter() {
-    auto history = risk_manager_->getTradeHistory();
-    if (history.size() < 20) {
-        return;
-    }
-
-    const size_t sample_n = std::min<size_t>(60, history.size());
-    double gross_profit = 0.0;
-    double gross_loss_abs = 0.0;
-    double sum_pnl = 0.0;
-    int wins = 0;
-
-    size_t seen = 0;
-    for (auto it = history.rbegin(); it != history.rend() && seen < sample_n; ++it, ++seen) {
-        const double pnl = it->profit_loss;
-        sum_pnl += pnl;
-        if (pnl > 0.0) {
-            gross_profit += pnl;
-            ++wins;
-        } else if (pnl < 0.0) {
-            gross_loss_abs += std::abs(pnl);
-        }
-    }
-
-    const double expectancy = sum_pnl / static_cast<double>(sample_n);
-    const double profit_factor =
-        (gross_loss_abs > 1e-12) ? (gross_profit / gross_loss_abs) : ((gross_profit > 1e-12) ? 99.9 : 0.0);
-    const double win_rate = static_cast<double>(wins) / static_cast<double>(sample_n);
-
-    if (expectancy < 0.0 || profit_factor < 1.0) {
-        dynamic_filter_value_ = std::min(0.70, dynamic_filter_value_ + 0.01);
-    } else if (expectancy > 0.0 && profit_factor > 1.15 && win_rate >= 0.50) {
-        dynamic_filter_value_ = std::max(0.35, dynamic_filter_value_ - 0.01);
-    } else {
-        if (dynamic_filter_value_ > 0.50) {
-            dynamic_filter_value_ = std::max(0.35, dynamic_filter_value_ - 0.003);
-        } else if (dynamic_filter_value_ < 0.50) {
-            dynamic_filter_value_ = std::min(0.70, dynamic_filter_value_ + 0.003);
-        }
-    }
-}
 
 } // namespace backtest
 } // namespace autolife

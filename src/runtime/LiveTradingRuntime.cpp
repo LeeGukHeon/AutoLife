@@ -935,9 +935,10 @@ void applyProbabilisticManagerFloors(
         return;
     }
     const auto& policy = snapshot.phase3_manager_filter_policy;
+    const auto defaults = autolife::analytics::ProbabilisticRuntimeModel::Phase3ManagerFilterPolicy{};
     const bool use_policy = policy.enabled;
-    const auto pick = [&](double policy_value, double legacy_value) {
-        return use_policy ? policy_value : legacy_value;
+    const auto pick = [&](double policy_value, double default_value) {
+        return use_policy ? policy_value : default_value;
     };
     const bool hostile_regime =
         regime == autolife::analytics::MarketRegime::HIGH_VOLATILITY ||
@@ -946,26 +947,38 @@ void applyProbabilisticManagerFloors(
         *min_strength = std::min(
             *min_strength,
             hostile_regime
-                ? pick(policy.no_snapshot_min_strength_hostile, 0.36)
-                : pick(policy.no_snapshot_min_strength_calm, 0.28)
+                ? pick(policy.no_snapshot_min_strength_hostile, defaults.no_snapshot_min_strength_hostile)
+                : pick(policy.no_snapshot_min_strength_calm, defaults.no_snapshot_min_strength_calm)
         );
         *min_expected_value = std::min(
             *min_expected_value,
             hostile_regime
-                ? pick(policy.no_snapshot_min_expected_value_hostile, 0.00002)
-                : pick(policy.no_snapshot_min_expected_value_calm, -0.00030)
+                ? pick(
+                    policy.no_snapshot_min_expected_value_hostile,
+                    defaults.no_snapshot_min_expected_value_hostile
+                )
+                : pick(
+                    policy.no_snapshot_min_expected_value_calm,
+                    defaults.no_snapshot_min_expected_value_calm
+                )
         );
         return;
     }
 
     const double prob = std::clamp(snapshot.prob_h5_calibrated, 0.0, 1.0);
     const double margin = std::clamp(snapshot.margin_h5, -1.0, 1.0);
-    const double conf_prob_shift = pick(policy.confidence_prob_shift, 0.50);
-    const double conf_prob_scale = std::max(1e-6, pick(policy.confidence_prob_scale, 0.20));
-    const double conf_margin_shift = pick(policy.confidence_margin_shift, 0.01);
-    const double conf_margin_scale = std::max(1e-6, pick(policy.confidence_margin_scale, 0.08));
-    const double conf_prob_weight = std::max(0.0, pick(policy.confidence_prob_weight, 0.65));
-    const double conf_margin_weight = std::max(0.0, pick(policy.confidence_margin_weight, 0.35));
+    const double conf_prob_shift = pick(policy.confidence_prob_shift, defaults.confidence_prob_shift);
+    const double conf_prob_scale = std::max(1e-6, pick(policy.confidence_prob_scale, defaults.confidence_prob_scale));
+    const double conf_margin_shift = pick(policy.confidence_margin_shift, defaults.confidence_margin_shift);
+    const double conf_margin_scale = std::max(
+        1e-6,
+        pick(policy.confidence_margin_scale, defaults.confidence_margin_scale)
+    );
+    const double conf_prob_weight = std::max(0.0, pick(policy.confidence_prob_weight, defaults.confidence_prob_weight));
+    const double conf_margin_weight = std::max(
+        0.0,
+        pick(policy.confidence_margin_weight, defaults.confidence_margin_weight)
+    );
     const double conf_prob_component = std::clamp((prob - conf_prob_shift) / conf_prob_scale, 0.0, 1.0);
     const double conf_margin_component = std::clamp((margin + conf_margin_shift) / conf_margin_scale, 0.0, 1.0);
     const double conf_denom = std::max(1e-6, conf_prob_weight + conf_margin_weight);
@@ -977,41 +990,62 @@ void applyProbabilisticManagerFloors(
     );
 
     double target_strength = hostile_regime
-        ? (pick(policy.target_strength_hostile_base, 0.34) -
-           (confidence * pick(policy.target_strength_hostile_confidence_scale, 0.08)))
-        : (pick(policy.target_strength_calm_base, 0.24) -
-           (confidence * pick(policy.target_strength_calm_confidence_scale, 0.14)));
+        ? (pick(policy.target_strength_hostile_base, defaults.target_strength_hostile_base) -
+           (confidence * pick(
+               policy.target_strength_hostile_confidence_scale,
+               defaults.target_strength_hostile_confidence_scale
+           )))
+        : (pick(policy.target_strength_calm_base, defaults.target_strength_calm_base) -
+           (confidence * pick(
+               policy.target_strength_calm_confidence_scale,
+               defaults.target_strength_calm_confidence_scale
+           )));
     double target_edge = hostile_regime
-        ? (pick(policy.target_expected_value_hostile_base, 0.00002) -
-           (confidence * pick(policy.target_expected_value_hostile_confidence_scale, 0.00008)))
-        : (pick(policy.target_expected_value_calm_base, -0.00035) -
-           (confidence * pick(policy.target_expected_value_calm_confidence_scale, 0.00035)));
+        ? (pick(
+                policy.target_expected_value_hostile_base,
+                defaults.target_expected_value_hostile_base
+            ) -
+           (confidence * pick(
+               policy.target_expected_value_hostile_confidence_scale,
+               defaults.target_expected_value_hostile_confidence_scale
+           )))
+        : (pick(policy.target_expected_value_calm_base, defaults.target_expected_value_calm_base) -
+           (confidence * pick(
+               policy.target_expected_value_calm_confidence_scale,
+               defaults.target_expected_value_calm_confidence_scale
+           )));
     if (margin < 0.0) {
         target_strength += hostile_regime
-            ? pick(policy.negative_margin_strength_add_hostile, 0.03)
-            : pick(policy.negative_margin_strength_add_calm, 0.02);
+            ? pick(policy.negative_margin_strength_add_hostile, defaults.negative_margin_strength_add_hostile)
+            : pick(policy.negative_margin_strength_add_calm, defaults.negative_margin_strength_add_calm);
         target_edge += hostile_regime
-            ? pick(policy.negative_margin_expected_value_add_hostile, 0.00005)
-            : pick(policy.negative_margin_expected_value_add_calm, 0.00010);
+            ? pick(
+                policy.negative_margin_expected_value_add_hostile,
+                defaults.negative_margin_expected_value_add_hostile
+            )
+            : pick(
+                policy.negative_margin_expected_value_add_calm,
+                defaults.negative_margin_expected_value_add_calm
+            );
     }
 
     target_strength = std::clamp(
         target_strength,
         hostile_regime
-            ? pick(policy.target_strength_hostile_min, 0.26)
-            : pick(policy.target_strength_calm_min, 0.12),
+            ? pick(policy.target_strength_hostile_min, defaults.target_strength_hostile_min)
+            : pick(policy.target_strength_calm_min, defaults.target_strength_calm_min),
         hostile_regime
-            ? pick(policy.target_strength_hostile_max, 0.38)
-            : pick(policy.target_strength_calm_max, 0.24)
+            ? pick(policy.target_strength_hostile_max, defaults.target_strength_hostile_max)
+            : pick(policy.target_strength_calm_max, defaults.target_strength_calm_max)
     );
     target_edge = std::clamp(
         target_edge,
         hostile_regime
-            ? pick(policy.target_expected_value_hostile_min, -0.00010)
-            : pick(policy.target_expected_value_calm_min, -0.00080),
+            ? pick(policy.target_expected_value_hostile_min, defaults.target_expected_value_hostile_min)
+            : pick(policy.target_expected_value_calm_min, defaults.target_expected_value_calm_min),
         hostile_regime
-            ? pick(policy.target_expected_value_hostile_max, 0.00008)
-            : pick(policy.target_expected_value_calm_max, -0.00020)
+            ? pick(policy.target_expected_value_hostile_max, defaults.target_expected_value_hostile_max)
+            : pick(policy.target_expected_value_calm_max, defaults.target_expected_value_calm_max)
     );
     *min_strength = std::min(*min_strength, target_strength);
     *min_expected_value = std::min(*min_expected_value, target_edge);
@@ -2161,7 +2195,6 @@ void TradingEngine::run() {
                 }
 
                 generateSignals();
-                learnOptimalFilterValue();
                 executeSignals();
 
                 last_scan_time = std::chrono::steady_clock::now();
@@ -2559,18 +2592,35 @@ void TradingEngine::generateSignals() {
             strategy::Signal best_signal;
             int candidate_count = static_cast<int>(signals.size());
             const auto& manager_policy = probabilistic_snapshot.phase3_manager_filter_policy;
+            const auto manager_defaults =
+                autolife::analytics::ProbabilisticRuntimeModel::Phase3ManagerFilterPolicy{};
             const bool use_manager_policy = manager_policy.enabled;
-            const auto manager_pick = [&](double policy_value, double legacy_value) {
-                return use_manager_policy ? policy_value : legacy_value;
+            const auto manager_pick = [&](double policy_value, double default_value) {
+                return use_manager_policy ? policy_value : default_value;
             };
-            double min_strength = manager_pick(manager_policy.base_min_strength_default, 0.40);
-            double min_expected_value = manager_pick(manager_policy.base_min_expected_value, 0.0);
+            double min_strength = manager_pick(
+                manager_policy.base_min_strength_default,
+                manager_defaults.base_min_strength_default
+            );
+            double min_expected_value = manager_pick(
+                manager_policy.base_min_expected_value,
+                manager_defaults.base_min_expected_value
+            );
             if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
-                min_strength = manager_pick(manager_policy.base_min_strength_high_volatility, 0.48);
+                min_strength = manager_pick(
+                    manager_policy.base_min_strength_high_volatility,
+                    manager_defaults.base_min_strength_high_volatility
+                );
             } else if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
-                min_strength = manager_pick(manager_policy.base_min_strength_trending_down, 0.52);
+                min_strength = manager_pick(
+                    manager_policy.base_min_strength_trending_down,
+                    manager_defaults.base_min_strength_trending_down
+                );
             } else if (regime.regime == analytics::MarketRegime::RANGING) {
-                min_strength = manager_pick(manager_policy.base_min_strength_ranging, 0.43);
+                min_strength = manager_pick(
+                    manager_policy.base_min_strength_ranging,
+                    manager_defaults.base_min_strength_ranging
+                );
             }
             applyProbabilisticManagerFloors(
                 config_,
@@ -2930,8 +2980,6 @@ void TradingEngine::executeSignals() {
         return;
     }
 
-    const double current_filter = calculateDynamicFilterValue();
-
     const double current_scale = calculatePositionScaleMultiplier();
     LOG_INFO("Position scale multiplier: {:.2f}", current_scale);
 
@@ -2939,20 +2987,13 @@ void TradingEngine::executeSignals() {
     const bool small_seed_mode =
         metrics_snapshot.total_capital > 0.0 &&
         metrics_snapshot.total_capital <= config_.small_account_tier2_capital_krw;
-    double adaptive_filter_floor = std::clamp(current_filter + (small_seed_mode ? 0.08 : 0.0), 0.35, 0.90);
     int per_scan_buy_limit = small_seed_mode
         ? 1
         : std::max(1, config_.max_new_orders_per_scan);
-    const double small_seed_rr_add = small_seed_mode ? 0.16 : 0.0;
-    const double small_seed_edge_mul = small_seed_mode ? 1.30 : 1.0;
-    double min_reward_risk_gate = config_.min_reward_risk + small_seed_rr_add;
-    double min_expected_edge_gate = config_.min_expected_edge_pct * small_seed_edge_mul;
     if (small_seed_mode) {
-        LOG_INFO("Small-seed mode active: capital {:.0f}, filter {:.3f}, rr>= {:.2f}, edge>= {:.3f}%",
+        LOG_INFO("Small-seed mode active: capital {:.0f}, per_scan_limit={}",
                  metrics_snapshot.total_capital,
-                 adaptive_filter_floor,
-                 min_reward_risk_gate,
-                 min_expected_edge_gate * 100.0);
+                 per_scan_buy_limit);
     }
     const double fee_rate_for_capacity = Config::getInstance().getFeeRate();
     const double capacity_stop_guard_pct = 0.03;
@@ -3103,50 +3144,19 @@ void TradingEngine::executeSignals() {
         hostile_pause_scans_remaining_ = std::max(hostile_pause_scans_remaining_, base_pause);
     }
 
-    const double effective_filter = std::max(0.35, current_filter);
-    double hostility_filter_add = 0.0;
-    if (effective_hostility > (hostile_threshold - 0.04)) {
-        hostility_filter_add = std::clamp((effective_hostility - (hostile_threshold - 0.04)) * 0.22, 0.0, 0.08);
-    }
-    adaptive_filter_floor = std::clamp(
-        effective_filter + (small_seed_mode ? 0.08 : 0.0) + hostility_filter_add,
-        0.35,
-        0.93
-    );
-
     if (!small_seed_mode && effective_hostility >= (hostile_threshold + 0.13)) {
         per_scan_buy_limit = 1;
     }
 
-    if (effective_hostility >= hostile_threshold) {
-        min_reward_risk_gate += std::clamp((effective_hostility - hostile_threshold) * 0.45, 0.0, 0.18);
-        min_expected_edge_gate += std::clamp((effective_hostility - hostile_threshold) * 0.0011, 0.0, 0.00045);
-    }
-
-    min_reward_risk_gate = std::clamp(
-        min_reward_risk_gate,
-        config_.min_reward_risk,
-        config_.min_reward_risk + 0.35
-    );
-    min_expected_edge_gate = std::clamp(
-        min_expected_edge_gate,
-        config_.min_expected_edge_pct,
-        config_.min_expected_edge_pct + 0.0009
-    );
-
     LOG_INFO(
-        "Adaptive scan profile: hostility_now={:.3f}, hostility_ewma={:.3f} (up {:.2f}/range {:.2f}/down {:.2f}/hv {:.2f}), filter {:.3f} -> {:.3f}, per_scan_limit={}, rr>= {:.2f}, edge>= {:.3f}%, pause_remaining={}",
+        "Adaptive scan profile: hostility_now={:.3f}, hostility_ewma={:.3f} (up {:.2f}/range {:.2f}/down {:.2f}/hv {:.2f}), per_scan_limit={}, pause_remaining={}",
         market_hostility_score,
         market_hostility_ewma_,
         up_ratio,
         ranging_ratio,
         down_ratio,
         high_vol_ratio,
-        current_filter,
-        adaptive_filter_floor,
         per_scan_buy_limit,
-        min_reward_risk_gate,
-        min_expected_edge_gate * 100.0,
         hostile_pause_scans_remaining_
     );
     if (pause_new_entries_this_scan) {
@@ -5182,7 +5192,6 @@ void TradingEngine::logPerformance() {
     }
 
     LOG_INFO("Realtime monitoring metrics");
-    LOG_INFO("Dynamic filter value: {:.3f}", dynamic_filter_value_);
     LOG_INFO("Position scale multiplier: {:.2f}", position_scale_multiplier_);
     LOG_INFO("Cumulative buy/sell orders: {} / {}",
              prometheus_metrics_.total_buy_orders,
@@ -5504,13 +5513,6 @@ void TradingEngine::loadLearningState() {
         }
 
         const auto& policy = loaded->policy_params;
-        if (policy.contains("dynamic_filter_value")) {
-            dynamic_filter_value_ = std::clamp(
-                policy.value("dynamic_filter_value", dynamic_filter_value_),
-                0.35,
-                0.70
-            );
-        }
         if (policy.contains("position_scale_multiplier")) {
             position_scale_multiplier_ = std::clamp(
                 policy.value("position_scale_multiplier", position_scale_multiplier_),
@@ -5534,10 +5536,9 @@ void TradingEngine::loadLearningState() {
         }
 
         LOG_INFO(
-            "Learning state loaded (schema v{}, saved_at={}, filter={:.3f}, scale={:.2f}, hostility_ewma={:.3f}, pause_remaining={})",
+            "Learning state loaded (schema v{}, saved_at={}, scale={:.2f}, hostility_ewma={:.3f}, pause_remaining={})",
             loaded->schema_version,
             loaded->saved_at_ms,
-            dynamic_filter_value_,
             position_scale_multiplier_,
             market_hostility_ewma_,
             hostile_pause_scans_remaining_
@@ -5557,7 +5558,6 @@ void TradingEngine::saveLearningState() {
         snapshot.schema_version = core::LearningStateStoreJson::kCurrentSchemaVersion;
         snapshot.saved_at_ms = getCurrentTimestampMs();
         snapshot.policy_params = nlohmann::json::object();
-        snapshot.policy_params["dynamic_filter_value"] = dynamic_filter_value_;
         snapshot.policy_params["position_scale_multiplier"] = position_scale_multiplier_;
         snapshot.policy_params["market_hostility_ewma"] = market_hostility_ewma_;
         snapshot.policy_params["hostile_pause_scans_remaining"] = hostile_pause_scans_remaining_;
@@ -5580,7 +5580,6 @@ void TradingEngine::saveLearningState() {
         }
         snapshot.bucket_stats = std::move(bucket_stats);
         snapshot.rollback_point = nlohmann::json::object();
-        snapshot.rollback_point["dynamic_filter_value"] = dynamic_filter_value_;
         snapshot.rollback_point["position_scale_multiplier"] = position_scale_multiplier_;
         snapshot.rollback_point["market_hostility_ewma"] = market_hostility_ewma_;
         snapshot.rollback_point["hostile_pause_scans_remaining"] = hostile_pause_scans_remaining_;
@@ -5599,7 +5598,6 @@ void TradingEngine::saveState() {
         state["version"] = 1;
         state["timestamp"] = getCurrentTimestampMs();
         state["snapshot_last_event_seq"] = event_journal_ ? event_journal_->lastSeq() : 0;
-        state["dynamic_filter_value"] = dynamic_filter_value_;
         state["position_scale_multiplier"] = position_scale_multiplier_;
         state["market_hostility_ewma"] = market_hostility_ewma_;
         state["hostile_pause_scans_remaining"] = hostile_pause_scans_remaining_;
@@ -5765,7 +5763,6 @@ void TradingEngine::loadState() {
             snapshot_last_seq
         );
 
-        dynamic_filter_value_ = state.value("dynamic_filter_value", dynamic_filter_value_);
         position_scale_multiplier_ = state.value("position_scale_multiplier", position_scale_multiplier_);
         market_hostility_ewma_ = std::clamp(
             state.value("market_hostility_ewma", market_hostility_ewma_),
@@ -6148,71 +6145,6 @@ void TradingEngine::loadState() {
 
 // ===== [NEW] ???????????좎룞??????좎뜫爰?????獄쎼끏???????????????????????????좎럥荑??????????????????(?????????좎럡萸???????????????????????????? =====
 
-double TradingEngine::calculateDynamicFilterValue() {
-    if (scanned_markets_.empty()) {
-        return dynamic_filter_value_;
-    }
-
-    double total_volatility = 0.0;
-    for (const auto& metrics : scanned_markets_) {
-        total_volatility += metrics.volatility;
-    }
-    const double avg_volatility = total_volatility / static_cast<double>(scanned_markets_.size());
-
-    // Base filter from market volatility.
-    double new_filter_value = 0.40;
-    if (avg_volatility < 0.3) {
-        new_filter_value = 0.40 + (0.3 - avg_volatility) * 0.1667;  // tighter in calm markets
-    } else if (avg_volatility > 0.7) {
-        new_filter_value = 0.40 - (avg_volatility - 0.7) * 0.1667;  // looser in volatile markets
-    }
-    new_filter_value = std::clamp(new_filter_value, 0.35, 0.45);
-
-    // Performance overlay from recent net PnL (already fee/slippage realized).
-    auto history = risk_manager_->getTradeHistory();
-    if (history.size() >= 20) {
-        const size_t sample_n = std::min<size_t>(60, history.size());
-        double gross_profit = 0.0;
-        double gross_loss_abs = 0.0;
-        double sum_pnl = 0.0;
-        int wins = 0;
-
-        size_t seen = 0;
-        for (auto it = history.rbegin(); it != history.rend() && seen < sample_n; ++it, ++seen) {
-            const double pnl = it->profit_loss;
-            sum_pnl += pnl;
-            if (pnl > 0.0) {
-                gross_profit += pnl;
-                ++wins;
-            } else if (pnl < 0.0) {
-                gross_loss_abs += std::abs(pnl);
-            }
-        }
-
-        const double expectancy = sum_pnl / static_cast<double>(sample_n);
-        const double profit_factor =
-            (gross_loss_abs > 1e-12) ? (gross_profit / gross_loss_abs) : ((gross_profit > 1e-12) ? 99.9 : 0.0);
-        const double win_rate = static_cast<double>(wins) / static_cast<double>(sample_n);
-
-        if (expectancy < 0.0 || profit_factor < 1.0) {
-            new_filter_value += 0.02; // tighten entries when edge is negative
-        } else if (expectancy > 0.0 && profit_factor > 1.2 && win_rate >= 0.50) {
-            new_filter_value -= 0.01;
-        }
-    }
-
-    new_filter_value = std::clamp(new_filter_value, 0.35, 0.55);
-    if (std::abs(new_filter_value - dynamic_filter_value_) > 0.01) {
-        LOG_INFO("Dynamic filter update: {:.3f} -> {:.3f} (avg_vol {:.3f})",
-                 dynamic_filter_value_, new_filter_value, avg_volatility);
-    }
-
-    dynamic_filter_value_ = new_filter_value;
-    return dynamic_filter_value_;
-}
-
-// ===== [NEW] ???????? ??????熬곣뫖利닷뜝??좎룞?쇿뜝????좎룞????????????????????(Win Rate & Profit Factor ??????????????? =====
-
 double TradingEngine::calculatePositionScaleMultiplier() {
     // ????????????????:
     // Win Rate >= 60% AND Profit Factor >= 1.5 ?????????? ???????????????????좎?猷뤷뜝??
@@ -6267,174 +6199,6 @@ double TradingEngine::calculatePositionScaleMultiplier() {
 }
 
 // ===== [NEW] ML ?????????????????????좎럥큔????????????????????????????????????좎럥荑??????????? =====
-
-void TradingEngine::learnOptimalFilterValue() {
-    // historical P&L ??????????????????????????????????????????좎럥荑??????????????????????????繹먮굞彛???沃섎봿沅졾뜝???????????????
-    // ?????????
-    // 1. ??????좎럥큔??????????????????????signal_filter ????????????????????????????좎럥큔???????????????????????????????
-    // 2. ???????????????????????????좎럥荑??????????????????????????????繹먮굞彛???沃섎봿沅졾뜝???????좎럥큔?????????????????????(Win Rate, Profit Factor, Sharpe Ratio)
-    // 3. ??????좎럥큔?????????????????????????????좎럥痢?????좎룞?????????????????????????????좎럥荑????????????????좎룞彛????
-    
-    auto history = risk_manager_->getTradeHistory();
-    
-    if (history.size() < 50) {
-        LOG_INFO("Not enough samples for filter learning ({}/50), skipping", history.size());
-        return;
-    }
-    
-    // ?????????????????????????좎럥荑???????????????좎럥큔??????????????????????????????????????????????????繹먮굞彛???沃섎봿沅졾뜝?????????????
-    std::map<double, std::vector<TradeHistory>> trades_by_filter;
-    std::map<double, std::vector<double>> returns_by_filter;  // Sharpe Ratio ?????????????
-    
-    // ?????????????????????????좎럥荑?????????????(0.45 ~ 0.55, 0.01 ???????????좎럡萸??
-    for (double filter = 0.45; filter <= 0.55; filter += 0.01) {
-        trades_by_filter[filter] = std::vector<TradeHistory>();
-        returns_by_filter[filter] = std::vector<double>();
-    }
-    
-    // 1. ??????좎럥큔????????????????????????????????????????????좎럥荑??????????????????????????????
-    for (const auto& trade : history) {
-        // signal_filter???????????????????????????????????????0.01 ???????????좎럡萸???????????熬곣뫖利닷뜝??좎룞?쇿뜝????좎룞??????????????좎럩猶욕뜝?????
-        double rounded_filter = std::round(trade.signal_filter * 100.0) / 100.0;
-        
-        // ??????????????????????????????????좎럥荑???????????????????됰Ŧ????????????
-        if (rounded_filter >= 0.45 && rounded_filter <= 0.55) {
-            trades_by_filter[rounded_filter].push_back(trade);
-            returns_by_filter[rounded_filter].push_back(trade.profit_loss_pct);
-        }
-    }
-    
-    // 2. ???????????????????????????좎럥荑??????????????????????????????繹먮굞彛???沃섎봿沅졾뜝???????????????
-    struct FilterPerformance {
-        double filter_value;
-        int trade_count;
-        double win_rate;
-        double avg_return;
-        double profit_factor;
-        double sharpe_ratio;
-        double total_pnl;
-        
-        FilterPerformance()
-            : filter_value(0), trade_count(0), win_rate(0)
-            , avg_return(0), profit_factor(0), sharpe_ratio(0), total_pnl(0)
-        {}
-    };
-    
-    std::map<double, FilterPerformance> performances;
-    double best_sharpe = -999.0;
-    double best_filter = 0.5;
-    
-    for (auto& [filter_val, trades] : trades_by_filter) {
-        if (trades.empty()) continue;
-        
-        FilterPerformance perf;
-        perf.filter_value = filter_val;
-        perf.trade_count = static_cast<int>(trades.size());
-        
-        // Win Rate ????????????
-        int winning_trades = 0;
-        double total_profit = 0.0;
-        double total_loss = 0.0;  // ????????좎럥??????????????
-        
-        for (const auto& trade : trades) {
-            if (trade.profit_loss > 0) {
-                winning_trades++;
-                total_profit += trade.profit_loss;
-            } else {
-                total_loss += std::abs(trade.profit_loss);  // ????????좎럥????????????????????????????
-            }
-        }
-        
-        perf.win_rate = static_cast<double>(winning_trades) / trades.size();
-        perf.total_pnl = total_profit - total_loss;
-        
-        // Profit Factor ????????????(???????????좎럥裕????????/ ???????
-        perf.profit_factor = (total_loss > 0) ? (total_profit / total_loss) : total_profit;
-        
-        // ??????????????좎럥裕?????????
-        perf.avg_return = perf.total_pnl / trades.size();
-        
-        // Sharpe Ratio ????????????(?????????좎럥????????μ떜媛?걫??좎럩???????????????????????????좎럥裕?????????
-        const auto& returns = returns_by_filter[filter_val];
-        if (returns.size() > 1) {
-            double mean_return = 0.0;
-            for (double ret : returns) {
-                mean_return += ret;
-            }
-            mean_return /= returns.size();
-            
-            // ?????????됰Ŧ???????????亦껋꼦維뽩뜝???????????????
-            double variance = 0.0;
-            for (double ret : returns) {
-                double diff = ret - mean_return;
-                variance += diff * diff;
-            }
-            variance /= returns.size();
-            double std_dev = std::sqrt(variance);
-            
-            // Sharpe Ratio = (??????????????좎럥裕?????????- ?????遺얘턁?????????????? / ?????????됰Ŧ???????????亦껋꼦維뽩뜝???
-            // ?????遺얘턁??????????????0?????????????????????
-            perf.sharpe_ratio = (std_dev > 0.0001) ? (mean_return / std_dev) : 0.0;
-        }
-        
-        performances[filter_val] = perf;
-        
-        // ??????좎럥큔????????????????????????????????????좎럥荑?????????????????????(Sharpe Ratio ???????)
-        if (perf.sharpe_ratio > best_sharpe) {
-            best_sharpe = perf.sharpe_ratio;
-            best_filter = filter_val;
-        }
-        
-        LOG_INFO("Filter {:.2f}: trades {}, win {:.1f}%, PF {:.2f}, Sharpe {:.3f}, net {:.0f}",
-                 filter_val, perf.trade_count, perf.win_rate * 100.0, 
-                 perf.profit_factor, perf.sharpe_ratio, perf.total_pnl);
-    }
-    
-    // 3. ?????좎럥????????????????????????????????????좎룞彛????
-    // ??????????좎룞彛??? ??????????????? Win Rate >= 50% ??Profit Factor >= 1.2 ???????????????(?????????????????
-    std::vector<double> qualified_filters;
-    for (auto& [filter_val, perf] : performances) {
-        if (perf.win_rate >= 0.50 && perf.profit_factor >= 1.2 && perf.trade_count >= 10) {
-            qualified_filters.push_back(filter_val);
-        }
-    }
-    
-    if (!qualified_filters.empty()) {
-        // ???????????????????????????????????좎럥??????????좎럡????????Sharpe Ratio ??????좎럥큔????????????????????????????
-        double best_qualified_sharpe = -999.0;
-        for (double f : qualified_filters) {
-            if (performances[f].sharpe_ratio > best_qualified_sharpe) {
-                best_qualified_sharpe = performances[f].sharpe_ratio;
-                best_filter = f;
-            }
-        }
-        
-        LOG_INFO("ML filter learning (qualified set):");
-        LOG_INFO("  best filter {:.2f} (Sharpe {:.3f}, win {:.1f}%, PF {:.2f})",
-                 best_filter, best_qualified_sharpe,
-                 performances[best_filter].win_rate * 100.0,
-                 performances[best_filter].profit_factor);
-    } else {
-        // ???????????????????????????????????좎럥荑????????????????좎듅? ???????????????遺얘턁????????沃섃뫖荑???????????좎럡?썹땟戮녹???좎럩?????좎?留??????Sharpe ??????좎럥큔?????????????
-        LOG_WARN("ML filter learning fallback (no qualified set).");
-        LOG_WARN("  best Sharpe filter {:.2f} (Sharpe {:.3f})", best_filter, best_sharpe);
-    }
-    
-    // [FIX] ???????????좎룞??????좎뜫爰?????獄쎼끏???????????????????????????좎럥荑??????????????????좎룞??????????ш끽維뽳쭩?뱀땡???좎뜴????(??????좎럥큔???????????????좎럩?쒎뜝??좎룞??嶺뚮슢竊????????좎럥痢????????????熬곣뫖利닷뜝??좎룞?쇿뜝????좎룞????????
-    if (std::abs(best_filter - dynamic_filter_value_) > 0.001) {
-        double direction = (best_filter > dynamic_filter_value_) ? 1.0 : -1.0;
-        dynamic_filter_value_ += direction * 0.01; // 0.01???????
-        dynamic_filter_value_ = std::clamp(dynamic_filter_value_, 0.45, 0.55);
-        
-        LOG_INFO("Dynamic filter nudged: {:.2f} -> {:.2f}", 
-                 dynamic_filter_value_ - (direction * 0.01), dynamic_filter_value_);
-    }
-    
-    // ????????????????????????????????繹먮굞彛???沃섎봿沅졾뜝??????????(??????????좎룞彛???????????????????
-    filter_performance_history_[best_filter] = performances[best_filter].win_rate;
-}
-
-// ===== [NEW] Prometheus ??????좎럥큔????????????饔낅떽?????????????됰Ŧ?????????=====
 
 std::string TradingEngine::exportPrometheusMetrics() const {
     // Prometheus ??????됰Ŧ????????????????좎럥利?????????좎럥큔????????????饔낅떽????????????????????????꾩룆梨띰쭕?뚢뵾???????
@@ -6506,8 +6270,6 @@ std::string TradingEngine::exportPrometheusMetrics() const {
     oss << "# TYPE autolife_engine_signals_total counter\n";
 
     // ???????????좎룞??????좎뜫爰?????獄쎼끏?????????????????????????????饔낅떽?????????
-    oss << "# HELP autolife_filter_value_dynamic ???????????좎룞??????좎뜫爰?????獄쎼끏???????????????????????????좎럥荑??????(0~1)\n";
-    oss << "# TYPE autolife_filter_value_dynamic gauge\n";
     oss << "# HELP autolife_position_scale_multiplier ???????? ??????熬곣뫖利닷뜝??좎룞?쇿뜝????좎룞????????n";
     oss << "# TYPE autolife_position_scale_multiplier gauge\n";
 
@@ -6557,7 +6319,6 @@ std::string TradingEngine::exportPrometheusMetrics() const {
     oss << "autolife_engine_signals_total{} " << total_signals_ << " " << timestamp_ms << "\n";
     
     // 8. [NEW] ???????????좎룞??????좎뜫爰?????獄쎼끏??????????????????????????? ??????좎럥큔????????????饔낅떽???????
-    oss << "autolife_filter_value_dynamic{} " << dynamic_filter_value_ << " " << timestamp_ms << "\n";
     oss << "autolife_position_scale_multiplier{} " << position_scale_multiplier_ << " " << timestamp_ms << "\n";
     
     // 9. [NEW] ??????좎럥큔???????????????????????????좎럥큔????????????饔낅떽???????

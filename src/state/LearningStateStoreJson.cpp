@@ -33,7 +33,6 @@ bool LearningStateStoreJson::migrateLegacySchemaToCurrent(nlohmann::json& raw) {
     }
 
     constexpr const char* kPolicyKeys[] = {
-        "dynamic_filter_value",
         "position_scale_multiplier",
         "market_hostility_ewma",
         "hostile_pause_scans_remaining"

@@ -234,7 +234,6 @@ private:
     std::map<std::string, size_t> loaded_tf_cursors_;
     bool strict_live_equivalent_data_parity_ = false;
     int strict_data_parity_skip_count_ = 0;
-    double dynamic_filter_value_ = 0.46; // Self-learning filter (backtest bootstrap)
     double market_hostility_ewma_ = 0.0;
     int hostile_entry_pause_candles_ = 0;
     double recent_best_ask_price_ = 0.0;
@@ -316,8 +315,6 @@ private:
     );
     static long long toMsTimestamp(long long ts);
     
-    // Self-learning
-    void updateDynamicFilter();
 };
 
 } // namespace backtest
