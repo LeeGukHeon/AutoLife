@@ -2255,6 +2255,8 @@ void BacktestEngine::processCandle(const Candle& candle) {
             !strategy &&
             position &&
             position->entry_archetype.find("PROBABILISTIC_PRIMARY_RUNTIME") != std::string::npos;
+        const bool strategyless_runtime_live_exit_hard_only =
+            engine_config_.backtest_strategyless_runtime_live_exit_mapping_hard_exit_only;
         if (strategyless_runtime_live_exit_mapping && position) {
             bool partial_tp1_handled = false;
             if (!position->half_closed && current_price >= position->take_profit_1) {
@@ -2324,10 +2326,18 @@ void BacktestEngine::processCandle(const Candle& candle) {
             }
 
             if (position && !partial_tp1_handled) {
-                const bool risk_manager_exit = risk_manager_->shouldExitPosition(market_name_);
-                if (risk_manager_exit) {
-                    const bool is_stop_loss = current_price <= position->stop_loss;
-                    const bool is_take_profit_2 = current_price >= position->take_profit_2;
+                const bool is_stop_loss = current_price <= position->stop_loss;
+                const bool is_take_profit_2 = current_price >= position->take_profit_2;
+                bool risk_manager_exit = false;
+                bool should_close = is_stop_loss || is_take_profit_2;
+                if (!should_close) {
+                    risk_manager_exit = risk_manager_->shouldExitPosition(market_name_);
+                    if (!strategyless_runtime_live_exit_hard_only) {
+                        should_close = risk_manager_exit;
+                    }
+                }
+
+                if (should_close) {
                     const char* slippage_reason = is_stop_loss
                         ? "stop_loss"
                         : (is_take_profit_2 ? "take_profit_2" : "strategy_exit");
@@ -2356,7 +2366,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     executeOrder(order, order.price);
                     const std::string exit_reason = is_stop_loss
                         ? "StopLoss"
-                        : (is_take_profit_2 ? "TakeProfit2" : "RiskManagerExit");
+                        : (is_take_profit_2 ? "TakeProfit2" : (risk_manager_exit ? "RiskManagerExit" : "StrategyExit"));
                     risk_manager_->exitPosition(market_name_, order.price, exit_reason);
                     notifyStrategyClosed(closed_position, order.price);
                     position = nullptr;

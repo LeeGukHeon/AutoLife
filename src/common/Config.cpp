@@ -699,6 +699,8 @@ void Config::load(const std::string& path) {
             engine_config_.backtest_hostility_pause_candles_extreme = t.value("backtest_hostility_pause_candles_extreme", 60);
             engine_config_.backtest_strategyless_runtime_live_exit_mapping =
                 t.value("backtest_strategyless_runtime_live_exit_mapping", false);
+            engine_config_.backtest_strategyless_runtime_live_exit_mapping_hard_exit_only =
+                t.value("backtest_strategyless_runtime_live_exit_mapping_hard_exit_only", false);
             engine_config_.enable_uptrend_rescue_prefilter_tail_guard =
                 t.value("enable_uptrend_rescue_prefilter_tail_guard", false);
             engine_config_.enable_v21_rescue_prefiltered_pair_probe =

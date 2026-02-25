@@ -985,6 +985,36 @@ Last updated: 2026-02-25
   - `python scripts/run_ci_operational_gate.py --include-backtest --strict-execution-parity`
   - result: `pass`
 
+## Latest update (2026-02-25, v24)
+- Ticket: `SO4-15-NEGATIVE-DAY-TAIL-ANALYSIS-20260224`
+- Goal in this step:
+  - tighten strategy-less runtime mapping scope to hard exits only for correctness probes.
+- Code changes:
+  - `include/engine/EngineConfig.h`
+  - `src/common/Config.cpp`
+  - `src/runtime/BacktestRuntime.cpp`
+  - new flag:
+    - `trading.backtest_strategyless_runtime_live_exit_mapping_hard_exit_only` (default `false`)
+- Probe summary (OFF vs ON hard-only):
+  - OFF artifact:
+    - `build/Release/logs/strategyless_exit_audit_5set_20260225_v24_hardonly_off_probefixed2.json`
+  - ON artifact:
+    - `build/Release/logs/strategyless_exit_audit_5set_20260225_v24_hardonly_on_probefixed2.json`
+  - key delta:
+    - `runtime_trade_backtest_eod_ratio 1.0 -> 0.0`
+    - `runtime_trade_sample_count 5 -> 27`
+    - exit reasons shift:
+      - OFF `{BacktestEOD:5}`
+      - ON `{StopLoss:17, TakeProfit1:10}`
+- Baseline safety:
+  - source encoding: pass
+    - `build/Release/logs/source_encoding_check_20260225_v24_patch.json`
+  - CI operational gate: pass
+    - `build/Release/logs/operational_readiness_report.json`
+- Remaining:
+  - strict gap conclusion still blocked by live overlap sample policy in fixed-window compare;
+    continue sample expansion and recheck.
+
 ## Detailed history references
 - `docs/TODO_STAGE15_EXECUTION_PLAN_2026-02-13.md`
 - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`

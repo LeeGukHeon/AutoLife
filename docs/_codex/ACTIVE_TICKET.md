@@ -1295,3 +1295,35 @@ Last updated: 2026-02-25
   - `sample_size_ready=true`
   - `mapping_gap_observed=true`
   - `next_step_hint=narrow_correctness_patch_scope_to_runtime_strategyless_exit_mapping`
+
+## Latest update (2026-02-25, v24)
+- scope:
+  - narrow correctness patch for `strategy-less runtime exit mapping` to reduce broad occupancy side effects.
+- code:
+  - `include/engine/EngineConfig.h`
+    - added flag:
+      - `backtest_strategyless_runtime_live_exit_mapping_hard_exit_only` (default `false`)
+  - `src/common/Config.cpp`
+    - config parsing for `trading.backtest_strategyless_runtime_live_exit_mapping_hard_exit_only`
+  - `src/runtime/BacktestRuntime.cpp`
+    - when mapping flag ON and hard-only ON:
+      - apply live-like mapping only for hard exits (`stop_loss`, `take_profit_2`)
+      - skip soft `RiskManagerExit` path in strategy-less runtime branch
+- baseline safety:
+  - build:
+    - `cmake --build build --config Release --target AutoLifeTrading`
+  - gate:
+    - `python scripts/run_ci_operational_gate.py --include-backtest --strict-execution-parity`
+    - result: `pass`
+- probe artifacts (OFF vs ON hard-only):
+  - OFF:
+    - `build/Release/logs/strategyless_exit_audit_5set_20260225_v24_hardonly_off_probefixed2.json`
+  - ON:
+    - `build/Release/logs/strategyless_exit_audit_5set_20260225_v24_hardonly_on_probefixed2.json`
+  - focused delta:
+    - `runtime_trade_backtest_eod_ratio: 1.0 -> 0.0`
+    - `runtime_trade_sample_count: 5 -> 27`
+    - `runtime_exit_reason_counts_in_samples: {BacktestEOD:5} -> {StopLoss:17, TakeProfit1:10}`
+- interpretation:
+  - hard-only mapping removes strategy-less runtime `BacktestEOD` concentration in backtest probe.
+  - next step remains live-overlap sample expansion for strict reason-gap conclusion.

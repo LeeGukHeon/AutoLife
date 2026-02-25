@@ -234,6 +234,11 @@ struct EngineConfig {
     // Correctness probe (default OFF): allow strategy-less runtime positions
     // to use live-like RiskManager exit mapping in backtest.
     bool backtest_strategyless_runtime_live_exit_mapping = false;
+    // Correctness probe scope (default OFF): when enabled together with
+    // backtest_strategyless_runtime_live_exit_mapping, limit mapping exits
+    // to hard conditions only (stop loss / take profit 2) and skip soft
+    // RiskManager exits (e.g., stagnation/time-based exits).
+    bool backtest_strategyless_runtime_live_exit_mapping_hard_exit_only = false;
     // Guard flag (default OFF): prefilter-qualified uptrend rescue tail guard.
     bool enable_uptrend_rescue_prefilter_tail_guard = false;
     // Deprecated alias (default OFF): retained for backward-compatible config.

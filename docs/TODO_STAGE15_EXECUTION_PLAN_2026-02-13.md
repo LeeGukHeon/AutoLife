@@ -2092,6 +2092,30 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
 - safety:
   - `python scripts/run_ci_operational_gate.py --include-backtest --strict-execution-parity` -> `pass`
 
+## 2026-02-25 v24 update (strategyless runtime hard-only mapping probe)
+- code updates:
+  - `include/engine/EngineConfig.h`
+  - `src/common/Config.cpp`
+  - `src/runtime/BacktestRuntime.cpp`
+  - new probe flag:
+    - `trading.backtest_strategyless_runtime_live_exit_mapping_hard_exit_only` (default `false`)
+- behavior (when both flags ON):
+  - `backtest_strategyless_runtime_live_exit_mapping=true`
+  - `backtest_strategyless_runtime_live_exit_mapping_hard_exit_only=true`
+  - strategy-less runtime mapping exits only on hard conditions (`stop_loss`, `take_profit_2`)
+  - soft `RiskManagerExit` path skipped in that probe mode
+- probe artifacts:
+  - OFF:
+    - `build/Release/logs/strategyless_exit_audit_5set_20260225_v24_hardonly_off_probefixed2.json`
+  - ON:
+    - `build/Release/logs/strategyless_exit_audit_5set_20260225_v24_hardonly_on_probefixed2.json`
+  - delta:
+    - `runtime_trade_backtest_eod_ratio: 1.0 -> 0.0`
+    - `runtime_trade_sample_count: 5 -> 27`
+    - exit reasons: `{BacktestEOD:5} -> {StopLoss:17, TakeProfit1:10}`
+- safety recheck:
+  - `python scripts/run_ci_operational_gate.py --include-backtest --strict-execution-parity` -> `pass`
+
 ## Guardrails
 - Sequential only (`--max-workers 1` policy).
 - No coin hardcoding (pattern/regime only).
