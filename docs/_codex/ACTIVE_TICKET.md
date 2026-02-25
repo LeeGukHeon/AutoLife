@@ -55,6 +55,28 @@ Last updated: 2026-02-25
   - strict gate recheck:
     - `python scripts/run_ci_operational_gate.py --include-backtest --strict-execution-parity --run-should-exit-parity-analysis --refresh-should-exit-audit-from-logs --should-exit-audit-live-runtime-log-glob "build/Release/logs/live_probe_stdout*.txt" --should-exit-audit-live-runtime-log-mode-filter exclude_backtest --strict-should-exit-parity`
     - `CIGate PASSED`
+- Profitability iteration-2 (`2026-02-25`, retained candidate):
+  - patch:
+    - `src/runtime/BacktestRuntime.cpp`
+    - `src/runtime/LiveTradingRuntime.cpp`
+    - under `RANGING|CORE_RESCUE`, added `weak_range_rescue_midvol_margin_tail`
+      (`cal 0.4175~0.4186`, `margin -0.0062~-0.0051`, `strength<0.50`, `liq<68`, `vol 0.16~0.18`)
+  - verification:
+    - `build/Release/logs/verification_report_profitability_iter2_candidate.json`
+    - non-degrade (`baseline_delta_pf=0.0`, `baseline_delta_exp=0.0`, `overall_gate_pass=true`)
+  - daily OOS:
+    - `build/Release/logs/daily_oos_stability_report_profitability_iter2_candidate.json`
+    - `status=pass`, `nonpositive_day_ratio=0.2`, `total_profit_sum=545.74624`, `peak_day_drawdown_pct=0.916375`
+  - deltas:
+    - vs run2:
+      - `build/Release/logs/daily_oos_delta_profitability_iter2_vs_run2.json`
+      - gate-aligned `profit_sum_delta=+88.266221`, `nonpositive_day_count_delta=-1`
+    - vs run1 baseline:
+      - `build/Release/logs/daily_oos_delta_profitability_iter2_vs_run1.json`
+      - gate-aligned `profit_sum_delta=+137.374230`, `nonpositive_day_count_delta=-1`
+  - strict operational gate:
+    - same strict parity command rerun
+    - `CIGate PASSED`
 
 ## Scope
 - In scope:

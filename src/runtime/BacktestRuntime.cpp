@@ -1367,9 +1367,19 @@ bool passesProbabilisticPrimaryMinimums(
                 signal.liquidity_score < 51.0 &&
                 signal.volatility >= 0.13 &&
                 signal.volatility < 0.19;
+            const bool weak_range_rescue_midvol_margin_tail =
+                signal.probabilistic_h5_calibrated >= 0.4175 &&
+                signal.probabilistic_h5_calibrated < 0.4186 &&
+                signal.probabilistic_h5_margin <= -0.0051 &&
+                signal.probabilistic_h5_margin > -0.0062 &&
+                signal.strength < 0.50 &&
+                signal.liquidity_score < 68.0 &&
+                signal.volatility >= 0.16 &&
+                signal.volatility < 0.18;
             if (weak_range_rescue_tail ||
                 weak_range_rescue_narrow_tail ||
-                weak_range_rescue_lowliq_margin_tail) {
+                weak_range_rescue_lowliq_margin_tail ||
+                weak_range_rescue_midvol_margin_tail) {
                 if (reject_reason != nullptr) {
                     *reject_reason = "blocked_probabilistic_primary_rescue_tail_guard";
                 }

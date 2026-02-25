@@ -71,6 +71,25 @@ Last updated: 2026-02-25
 - Safety gate recheck:
   - `python scripts/run_ci_operational_gate.py --include-backtest --strict-execution-parity --run-should-exit-parity-analysis --refresh-should-exit-audit-from-logs --should-exit-audit-live-runtime-log-glob "build/Release/logs/live_probe_stdout*.txt" --should-exit-audit-live-runtime-log-mode-filter exclude_backtest --strict-should-exit-parity`
   - result: `CIGate PASSED`
+- Iteration-2 candidate (2026-02-25):
+  - code:
+    - `src/runtime/BacktestRuntime.cpp`
+    - `src/runtime/LiveTradingRuntime.cpp`
+    - added `weak_range_rescue_midvol_margin_tail` under `RANGING|CORE_RESCUE` gate.
+  - verification:
+    - `build/Release/logs/verification_report_profitability_iter2_candidate.json`
+    - unchanged vs run2 (`avg_profit_factor=2.9577`, `avg_expectancy_krw=14.7159`, `overall_gate_pass=true`)
+  - daily OOS:
+    - `build/Release/logs/daily_oos_stability_report_profitability_iter2_candidate.json`
+    - `status=pass`, `evaluated_day_count=10`, `nonpositive_day_ratio=0.2`, `total_profit_sum=545.74624`, `peak_day_drawdown_pct=0.916375`
+  - delta vs run2:
+    - `build/Release/logs/daily_oos_delta_profitability_iter2_vs_run2.json`
+    - gate-aligned `profit_sum_delta=+88.266221`, `nonpositive_day_count_delta=-1`
+  - delta vs run1 baseline:
+    - `build/Release/logs/daily_oos_delta_profitability_iter2_vs_run1.json`
+    - gate-aligned `profit_sum_delta=+137.374230`, `nonpositive_day_count_delta=-1`
+  - strict gate recheck:
+    - `CIGate PASSED` (same strict parity command)
 
 ## Phase 3 delivery status (2026-02-25)
 - Status: `delivery summary finalized (Phase 3 only)`
