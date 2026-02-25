@@ -323,13 +323,7 @@ bool requiresTypedArchetype(const std::string& strategy_name) {
     if (normalized.empty() || normalized == "recovered") {
         return false;
     }
-    if (normalized == "foundation_adaptive") {
-        return true;
-    }
-    return normalized.find("momentum") != std::string::npos ||
-           normalized.find("breakout") != std::string::npos ||
-           normalized.find("scalp") != std::string::npos ||
-           normalized.find("trend") != std::string::npos;
+    return normalized == "foundation_adaptive";
 }
 
 void normalizeSignalStopLossByRegime(strategy::Signal& signal, analytics::MarketRegime regime) {

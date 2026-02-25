@@ -131,14 +131,14 @@ class DailyOosStabilityTest(unittest.TestCase):
                     "exit_reason": "BacktestEOD",
                     "profit_loss_krw": -100.0,
                     "regime": "TRENDING_UP",
-                    "entry_archetype": "CORE_RESCUE_SHOULD_ENTER",
+                    "entry_archetype": "FOUNDATION_RANGE_PULLBACK",
                 },
                 {
                     "exit_time": 1771200300000,
                     "exit_reason": "TakeProfit1",
                     "profit_loss_krw": 40.0,
                     "regime": "TRENDING_UP",
-                    "entry_archetype": "CORE_RESCUE_SHOULD_ENTER",
+                    "entry_archetype": "FOUNDATION_RANGE_PULLBACK",
                 },
             ]
         }
@@ -155,14 +155,14 @@ class DailyOosStabilityTest(unittest.TestCase):
                     "exit_reason": "BacktestEOD",
                     "profit_loss_krw": -100.0,
                     "regime": "TRENDING_UP",
-                    "entry_archetype": "CORE_RESCUE_SHOULD_ENTER",
+                    "entry_archetype": "FOUNDATION_RANGE_PULLBACK",
                 },
                 {
                     "exit_time": 1771200300000,
                     "exit_reason": "TakeProfit1",
                     "profit_loss_krw": 40.0,
                     "regime": "TRENDING_UP",
-                    "entry_archetype": "CORE_RESCUE_SHOULD_ENTER",
+                    "entry_archetype": "FOUNDATION_RANGE_PULLBACK",
                 },
             ]
         }

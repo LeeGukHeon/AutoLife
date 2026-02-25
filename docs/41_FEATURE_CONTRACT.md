@@ -1,11 +1,8 @@
-# Feature Contract (v1)
+# Feature Contract (v2_draft)
 Last updated: 2026-02-23
 
 ## Canonical contract file
-- `config/model/probabilistic_feature_contract_v1.json`
-
-## Optional draft (not active)
-- `config/model/probabilistic_feature_contract_v2.json` (MODE B draft)
+- `config/model/probabilistic_feature_contract_v2.json`
 - Current `v2_draft` is transitional:
   - explicit `version=v2_draft`
   - row schema is frozen (43 columns) for strict gate compatibility

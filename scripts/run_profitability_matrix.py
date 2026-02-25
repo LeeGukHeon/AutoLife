@@ -855,11 +855,6 @@ def main() -> int:
         action="store_true",
         help="Skip baseline comparison gate and evaluate only profile-level gates.",
     )
-    # Deprecated aliases (kept for backward compatibility)
-    parser.add_argument("--core-vs-legacy-min-profit-factor-delta", type=float, default=None, help=argparse.SUPPRESS)
-    parser.add_argument("--core-vs-legacy-min-expectancy-delta-krw", type=float, default=None, help=argparse.SUPPRESS)
-    parser.add_argument("--core-vs-legacy-min-total-profit-delta-krw", type=float, default=None, help=argparse.SUPPRESS)
-    parser.add_argument("--skip-core-vs-legacy-gate", action="store_true", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--max-workers", type=int, default=1)
     parser.add_argument("--backtest-retry-count", type=int, default=2)
     parser.add_argument(
@@ -945,12 +940,6 @@ def main() -> int:
     core_vs_baseline_min_pf_delta = float(args.core_vs_baseline_min_profit_factor_delta)
     core_vs_baseline_min_expectancy_delta_krw = float(args.core_vs_baseline_min_expectancy_delta_krw)
     core_vs_baseline_min_total_profit_delta_krw = float(args.core_vs_baseline_min_total_profit_delta_krw)
-    if args.core_vs_legacy_min_profit_factor_delta is not None:
-        core_vs_baseline_min_pf_delta = float(args.core_vs_legacy_min_profit_factor_delta)
-    if args.core_vs_legacy_min_expectancy_delta_krw is not None:
-        core_vs_baseline_min_expectancy_delta_krw = float(args.core_vs_legacy_min_expectancy_delta_krw)
-    if args.core_vs_legacy_min_total_profit_delta_krw is not None:
-        core_vs_baseline_min_total_profit_delta_krw = float(args.core_vs_legacy_min_total_profit_delta_krw)
     if bool(threshold_bundle.get("adaptive_applied", False)) and str(threshold_bundle.get("adaptive_mode", "none")) == "full":
         relief = float(threshold_bundle.get("relief_ratio", 0.0))
         hostility_level = str((threshold_bundle.get("blended_context") or {}).get("blended_hostility_level", "unknown")).lower()
@@ -1312,7 +1301,7 @@ def main() -> int:
     core_full_summary = next((x for x in profile_summaries if x["profile_id"] == "core_full"), None)
     core_vs_baseline_required_profiles = {"baseline_default", "core_full"}
     core_vs_baseline_required_profiles_present = core_vs_baseline_required_profiles.issubset(requested_profile_ids)
-    skip_core_vs_baseline_gate = bool(args.skip_core_vs_baseline_gate) or bool(args.skip_core_vs_legacy_gate)
+    skip_core_vs_baseline_gate = bool(args.skip_core_vs_baseline_gate)
     core_vs_baseline: Dict[str, Any] = {
         "comparison_available": baseline_summary is not None and core_full_summary is not None,
         "baseline_profile": "baseline_default",
@@ -1430,17 +1419,10 @@ def main() -> int:
             "core_vs_baseline_min_expectancy_delta_krw": core_vs_baseline_min_expectancy_delta_krw,
             "core_vs_baseline_min_total_profit_delta_krw": core_vs_baseline_min_total_profit_delta_krw,
             "skip_core_vs_baseline_gate": skip_core_vs_baseline_gate,
-            # Backward compatibility aliases
-            "core_vs_legacy_min_profit_factor_delta": core_vs_baseline_min_pf_delta,
-            "core_vs_legacy_min_expectancy_delta_krw": core_vs_baseline_min_expectancy_delta_krw,
-            "core_vs_legacy_min_total_profit_delta_krw": core_vs_baseline_min_total_profit_delta_krw,
-            "skip_core_vs_legacy_gate": skip_core_vs_baseline_gate,
             "hostility_adaptive": threshold_bundle,
         },
         "profile_gate_pass": profile_gate_pass,
         "core_vs_baseline": core_vs_baseline,
-        # Backward compatibility alias
-        "core_vs_legacy": core_vs_baseline,
         "overall_gate_pass": overall_gate_pass,
         "entry_rejection_by_profile": entry_rejection_by_profile,
         "profile_summaries": profile_summaries,

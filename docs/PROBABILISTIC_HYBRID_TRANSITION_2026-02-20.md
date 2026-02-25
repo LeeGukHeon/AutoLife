@@ -38,7 +38,7 @@ Status: `PHASE_4_RUNTIME_RISK_COUPLED`
 ### Required
 - [x] Build indicator + context feature pipeline base script
 - [x] Run full feature build and freeze output manifest
-- [x] Freeze schema/version using `config/model/probabilistic_feature_contract_v1.json`
+- [x] Freeze schema/version using `config/model/probabilistic_feature_contract_v2.json`
 - [x] Regenerate split manifest on final dataset
 
 ### Completed Snapshot
