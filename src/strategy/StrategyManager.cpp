@@ -3,6 +3,7 @@
 #include "analytics/TechnicalIndicators.h"
 #include "common/Logger.h"
 #include "common/Config.h"
+#include "common/RuntimeDiagnosticsShared.h"
 #include "risk/RiskManager.h"
 #include <algorithm>
 #include <cctype>
@@ -605,6 +606,102 @@ void incrementRejectionReason(std::map<std::string, int>* bucket, const char* re
     (*bucket)[reason]++;
 }
 
+void incrementCounter(std::map<std::string, int>* bucket, const std::string& key, int delta = 1) {
+    if (bucket == nullptr || key.empty() || delta <= 0) {
+        return;
+    }
+    (*bucket)[key] += delta;
+}
+
+void recordPhase3SliceCounter(
+    std::map<std::string, int>* bucket,
+    const std::string& prefix,
+    const std::string& label,
+    bool passed
+) {
+    if (bucket == nullptr) {
+        return;
+    }
+    const std::string safe_label = label.empty() ? "UNKNOWN" : label;
+    incrementCounter(bucket, prefix + "::" + safe_label + "::candidate", 1);
+    if (passed) {
+        incrementCounter(bucket, prefix + "::" + safe_label + "::pass", 1);
+    }
+}
+
+void recordPhase3DiagnosticsV2(
+    std::map<std::string, int>* bucket,
+    const Signal& signal,
+    bool passed
+) {
+    if (bucket == nullptr || !signal.phase3.diagnostics_v2_enabled) {
+        return;
+    }
+    incrementCounter(bucket, "candidate_total", 1);
+    if (passed) {
+        incrementCounter(bucket, "pass_total", 1);
+    }
+
+    recordPhase3SliceCounter(
+        bucket,
+        "pass_rate_by_regime",
+        autolife::common::runtime_diag::marketRegimeLabel(signal.market_regime),
+        passed
+    );
+    recordPhase3SliceCounter(
+        bucket,
+        "pass_rate_by_vol_bucket",
+        autolife::common::runtime_diag::volatilityBucket(signal.volatility),
+        passed
+    );
+    recordPhase3SliceCounter(
+        bucket,
+        "pass_rate_by_liquidity_bucket",
+        autolife::common::runtime_diag::liquidityBucket(signal.liquidity_score),
+        passed
+    );
+    recordPhase3SliceCounter(
+        bucket,
+        "pass_rate_edge_regressor_present_vs_fallback",
+        signal.phase3.edge_regressor_used ? "edge_regressor_present" : "edge_fallback",
+        passed
+    );
+    recordPhase3SliceCounter(
+        bucket,
+        "pass_rate_by_cost_mode",
+        signal.phase3.cost_mode,
+        passed
+    );
+}
+
+void recordPhase3RejectDiagnosticsV2(
+    std::map<std::string, int>* bucket,
+    const foundation::FilterDecision& decision,
+    const Signal& signal
+) {
+    if (bucket == nullptr || !signal.phase3.diagnostics_v2_enabled) {
+        return;
+    }
+    if (!decision.margin_pass) {
+        incrementCounter(bucket, "reject_margin_insufficient", 1);
+    }
+    if (!decision.strength_pass) {
+        incrementCounter(bucket, "reject_strength_fail", 1);
+    }
+    if (!decision.expected_value_pass) {
+        incrementCounter(bucket, "reject_expected_value_fail", 1);
+    }
+    if (decision.frontier_enabled && !decision.frontier_pass) {
+        incrementCounter(bucket, "reject_frontier_fail", 1);
+    }
+    if (!decision.ev_confidence_pass) {
+        incrementCounter(bucket, "reject_ev_confidence_low", 1);
+    }
+    if (signal.phase3.cost_tail_enabled && !decision.cost_tail_pass) {
+        incrementCounter(bucket, "reject_cost_tail_fail", 1);
+    }
+}
+
 }
 
 StrategyManager::StrategyManager(std::shared_ptr<network::UpbitHttpClient> client)
@@ -1000,6 +1097,8 @@ std::vector<Signal> StrategyManager::filterSignalsWithDiagnostics(
         diagnostics->output_count = 0;
         diagnostics->rejection_reason_counts.clear();
     }
+    auto* rejection_bucket =
+        diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr;
 
     // Rebuilt from baseline: deterministic, decomposed filter pipeline.
     for (const auto& signal : signals) {
@@ -1033,6 +1132,7 @@ std::vector<Signal> StrategyManager::filterSignalsWithDiagnostics(
         const foundation::FilterDecision decision = foundation::evaluateFilter(input);
         if (decision.pass) {
             filtered.push_back(signal);
+            recordPhase3DiagnosticsV2(rejection_bucket, signal, true);
             continue;
         }
 
@@ -1047,8 +1147,9 @@ std::vector<Signal> StrategyManager::filterSignalsWithDiagnostics(
             }
             promoted.reason = "manager_probabilistic_primary_fastpass";
             filtered.push_back(promoted);
+            recordPhase3DiagnosticsV2(rejection_bucket, signal, true);
             incrementRejectionReason(
-                diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                rejection_bucket,
                 "manager_probabilistic_primary_fastpass"
             );
             continue;
@@ -1062,8 +1163,9 @@ std::vector<Signal> StrategyManager::filterSignalsWithDiagnostics(
             }
             promoted.reason = "manager_soft_queue_promoted";
             filtered.push_back(promoted);
+            recordPhase3DiagnosticsV2(rejection_bucket, signal, true);
             incrementRejectionReason(
-                diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                rejection_bucket,
                 "manager_soft_queue_promoted"
             );
             continue;
@@ -1076,15 +1178,18 @@ std::vector<Signal> StrategyManager::filterSignalsWithDiagnostics(
             }
             promoted.reason = "manager_probabilistic_primary_promoted";
             filtered.push_back(promoted);
+            recordPhase3DiagnosticsV2(rejection_bucket, signal, true);
             incrementRejectionReason(
-                diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+                rejection_bucket,
                 "manager_probabilistic_primary_promoted"
             );
             continue;
         }
 
+        recordPhase3DiagnosticsV2(rejection_bucket, signal, false);
+        recordPhase3RejectDiagnosticsV2(rejection_bucket, decision, signal);
         incrementRejectionReason(
-            diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr,
+            rejection_bucket,
             decision.reject_reason.empty()
                 ? "filtered_out_by_manager_unknown"
                 : decision.reject_reason.c_str()

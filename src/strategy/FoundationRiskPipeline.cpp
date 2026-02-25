@@ -47,6 +47,9 @@ FilterDecision evaluateFilter(const FilterInput& input) {
           )
         : 0.0;
     const bool probabilistic_high_confidence = probabilistic_confidence >= 0.65;
+    out.probabilistic_confidence = probabilistic_confidence;
+    out.ev_confidence = std::clamp(signal.phase3.ev_confidence, 0.0, 1.0);
+    out.frontier_enabled = signal.phase3.frontier_enabled;
 
     if (input.policy_block) {
         out.reject_reason = "filtered_out_by_manager_policy_block";
@@ -137,7 +140,7 @@ FilterDecision evaluateFilter(const FilterInput& input) {
             signal.strength >= 0.08
         )
     );
-    if (probabilistic_decision_path) {
+    if (probabilistic_decision_path && !out.frontier_enabled) {
         out.pass = true;
         return out;
     }
@@ -282,8 +285,47 @@ FilterDecision evaluateFilter(const FilterInput& input) {
         out.required_expected_value = std::min(out.required_expected_value, ev_cap);
     }
 
+    out.base_required_expected_value = out.required_expected_value;
+    out.frontier_required_expected_value = out.required_expected_value;
+    out.margin_pass = true;
+    out.ev_confidence_pass = true;
+    out.cost_tail_pass = true;
+    if (out.frontier_enabled) {
+        const double margin = std::clamp(signal.probabilistic_h5_margin, -1.0, 1.0);
+        const double margin_floor = std::clamp(signal.phase3.frontier_margin_floor, -1.0, 1.0);
+        out.margin_pass = margin >= margin_floor;
+        out.uncertainty_term = std::clamp(
+            ((1.0 - probabilistic_confidence) * 0.60) +
+                ((1.0 - out.ev_confidence) * 0.40),
+            0.0,
+            1.0
+        );
+        out.cost_tail_term = std::max(0.0, signal.phase3.cost_tail_pct - signal.phase3.cost_used_pct);
+        double required_ev =
+            out.base_required_expected_value -
+            (signal.phase3.frontier_k_margin * margin) +
+            (signal.phase3.frontier_k_uncertainty * out.uncertainty_term) +
+            (signal.phase3.frontier_k_cost_tail * out.cost_tail_term);
+        required_ev = std::clamp(
+            required_ev,
+            signal.phase3.frontier_min_required_ev,
+            signal.phase3.frontier_max_required_ev
+        );
+        out.frontier_required_expected_value = required_ev;
+        out.required_expected_value = required_ev;
+
+        const double ev_confidence_floor =
+            std::clamp(signal.phase3.frontier_ev_confidence_floor, 0.0, 1.0);
+        out.ev_confidence_pass = out.ev_confidence >= ev_confidence_floor;
+
+        const double cost_tail_threshold =
+            std::clamp(signal.phase3.frontier_cost_tail_reject_threshold_pct, 0.0, 1.0);
+        out.cost_tail_pass = out.cost_tail_term <= cost_tail_threshold;
+    }
+
     const bool probabilistic_primary_override =
         probabilistic_primary_signal &&
+        !out.frontier_enabled &&
         !input.hostile_regime &&
         signal.probabilistic_h5_calibrated >= 0.56 &&
         signal.probabilistic_h5_margin >= -0.002 &&
@@ -296,14 +338,36 @@ FilterDecision evaluateFilter(const FilterInput& input) {
         return out;
     }
 
-    const bool strength_pass = signal.strength >= out.required_strength;
-    const bool expected_value_pass = signal.expected_value >= out.required_expected_value;
-    out.pass = strength_pass && expected_value_pass;
+    out.strength_pass = signal.strength >= out.required_strength;
+    out.expected_value_pass = signal.expected_value >= out.required_expected_value;
+    out.frontier_pass =
+        out.margin_pass &&
+        out.ev_confidence_pass &&
+        out.cost_tail_pass &&
+        out.expected_value_pass;
+    out.pass = out.frontier_enabled
+        ? (out.strength_pass && out.frontier_pass)
+        : (out.strength_pass && out.expected_value_pass);
     if (out.pass) {
         return out;
     }
 
-    if (!strength_pass) {
+    if (out.frontier_enabled && !out.margin_pass) {
+        out.reject_reason = "filtered_out_by_manager_margin_insufficient";
+        return out;
+    }
+
+    if (out.frontier_enabled && !out.ev_confidence_pass) {
+        out.reject_reason = "filtered_out_by_manager_ev_confidence_low";
+        return out;
+    }
+
+    if (out.frontier_enabled && signal.phase3.cost_tail_enabled && !out.cost_tail_pass) {
+        out.reject_reason = "filtered_out_by_manager_cost_tail_fail";
+        return out;
+    }
+
+    if (!out.strength_pass) {
         if (rr_guard_active) {
             out.reject_reason = "filtered_out_by_manager_rr_guard_strength";
         } else if (history_guard_active) {
@@ -316,7 +380,12 @@ FilterDecision evaluateFilter(const FilterInput& input) {
         return out;
     }
 
-    if (!expected_value_pass) {
+    if (out.frontier_enabled && !out.frontier_pass) {
+        out.reject_reason = "filtered_out_by_manager_frontier";
+        return out;
+    }
+
+    if (!out.expected_value_pass) {
         if (rr_guard_active) {
             out.reject_reason = "filtered_out_by_manager_rr_guard_ev";
         } else if (history_guard_active) {

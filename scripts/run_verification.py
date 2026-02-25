@@ -474,6 +474,108 @@ def filter_reason_counts_by_prefix(
     return out
 
 
+def parse_phase3_slice_rows(
+    reason_counts: Dict[str, int],
+    prefix: str,
+) -> List[Dict[str, Any]]:
+    candidate_counts: Dict[str, int] = {}
+    pass_counts: Dict[str, int] = {}
+    token = f"{str(prefix).strip()}::"
+    for key, value in reason_counts.items():
+        name = str(key).strip()
+        if not name.startswith(token):
+            continue
+        tail = name[len(token) :]
+        parts = tail.split("::")
+        if len(parts) < 2:
+            continue
+        label = str("::".join(parts[:-1])).strip()
+        metric = str(parts[-1]).strip().lower()
+        if not label:
+            continue
+        count = max(0, to_int(value))
+        if metric == "candidate":
+            candidate_counts[label] = candidate_counts.get(label, 0) + count
+        elif metric == "pass":
+            pass_counts[label] = pass_counts.get(label, 0) + count
+
+    labels = sorted(set(candidate_counts.keys()) | set(pass_counts.keys()))
+    rows: List[Dict[str, Any]] = []
+    for label in labels:
+        candidate_total = max(0, to_int(candidate_counts.get(label, 0)))
+        pass_total = max(0, to_int(pass_counts.get(label, 0)))
+        rows.append(
+            {
+                "label": label,
+                "candidate_total": int(candidate_total),
+                "pass_total": int(pass_total),
+                "pass_rate": round(float(pass_total) / float(max(1, candidate_total)), 4),
+            }
+        )
+    rows.sort(key=lambda item: (-int(item["candidate_total"]), str(item["label"])))
+    return rows
+
+
+def build_phase3_diagnostics_v2(reason_counts: Dict[str, int]) -> Dict[str, Any]:
+    counters = {
+        "candidate_total": max(0, to_int(reason_counts.get("candidate_total", 0))),
+        "pass_total": max(0, to_int(reason_counts.get("pass_total", 0))),
+        "reject_margin_insufficient": max(0, to_int(reason_counts.get("reject_margin_insufficient", 0))),
+        "reject_strength_fail": max(0, to_int(reason_counts.get("reject_strength_fail", 0))),
+        "reject_expected_value_fail": max(0, to_int(reason_counts.get("reject_expected_value_fail", 0))),
+        "reject_frontier_fail": max(0, to_int(reason_counts.get("reject_frontier_fail", 0))),
+        "reject_ev_confidence_low": max(0, to_int(reason_counts.get("reject_ev_confidence_low", 0))),
+        "reject_cost_tail_fail": max(0, to_int(reason_counts.get("reject_cost_tail_fail", 0))),
+    }
+    reject_rows = sorted(
+        [
+            {"reason": key, "count": int(value)}
+            for key, value in counters.items()
+            if key.startswith("reject_") and int(value) > 0
+        ],
+        key=lambda item: (-int(item["count"]), str(item["reason"])),
+    )
+    pass_rate_by_regime = parse_phase3_slice_rows(reason_counts, "pass_rate_by_regime")
+    pass_rate_by_vol_bucket = parse_phase3_slice_rows(reason_counts, "pass_rate_by_vol_bucket")
+    pass_rate_by_liquidity_bucket = parse_phase3_slice_rows(reason_counts, "pass_rate_by_liquidity_bucket")
+    pass_rate_by_edge_source = parse_phase3_slice_rows(
+        reason_counts,
+        "pass_rate_edge_regressor_present_vs_fallback",
+    )
+    pass_rate_by_cost_mode = parse_phase3_slice_rows(reason_counts, "pass_rate_by_cost_mode")
+
+    enabled = bool(
+        counters["candidate_total"] > 0
+        or counters["pass_total"] > 0
+        or reject_rows
+        or pass_rate_by_regime
+        or pass_rate_by_vol_bucket
+        or pass_rate_by_liquidity_bucket
+        or pass_rate_by_edge_source
+        or pass_rate_by_cost_mode
+    )
+    return {
+        "enabled": bool(enabled),
+        "counters": counters,
+        "funnel_breakdown": {
+            "candidate_total": int(counters["candidate_total"]),
+            "pass_total": int(counters["pass_total"]),
+            "reject_margin_insufficient": int(counters["reject_margin_insufficient"]),
+            "reject_strength_fail": int(counters["reject_strength_fail"]),
+            "reject_expected_value_fail": int(counters["reject_expected_value_fail"]),
+            "reject_frontier_fail": int(counters["reject_frontier_fail"]),
+            "reject_ev_confidence_low": int(counters["reject_ev_confidence_low"]),
+            "reject_cost_tail_fail": int(counters["reject_cost_tail_fail"]),
+        },
+        "pass_rate_by_regime": pass_rate_by_regime,
+        "pass_rate_by_vol_bucket": pass_rate_by_vol_bucket,
+        "pass_rate_by_liquidity_bucket": pass_rate_by_liquidity_bucket,
+        "pass_rate_edge_regressor_present_vs_fallback": pass_rate_by_edge_source,
+        "pass_rate_by_cost_mode": pass_rate_by_cost_mode,
+        "top3_bottlenecks": reject_rows[:3],
+    }
+
+
 def build_candidate_generation_ab_playbook(
     component_shares: Dict[str, float],
     top_no_signal_reasons: List[Dict[str, Any]],
@@ -955,6 +1057,7 @@ def build_dataset_diagnostics(dataset_name: str, backtest_result: Dict[str, Any]
     }
 
     reason_counts = normalized_reason_counts(backtest_result.get("entry_rejection_reason_counts", {}))
+    phase3_diag = build_phase3_diagnostics_v2(reason_counts)
     no_signal_pattern_counts = normalized_reason_counts(backtest_result.get("no_signal_pattern_counts", {}))
     edge_gap_bucket_counts = normalized_reason_counts(
         backtest_result.get("entry_quality_edge_gap_buckets", {})
@@ -1057,6 +1160,7 @@ def build_dataset_diagnostics(dataset_name: str, backtest_result: Dict[str, Any]
         "strategy_funnel": strategy_diag,
         "strategy_collection": strategy_collection_diag,
         "post_entry_risk_telemetry": post_entry_telemetry,
+        "phase3_diagnostics_v2": phase3_diag,
         "shadow_funnel": {
             "rounds": int(shadow_rounds),
             "primary_generated_signals": int(shadow_primary_generated_signals),
@@ -1129,6 +1233,24 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         "dataset_with_shadow_probe": 0,
         "contract_all_pass_count": 0,
     }
+    phase3_counter_keys = [
+        "candidate_total",
+        "pass_total",
+        "reject_margin_insufficient",
+        "reject_strength_fail",
+        "reject_expected_value_fail",
+        "reject_frontier_fail",
+        "reject_ev_confidence_low",
+        "reject_cost_tail_fail",
+    ]
+    aggregate_phase3_counters: Dict[str, int] = {k: 0 for k in phase3_counter_keys}
+    aggregate_phase3_slices: Dict[str, Dict[str, Dict[str, int]]] = {
+        "pass_rate_by_regime": {},
+        "pass_rate_by_vol_bucket": {},
+        "pass_rate_by_liquidity_bucket": {},
+        "pass_rate_edge_regressor_present_vs_fallback": {},
+        "pass_rate_by_cost_mode": {},
+    }
 
     for item in dataset_diagnostics:
         groups = item.get("bottleneck_groups", {})
@@ -1143,6 +1265,29 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
                 if not reason_key:
                     continue
                 aggregate_reasons[reason_key] = aggregate_reasons.get(reason_key, 0) + max(0, to_int(v))
+
+        phase3_diag = item.get("phase3_diagnostics_v2", {})
+        if isinstance(phase3_diag, dict) and bool(phase3_diag.get("enabled", False)):
+            counters = phase3_diag.get("counters", {})
+            if isinstance(counters, dict):
+                for key in phase3_counter_keys:
+                    aggregate_phase3_counters[key] += max(0, to_int(counters.get(key, 0)))
+            for slice_key in aggregate_phase3_slices:
+                rows = phase3_diag.get(slice_key, [])
+                if not isinstance(rows, list):
+                    continue
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    label = str(row.get("label", "")).strip()
+                    if not label:
+                        continue
+                    slot = aggregate_phase3_slices[slice_key].setdefault(
+                        label,
+                        {"candidate_total": 0, "pass_total": 0},
+                    )
+                    slot["candidate_total"] += max(0, to_int(row.get("candidate_total", 0)))
+                    slot["pass_total"] += max(0, to_int(row.get("pass_total", 0)))
 
         no_signal_patterns = item.get("no_signal_pattern_counts", {})
         if isinstance(no_signal_patterns, dict):
@@ -1371,6 +1516,73 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         top_manager_prefilter_reasons=aggregate_top_manager_prefilter_reasons,
     )
 
+    def build_phase3_aggregate_rows(
+        payload: Dict[str, Dict[str, int]],
+    ) -> List[Dict[str, Any]]:
+        rows: List[Dict[str, Any]] = []
+        for label, counts in payload.items():
+            candidate_total = max(0, to_int(counts.get("candidate_total", 0)))
+            pass_total = max(0, to_int(counts.get("pass_total", 0)))
+            rows.append(
+                {
+                    "label": str(label),
+                    "candidate_total": int(candidate_total),
+                    "pass_total": int(pass_total),
+                    "pass_rate": round(float(pass_total) / float(max(1, candidate_total)), 4),
+                }
+            )
+        rows.sort(key=lambda item: (-int(item["candidate_total"]), str(item["label"])))
+        return rows
+
+    phase3_reject_rows = sorted(
+        [
+            {"reason": key, "count": int(value)}
+            for key, value in aggregate_phase3_counters.items()
+            if key.startswith("reject_") and int(value) > 0
+        ],
+        key=lambda item: (-int(item["count"]), str(item["reason"])),
+    )
+    aggregate_phase3_diag = {
+        "enabled": bool(
+            aggregate_phase3_counters.get("candidate_total", 0) > 0
+            or aggregate_phase3_counters.get("pass_total", 0) > 0
+            or phase3_reject_rows
+        ),
+        "counters": {key: int(value) for key, value in aggregate_phase3_counters.items()},
+        "funnel_breakdown": {
+            "candidate_total": int(aggregate_phase3_counters.get("candidate_total", 0)),
+            "pass_total": int(aggregate_phase3_counters.get("pass_total", 0)),
+            "reject_margin_insufficient": int(
+                aggregate_phase3_counters.get("reject_margin_insufficient", 0)
+            ),
+            "reject_strength_fail": int(aggregate_phase3_counters.get("reject_strength_fail", 0)),
+            "reject_expected_value_fail": int(
+                aggregate_phase3_counters.get("reject_expected_value_fail", 0)
+            ),
+            "reject_frontier_fail": int(aggregate_phase3_counters.get("reject_frontier_fail", 0)),
+            "reject_ev_confidence_low": int(
+                aggregate_phase3_counters.get("reject_ev_confidence_low", 0)
+            ),
+            "reject_cost_tail_fail": int(aggregate_phase3_counters.get("reject_cost_tail_fail", 0)),
+        },
+        "pass_rate_by_regime": build_phase3_aggregate_rows(
+            aggregate_phase3_slices["pass_rate_by_regime"]
+        ),
+        "pass_rate_by_vol_bucket": build_phase3_aggregate_rows(
+            aggregate_phase3_slices["pass_rate_by_vol_bucket"]
+        ),
+        "pass_rate_by_liquidity_bucket": build_phase3_aggregate_rows(
+            aggregate_phase3_slices["pass_rate_by_liquidity_bucket"]
+        ),
+        "pass_rate_edge_regressor_present_vs_fallback": build_phase3_aggregate_rows(
+            aggregate_phase3_slices["pass_rate_edge_regressor_present_vs_fallback"]
+        ),
+        "pass_rate_by_cost_mode": build_phase3_aggregate_rows(
+            aggregate_phase3_slices["pass_rate_by_cost_mode"]
+        ),
+        "top3_bottlenecks": phase3_reject_rows[:3],
+    }
+
     return {
         "dataset_count": len(dataset_diagnostics),
         "aggregate_bottleneck_groups": aggregate_groups,
@@ -1401,6 +1613,7 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         },
         "top_non_execution_group_vote_counts": top_group_votes,
         "post_entry_risk_telemetry": aggregate_post_entry_telemetry,
+        "phase3_diagnostics_v2": aggregate_phase3_diag,
         "shadow_funnel": aggregate_shadow_summary,
     }
 

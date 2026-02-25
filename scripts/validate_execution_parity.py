@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import math
+from collections import Counter
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, Iterable, List, Set
 
 from _script_common import dump_json, read_nonempty_lines, resolve_repo_path
 
@@ -21,7 +23,90 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument("--output-json", "-OutputJson", default="build/Release/logs/execution_parity_report.json")
     parser.add_argument("--strict", "-Strict", action="store_true")
+    parser.add_argument(
+        "--strict-normalized-parity",
+        action="store_true",
+        help="Fail when normalized side/event/status distribution drifts beyond thresholds.",
+    )
+    parser.add_argument("--normalized-side-tvd-warn-threshold", type=float, default=0.35)
+    parser.add_argument("--normalized-event-tvd-warn-threshold", type=float, default=0.45)
+    parser.add_argument("--normalized-status-tvd-warn-threshold", type=float, default=0.45)
+    parser.add_argument("--top-normalized-deltas", type=int, default=20)
     return parser.parse_args(argv)
+
+
+def safe_token(value: Any, fallback: str = "UNKNOWN", upper: bool = True) -> str:
+    token = str(value).strip()
+    if not token:
+        token = fallback
+    return token.upper() if upper else token
+
+
+def counter_to_dict(counter: Counter) -> Dict[str, int]:
+    return {str(k): int(v) for k, v in sorted(counter.items(), key=lambda kv: str(kv[0]))}
+
+
+def distribution_from_counter(counter: Dict[str, int], keys: Iterable[str]) -> List[float]:
+    key_list = list(keys)
+    total = float(sum(max(0, int(counter.get(key, 0))) for key in key_list))
+    if total <= 0.0:
+        return [0.0 for _ in key_list]
+    return [float(max(0, int(counter.get(key, 0)))) / total for key in key_list]
+
+
+def total_variation_distance(counter_a: Dict[str, int], counter_b: Dict[str, int]) -> float:
+    keys = sorted(set(counter_a.keys()) | set(counter_b.keys()))
+    if not keys:
+        return 0.0
+    p = distribution_from_counter(counter_a, keys)
+    q = distribution_from_counter(counter_b, keys)
+    return 0.5 * sum(abs(pi - qi) for pi, qi in zip(p, q))
+
+
+def js_divergence(counter_a: Dict[str, int], counter_b: Dict[str, int]) -> float:
+    keys = sorted(set(counter_a.keys()) | set(counter_b.keys()))
+    if not keys:
+        return 0.0
+    p = distribution_from_counter(counter_a, keys)
+    q = distribution_from_counter(counter_b, keys)
+    m = [(pi + qi) / 2.0 for pi, qi in zip(p, q)]
+    value = 0.0
+    for left, right in [(p, m), (q, m)]:
+        kl = 0.0
+        for l, r in zip(left, right):
+            if l <= 0.0:
+                continue
+            kl += l * math.log(l / max(1e-12, r), 2.0)
+        value += kl
+    return value / 2.0
+
+
+def build_delta_table(counter_live: Dict[str, int], counter_backtest: Dict[str, int], top_n: int) -> List[Dict[str, Any]]:
+    keys = sorted(set(counter_live.keys()) | set(counter_backtest.keys()))
+    live_total = float(sum(max(0, int(v)) for v in counter_live.values()))
+    backtest_total = float(sum(max(0, int(v)) for v in counter_backtest.values()))
+    rows: List[Dict[str, Any]] = []
+    for key in keys:
+        live_count = max(0, int(counter_live.get(key, 0)))
+        backtest_count = max(0, int(counter_backtest.get(key, 0)))
+        rows.append(
+            {
+                "key": str(key),
+                "live_count": live_count,
+                "backtest_count": backtest_count,
+                "delta_count": live_count - backtest_count,
+                "live_ratio": (live_count / live_total) if live_total > 0.0 else 0.0,
+                "backtest_ratio": (backtest_count / backtest_total) if backtest_total > 0.0 else 0.0,
+            }
+        )
+    rows.sort(
+        key=lambda x: (
+            abs(int(x["delta_count"])),
+            abs(float(x["live_ratio"]) - float(x["backtest_ratio"])),
+        ),
+        reverse=True,
+    )
+    return rows[: max(1, int(top_n))]
 
 
 def read_execution_updates(
@@ -44,6 +129,16 @@ def read_execution_updates(
         "key_signature": "",
         "schema_valid": False,
         "sample": None,
+        "normalized_summary": {
+            "total_events": 0,
+            "terminal_event_count": 0,
+            "side_counts": {},
+            "event_counts": {},
+            "status_counts": {},
+            "strategy_counts": {},
+            "market_counts": {},
+            "side_event_status_counts": {},
+        },
     }
     if not exists:
         return report
@@ -53,6 +148,13 @@ def read_execution_updates(
     unexpected_keys: Set[str] = set()
     invalid_sides: Set[str] = set()
     invalid_statuses: Set[str] = set()
+    side_counts: Counter = Counter()
+    event_counts: Counter = Counter()
+    status_counts: Counter = Counter()
+    strategy_counts: Counter = Counter()
+    market_counts: Counter = Counter()
+    side_event_status_counts: Counter = Counter()
+    terminal_event_count = 0
 
     for line in read_nonempty_lines(path_value):
         report["total_lines"] += 1
@@ -89,6 +191,21 @@ def read_execution_updates(
             if status_value not in allowed_statuses:
                 invalid_statuses.add(status_value)
 
+        side_token = safe_token(row.get("side", ""), fallback="UNKNOWN", upper=True)
+        event_token = safe_token(row.get("event", ""), fallback="UNKNOWN", upper=True)
+        status_token = safe_token(row.get("status", ""), fallback="UNKNOWN", upper=True)
+        strategy_token = safe_token(row.get("strategy_name", ""), fallback="unknown", upper=False)
+        market_token = safe_token(row.get("market", ""), fallback="UNKNOWN", upper=True)
+        side_event_status_token = f"{side_token}|{event_token}|{status_token}"
+        side_counts[side_token] += 1
+        event_counts[event_token] += 1
+        status_counts[status_token] += 1
+        strategy_counts[strategy_token] += 1
+        market_counts[market_token] += 1
+        side_event_status_counts[side_event_status_token] += 1
+        if bool(row.get("terminal", False)):
+            terminal_event_count += 1
+
     sorted_keys = sorted(all_keys)
     report["key_signature"] = ",".join(sorted_keys)
     report["missing_keys"] = sorted(missing_keys)
@@ -103,6 +220,16 @@ def read_execution_updates(
         and len(report["invalid_side_values"]) == 0
         and len(report["invalid_status_values"]) == 0
     )
+    report["normalized_summary"] = {
+        "total_events": int(sum(side_counts.values())),
+        "terminal_event_count": int(terminal_event_count),
+        "side_counts": counter_to_dict(side_counts),
+        "event_counts": counter_to_dict(event_counts),
+        "status_counts": counter_to_dict(status_counts),
+        "strategy_counts": counter_to_dict(strategy_counts),
+        "market_counts": counter_to_dict(market_counts),
+        "side_event_status_counts": counter_to_dict(side_event_status_counts),
+    }
     return report
 
 
@@ -145,6 +272,50 @@ def main(argv=None) -> int:
     if checks["both_have_rows"]:
         checks["schema_compatible"] = live["key_signature"] == backtest["key_signature"]
 
+    live_norm = live.get("normalized_summary", {}) if isinstance(live, dict) else {}
+    backtest_norm = backtest.get("normalized_summary", {}) if isinstance(backtest, dict) else {}
+    live_side_counts = live_norm.get("side_counts", {}) if isinstance(live_norm, dict) else {}
+    backtest_side_counts = backtest_norm.get("side_counts", {}) if isinstance(backtest_norm, dict) else {}
+    live_event_counts = live_norm.get("event_counts", {}) if isinstance(live_norm, dict) else {}
+    backtest_event_counts = backtest_norm.get("event_counts", {}) if isinstance(backtest_norm, dict) else {}
+    live_status_counts = live_norm.get("status_counts", {}) if isinstance(live_norm, dict) else {}
+    backtest_status_counts = backtest_norm.get("status_counts", {}) if isinstance(backtest_norm, dict) else {}
+    live_side_event_status_counts = (
+        live_norm.get("side_event_status_counts", {}) if isinstance(live_norm, dict) else {}
+    )
+    backtest_side_event_status_counts = (
+        backtest_norm.get("side_event_status_counts", {}) if isinstance(backtest_norm, dict) else {}
+    )
+
+    side_tvd = total_variation_distance(live_side_counts, backtest_side_counts)
+    event_tvd = total_variation_distance(live_event_counts, backtest_event_counts)
+    status_tvd = total_variation_distance(live_status_counts, backtest_status_counts)
+    side_js = js_divergence(live_side_counts, backtest_side_counts)
+    event_js = js_divergence(live_event_counts, backtest_event_counts)
+    status_js = js_divergence(live_status_counts, backtest_status_counts)
+
+    normalized_comparison = {
+        "ready": bool(checks["both_have_rows"]),
+        "overlap": {
+            "side": sorted(set(live_side_counts.keys()) & set(backtest_side_counts.keys())),
+            "event": sorted(set(live_event_counts.keys()) & set(backtest_event_counts.keys())),
+            "status": sorted(set(live_status_counts.keys()) & set(backtest_status_counts.keys())),
+        },
+        "distance_metrics": {
+            "side_total_variation_distance": side_tvd,
+            "event_total_variation_distance": event_tvd,
+            "status_total_variation_distance": status_tvd,
+            "side_js_divergence": side_js,
+            "event_js_divergence": event_js,
+            "status_js_divergence": status_js,
+        },
+        "top_side_event_status_deltas": build_delta_table(
+            live_side_event_status_counts,
+            backtest_side_event_status_counts,
+            top_n=max(1, int(args.top_normalized_deltas)),
+        ),
+    }
+
     warnings = []
     errors = []
 
@@ -168,6 +339,17 @@ def main(argv=None) -> int:
     if checks["both_have_rows"] and not checks["schema_compatible"]:
         errors.append("execution_update_schema_mismatch")
 
+    side_tvd_warn_threshold = max(0.0, float(args.normalized_side_tvd_warn_threshold))
+    event_tvd_warn_threshold = max(0.0, float(args.normalized_event_tvd_warn_threshold))
+    status_tvd_warn_threshold = max(0.0, float(args.normalized_status_tvd_warn_threshold))
+
+    if checks["both_have_rows"] and side_tvd > side_tvd_warn_threshold:
+        warnings.append("normalized_side_distribution_drift_high")
+    if checks["both_have_rows"] and event_tvd > event_tvd_warn_threshold:
+        warnings.append("normalized_event_distribution_drift_high")
+    if checks["both_have_rows"] and status_tvd > status_tvd_warn_threshold:
+        warnings.append("normalized_status_distribution_drift_high")
+
     if args.strict:
         if not checks["live_file_available"]:
             errors.append("strict_failed_live_execution_updates_missing")
@@ -180,18 +362,43 @@ def main(argv=None) -> int:
         if not checks["schema_compatible"]:
             errors.append("strict_failed_execution_schema_mismatch")
 
+    if args.strict_normalized_parity and checks["both_have_rows"]:
+        if side_tvd > side_tvd_warn_threshold:
+            errors.append("strict_failed_normalized_side_distribution_drift")
+        if event_tvd > event_tvd_warn_threshold:
+            errors.append("strict_failed_normalized_event_distribution_drift")
+        if status_tvd > status_tvd_warn_threshold:
+            errors.append("strict_failed_normalized_status_distribution_drift")
+
+    parity_boundary = {
+        "must_match_core_surface": [
+            "decision event/status/side schema",
+            "BUY/SELL lifecycle surface coverage",
+            "normalized side/event/status distribution stability",
+        ],
+        "allowed_runtime_differences": [
+            "ts_ms wall-clock timestamps",
+            "source label (live/live_paper vs backtest)",
+            "order_id format",
+            "exchange retry/latency side effects",
+        ],
+        "notes": "Parity review should prioritize decision surface equivalence and treat runtime transport differences as expected variance.",
+    }
+
     report = {
         "generated_at": datetime.now(tz=timezone.utc).isoformat(),
         "inputs": {
             "live_execution_updates": str(live_path),
             "backtest_execution_updates": str(backtest_path),
         },
+        "parity_boundary": parity_boundary,
         "expected_schema": {
             "keys": expected_keys,
             "side_values": allowed_sides,
             "status_values": allowed_statuses,
         },
         "checks": checks,
+        "normalized_comparison": normalized_comparison,
         "live": live,
         "backtest": backtest,
         "warnings": warnings,

@@ -28,6 +28,19 @@ struct FilterDecision {
     double reward_risk_ratio = 0.0;
     double required_strength = 0.0;
     double required_expected_value = 0.0;
+    double base_required_expected_value = 0.0;
+    double uncertainty_term = 0.0;
+    double cost_tail_term = 0.0;
+    double probabilistic_confidence = 0.0;
+    double ev_confidence = 1.0;
+    double frontier_required_expected_value = 0.0;
+    bool margin_pass = true;
+    bool strength_pass = false;
+    bool expected_value_pass = false;
+    bool frontier_enabled = false;
+    bool frontier_pass = false;
+    bool ev_confidence_pass = true;
+    bool cost_tail_pass = true;
     std::string reject_reason;
 };
 

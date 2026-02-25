@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 import argparse
 import subprocess
+import sys
 
 import check_source_encoding
 import compare_execution_event_distribution
 import generate_live_execution_probe
 import prepare_operational_readiness_fixture
+import validate_should_exit_parity
 import validate_operational_readiness
 import validate_readiness
 from _script_common import read_nonempty_lines, resolve_repo_path
@@ -53,6 +55,67 @@ def parse_args(argv=None) -> argparse.Namespace:
         "-SkipSourceEncodingCheck",
         action="store_true",
         help="Skip UTF-8 no-BOM source encoding check.",
+    )
+    parser.add_argument(
+        "--run-should-exit-parity-analysis",
+        action="store_true",
+        help="Run should-exit parity boundary analysis from strategyless exit audit artifact.",
+    )
+    parser.add_argument(
+        "--strict-should-exit-parity",
+        action="store_true",
+        help="Fail gate when should-exit parity verdict is not pass (requires --run-should-exit-parity-analysis).",
+    )
+    parser.add_argument(
+        "--should-exit-audit-json",
+        default="build/Release/logs/strategyless_exit_audit_5set_20260225_v25_skip_primary.json",
+        help="Input audit JSON path for should-exit parity analysis.",
+    )
+    parser.add_argument(
+        "--should-exit-parity-output-json",
+        default="build/Release/logs/should_exit_parity_report.json",
+        help="Output JSON path for should-exit parity analysis.",
+    )
+    parser.add_argument(
+        "--refresh-should-exit-audit-from-logs",
+        action="store_true",
+        help=(
+            "Regenerate should-exit audit JSON from archived runtime logs before "
+            "running should-exit parity analysis."
+        ),
+    )
+    parser.add_argument(
+        "--should-exit-audit-live-runtime-log-glob",
+        default="build/Release/logs/autolife*.log",
+        help="Glob for archived runtime logs used when refreshing should-exit audit.",
+    )
+    parser.add_argument(
+        "--should-exit-audit-include-primary-runtime-log",
+        action="store_true",
+        help="Include primary runtime log path when refreshing should-exit audit.",
+    )
+    parser.add_argument(
+        "--should-exit-audit-primary-runtime-log",
+        default="build/Release/logs/autolife.log",
+        help="Primary runtime log path for should-exit audit refresh.",
+    )
+    parser.add_argument(
+        "--should-exit-audit-live-runtime-log-mode-filter",
+        default="exclude_backtest",
+        choices=("off", "exclude_backtest", "live_only"),
+        help=(
+            "Mode filter passed to collect_strategyless_exit_audit when refreshing "
+            "should-exit audit from archived logs."
+        ),
+    )
+    parser.add_argument(
+        "--should-exit-tp1-unobservable-policy",
+        default="inconclusive",
+        choices=("inconclusive", "pass"),
+        help=(
+            "Policy for TP1-unobservable should-exit parity state "
+            "(passed through to validate_should_exit_parity.py)."
+        ),
     )
     return parser.parse_args(argv)
 
@@ -156,6 +219,57 @@ def main(argv=None) -> int:
                 "Execution event distribution comparison failed "
                 f"with exit code {compare_exit}"
             )
+
+    if args.run_should_exit_parity_analysis:
+        should_exit_audit_path = resolve_repo_path(args.should_exit_audit_json)
+        should_exit_output_path = resolve_repo_path(args.should_exit_parity_output_json)
+        if args.refresh_should_exit_audit_from_logs:
+            collect_script = resolve_repo_path("scripts/collect_strategyless_exit_audit.py")
+            collect_cmd = [
+                sys.executable,
+                str(collect_script),
+                "--output-json",
+                str(should_exit_audit_path),
+                "--live-runtime-log",
+                str(resolve_repo_path(args.should_exit_audit_primary_runtime_log)),
+                "--live-runtime-log-glob",
+                str(args.should_exit_audit_live_runtime_log_glob),
+                "--live-runtime-log-mode-filter",
+                str(args.should_exit_audit_live_runtime_log_mode_filter),
+            ]
+            if not args.should_exit_audit_include_primary_runtime_log:
+                collect_cmd.append("--skip-primary-live-runtime-log")
+            collect_proc = subprocess.run(collect_cmd, capture_output=True, text=True, encoding="utf-8", errors="ignore")
+            if collect_proc.returncode != 0:
+                raise RuntimeError(
+                    "Should-exit audit refresh failed "
+                    f"(exit={collect_proc.returncode}) "
+                    f"tail={(' || '.join((collect_proc.stderr or '').splitlines()[-5:]))[:800]}"
+                )
+            if collect_proc.stdout:
+                print(collect_proc.stdout.strip())
+        if not should_exit_audit_path.exists():
+            print(
+                "[CIGate] should-exit parity analysis skipped (audit artifact missing): "
+                f"{should_exit_audit_path}"
+            )
+        else:
+            should_exit_args = [
+                "--audit-json",
+                str(should_exit_audit_path),
+                "--output-json",
+                str(should_exit_output_path),
+                "--tp1-unobservable-policy",
+                str(args.should_exit_tp1_unobservable_policy),
+            ]
+            if args.strict_should_exit_parity:
+                should_exit_args.append("--strict")
+            should_exit_exit = validate_should_exit_parity.main(should_exit_args)
+            if should_exit_exit != 0:
+                raise RuntimeError(
+                    "Should-exit parity analysis failed "
+                    f"with exit code {should_exit_exit}"
+                )
 
     if args.run_live_probe:
         if not args.allow_live_probe_order:

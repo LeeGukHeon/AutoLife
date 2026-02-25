@@ -605,6 +605,16 @@ bool RiskManager::applyPartialSellFill(
         positions_.erase(it);
     }
 
+    LOG_INFO(
+        "Position partial exit: {} | qty {:.8f} | pnl {:.0f} ({:+.2f}%) | reason={} | cash {:.0f}",
+        market,
+        qty,
+        trade.profit_loss,
+        trade.profit_loss_pct * 100.0,
+        exit_reason,
+        current_capital_
+    );
+
     return true;
 }
 
@@ -1729,6 +1739,5 @@ void RiskManager::updateCapital(double amount_change) {
 
 } // namespace risk
 } // namespace autolife
-
 
 

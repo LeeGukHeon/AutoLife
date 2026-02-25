@@ -12,6 +12,7 @@ Default state: OFF for all extensions
 - `EXT-53`: Uncertainty via ensemble-K
 - `EXT-54`: Conditional cost model
 - `EXT-55`: Regime spec hardening
+- `EXT-56`: Frontier coupling + EV calibration + cost tail + adaptive EV blend + diagnostics v2
 
 ## Required implementation standards
 - A dedicated config flag per extension.

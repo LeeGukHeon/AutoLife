@@ -105,6 +105,17 @@ def parse_args() -> argparse.Namespace:
         help="Optional comma-separated exit reasons to exclude from live exit snapshot.",
     )
     parser.add_argument(
+        "--live-runtime-log-mode-filter",
+        default="off",
+        choices=("off", "exclude_backtest", "live_only"),
+        help=(
+            "Filter mode for runtime text log scan: "
+            "off=scan all lines, "
+            "exclude_backtest=exclude backtest-mode sections/files, "
+            "live_only=include only live-mode sections."
+        ),
+    )
+    parser.add_argument(
         "--output-json",
         default=r".\build\Release\logs\strategyless_exit_audit_5set_20260224.json",
         help="Output audit JSON path.",
@@ -123,6 +134,18 @@ def load_json(path: Path) -> Optional[Dict[str, Any]]:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
+
+
+def read_text_with_fallback(path: Path) -> str:
+    encodings = ("utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "cp949")
+    for encoding in encodings:
+        try:
+            return path.read_text(encoding=encoding)
+        except UnicodeDecodeError:
+            continue
+        except Exception:
+            break
+    return path.read_text(encoding="utf-8", errors="replace")
 
 
 def parse_last_json_line(stdout: str) -> Optional[Dict[str, Any]]:
@@ -453,7 +476,12 @@ def aggregate_dataset_results(items: Iterable[Dict[str, Any]]) -> Dict[str, Any]
 def summarize_live_exit_reasons(
     paths: List[Path],
     deny_reasons: set[str],
+    mode_filter: str = "off",
 ) -> Dict[str, Any]:
+    normalized_mode_filter = str(mode_filter or "off").strip().lower()
+    if normalized_mode_filter not in {"off", "exclude_backtest", "live_only"}:
+        normalized_mode_filter = "off"
+
     result: Dict[str, Any] = {
         "paths": [str(path) for path in paths],
         "existing_paths": [str(path) for path in paths if path.exists()],
@@ -461,6 +489,16 @@ def summarize_live_exit_reasons(
         "matched_exit_count_raw": 0,
         "matched_exit_count": 0,
         "duplicate_event_count": 0,
+        "filtered_out_by_mode_count": 0,
+        "tp1_observed_count": 0,
+        "tp1_signal_count": 0,
+        "partial_tp1_observable": False,
+        "mode_filter": normalized_mode_filter,
+        "mode_marker_counts": {
+            "live": 0,
+            "backtest": 0,
+        },
+        "source_file_mode_summary": {},
         "deny_reasons": sorted(deny_reasons),
         "exit_reason_counts": {},
         "exit_market_counts": {},
@@ -478,22 +516,85 @@ def summarize_live_exit_reasons(
     raw_count = 0
     duplicate_count = 0
 
-    pattern = re.compile(r"Position exited:\s*([A-Z0-9\-]+)\s*\|.*?\|\s*reason=([A-Za-z0-9_]+)")
+    full_exit_pattern = re.compile(
+        r"Position (?:exited|partial exit):\s*([A-Z0-9\-]+)\s*\|.*?\|\s*reason=([A-Za-z0-9_]+)"
+    )
+    tp1_hit_pattern = re.compile(r"First TP hit \(50%\):\s*([A-Z0-9\-]+)\s*-")
+    tp1_signal_pattern = re.compile(r"([A-Z0-9\-]+)\s+partial take-profit triggered")
     timestamp_pattern = re.compile(r"^\s*\[([^\]]+)\]")
+    backtest_mode_marker_pattern = re.compile(r"Starting Backtest Mode with file:", re.IGNORECASE)
+    live_mode_marker_pattern = re.compile(
+        r"AutoLife Trading Bot v1\.0 - Live Mode|Starting Live Trading Mode",
+        re.IGNORECASE,
+    )
 
     for path in paths:
         if not path.exists():
             continue
+        lines = read_text_with_fallback(path).splitlines()
+        has_backtest_marker = any(backtest_mode_marker_pattern.search(raw) for raw in lines)
+        has_live_marker = any(live_mode_marker_pattern.search(raw) for raw in lines)
+        default_mode = "unknown"
+        if normalized_mode_filter != "off":
+            if has_backtest_marker and not has_live_marker:
+                default_mode = "backtest"
+            elif has_live_marker and not has_backtest_marker:
+                default_mode = "live"
+        result["source_file_mode_summary"][str(path)] = {
+            "default_mode": default_mode,
+            "has_backtest_marker": has_backtest_marker,
+            "has_live_marker": has_live_marker,
+        }
+        current_mode = default_mode
         file_match_count = 0
-        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
-            match = pattern.search(raw)
-            if not match:
+        for raw in lines:
+            if backtest_mode_marker_pattern.search(raw):
+                current_mode = "backtest"
+                result["mode_marker_counts"]["backtest"] = int(
+                    result["mode_marker_counts"].get("backtest", 0)
+                ) + 1
+            elif live_mode_marker_pattern.search(raw):
+                current_mode = "live"
+                result["mode_marker_counts"]["live"] = int(
+                    result["mode_marker_counts"].get("live", 0)
+                ) + 1
+
+            market = ""
+            reason = ""
+            explicit_tp1_signal = False
+            match = full_exit_pattern.search(raw)
+            if match:
+                market = str(match.group(1)).strip() or "unknown"
+                reason = str(match.group(2)).strip() or "unknown"
+            else:
+                tp1_hit = tp1_hit_pattern.search(raw)
+                if tp1_hit:
+                    market = str(tp1_hit.group(1)).strip() or "unknown"
+                    reason = "TakeProfit1"
+                else:
+                    tp1_signal = tp1_signal_pattern.search(raw)
+                    if tp1_signal:
+                        market = str(tp1_signal.group(1)).strip() or "unknown"
+                        reason = "TakeProfit1"
+                        explicit_tp1_signal = True
+                    else:
+                        continue
+
+            if not market or not reason:
                 continue
             raw_count += 1
             file_match_count += 1
-            market = str(match.group(1)).strip() or "unknown"
-            reason = str(match.group(2)).strip() or "unknown"
             if reason.lower() in deny_reasons:
+                continue
+            if normalized_mode_filter == "exclude_backtest" and current_mode == "backtest":
+                result["filtered_out_by_mode_count"] = int(
+                    result.get("filtered_out_by_mode_count", 0)
+                ) + 1
+                continue
+            if normalized_mode_filter == "live_only" and current_mode != "live":
+                result["filtered_out_by_mode_count"] = int(
+                    result.get("filtered_out_by_mode_count", 0)
+                ) + 1
                 continue
             ts_match = timestamp_pattern.search(raw)
             ts_token = str(ts_match.group(1)).strip() if ts_match else ""
@@ -506,11 +607,19 @@ def summarize_live_exit_reasons(
             market_counts[market] = market_counts.get(market, 0) + 1
             mk_key = f"{market}|{reason}"
             market_reason_counts[mk_key] = market_reason_counts.get(mk_key, 0) + 1
+            if reason == "TakeProfit1":
+                if explicit_tp1_signal:
+                    result["tp1_signal_count"] = int(result.get("tp1_signal_count", 0)) + 1
+                else:
+                    result["tp1_observed_count"] = int(result.get("tp1_observed_count", 0)) + 1
         source_counts[str(path)] = file_match_count
 
     result["matched_exit_count_raw"] = int(raw_count)
     result["matched_exit_count"] = int(sum(reason_counts.values()))
     result["duplicate_event_count"] = int(duplicate_count)
+    result["partial_tp1_observable"] = bool(
+        int(result.get("tp1_observed_count", 0)) > 0 or int(result.get("tp1_signal_count", 0)) > 0
+    )
     result["exit_reason_counts"] = reason_counts
     result["exit_market_counts"] = market_counts
     result["exit_market_reason_counts"] = market_reason_counts
@@ -637,6 +746,7 @@ def main() -> int:
     live_exit_reason_snapshot = summarize_live_exit_reasons(
         live_runtime_log_paths,
         live_exit_reason_denylist,
+        args.live_runtime_log_mode_filter,
     )
 
     entry_side_shadow_parity_pass = (
@@ -682,6 +792,7 @@ def main() -> int:
             "live_runtime_logs": [str(path) for path in live_runtime_log_paths],
             "skip_primary_live_runtime_log": bool(args.skip_primary_live_runtime_log),
             "live_exit_reason_denylist": sorted(live_exit_reason_denylist),
+            "live_runtime_log_mode_filter": str(args.live_runtime_log_mode_filter),
         },
         "dataset_results": dataset_results,
         "aggregate": aggregate,

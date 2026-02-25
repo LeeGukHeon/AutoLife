@@ -73,6 +73,33 @@ struct OrderResult {
 
 // 전략이 엔진으로 전달하는 표준 신호 객체
 struct Signal {
+    struct Phase3PolicySnapshot {
+        bool frontier_enabled = false;
+        bool ev_calibration_enabled = false;
+        bool cost_tail_enabled = false;
+        bool adaptive_ev_blend_enabled = false;
+        bool diagnostics_v2_enabled = false;
+        bool edge_regressor_used = false;
+        bool ev_calibration_applied = false;
+        double ev_confidence = 1.0;
+        double expected_edge_raw_pct = 0.0;
+        double expected_edge_calibrated_pct = 0.0;
+        double cost_entry_pct = 0.0;
+        double cost_exit_pct = 0.0;
+        double cost_tail_pct = 0.0;
+        double cost_used_pct = 0.0;
+        double adaptive_ev_blend = 0.20;
+        double frontier_k_margin = 0.0;
+        double frontier_k_uncertainty = 0.0;
+        double frontier_k_cost_tail = 0.0;
+        double frontier_min_required_ev = -0.0002;
+        double frontier_max_required_ev = 0.0050;
+        double frontier_margin_floor = -1.0;
+        double frontier_ev_confidence_floor = 0.0;
+        double frontier_cost_tail_reject_threshold_pct = 1.0;
+        std::string cost_mode = "mean_mode";
+    };
+
     SignalType type;
     std::string market;
     std::string strategy_name;
@@ -104,6 +131,7 @@ struct Signal {
     double probabilistic_h5_uncertainty_std;
     int probabilistic_ensemble_member_count;
     bool probabilistic_runtime_applied;
+    Phase3PolicySnapshot phase3;
     double liquidity_score;
     double volatility;
     double strategy_win_rate;

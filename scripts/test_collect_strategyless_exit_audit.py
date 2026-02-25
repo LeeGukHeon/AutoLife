@@ -77,6 +77,83 @@ class CollectStrategylessExitAuditTest(unittest.TestCase):
             self.assertNotIn(str(primary.resolve()), without_primary_str)
             self.assertIn(str(extra.resolve()), without_primary_str)
 
+    def test_live_exit_snapshot_detects_tp1_observability(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            log1 = root / "tp1.log"
+            log1.write_text(
+                "\n".join(
+                    [
+                        "[2026-02-25 10:00:00] [info] First TP hit (50%): KRW-BTC - exit price: 100, pnl: 1",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            snapshot = audit_script.summarize_live_exit_reasons([log1], deny_reasons=set())
+            self.assertTrue(bool(snapshot.get("partial_tp1_observable")))
+            self.assertEqual(1, int(snapshot.get("tp1_observed_count", 0)))
+            reason_counts = snapshot.get("exit_reason_counts", {})
+            self.assertEqual(1, int(reason_counts.get("TakeProfit1", 0)))
+
+    def test_live_exit_snapshot_mode_filter_excludes_backtest_sections(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            log1 = root / "mixed.log"
+            log1.write_text(
+                "\n".join(
+                    [
+                        "[2026-02-25 15:28:10.000] [main] [info] Starting Backtest Mode with file: D:/x.csv",
+                        "[2026-02-25 15:28:10.001] [main] [info] Position exited: KRW-BTC | pnl 10 | reason=StopLoss",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            snapshot_off = audit_script.summarize_live_exit_reasons(
+                [log1],
+                deny_reasons=set(),
+                mode_filter="off",
+            )
+            snapshot_filtered = audit_script.summarize_live_exit_reasons(
+                [log1],
+                deny_reasons=set(),
+                mode_filter="exclude_backtest",
+            )
+
+            self.assertEqual(1, int(snapshot_off.get("matched_exit_count", 0)))
+            self.assertEqual(0, int(snapshot_filtered.get("matched_exit_count", 0)))
+            self.assertEqual(1, int(snapshot_filtered.get("filtered_out_by_mode_count", 0)))
+            source_summary = snapshot_filtered.get("source_file_mode_summary", {}).get(str(log1), {})
+            self.assertEqual("backtest", str(source_summary.get("default_mode", "")))
+
+    def test_live_exit_snapshot_reads_utf16_log(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            log1 = root / "utf16_live.log"
+            log1.write_text(
+                "\n".join(
+                    [
+                        "[2026-02-24 23:37:15] [info] Position exited: KRW-BTC | pnl -1 | reason=stop_loss",
+                        "[2026-02-24 23:42:44] [info] Position exited: KRW-ETH | pnl 17 | reason=take_profit_full_due_to_min_order",
+                    ]
+                )
+                + "\n",
+                encoding="utf-16",
+            )
+
+            snapshot = audit_script.summarize_live_exit_reasons(
+                [log1],
+                deny_reasons=set(),
+                mode_filter="exclude_backtest",
+            )
+            self.assertEqual(2, int(snapshot.get("matched_exit_count", 0)))
+            reason_counts = snapshot.get("exit_reason_counts", {})
+            self.assertEqual(1, int(reason_counts.get("stop_loss", 0)))
+            self.assertEqual(1, int(reason_counts.get("take_profit_full_due_to_min_order", 0)))
+
 
 if __name__ == "__main__":
     unittest.main()

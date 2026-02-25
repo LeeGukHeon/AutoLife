@@ -154,7 +154,24 @@ struct ProbabilisticRuntimeSnapshot {
     int ensemble_member_count = 1;
     double threshold_h5 = 0.6;
     double margin_h5 = 0.0;
+    double expected_edge_raw_pct = 0.0;
+    double expected_edge_calibrated_pct = 0.0;
     double expected_edge_pct = 0.0;
+    double ev_confidence = 1.0;
+    bool edge_regressor_used = false;
+    bool ev_calibration_applied = false;
+    double cost_entry_pct = 0.0;
+    double cost_exit_pct = 0.0;
+    double cost_tail_pct = 0.0;
+    double cost_used_pct = 0.0;
+    std::string cost_mode = "mean_mode";
+    bool phase3_frontier_enabled = false;
+    bool phase3_ev_calibration_enabled = false;
+    bool phase3_cost_tail_enabled = false;
+    bool phase3_adaptive_ev_blend_enabled = false;
+    bool phase3_diagnostics_v2_enabled = false;
+    autolife::analytics::ProbabilisticRuntimeModel::Phase3FrontierPolicy phase3_frontier_policy{};
+    autolife::analytics::ProbabilisticRuntimeModel::Phase3AdaptiveEvBlendPolicy phase3_blend_policy{};
     double online_margin_bias = 0.0;
     double online_strength_gain = 1.0;
     autolife::common::probabilistic_regime::State regime_state =
@@ -285,6 +302,43 @@ bool probabilisticUncertaintyBlocksEntry(
     return snapshot.prob_h5_std > std::max(cfg.probabilistic_uncertainty_u_max, cfg.probabilistic_uncertainty_skip_u);
 }
 
+double resolveAdaptiveEvBlend(
+    const autolife::engine::EngineConfig& cfg,
+    const ProbabilisticRuntimeSnapshot& snapshot,
+    const autolife::strategy::Signal& signal
+) {
+    (void)cfg;
+    if (!snapshot.phase3_adaptive_ev_blend_enabled) {
+        return 0.20;
+    }
+    const auto& p = snapshot.phase3_blend_policy;
+    double blend = p.base;
+    const bool hostile_regime =
+        signal.market_regime == autolife::analytics::MarketRegime::HIGH_VOLATILITY ||
+        signal.market_regime == autolife::analytics::MarketRegime::TRENDING_DOWN;
+    if (!hostile_regime && signal.market_regime == autolife::analytics::MarketRegime::TRENDING_UP) {
+        blend += p.trend_bonus;
+    }
+    if (signal.market_regime == autolife::analytics::MarketRegime::RANGING) {
+        blend -= p.ranging_penalty;
+    }
+    if (hostile_regime) {
+        blend -= p.hostile_penalty;
+    }
+    if (snapshot.edge_regressor_used) {
+        blend += 0.02;
+    }
+    const double ev_confidence = std::clamp(snapshot.ev_confidence, 0.0, 1.0);
+    if (ev_confidence >= 0.72) {
+        blend += p.high_confidence_bonus;
+    } else {
+        blend -= (1.0 - ev_confidence) * p.low_confidence_penalty;
+    }
+    const double tail_excess_pct = std::max(0.0, snapshot.cost_tail_pct - snapshot.cost_used_pct);
+    blend -= (tail_excess_pct * 100.0) * p.cost_penalty;
+    return std::clamp(blend, p.min, p.max);
+}
+
 bool inferProbabilisticRuntimeSnapshot(
     const autolife::analytics::ProbabilisticRuntimeModel& model,
     const autolife::engine::EngineConfig& cfg,
@@ -376,7 +430,29 @@ bool inferProbabilisticRuntimeSnapshot(
     out_snapshot.prob_h5_std = std::max(0.0, inference.prob_h5_std);
     out_snapshot.ensemble_member_count = std::max(1, inference.ensemble_member_count);
     out_snapshot.threshold_h5 = std::clamp(inference.selection_threshold_h5, 0.0, 1.0);
+    out_snapshot.expected_edge_raw_pct = std::clamp(inference.expected_edge_raw_bps / 10000.0, -0.05, 0.05);
+    out_snapshot.expected_edge_calibrated_pct = std::clamp(
+        inference.expected_edge_calibrated_bps / 10000.0,
+        -0.05,
+        0.05
+    );
     out_snapshot.expected_edge_pct = std::clamp(inference.expected_edge_pct, -0.05, 0.05);
+    out_snapshot.ev_confidence = std::clamp(inference.ev_confidence, 0.0, 1.0);
+    out_snapshot.edge_regressor_used = inference.edge_regressor_used;
+    out_snapshot.ev_calibration_applied = inference.ev_calibration_applied;
+    out_snapshot.cost_entry_pct = std::clamp(inference.entry_cost_bps_estimate / 10000.0, 0.0, 0.10);
+    out_snapshot.cost_exit_pct = std::clamp(inference.exit_cost_bps_estimate / 10000.0, 0.0, 0.10);
+    out_snapshot.cost_tail_pct = std::clamp(inference.tail_cost_bps_estimate / 10000.0, 0.0, 0.10);
+    out_snapshot.cost_used_pct = std::clamp(inference.cost_used_bps_estimate / 10000.0, 0.0, 0.10);
+    out_snapshot.cost_mode = inference.cost_mode;
+    const auto& phase3_policy = model.phase3Policy();
+    out_snapshot.phase3_frontier_enabled = inference.phase3_frontier_enabled;
+    out_snapshot.phase3_ev_calibration_enabled = inference.phase3_ev_calibration_enabled;
+    out_snapshot.phase3_cost_tail_enabled = inference.phase3_cost_tail_enabled;
+    out_snapshot.phase3_adaptive_ev_blend_enabled = inference.phase3_adaptive_ev_blend_enabled;
+    out_snapshot.phase3_diagnostics_v2_enabled = inference.phase3_diagnostics_v2_enabled;
+    out_snapshot.phase3_frontier_policy = phase3_policy.frontier;
+    out_snapshot.phase3_blend_policy = phase3_policy.adaptive_ev_blend;
     out_snapshot.margin_h5 = std::clamp(
         inference.prob_h5_calibrated - inference.selection_threshold_h5,
         -1.0,
@@ -454,6 +530,7 @@ bool applyProbabilisticRuntimeAdjustment(
     autolife::strategy::Signal& signal,
     std::string* reject_reason
 ) {
+    signal.phase3 = autolife::strategy::Signal::Phase3PolicySnapshot{};
     signal.probabilistic_runtime_applied = false;
     signal.probabilistic_h1_calibrated = 0.5;
     signal.probabilistic_h5_calibrated = 0.5;
@@ -478,6 +555,30 @@ bool applyProbabilisticRuntimeAdjustment(
     signal.probabilistic_h5_margin = effective_margin;
     signal.probabilistic_h5_uncertainty_std = std::max(0.0, snapshot.prob_h5_std);
     signal.probabilistic_ensemble_member_count = std::max(1, snapshot.ensemble_member_count);
+    signal.phase3.frontier_enabled = snapshot.phase3_frontier_enabled;
+    signal.phase3.ev_calibration_enabled = snapshot.phase3_ev_calibration_enabled;
+    signal.phase3.cost_tail_enabled = snapshot.phase3_cost_tail_enabled;
+    signal.phase3.adaptive_ev_blend_enabled = snapshot.phase3_adaptive_ev_blend_enabled;
+    signal.phase3.diagnostics_v2_enabled = snapshot.phase3_diagnostics_v2_enabled;
+    signal.phase3.edge_regressor_used = snapshot.edge_regressor_used;
+    signal.phase3.ev_calibration_applied = snapshot.ev_calibration_applied;
+    signal.phase3.ev_confidence = snapshot.ev_confidence;
+    signal.phase3.expected_edge_raw_pct = snapshot.expected_edge_raw_pct;
+    signal.phase3.expected_edge_calibrated_pct = snapshot.expected_edge_calibrated_pct;
+    signal.phase3.cost_entry_pct = snapshot.cost_entry_pct;
+    signal.phase3.cost_exit_pct = snapshot.cost_exit_pct;
+    signal.phase3.cost_tail_pct = snapshot.cost_tail_pct;
+    signal.phase3.cost_used_pct = snapshot.cost_used_pct;
+    signal.phase3.cost_mode = snapshot.cost_mode;
+    signal.phase3.frontier_k_margin = snapshot.phase3_frontier_policy.k_margin;
+    signal.phase3.frontier_k_uncertainty = snapshot.phase3_frontier_policy.k_uncertainty;
+    signal.phase3.frontier_k_cost_tail = snapshot.phase3_frontier_policy.k_cost_tail;
+    signal.phase3.frontier_min_required_ev = snapshot.phase3_frontier_policy.min_required_ev;
+    signal.phase3.frontier_max_required_ev = snapshot.phase3_frontier_policy.max_required_ev;
+    signal.phase3.frontier_margin_floor = snapshot.phase3_frontier_policy.margin_floor;
+    signal.phase3.frontier_ev_confidence_floor = snapshot.phase3_frontier_policy.ev_confidence_floor;
+    signal.phase3.frontier_cost_tail_reject_threshold_pct =
+        snapshot.phase3_frontier_policy.cost_tail_reject_threshold_pct;
     signal.score += std::clamp(
         effective_margin * std::clamp(cfg.probabilistic_runtime_score_weight, 0.0, 1.0),
         -0.12,
@@ -489,8 +590,9 @@ bool applyProbabilisticRuntimeAdjustment(
         0.0,
         0.01
     );
+    const double ev_blend = resolveAdaptiveEvBlend(cfg, snapshot, signal);
+    signal.phase3.adaptive_ev_blend = ev_blend;
     if (std::isfinite(snapshot.expected_edge_pct) && std::abs(snapshot.expected_edge_pct) > 1e-9) {
-        const double ev_blend = 0.20;
         signal.expected_value =
             (signal.expected_value * (1.0 - ev_blend)) +
             (std::clamp(snapshot.expected_edge_pct, -0.05, 0.05) * ev_blend);
@@ -671,7 +773,11 @@ void applyProbabilisticPrimaryDecisionProfile(
             const double model_ev =
                 (implied_win * expected_return) -
                 ((1.0 - implied_win) * expected_risk);
-            signal.expected_value = (signal.expected_value * 0.20) + (model_ev * 0.80);
+            const double ev_anchor_weight = std::clamp(signal.phase3.adaptive_ev_blend, 0.0, 1.0);
+            const double ev_model_weight = 1.0 - ev_anchor_weight;
+            signal.expected_value =
+                (signal.expected_value * ev_anchor_weight) +
+                (model_ev * ev_model_weight);
         }
     }
     const double probabilistic_edge_floor =
@@ -2840,7 +2946,7 @@ void TradingEngine::generateSignals() {
             live_signal_funnel_.selection_scored_candidate_count +=
                 static_cast<long long>(candidate_count);
             LOG_INFO(
-                "{} probabilistic-primary best selected: p_h5={:.4f}, margin={:+.4f}, liq={:.1f}, strength={:.3f}, ranked_candidates={}, regime_state={}, vol_z={:+.3f}, dd_speed_bps={:.2f}, ens_n={}, u_std={:.4f}",
+                "{} probabilistic-primary best selected: p_h5={:.4f}, margin={:+.4f}, liq={:.1f}, strength={:.3f}, ranked_candidates={}, regime_state={}, vol_z={:+.3f}, dd_speed_bps={:.2f}, ens_n={}, u_std={:.4f}, ev_blend={:.3f}, ev_conf={:.3f}, edge_raw={:+.4f}%, edge_cal={:+.4f}%, cost_mode={}, c_entry={:.4f}%, c_exit={:.4f}%, c_tail={:.4f}%",
                 coin.market,
                 best_signal.probabilistic_h5_calibrated,
                 best_signal.probabilistic_h5_margin,
@@ -2851,7 +2957,15 @@ void TradingEngine::generateSignals() {
                 probabilistic_snapshot.regime_volatility_zscore,
                 probabilistic_snapshot.regime_drawdown_speed_bps,
                 probabilistic_snapshot.ensemble_member_count,
-                probabilistic_snapshot.prob_h5_std
+                probabilistic_snapshot.prob_h5_std,
+                best_signal.phase3.adaptive_ev_blend,
+                best_signal.phase3.ev_confidence,
+                best_signal.phase3.expected_edge_raw_pct * 100.0,
+                best_signal.phase3.expected_edge_calibrated_pct * 100.0,
+                best_signal.phase3.cost_mode,
+                best_signal.phase3.cost_entry_pct * 100.0,
+                best_signal.phase3.cost_exit_pct * 100.0,
+                best_signal.phase3.cost_tail_pct * 100.0
             );
 
             if (best_signal.type == strategy::SignalType::NONE) {

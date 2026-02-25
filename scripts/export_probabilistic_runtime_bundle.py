@@ -62,6 +62,106 @@ def infer_train_summary_pipeline_version(summary: Dict[str, Any]) -> str:
     return "v1"
 
 
+def default_phase3_bundle_config() -> Dict[str, Any]:
+    return {
+        "phase3_frontier_enabled": False,
+        "phase3_ev_calibration_enabled": False,
+        "phase3_cost_tail_enabled": False,
+        "phase3_adaptive_ev_blend_enabled": False,
+        "phase3_diagnostics_v2_enabled": False,
+        "frontier": {
+            "enabled": False,
+            "k_margin": 0.0,
+            "k_uncertainty": 0.0,
+            "k_cost_tail": 0.0,
+            "min_required_ev": -0.0002,
+            "max_required_ev": 0.0050,
+            "margin_floor": -1.0,
+            "ev_confidence_floor": 0.0,
+            "ev_confidence_penalty": 0.0,
+            "cost_tail_penalty": 0.0,
+            "cost_tail_reject_threshold_pct": 1.0,
+        },
+        "ev_calibration": {
+            "enabled": False,
+            "use_quantile_map": False,
+            "min_bucket_samples": 64,
+            "default_confidence": 1.0,
+            "min_confidence": 0.10,
+            "ood_penalty": 0.10,
+            "buckets": [],
+        },
+        "cost_model": {
+            "enabled": False,
+            "mode": "mean_mode",
+            "entry_multiplier": 0.50,
+            "exit_multiplier": 0.50,
+            "entry_add_bps": 0.0,
+            "exit_add_bps": 0.0,
+            "tail_markup_ratio": 0.35,
+            "tail_add_bps": 0.0,
+            "hybrid_lambda": 0.50,
+        },
+        "adaptive_ev_blend": {
+            "enabled": False,
+            "min": 0.05,
+            "max": 0.40,
+            "base": 0.20,
+            "trend_bonus": 0.08,
+            "ranging_penalty": 0.06,
+            "hostile_penalty": 0.08,
+            "high_confidence_bonus": 0.05,
+            "low_confidence_penalty": 0.10,
+            "cost_penalty": 0.06,
+        },
+        "diagnostics_v2": {"enabled": False},
+    }
+
+
+def merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = merge_dicts(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
+def build_phase3_bundle_config(summary: Dict[str, Any]) -> Dict[str, Any]:
+    defaults = default_phase3_bundle_config()
+    raw = summary.get("phase3", {})
+    if not isinstance(raw, dict):
+        raw = {}
+    merged = merge_dicts(defaults, raw)
+
+    # Keep nested enabled fields aligned with top-level feature flags.
+    merged["frontier"]["enabled"] = bool(
+        merged.get("phase3_frontier_enabled", merged["frontier"].get("enabled", False))
+    )
+    merged["ev_calibration"]["enabled"] = bool(
+        merged.get("phase3_ev_calibration_enabled", merged["ev_calibration"].get("enabled", False))
+    )
+    merged["cost_model"]["enabled"] = bool(
+        merged.get("phase3_cost_tail_enabled", merged["cost_model"].get("enabled", False))
+    )
+    merged["adaptive_ev_blend"]["enabled"] = bool(
+        merged.get(
+            "phase3_adaptive_ev_blend_enabled",
+            merged["adaptive_ev_blend"].get("enabled", False),
+        )
+    )
+    merged["diagnostics_v2"]["enabled"] = bool(
+        merged.get("phase3_diagnostics_v2_enabled", merged["diagnostics_v2"].get("enabled", False))
+    )
+    merged["phase3_frontier_enabled"] = bool(merged["frontier"]["enabled"])
+    merged["phase3_ev_calibration_enabled"] = bool(merged["ev_calibration"]["enabled"])
+    merged["phase3_cost_tail_enabled"] = bool(merged["cost_model"]["enabled"])
+    merged["phase3_adaptive_ev_blend_enabled"] = bool(merged["adaptive_ev_blend"]["enabled"])
+    merged["phase3_diagnostics_v2_enabled"] = bool(merged["diagnostics_v2"]["enabled"])
+    return merged
+
+
 def extract_linear(payload: Dict[str, Any]) -> Dict[str, Any]:
     model = payload.get("model")
     if model is None:
@@ -358,6 +458,7 @@ def main(argv=None) -> int:
 
     global_fallback_enabled = bool(default_model is not None)
     prefer_default_model = bool(default_model is not None)
+    phase3_bundle = build_phase3_bundle_config(summary)
 
     out = {
         "version": (
@@ -382,6 +483,12 @@ def main(argv=None) -> int:
         "default_model": default_model if default_model is not None else None,
         "markets": markets_out,
         "cost_model": summary.get("cost_model", {}),
+        "phase3": phase3_bundle,
+        "phase3_frontier_enabled": bool(phase3_bundle.get("phase3_frontier_enabled", False)),
+        "phase3_ev_calibration_enabled": bool(phase3_bundle.get("phase3_ev_calibration_enabled", False)),
+        "phase3_cost_tail_enabled": bool(phase3_bundle.get("phase3_cost_tail_enabled", False)),
+        "phase3_adaptive_ev_blend_enabled": bool(phase3_bundle.get("phase3_adaptive_ev_blend_enabled", False)),
+        "phase3_diagnostics_v2_enabled": bool(phase3_bundle.get("phase3_diagnostics_v2_enabled", False)),
     }
     if pipeline_version != "v1":
         out["pipeline_version"] = str(pipeline_version)

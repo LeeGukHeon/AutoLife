@@ -413,6 +413,9 @@ def main(argv=None) -> int:
     split_cost_model = split_manifest.get("cost_model", {})
     if not isinstance(split_cost_model, dict):
         split_cost_model = {}
+    split_phase3 = split_manifest.get("phase3", {})
+    if not isinstance(split_phase3, dict):
+        split_phase3 = {}
     raw_datasets = split_manifest.get("datasets", [])
     if not isinstance(raw_datasets, list) or not raw_datasets:
         raise RuntimeError(f"empty datasets in split manifest: {split_manifest_path}")
@@ -563,6 +566,8 @@ def main(argv=None) -> int:
         out["purge_embargo"] = purge_embargo_cfg
     if bool(split_cost_model.get("enabled", False)):
         out["cost_model"] = split_cost_model
+    if split_phase3:
+        out["phase3"] = split_phase3
     if ensemble_k > 1:
         out["ensemble"] = {
             "enabled": True,

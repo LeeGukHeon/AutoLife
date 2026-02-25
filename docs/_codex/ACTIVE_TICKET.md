@@ -11,6 +11,14 @@ Last updated: 2026-02-25
 - Status: `in_progress`
 - Mode: `A`
 
+## Progress update (2026-02-25)
+- Phase 2 parity-readiness closure was fixed and documented:
+  - `docs/_codex/PHASE2_CLOSURE_2026-02-25.md`
+- Gate baseline now includes strict should-exit parity with live-probe log refresh.
+- Phase 3 final delivery summary (required 6 sections) was added:
+  - `docs/_codex/CH01_PHASE3_FINAL_DELIVERY_2026-02-25.md`
+- Profitability tuning remains deferred by policy until Phase 3/4 rollout completion.
+
 ## Scope
 - In scope:
   - analyze residual negative days after `step8e` baseline (`ETH/XRP` focus).

@@ -10,6 +10,31 @@ Last updated: 2026-02-25
 - Current: `SO4-15-NEGATIVE-DAY-TAIL-ANALYSIS-20260224` (`Strict-Order-4-15`, Mode `A`, status `in_progress`)
 - Current phase: `correctness-first` (live original exit/risk-control validity review before further tuning)
 
+## Phase 2 closure status (2026-02-25)
+- Status: `closed for parity-readiness`
+- Baseline document:
+  - `docs/_codex/PHASE2_CLOSURE_2026-02-25.md`
+- Locked gate command:
+  - `python scripts/run_ci_operational_gate.py --include-backtest --strict-execution-parity --run-should-exit-parity-analysis --refresh-should-exit-audit-from-logs --should-exit-audit-live-runtime-log-glob "build/Release/logs/live_probe_stdout*.txt" --should-exit-audit-live-runtime-log-mode-filter exclude_backtest --strict-should-exit-parity`
+- Latest verdict:
+  - `CIGate PASSED`
+  - `should_exit_parity_report.json: verdict=pass, critical_findings=0`
+  - TP handling: `allowed_tp1_collapsed_to_full_due_to_min_order` active.
+- Profitability work policy:
+  - Deferred until Phase 3/4 full rollout, migration cleanup, and legacy removal completion.
+
+## Phase 3 delivery status (2026-02-25)
+- Status: `delivery summary finalized (Phase 3 only)`
+- Final handoff document:
+  - `docs/_codex/CH01_PHASE3_FINAL_DELIVERY_2026-02-25.md`
+- Contains required 6 sections:
+  1. changed/added files
+  2. phase3 bundle keys/defaults
+  3. diagnostics counters/buckets
+  4. OFF/ON behavior diff
+  5. operational gate result
+  6. strict parity result
+
 ## Correctness audit snapshot
 - Live exit reference (`src/runtime/LiveTradingRuntime.cpp:4231`~`src/runtime/LiveTradingRuntime.cpp:4299`):
   - `updatePosition -> applyAdaptiveRiskControls -> strategy shouldExit(optional) -> partial TP1 -> shouldExitPosition`
