@@ -703,13 +703,6 @@ void Config::load(const std::string& path) {
                 t.value("backtest_strategyless_runtime_live_exit_mapping_hard_exit_only", false);
             engine_config_.enable_uptrend_rescue_prefilter_tail_guard =
                 t.value("enable_uptrend_rescue_prefilter_tail_guard", false);
-            engine_config_.enable_v21_rescue_prefiltered_pair_probe =
-                t.value("enable_v21_rescue_prefiltered_pair_probe", false);
-            if (!engine_config_.enable_uptrend_rescue_prefilter_tail_guard &&
-                engine_config_.enable_v21_rescue_prefiltered_pair_probe) {
-                // Backward-compat bridge for old probe key.
-                engine_config_.enable_uptrend_rescue_prefilter_tail_guard = true;
-            }
 
             if (t.contains("enabled_strategies")) {
                 engine_config_.enabled_strategies = t["enabled_strategies"].get<std::vector<std::string>>();

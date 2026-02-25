@@ -13,7 +13,9 @@ Last updated: 2026-02-25
 5. If ticket touches live/backtest parity, read:
    - `docs/_codex/PARITY_BOUNDARY.md`
    - `docs/_codex/PHASE2_CLOSURE_2026-02-25.md` (current Phase 2 closure baseline)
-6. Check `docs/_codex/PR_CHECKLIST.md` before finalizing changes.
+6. If ticket touches migration cleanup for Phase 2/3 paths, read:
+   - `docs/_codex/PHASE23_MIGRATION_CLEANUP_2026-02-25.md`
+7. Check `docs/_codex/PR_CHECKLIST.md` before finalizing changes.
 
 ## Immediate commands
 ```powershell

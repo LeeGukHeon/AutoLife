@@ -17,6 +17,8 @@ Last updated: 2026-02-25
 - Gate baseline now includes strict should-exit parity with live-probe log refresh.
 - Phase 3 final delivery summary (required 6 sections) was added:
   - `docs/_codex/CH01_PHASE3_FINAL_DELIVERY_2026-02-25.md`
+- Phase 2/3 migration cleanup wave-1 was documented:
+  - `docs/_codex/PHASE23_MIGRATION_CLEANUP_2026-02-25.md`
 - Profitability tuning remains deferred by policy until Phase 3/4 rollout completion.
 
 ## Scope
@@ -42,7 +44,6 @@ Last updated: 2026-02-25
 - Flags added/changed:
   - `backtest_strategyless_runtime_live_exit_mapping` (default `false`)
   - `enable_uptrend_rescue_prefilter_tail_guard` (default `false`)
-  - `enable_v21_rescue_prefiltered_pair_probe` (default `false`)
 
 ## Implementation plan
 1. audit `LiveTradingRuntime` exit/risk-control flow and confirm intended behavior.

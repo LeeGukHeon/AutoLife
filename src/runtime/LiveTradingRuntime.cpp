@@ -1302,8 +1302,7 @@ bool passesProbabilisticPrimaryMinimums(
         }
         if (regime == autolife::analytics::MarketRegime::TRENDING_UP) {
             const bool uptrend_rescue_prefilter_tail_guard =
-                (cfg.enable_uptrend_rescue_prefilter_tail_guard ||
-                 cfg.enable_v21_rescue_prefiltered_pair_probe) &&
+                cfg.enable_uptrend_rescue_prefilter_tail_guard &&
                 signal.probabilistic_h5_calibrated >= 0.40515 &&
                 signal.probabilistic_h5_margin <= -0.017422;
             const bool weak_uptrend_rescue_lowliq_tail =

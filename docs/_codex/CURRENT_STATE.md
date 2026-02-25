@@ -35,6 +35,14 @@ Last updated: 2026-02-25
   5. operational gate result
   6. strict parity result
 
+## Migration cleanup status (2026-02-25)
+- Status: `wave-1 applied (parity-safe)`
+- Document:
+  - `docs/_codex/PHASE23_MIGRATION_CLEANUP_2026-02-25.md`
+- Applied:
+  - removed deprecated alias `enable_v21_rescue_prefiltered_pair_probe`
+  - unified runtime guard flag path to `enable_uptrend_rescue_prefilter_tail_guard`
+
 ## Correctness audit snapshot
 - Live exit reference (`src/runtime/LiveTradingRuntime.cpp:4231`~`src/runtime/LiveTradingRuntime.cpp:4299`):
   - `updatePosition -> applyAdaptiveRiskControls -> strategy shouldExit(optional) -> partial TP1 -> shouldExitPosition`
