@@ -643,6 +643,8 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
     const auto phase3_blend_node = phase3_root.value("adaptive_ev_blend", nlohmann::json::object());
     const auto phase3_primary_minimums_node = phase3_root.value("primary_minimums", nlohmann::json::object());
     const auto phase3_primary_priority_node = phase3_root.value("primary_priority", nlohmann::json::object());
+    const auto phase3_primary_decision_profile_node =
+        phase3_root.value("primary_decision_profile", nlohmann::json::object());
     const auto phase3_manager_filter_node = phase3_root.value("manager_filter", nlohmann::json::object());
     const auto phase3_diag_node = phase3_root.value("diagnostics_v2", nlohmann::json::object());
 
@@ -1271,6 +1273,324 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         0.0,
         1.0
     );
+
+    phase3_policy_.primary_decision_profile.enabled =
+        phase3_primary_decision_profile_node.value("enabled", false);
+    phase3_policy_.primary_decision_profile.current_risk_min = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "current_risk_min",
+        0.0010,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.current_risk_max = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "current_risk_max",
+        0.0500,
+        0.0,
+        1.0
+    );
+    if (phase3_policy_.primary_decision_profile.current_risk_max <
+        phase3_policy_.primary_decision_profile.current_risk_min) {
+        std::swap(
+            phase3_policy_.primary_decision_profile.current_risk_min,
+            phase3_policy_.primary_decision_profile.current_risk_max
+        );
+    }
+    phase3_policy_.primary_decision_profile.target_risk_base_hostile = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "target_risk_base_hostile",
+        0.0026,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.target_risk_base_calm = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "target_risk_base_calm",
+        0.0028,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.target_risk_confidence_scale_hostile = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "target_risk_confidence_scale_hostile",
+        0.0036,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.target_risk_confidence_scale_calm = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "target_risk_confidence_scale_calm",
+        0.0048,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.fragility_target_risk_multiplier = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "fragility_target_risk_multiplier",
+        0.78,
+        0.0,
+        2.0
+    );
+    phase3_policy_.primary_decision_profile.fragility_negative_margin_threshold = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "fragility_negative_margin_threshold",
+        -0.006,
+        -1.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.fragility_negative_margin_target_risk_multiplier = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "fragility_negative_margin_target_risk_multiplier",
+        0.90,
+        0.0,
+        2.0
+    );
+    phase3_policy_.primary_decision_profile.target_risk_min_hostile = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "target_risk_min_hostile",
+        0.0022,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.target_risk_min_calm = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "target_risk_min_calm",
+        0.0024,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.target_risk_max_hostile = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "target_risk_max_hostile",
+        0.0075,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.target_risk_max_calm = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "target_risk_max_calm",
+        0.0105,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.blended_risk_old_weight = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "blended_risk_old_weight",
+        0.35,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.blended_risk_target_weight = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "blended_risk_target_weight",
+        0.65,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.blended_risk_min_hostile = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "blended_risk_min_hostile",
+        0.0022,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.blended_risk_min_calm = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "blended_risk_min_calm",
+        0.0024,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.blended_risk_max_hostile = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "blended_risk_max_hostile",
+        0.0080,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.blended_risk_max_calm = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "blended_risk_max_calm",
+        0.0120,
+        0.0,
+        1.0
+    );
+    phase3_policy_.primary_decision_profile.rr_base_hostile = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "rr_base_hostile",
+        1.10,
+        0.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.rr_base_calm = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "rr_base_calm",
+        1.20,
+        0.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.rr_confidence_weight_hostile = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "rr_confidence_weight_hostile",
+        1.00,
+        0.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.rr_confidence_weight_calm = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "rr_confidence_weight_calm",
+        1.30,
+        0.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.rr_margin_positive_weight_hostile = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "rr_margin_positive_weight_hostile",
+        2.0,
+        0.0,
+        20.0
+    );
+    phase3_policy_.primary_decision_profile.rr_margin_positive_weight_calm = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "rr_margin_positive_weight_calm",
+        2.8,
+        0.0,
+        20.0
+    );
+    phase3_policy_.primary_decision_profile.fragility_rr_bonus = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "fragility_rr_bonus",
+        0.18,
+        -10.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.rr_min_hostile = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "rr_min_hostile",
+        1.05,
+        0.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.rr_min_calm = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "rr_min_calm",
+        1.10,
+        0.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.rr_max_hostile = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "rr_max_hostile",
+        2.40,
+        0.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.rr_max_calm = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "rr_max_calm",
+        3.20,
+        0.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.tp1_rr_min = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "tp1_rr_min",
+        1.0,
+        0.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.tp1_rr_multiplier = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "tp1_rr_multiplier",
+        0.55,
+        0.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.breakeven_mult_fragility = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "breakeven_mult_fragility",
+        0.48,
+        0.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.breakeven_mult_default = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "breakeven_mult_default",
+        0.70,
+        0.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.trailing_mult_fragility = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "trailing_mult_fragility",
+        0.82,
+        0.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.trailing_mult_default = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "trailing_mult_default",
+        1.10,
+        0.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.size_base = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "size_base",
+        0.42,
+        0.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.size_confidence_weight = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "size_confidence_weight",
+        0.80,
+        0.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.size_margin_positive_weight = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "size_margin_positive_weight",
+        1.20,
+        0.0,
+        20.0
+    );
+    phase3_policy_.primary_decision_profile.size_negative_margin_multiplier = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "size_negative_margin_multiplier",
+        0.86,
+        0.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.size_hostile_multiplier = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "size_hostile_multiplier",
+        0.88,
+        0.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.size_min = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "size_min",
+        0.30,
+        0.0,
+        10.0
+    );
+    phase3_policy_.primary_decision_profile.size_max = parseCostParam(
+        phase3_primary_decision_profile_node,
+        "size_max",
+        1.35,
+        0.0,
+        10.0
+    );
+    if (phase3_policy_.primary_decision_profile.size_max <
+        phase3_policy_.primary_decision_profile.size_min) {
+        std::swap(
+            phase3_policy_.primary_decision_profile.size_min,
+            phase3_policy_.primary_decision_profile.size_max
+        );
+    }
 
     phase3_policy_.manager_filter.enabled = phase3_manager_filter_node.value("enabled", false);
     phase3_policy_.manager_filter.base_min_strength_default = parseCostParam(

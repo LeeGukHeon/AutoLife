@@ -151,6 +151,53 @@ public:
         double uptrend_bonus_prob_floor = 0.52;
     };
 
+    struct Phase3PrimaryDecisionProfilePolicy {
+        bool enabled = false;
+        double current_risk_min = 0.0010;
+        double current_risk_max = 0.0500;
+        double target_risk_base_hostile = 0.0026;
+        double target_risk_base_calm = 0.0028;
+        double target_risk_confidence_scale_hostile = 0.0036;
+        double target_risk_confidence_scale_calm = 0.0048;
+        double fragility_target_risk_multiplier = 0.78;
+        double fragility_negative_margin_threshold = -0.006;
+        double fragility_negative_margin_target_risk_multiplier = 0.90;
+        double target_risk_min_hostile = 0.0022;
+        double target_risk_min_calm = 0.0024;
+        double target_risk_max_hostile = 0.0075;
+        double target_risk_max_calm = 0.0105;
+        double blended_risk_old_weight = 0.35;
+        double blended_risk_target_weight = 0.65;
+        double blended_risk_min_hostile = 0.0022;
+        double blended_risk_min_calm = 0.0024;
+        double blended_risk_max_hostile = 0.0080;
+        double blended_risk_max_calm = 0.0120;
+        double rr_base_hostile = 1.10;
+        double rr_base_calm = 1.20;
+        double rr_confidence_weight_hostile = 1.00;
+        double rr_confidence_weight_calm = 1.30;
+        double rr_margin_positive_weight_hostile = 2.0;
+        double rr_margin_positive_weight_calm = 2.8;
+        double fragility_rr_bonus = 0.18;
+        double rr_min_hostile = 1.05;
+        double rr_min_calm = 1.10;
+        double rr_max_hostile = 2.40;
+        double rr_max_calm = 3.20;
+        double tp1_rr_min = 1.0;
+        double tp1_rr_multiplier = 0.55;
+        double breakeven_mult_fragility = 0.48;
+        double breakeven_mult_default = 0.70;
+        double trailing_mult_fragility = 0.82;
+        double trailing_mult_default = 1.10;
+        double size_base = 0.42;
+        double size_confidence_weight = 0.80;
+        double size_margin_positive_weight = 1.20;
+        double size_negative_margin_multiplier = 0.86;
+        double size_hostile_multiplier = 0.88;
+        double size_min = 0.30;
+        double size_max = 1.35;
+    };
+
     struct Phase3ManagerFilterPolicy {
         bool enabled = false;
         double base_min_strength_default = 0.40;
@@ -265,6 +312,7 @@ public:
         Phase3AdaptiveEvBlendPolicy adaptive_ev_blend;
         Phase3PrimaryMinimumPolicy primary_minimums;
         Phase3PrimaryPriorityPolicy primary_priority;
+        Phase3PrimaryDecisionProfilePolicy primary_decision_profile;
         Phase3ManagerFilterPolicy manager_filter;
         Phase3DiagnosticsPolicy diagnostics_v2;
     };

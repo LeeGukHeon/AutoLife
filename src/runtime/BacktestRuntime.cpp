@@ -258,6 +258,8 @@ struct ProbabilisticRuntimeSnapshot {
     autolife::analytics::ProbabilisticRuntimeModel::Phase3AdaptiveEvBlendPolicy phase3_blend_policy{};
     autolife::analytics::ProbabilisticRuntimeModel::Phase3PrimaryMinimumPolicy phase3_primary_minimum_policy{};
     autolife::analytics::ProbabilisticRuntimeModel::Phase3PrimaryPriorityPolicy phase3_primary_priority_policy{};
+    autolife::analytics::ProbabilisticRuntimeModel::Phase3PrimaryDecisionProfilePolicy
+        phase3_primary_decision_profile_policy{};
     autolife::analytics::ProbabilisticRuntimeModel::Phase3ManagerFilterPolicy phase3_manager_filter_policy{};
     double online_margin_bias = 0.0;
     double online_strength_gain = 1.0;
@@ -467,6 +469,7 @@ bool inferProbabilisticRuntimeSnapshot(
     out_snapshot.phase3_blend_policy = phase3_policy.adaptive_ev_blend;
     out_snapshot.phase3_primary_minimum_policy = phase3_policy.primary_minimums;
     out_snapshot.phase3_primary_priority_policy = phase3_policy.primary_priority;
+    out_snapshot.phase3_primary_decision_profile_policy = phase3_policy.primary_decision_profile;
     out_snapshot.phase3_manager_filter_policy = phase3_policy.manager_filter;
     out_snapshot.margin_h5 = std::clamp(
         inference.prob_h5_calibrated - inference.selection_threshold_h5,
@@ -750,10 +753,16 @@ void applyProbabilisticPrimaryDecisionProfile(
     const ProbabilisticRuntimeSnapshot& snapshot,
     autolife::strategy::Signal& signal
 ) {
-    (void)snapshot;
     if (!cfg.probabilistic_runtime_primary_mode || !signal.probabilistic_runtime_applied) {
         return;
     }
+    const auto defaults =
+        autolife::analytics::ProbabilisticRuntimeModel::Phase3PrimaryDecisionProfilePolicy{};
+    const auto& policy = snapshot.phase3_primary_decision_profile_policy;
+    const bool use_policy = policy.enabled;
+    const auto pick = [&](double policy_value, double fallback_value) {
+        return use_policy ? policy_value : fallback_value;
+    };
 
     const bool hostile_regime =
         signal.market_regime == autolife::analytics::MarketRegime::HIGH_VOLATILITY ||
@@ -817,41 +826,111 @@ void applyProbabilisticPrimaryDecisionProfile(
     if (signal.entry_price > 0.0 && signal.stop_loss > 0.0 && signal.stop_loss < signal.entry_price) {
         const double current_risk_pct = std::clamp(
             (signal.entry_price - signal.stop_loss) / signal.entry_price,
-            0.0010,
-            0.0500
+            pick(policy.current_risk_min, defaults.current_risk_min),
+            pick(policy.current_risk_max, defaults.current_risk_max)
         );
         double target_risk_pct = hostile_regime
-            ? (0.0026 + ((1.0 - confidence) * 0.0036))
-            : (0.0028 + ((1.0 - confidence) * 0.0048));
+            ? (pick(policy.target_risk_base_hostile, defaults.target_risk_base_hostile) +
+               ((1.0 - confidence) *
+                pick(
+                    policy.target_risk_confidence_scale_hostile,
+                    defaults.target_risk_confidence_scale_hostile
+                )))
+            : (pick(policy.target_risk_base_calm, defaults.target_risk_base_calm) +
+               ((1.0 - confidence) *
+                pick(
+                    policy.target_risk_confidence_scale_calm,
+                    defaults.target_risk_confidence_scale_calm
+                )));
         if (!hostile_regime && fragility_archetype) {
-            target_risk_pct *= 0.78;
+            target_risk_pct *= pick(
+                policy.fragility_target_risk_multiplier,
+                defaults.fragility_target_risk_multiplier
+            );
         }
-        if (!hostile_regime && fragility_archetype && margin < -0.006) {
-            target_risk_pct *= 0.90;
+        if (!hostile_regime &&
+            fragility_archetype &&
+            margin < pick(
+                policy.fragility_negative_margin_threshold,
+                defaults.fragility_negative_margin_threshold
+            )) {
+            target_risk_pct *= pick(
+                policy.fragility_negative_margin_target_risk_multiplier,
+                defaults.fragility_negative_margin_target_risk_multiplier
+            );
         }
         target_risk_pct = std::clamp(
             target_risk_pct,
-            hostile_regime ? 0.0022 : 0.0024,
-            hostile_regime ? 0.0075 : 0.0105
+            hostile_regime
+                ? pick(policy.target_risk_min_hostile, defaults.target_risk_min_hostile)
+                : pick(policy.target_risk_min_calm, defaults.target_risk_min_calm),
+            hostile_regime
+                ? pick(policy.target_risk_max_hostile, defaults.target_risk_max_hostile)
+                : pick(policy.target_risk_max_calm, defaults.target_risk_max_calm)
         );
+        const double blended_old_weight = std::clamp(
+            pick(policy.blended_risk_old_weight, defaults.blended_risk_old_weight),
+            0.0,
+            1.0
+        );
+        const double blended_target_weight = std::clamp(
+            pick(policy.blended_risk_target_weight, defaults.blended_risk_target_weight),
+            0.0,
+            1.0
+        );
+        const double blended_denom = std::max(1e-6, blended_old_weight + blended_target_weight);
         const double blended_risk_pct = std::clamp(
-            (current_risk_pct * 0.35) + (target_risk_pct * 0.65),
-            hostile_regime ? 0.0022 : 0.0024,
-            hostile_regime ? 0.0080 : 0.0120
+            ((current_risk_pct * blended_old_weight) + (target_risk_pct * blended_target_weight)) /
+                blended_denom,
+            hostile_regime
+                ? pick(policy.blended_risk_min_hostile, defaults.blended_risk_min_hostile)
+                : pick(policy.blended_risk_min_calm, defaults.blended_risk_min_calm),
+            hostile_regime
+                ? pick(policy.blended_risk_max_hostile, defaults.blended_risk_max_hostile)
+                : pick(policy.blended_risk_max_calm, defaults.blended_risk_max_calm)
         );
 
         double rr_target = hostile_regime
-            ? (1.10 + (confidence * 1.00) + (std::max(0.0, margin) * 2.0))
-            : (1.20 + (confidence * 1.30) + (std::max(0.0, margin) * 2.8));
+            ? (pick(policy.rr_base_hostile, defaults.rr_base_hostile) +
+               (confidence *
+                pick(policy.rr_confidence_weight_hostile, defaults.rr_confidence_weight_hostile)) +
+               (std::max(0.0, margin) *
+                pick(
+                    policy.rr_margin_positive_weight_hostile,
+                    defaults.rr_margin_positive_weight_hostile
+                )))
+            : (pick(policy.rr_base_calm, defaults.rr_base_calm) +
+               (confidence *
+                pick(policy.rr_confidence_weight_calm, defaults.rr_confidence_weight_calm)) +
+               (std::max(0.0, margin) *
+                pick(
+                    policy.rr_margin_positive_weight_calm,
+                    defaults.rr_margin_positive_weight_calm
+                )));
         if (!hostile_regime && fragility_archetype) {
-            rr_target += 0.18;
+            rr_target += pick(policy.fragility_rr_bonus, defaults.fragility_rr_bonus);
         }
-        rr_target = std::clamp(rr_target, hostile_regime ? 1.05 : 1.10, hostile_regime ? 2.40 : 3.20);
+        rr_target = std::clamp(
+            rr_target,
+            hostile_regime
+                ? pick(policy.rr_min_hostile, defaults.rr_min_hostile)
+                : pick(policy.rr_min_calm, defaults.rr_min_calm),
+            hostile_regime
+                ? pick(policy.rr_max_hostile, defaults.rr_max_hostile)
+                : pick(policy.rr_max_calm, defaults.rr_max_calm)
+        );
         signal.stop_loss = signal.entry_price * (1.0 - blended_risk_pct);
         signal.take_profit_2 = signal.entry_price * (1.0 + (blended_risk_pct * rr_target));
-        signal.take_profit_1 = signal.entry_price * (1.0 + (blended_risk_pct * std::max(1.0, rr_target * 0.55)));
-        double breakeven_mult = (!hostile_regime && fragility_archetype) ? 0.48 : 0.70;
-        double trailing_mult = (!hostile_regime && fragility_archetype) ? 0.82 : 1.10;
+        signal.take_profit_1 = signal.entry_price * (1.0 + (blended_risk_pct * std::max(
+            pick(policy.tp1_rr_min, defaults.tp1_rr_min),
+            rr_target * pick(policy.tp1_rr_multiplier, defaults.tp1_rr_multiplier)
+        )));
+        double breakeven_mult = (!hostile_regime && fragility_archetype)
+            ? pick(policy.breakeven_mult_fragility, defaults.breakeven_mult_fragility)
+            : pick(policy.breakeven_mult_default, defaults.breakeven_mult_default);
+        double trailing_mult = (!hostile_regime && fragility_archetype)
+            ? pick(policy.trailing_mult_fragility, defaults.trailing_mult_fragility)
+            : pick(policy.trailing_mult_default, defaults.trailing_mult_default);
         signal.breakeven_trigger = signal.entry_price * (1.0 + (blended_risk_pct * breakeven_mult));
         signal.trailing_start = signal.entry_price * (1.0 + (blended_risk_pct * trailing_mult));
         signal.expected_return_pct = (signal.take_profit_2 - signal.entry_price) / signal.entry_price;
@@ -863,14 +942,25 @@ void applyProbabilisticPrimaryDecisionProfile(
     }
 
     if (signal.position_size > 0.0) {
-        double size_scale = 0.42 + (confidence * 0.80) + (std::max(0.0, margin) * 1.20);
+        double size_scale =
+            pick(policy.size_base, defaults.size_base) +
+            (confidence * pick(policy.size_confidence_weight, defaults.size_confidence_weight)) +
+            (std::max(0.0, margin) *
+             pick(policy.size_margin_positive_weight, defaults.size_margin_positive_weight));
         if (margin < 0.0) {
-            size_scale *= 0.86;
+            size_scale *= pick(
+                policy.size_negative_margin_multiplier,
+                defaults.size_negative_margin_multiplier
+            );
         }
         if (hostile_regime) {
-            size_scale *= 0.88;
+            size_scale *= pick(policy.size_hostile_multiplier, defaults.size_hostile_multiplier);
         }
-        signal.position_size *= std::clamp(size_scale, 0.30, 1.35);
+        signal.position_size *= std::clamp(
+            size_scale,
+            pick(policy.size_min, defaults.size_min),
+            pick(policy.size_max, defaults.size_max)
+        );
     }
 }
 

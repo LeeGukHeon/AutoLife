@@ -183,6 +183,52 @@ def default_phase3_bundle_config() -> Dict[str, Any]:
             "uptrend_bonus_margin_floor": 0.0,
             "uptrend_bonus_prob_floor": 0.52,
         },
+        "primary_decision_profile": {
+            "enabled": True,
+            "current_risk_min": 0.0010,
+            "current_risk_max": 0.0500,
+            "target_risk_base_hostile": 0.0026,
+            "target_risk_base_calm": 0.0028,
+            "target_risk_confidence_scale_hostile": 0.0036,
+            "target_risk_confidence_scale_calm": 0.0048,
+            "fragility_target_risk_multiplier": 0.78,
+            "fragility_negative_margin_threshold": -0.006,
+            "fragility_negative_margin_target_risk_multiplier": 0.90,
+            "target_risk_min_hostile": 0.0022,
+            "target_risk_min_calm": 0.0024,
+            "target_risk_max_hostile": 0.0075,
+            "target_risk_max_calm": 0.0105,
+            "blended_risk_old_weight": 0.35,
+            "blended_risk_target_weight": 0.65,
+            "blended_risk_min_hostile": 0.0022,
+            "blended_risk_min_calm": 0.0024,
+            "blended_risk_max_hostile": 0.0080,
+            "blended_risk_max_calm": 0.0120,
+            "rr_base_hostile": 1.10,
+            "rr_base_calm": 1.20,
+            "rr_confidence_weight_hostile": 1.00,
+            "rr_confidence_weight_calm": 1.30,
+            "rr_margin_positive_weight_hostile": 2.0,
+            "rr_margin_positive_weight_calm": 2.8,
+            "fragility_rr_bonus": 0.18,
+            "rr_min_hostile": 1.05,
+            "rr_min_calm": 1.10,
+            "rr_max_hostile": 2.40,
+            "rr_max_calm": 3.20,
+            "tp1_rr_min": 1.0,
+            "tp1_rr_multiplier": 0.55,
+            "breakeven_mult_fragility": 0.48,
+            "breakeven_mult_default": 0.70,
+            "trailing_mult_fragility": 0.82,
+            "trailing_mult_default": 1.10,
+            "size_base": 0.42,
+            "size_confidence_weight": 0.80,
+            "size_margin_positive_weight": 1.20,
+            "size_negative_margin_multiplier": 0.86,
+            "size_hostile_multiplier": 0.88,
+            "size_min": 0.30,
+            "size_max": 1.35,
+        },
         "manager_filter": {
             "enabled": True,
             "base_min_strength_default": 0.40,
@@ -297,6 +343,9 @@ def build_phase3_bundle_config(summary: Dict[str, Any]) -> Dict[str, Any]:
     merged["diagnostics_v2"]["enabled"] = bool(merged["diagnostics_v2"].get("enabled", False))
     merged["primary_minimums"]["enabled"] = bool(merged["primary_minimums"].get("enabled", False))
     merged["primary_priority"]["enabled"] = bool(merged["primary_priority"].get("enabled", False))
+    merged["primary_decision_profile"]["enabled"] = bool(
+        merged["primary_decision_profile"].get("enabled", False)
+    )
     merged["manager_filter"]["enabled"] = bool(merged["manager_filter"].get("enabled", False))
     return merged
 
