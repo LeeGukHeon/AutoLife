@@ -3,7 +3,7 @@ Last updated: 2026-02-25
 
 ## Repository
 - Branch: `main`
-- Commit snapshot (pushed): `d2a5568`
+- Commit snapshot (pushed): `ce92947`
 
 ## Active ticket
 - Source of truth: `docs/_codex/ACTIVE_TICKET.md`
