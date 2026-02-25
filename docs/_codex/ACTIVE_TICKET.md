@@ -33,6 +33,28 @@ Last updated: 2026-02-25
   - strict-live gate command aligns with live-probe option contract
   - strict-live build now uses probe-only tool target to avoid extra exe generation
 - Profitability tuning remains deferred by policy until Phase 3/4 rollout completion.
+- Profitability track reopened by user request (`2026-02-25`, backtest-first):
+  - baseline refresh:
+    - `build/Release/logs/verification_report_profitability_baseline_20260225_run1.json`
+    - `build/Release/logs/daily_oos_stability_report_profitability_baseline_20260225_run1.json`
+  - applied parity-mirrored guard patch:
+    - `src/runtime/BacktestRuntime.cpp`
+    - `src/runtime/LiveTradingRuntime.cpp`
+    - `RANGING|CORE_RESCUE` candidate gate adds
+      `weak_range_rescue_lowliq_margin_tail`
+      (`cal 0.4178~0.4183`, `margin -0.0060~-0.0055`, `strength<=0.4522`, `liq 45~51`, `vol 0.13~0.19`)
+  - candidate verification:
+    - `build/Release/logs/verification_report_profitability_candidate_20260225_run2.json`
+    - no verification degradation vs baseline (`baseline_delta_pf=0.0`, `baseline_delta_exp=0.0`)
+  - candidate daily OOS:
+    - `build/Release/logs/daily_oos_stability_report_profitability_candidate_20260225_run2.json`
+    - `status=pass`, `nonpositive_day_ratio=0.3`, `total_profit_sum=457.480019`
+  - delta:
+    - `build/Release/logs/daily_oos_delta_profitability_candidate_vs_baseline_20260225_run2.json`
+    - gate-aligned `profit_sum_delta=+49.108009`, `nonpositive_day_count_delta=0`
+  - strict gate recheck:
+    - `python scripts/run_ci_operational_gate.py --include-backtest --strict-execution-parity --run-should-exit-parity-analysis --refresh-should-exit-audit-from-logs --should-exit-audit-live-runtime-log-glob "build/Release/logs/live_probe_stdout*.txt" --should-exit-audit-live-runtime-log-mode-filter exclude_backtest --strict-should-exit-parity`
+    - `CIGate PASSED`
 
 ## Scope
 - In scope:

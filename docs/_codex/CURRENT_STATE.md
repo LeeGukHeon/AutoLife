@@ -37,6 +37,40 @@ Last updated: 2026-02-25
   - TP handling: `allowed_tp1_collapsed_to_full_due_to_min_order` active.
 - Profitability work policy:
   - Deferred until Phase 3/4 full rollout, migration cleanup, and legacy removal completion.
+  - Reopened by user request on `2026-02-25` for backtest-first tuning.
+
+## Profitability retune update (2026-02-25)
+- Baseline refresh (current HEAD):
+  - verification:
+    - `build/Release/logs/verification_report_profitability_baseline_20260225_run1.json`
+    - aggregates unchanged vs retained `step8ai` (`avg_profit_factor=2.9577`, `avg_expectancy_krw=14.7159`)
+  - daily OOS:
+    - `build/Release/logs/daily_oos_stability_report_profitability_baseline_20260225_run1.json`
+    - `status=pass`, `nonpositive_day_ratio=0.3`, `total_profit_sum=408.37201`
+- Candidate mining:
+  - generated evaluated-day trade profiles:
+    - `build/Release/logs/daily_oos_trade_profile_profitability_baseline_20260225_run1_eval_tu_core_rescue.json`
+    - `build/Release/logs/daily_oos_trade_profile_profitability_baseline_20260225_run1_eval_ranging_core_rescue.json`
+  - guard candidate reports:
+    - `build/Release/logs/step_profitability_tu_core_rescue_guard_candidates_run1.json`
+    - `build/Release/logs/step_profitability_ranging_core_rescue_guard_candidates_run1.json`
+- Applied patch (parity-preserving mirror in live/backtest):
+  - `src/runtime/BacktestRuntime.cpp`
+  - `src/runtime/LiveTradingRuntime.cpp`
+  - added `weak_range_rescue_lowliq_margin_tail` inside `RANGING|CORE_RESCUE` probabilistic primary gate.
+- Candidate result:
+  - verification:
+    - `build/Release/logs/verification_report_profitability_candidate_20260225_run2.json`
+    - no degradation (`baseline_delta_pf=0.0`, `baseline_delta_exp=0.0`, `overall_gate_pass=true`)
+  - daily OOS:
+    - `build/Release/logs/daily_oos_stability_report_profitability_candidate_20260225_run2.json`
+    - `status=pass`, `nonpositive_day_ratio=0.3`, `total_profit_sum=457.480019`
+  - delta report:
+    - `build/Release/logs/daily_oos_delta_profitability_candidate_vs_baseline_20260225_run2.json`
+    - gate-aligned `profit_sum_delta=+49.108009`, `nonpositive_day_count_delta=0`, `peak_day_drawdown_pct 0.933162 -> 0.91771`
+- Safety gate recheck:
+  - `python scripts/run_ci_operational_gate.py --include-backtest --strict-execution-parity --run-should-exit-parity-analysis --refresh-should-exit-audit-from-logs --should-exit-audit-live-runtime-log-glob "build/Release/logs/live_probe_stdout*.txt" --should-exit-audit-live-runtime-log-mode-filter exclude_backtest --strict-should-exit-parity`
+  - result: `CIGate PASSED`
 
 ## Phase 3 delivery status (2026-02-25)
 - Status: `delivery summary finalized (Phase 3 only)`
