@@ -99,6 +99,39 @@ def parse_dataset_market(dataset_name: str) -> str:
     return "unknown"
 
 
+def load_backtest_market_reason_counts_from_runtime_samples(dataset_results: List[Any]) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for item in dataset_results:
+        if not isinstance(item, dict):
+            continue
+        market = parse_dataset_market(str(item.get("dataset", "")))
+        runtime = item.get("runtime_trade_distribution", {})
+        if not isinstance(runtime, dict):
+            continue
+        reason_counts = runtime.get("runtime_exit_reason_counts_in_samples", {})
+        if not isinstance(reason_counts, dict):
+            continue
+        for reason, count in reason_counts.items():
+            key = f"{normalize_market(market)}|{normalize_reason(str(reason))}"
+            counts[key] = counts.get(key, 0) + int(count)
+    return counts
+
+
+def load_backtest_market_reason_counts_from_dataset_exit_counts(dataset_results: List[Any]) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for item in dataset_results:
+        if not isinstance(item, dict):
+            continue
+        market = parse_dataset_market(str(item.get("dataset", "")))
+        reason_counts = item.get("exit_reason_counts", {})
+        if not isinstance(reason_counts, dict):
+            continue
+        for reason, count in reason_counts.items():
+            key = f"{normalize_market(market)}|{normalize_reason(str(reason))}"
+            counts[key] = counts.get(key, 0) + int(count)
+    return counts
+
+
 def parse_live_market_reason_counts_from_log(log_path: Path) -> Dict[str, int]:
     counts: Dict[str, int] = {}
     if not log_path.exists():
@@ -201,21 +234,8 @@ def main(argv=None) -> int:
     if not isinstance(dataset_results, list):
         dataset_results = []
 
-    # Backtest runtime sample: market|reason counts from each dataset summary.
-    backtest_market_reason_counts: Dict[str, int] = {}
-    for item in dataset_results:
-        if not isinstance(item, dict):
-            continue
-        market = parse_dataset_market(str(item.get("dataset", "")))
-        runtime = item.get("runtime_trade_distribution", {})
-        if not isinstance(runtime, dict):
-            continue
-        reason_counts = runtime.get("runtime_exit_reason_counts_in_samples", {})
-        if not isinstance(reason_counts, dict):
-            continue
-        for reason, count in reason_counts.items():
-            key = f"{normalize_market(market)}|{normalize_reason(str(reason))}"
-            backtest_market_reason_counts[key] = backtest_market_reason_counts.get(key, 0) + int(count)
+    backtest_runtime_market_reason_counts = load_backtest_market_reason_counts_from_runtime_samples(dataset_results)
+    backtest_dataset_exit_market_reason_counts = load_backtest_market_reason_counts_from_dataset_exit_counts(dataset_results)
 
     # Live runtime sample: parse market|reason pairs from segmented live log.
     live_market_reason_counts, live_source = load_live_market_reason_counts_from_audit(audit)
@@ -230,10 +250,22 @@ def main(argv=None) -> int:
         live_source = "runtime_log_path"
 
     live_market_reason_counts_canonical = canonicalize_market_reason_counter(live_market_reason_counts)
-    backtest_market_reason_counts_canonical = canonicalize_market_reason_counter(backtest_market_reason_counts)
+    backtest_runtime_market_reason_counts_canonical = canonicalize_market_reason_counter(backtest_runtime_market_reason_counts)
+    backtest_dataset_exit_market_reason_counts_canonical = canonicalize_market_reason_counter(
+        backtest_dataset_exit_market_reason_counts
+    )
+
+    runtime_sample_total = int(sum(backtest_runtime_market_reason_counts_canonical.values()))
+    dataset_exit_total = int(sum(backtest_dataset_exit_market_reason_counts_canonical.values()))
+    if dataset_exit_total > 0:
+        backtest_counts_source = "dataset_exit_reason_counts"
+        backtest_selected_market_reason_counts_canonical = backtest_dataset_exit_market_reason_counts_canonical
+    else:
+        backtest_counts_source = "runtime_trade_distribution_samples"
+        backtest_selected_market_reason_counts_canonical = backtest_runtime_market_reason_counts_canonical
 
     live_market_counts, live_reason_counts = split_market_reason(live_market_reason_counts_canonical)
-    backtest_market_counts, backtest_reason_counts = split_market_reason(backtest_market_reason_counts_canonical)
+    backtest_market_counts, backtest_reason_counts = split_market_reason(backtest_selected_market_reason_counts_canonical)
 
     reason_only_live = sorted(set(live_reason_counts.keys()) - set(backtest_reason_counts.keys()))
     reason_only_backtest = sorted(set(backtest_reason_counts.keys()) - set(live_reason_counts.keys()))
@@ -278,6 +310,7 @@ def main(argv=None) -> int:
             "audit_json": str(audit_path),
             "live_runtime_log": str(live_log_path) if live_log_path else "",
             "live_counts_source": live_source,
+            "backtest_counts_source": backtest_counts_source,
             "top_n": top_n,
             "min_live_exits": min_live_exits,
             "min_backtest_exits": min_backtest_exits,
@@ -289,14 +322,28 @@ def main(argv=None) -> int:
             "market_reason_counts": live_market_reason_counts_canonical,
         },
         "backtest_runtime_sample": {
+            "total_exits": runtime_sample_total,
+            "reason_counts": split_market_reason(backtest_runtime_market_reason_counts_canonical)[1],
+            "market_counts": split_market_reason(backtest_runtime_market_reason_counts_canonical)[0],
+            "market_reason_counts": backtest_runtime_market_reason_counts_canonical,
+        },
+        "backtest_dataset_exit_counts": {
+            "total_exits": dataset_exit_total,
+            "reason_counts": split_market_reason(backtest_dataset_exit_market_reason_counts_canonical)[1],
+            "market_counts": split_market_reason(backtest_dataset_exit_market_reason_counts_canonical)[0],
+            "market_reason_counts": backtest_dataset_exit_market_reason_counts_canonical,
+        },
+        "backtest_selected": {
+            "source": backtest_counts_source,
             "total_exits": backtest_total,
             "reason_counts": backtest_reason_counts,
             "market_counts": backtest_market_counts,
-            "market_reason_counts": backtest_market_reason_counts_canonical,
+            "market_reason_counts": backtest_selected_market_reason_counts_canonical,
         },
         "raw_reason_snapshot": {
             "live_market_reason_counts": live_market_reason_counts,
-            "backtest_market_reason_counts": backtest_market_reason_counts,
+            "backtest_runtime_market_reason_counts": backtest_runtime_market_reason_counts,
+            "backtest_dataset_exit_market_reason_counts": backtest_dataset_exit_market_reason_counts,
         },
         "gap_analysis": {
             "reason_only_in_live": reason_only_live,
@@ -307,8 +354,8 @@ def main(argv=None) -> int:
             "reason_delta_rows": build_delta_rows(live_reason_counts, backtest_reason_counts, top_n),
             "market_delta_rows": build_delta_rows(live_market_counts, backtest_market_counts, top_n),
             "market_reason_delta_rows": build_delta_rows(
-                live_market_reason_counts,
-                backtest_market_reason_counts,
+                live_market_reason_counts_canonical,
+                backtest_selected_market_reason_counts_canonical,
                 top_n,
             ),
         },

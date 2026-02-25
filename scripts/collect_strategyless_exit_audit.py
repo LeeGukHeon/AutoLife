@@ -599,6 +599,7 @@ def main() -> int:
                 "total_trades": safe_int(payload.get("total_trades", 0)),
                 "profit_factor": safe_float(payload.get("profit_factor", 0.0)),
                 "expectancy_krw": safe_float(payload.get("expectancy_krw", 0.0)),
+                "exit_reason_counts": payload.get("exit_reason_counts", {}),
                 "strategyless_diag": strategyless_diag,
                 "runtime_trade_distribution": runtime_distribution,
             }

@@ -956,6 +956,35 @@ Last updated: 2026-02-25
       좁은 correctness patch 범위로 재시도.
 - Gate5 staged enable execution and monitoring evidence are not started yet.
 
+## Latest update (2026-02-25, v23)
+- Exit parity sample-growth run completed with paper-mode safety maintained:
+  - `allow_live_orders=false` preserved for all probe runs.
+  - probe helper now supports temporary trading overrides + automatic config restore:
+    - `scripts/run_live_paper_probe_capture.py`
+  - probe tests added:
+    - `scripts/test_run_live_paper_probe_capture.py`
+- Exit-gap source hardening landed:
+  - audit now records per-dataset `exit_reason_counts`:
+    - `scripts/collect_strategyless_exit_audit.py`
+  - analyzer now auto-selects backtest source:
+    - `inputs.backtest_counts_source`
+    - prefers `dataset_exit_reason_counts` when runtime sample is sparse
+    - `scripts/analyze_exit_reason_mapping_gap.py`
+  - analyzer test extended:
+    - `scripts/test_analyze_exit_reason_mapping_gap.py`
+- Strict recheck artifacts:
+  - `build/Release/logs/strategyless_exit_audit_5set_20260225_sample_growth_v2.json`
+  - `build/Release/logs/exit_reason_mapping_gap_20260225_sample_growth_v2_min10.json`
+- Strict recheck snapshot:
+  - `live.total_exits=151`
+  - `backtest_selected.total_exits=51`
+  - `sample_size_ready=true`
+  - `mapping_gap_observed=true`
+  - `next_step_hint=narrow_correctness_patch_scope_to_runtime_strategyless_exit_mapping`
+- Operational safety recheck:
+  - `python scripts/run_ci_operational_gate.py --include-backtest --strict-execution-parity`
+  - result: `pass`
+
 ## Detailed history references
 - `docs/TODO_STAGE15_EXECUTION_PLAN_2026-02-13.md`
 - `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`

@@ -1263,3 +1263,35 @@ Last updated: 2026-02-25
 - Rollback strategy:
   - immediate code rollback on any `daily_oos` fail or verification degradation.
   - keep `step8e` and `v14_asc` artifacts as immutable baseline references.
+
+## Latest update (2026-02-25, v23)
+- scope:
+  - continue exit-parity sample-growth and strict reason-gap recheck under `allow_live_orders=false`.
+- code:
+  - `scripts/run_live_paper_probe_capture.py`
+    - temporary trading override support with guaranteed config restore
+    - repeat-run support and per-run stdout logs
+  - `scripts/collect_strategyless_exit_audit.py`
+    - dataset-level `exit_reason_counts` added
+  - `scripts/analyze_exit_reason_mapping_gap.py`
+    - backtest source auto-selection via `inputs.backtest_counts_source`
+  - tests:
+    - `scripts/test_run_live_paper_probe_capture.py`
+    - `scripts/test_analyze_exit_reason_mapping_gap.py`
+- key artifacts:
+  - probe:
+    - `build/Release/logs/live_probe_summary_20260225_sample_growth_smoke.json`
+    - `build/Release/logs/live_probe_summary_20260225_sample_growth_15m.json`
+    - `build/Release/logs/live_probe_summary_20260225_sample_growth_15m_run2.json`
+    - `build/Release/logs/live_probe_summary_20260225_sample_growth_aggressive_12m.json`
+    - `build/Release/logs/live_probe_summary_20260225_sample_growth_aggressive_30m.json`
+  - strict recheck:
+    - `build/Release/logs/strategyless_exit_audit_5set_20260225_sample_growth_v2.json`
+    - `build/Release/logs/exit_reason_mapping_gap_20260225_sample_growth_v2_min10.json`
+- result snapshot:
+  - `inputs.backtest_counts_source=dataset_exit_reason_counts`
+  - `live.total_exits=151`
+  - `backtest_selected.total_exits=51`
+  - `sample_size_ready=true`
+  - `mapping_gap_observed=true`
+  - `next_step_hint=narrow_correctness_patch_scope_to_runtime_strategyless_exit_mapping`

@@ -188,6 +188,64 @@ class AnalyzeExitReasonMappingGapTest(unittest.TestCase):
             self.assertTrue(bool(readiness.get("mapping_gap_inconclusive_due_to_sample_size")))
             self.assertEqual("increase_overlap_exit_samples_before_mapping_decision", readiness.get("next_step_hint"))
 
+    def test_backtest_dataset_exit_counts_source_is_selected_when_available(self):
+        repo_root = Path(__file__).resolve().parent.parent
+        script_path = repo_root / "scripts" / "analyze_exit_reason_mapping_gap.py"
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            audit_json = root / "audit.json"
+            output_json = root / "gap.json"
+
+            _write_json(
+                audit_json,
+                {
+                    "dataset_results": [
+                        {
+                            "dataset": "upbit_KRW_BTC_1m_full.csv",
+                            "exit_reason_counts": {
+                                "StopLoss": 12,
+                                "BacktestEOD": 2,
+                            },
+                            "runtime_trade_distribution": {
+                                "runtime_exit_reason_counts_in_samples": {
+                                    "BacktestEOD": 1,
+                                }
+                            },
+                        }
+                    ],
+                    "live_exit_reason_snapshot": {
+                        "exit_market_reason_counts": {
+                            "KRW-BTC|stop_loss": 10,
+                            "KRW-BTC|backtest_eod": 1,
+                        },
+                    },
+                },
+            )
+
+            cmd = [
+                sys.executable,
+                str(script_path),
+                "--audit-json",
+                str(audit_json),
+                "--output-json",
+                str(output_json),
+                "--min-live-exits",
+                "10",
+                "--min-backtest-exits",
+                "10",
+            ]
+            completed = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+            self.assertEqual(0, completed.returncode, msg=completed.stderr)
+
+            result = json.loads(output_json.read_text(encoding="utf-8"))
+            inputs = result.get("inputs", {})
+            self.assertEqual("dataset_exit_reason_counts", inputs.get("backtest_counts_source"))
+            readiness = result.get("readiness", {})
+            self.assertTrue(bool(readiness.get("sample_size_ready")))
+            backtest_selected = result.get("backtest_selected", {})
+            self.assertEqual("dataset_exit_reason_counts", backtest_selected.get("source"))
+            self.assertEqual(14, int(backtest_selected.get("total_exits", 0)))
+
 
 if __name__ == "__main__":
     unittest.main()

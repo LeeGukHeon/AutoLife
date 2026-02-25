@@ -2070,6 +2070,28 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
 5. 동일 5-set 재검증:
    - 목표: `overall_gate_pass` 유지 + expectancy/PF 추가 개선 + DD 비열화.
 
+## 2026-02-25 v23 update (exit parity sample-growth)
+- code updates:
+  - `scripts/run_live_paper_probe_capture.py`
+    - temp trading override + automatic config restore + repeat probe runs
+  - `scripts/collect_strategyless_exit_audit.py`
+    - dataset-level `exit_reason_counts` exported
+  - `scripts/analyze_exit_reason_mapping_gap.py`
+    - backtest source auto-select (`runtime sample` vs `dataset exit_reason_counts`)
+  - tests:
+    - `scripts/test_run_live_paper_probe_capture.py`
+    - `scripts/test_analyze_exit_reason_mapping_gap.py`
+- artifacts:
+  - `build/Release/logs/strategyless_exit_audit_5set_20260225_sample_growth_v2.json`
+  - `build/Release/logs/exit_reason_mapping_gap_20260225_sample_growth_v2_min10.json`
+- strict check result (`--min-live-exits 10 --min-backtest-exits 10`):
+  - `sample_size_ready=true`
+  - `mapping_gap_observed=true`
+  - `inputs.backtest_counts_source=dataset_exit_reason_counts`
+  - next: `narrow_correctness_patch_scope_to_runtime_strategyless_exit_mapping`
+- safety:
+  - `python scripts/run_ci_operational_gate.py --include-backtest --strict-execution-parity` -> `pass`
+
 ## Guardrails
 - Sequential only (`--max-workers 1` policy).
 - No coin hardcoding (pattern/regime only).
