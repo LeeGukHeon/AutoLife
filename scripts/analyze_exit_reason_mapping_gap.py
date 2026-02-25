@@ -115,6 +115,22 @@ def parse_live_market_reason_counts_from_log(log_path: Path) -> Dict[str, int]:
     return counts
 
 
+def load_live_market_reason_counts_from_audit(audit: Dict[str, Any]) -> Tuple[Dict[str, int], str]:
+    snapshot = audit.get("live_exit_reason_snapshot")
+    if not isinstance(snapshot, dict):
+        return {}, "none"
+    market_reason = snapshot.get("exit_market_reason_counts")
+    if isinstance(market_reason, dict):
+        parsed: Dict[str, int] = {}
+        for key, count in market_reason.items():
+            try:
+                parsed[str(key)] = int(count)
+            except Exception:
+                parsed[str(key)] = 0
+        return parsed, "audit_snapshot"
+    return {}, "none"
+
+
 def canonicalize_market_reason_counter(counter: Dict[str, int]) -> Dict[str, int]:
     out: Dict[str, int] = {}
     for key, count in counter.items():
@@ -202,13 +218,16 @@ def main(argv=None) -> int:
             backtest_market_reason_counts[key] = backtest_market_reason_counts.get(key, 0) + int(count)
 
     # Live runtime sample: parse market|reason pairs from segmented live log.
+    live_market_reason_counts, live_source = load_live_market_reason_counts_from_audit(audit)
     live_log_path_raw = (
         (audit.get("live_exit_reason_snapshot") or {}).get("path")
         if isinstance(audit.get("live_exit_reason_snapshot"), dict)
         else None
     )
     live_log_path = resolve_repo_path(str(live_log_path_raw)) if live_log_path_raw else Path("")
-    live_market_reason_counts = parse_live_market_reason_counts_from_log(live_log_path)
+    if not live_market_reason_counts:
+        live_market_reason_counts = parse_live_market_reason_counts_from_log(live_log_path)
+        live_source = "runtime_log_path"
 
     live_market_reason_counts_canonical = canonicalize_market_reason_counter(live_market_reason_counts)
     backtest_market_reason_counts_canonical = canonicalize_market_reason_counter(backtest_market_reason_counts)
@@ -258,7 +277,10 @@ def main(argv=None) -> int:
         "inputs": {
             "audit_json": str(audit_path),
             "live_runtime_log": str(live_log_path) if live_log_path else "",
+            "live_counts_source": live_source,
             "top_n": top_n,
+            "min_live_exits": min_live_exits,
+            "min_backtest_exits": min_backtest_exits,
         },
         "live": {
             "total_exits": live_total,

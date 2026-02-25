@@ -13,6 +13,64 @@ def _write_json(path_value: Path, payload) -> None:
 
 
 class AnalyzeExitReasonMappingGapTest(unittest.TestCase):
+    def test_prefers_audit_snapshot_market_reason_counts(self):
+        repo_root = Path(__file__).resolve().parent.parent
+        script_path = repo_root / "scripts" / "analyze_exit_reason_mapping_gap.py"
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            live_log = root / "live.log"
+            audit_json = root / "audit.json"
+            output_json = root / "gap.json"
+
+            # This log intentionally has no exit lines; analyzer should still work
+            # from audit snapshot counts.
+            live_log.write_text("no exit lines\n", encoding="utf-8")
+
+            _write_json(
+                audit_json,
+                {
+                    "dataset_results": [
+                        {
+                            "dataset": "upbit_KRW_BTC_1m_12000.csv",
+                            "runtime_trade_distribution": {
+                                "runtime_exit_reason_counts_in_samples": {
+                                    "StopLoss": 2,
+                                    "TakeProfitFullDueToMinOrder": 1,
+                                }
+                            },
+                        }
+                    ],
+                    "live_exit_reason_snapshot": {
+                        "path": str(live_log),
+                        "exit_market_reason_counts": {
+                            "KRW-BTC|stop_loss": 2,
+                            "KRW-BTC|take_profit_full_due_to_min_order": 1,
+                        },
+                    },
+                },
+            )
+
+            cmd = [
+                sys.executable,
+                str(script_path),
+                "--audit-json",
+                str(audit_json),
+                "--output-json",
+                str(output_json),
+                "--min-live-exits",
+                "1",
+                "--min-backtest-exits",
+                "1",
+            ]
+            completed = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+            self.assertEqual(0, completed.returncode, msg=completed.stderr)
+
+            result = json.loads(output_json.read_text(encoding="utf-8"))
+            inputs = result.get("inputs", {})
+            self.assertEqual("audit_snapshot", inputs.get("live_counts_source"))
+            readiness = result.get("readiness", {})
+            self.assertFalse(bool(readiness.get("mapping_gap_observed")))
+
     def test_canonical_reason_mapping_avoids_false_gap(self):
         repo_root = Path(__file__).resolve().parent.parent
         script_path = repo_root / "scripts" / "analyze_exit_reason_mapping_gap.py"

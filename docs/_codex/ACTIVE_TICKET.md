@@ -1207,6 +1207,26 @@ Last updated: 2026-02-25
       - backtest: `STOP_LOSS`, `TAKE_PROFIT_1`, `TAKE_PROFIT_2`
   - next:
     - `increase_overlap_exit_samples_before_mapping_decision`
+  - multilog evidence refresh (`2026-02-25`):
+    - collector patch:
+      - `scripts/collect_strategyless_exit_audit.py` now supports:
+        - `--live-runtime-log-list`
+        - `--live-runtime-log-glob`
+        - deduplicated `exit_market_reason_counts`
+        - `--live-exit-reason-denylist`
+    - new artifact:
+      - `build/Release/logs/strategyless_exit_audit_5set_20260225_multilog_dedup.json`
+      - live snapshot:
+        - `matched_exit_count_raw=4`
+        - `matched_exit_count=4`
+        - `exit_reason_counts={stop_loss:2, take_profit_full_due_to_min_order:2}`
+    - min-threshold sensitivity:
+      - strict:
+        - `build/Release/logs/exit_reason_mapping_gap_20260225_multilog_dedup_min10.json`
+        - `sample_size_ready=false`, `mapping_gap_observed=false`, `mapping_gap_observed_raw=true`
+      - exploratory:
+        - `build/Release/logs/exit_reason_mapping_gap_20260225_multilog_dedup_min4.json`
+        - `sample_size_ready=true`, `mapping_gap_observed=true`
 - 2) 검증 정확도 리스크(일별 델타 집계 기준):
   - status: `완료`
   - 조치:

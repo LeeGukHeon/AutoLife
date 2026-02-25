@@ -485,6 +485,22 @@ Last updated: 2026-02-25
           - backtest: `STOP_LOSS`, `TAKE_PROFIT_1`, `TAKE_PROFIT_2`
       - next:
         - `increase_overlap_exit_samples_before_mapping_decision`
+      - multilog refresh:
+        - collector update:
+          - `scripts/collect_strategyless_exit_audit.py` supports multilog + dedupe + denylist
+        - artifact:
+          - `build/Release/logs/strategyless_exit_audit_5set_20260225_multilog_dedup.json`
+          - live dedup counts:
+            - `matched_exit_count_raw=4`
+            - `matched_exit_count=4`
+            - `exit_reason_counts={stop_loss:2, take_profit_full_due_to_min_order:2}`
+        - threshold sensitivity:
+          - strict:
+            - `build/Release/logs/exit_reason_mapping_gap_20260225_multilog_dedup_min10.json`
+            - `sample_size_ready=false`, `mapping_gap_observed=false`, `mapping_gap_observed_raw=true`
+          - exploratory:
+            - `build/Release/logs/exit_reason_mapping_gap_20260225_multilog_dedup_min4.json`
+            - `sample_size_ready=true`, `mapping_gap_observed=true`
     - delta aggregation consistency risk:
       - status: `완료`
       - code:

@@ -82,7 +82,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--live-runtime-log",
         default=r".\build\Release\logs\autolife.log",
-        help="Live runtime text log path for exit reason scan (optional).",
+        help="Primary live runtime text log path for exit reason scan (optional).",
+    )
+    parser.add_argument(
+        "--live-runtime-log-list",
+        default="",
+        help="Optional comma-separated additional live runtime log paths.",
+    )
+    parser.add_argument(
+        "--live-runtime-log-glob",
+        default="",
+        help="Optional comma-separated glob patterns for additional live runtime logs.",
+    )
+    parser.add_argument(
+        "--live-exit-reason-denylist",
+        default="",
+        help="Optional comma-separated exit reasons to exclude from live exit snapshot.",
     )
     parser.add_argument(
         "--output-json",
@@ -120,6 +135,18 @@ def parse_last_json_line(stdout: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def parse_csv_tokens(raw: str) -> List[str]:
+    values: List[str] = []
+    seen: set[str] = set()
+    for token in str(raw or "").split(","):
+        item = token.strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        values.append(item)
+    return values
+
+
 def safe_float(value: Any) -> float:
     try:
         return float(value)
@@ -132,6 +159,42 @@ def safe_int(value: Any) -> int:
         return int(value)
     except Exception:
         return 0
+
+
+def resolve_existing_log_paths(
+    *,
+    primary_path: Path,
+    path_list_csv: str,
+    path_glob_csv: str,
+) -> List[Path]:
+    candidates: List[Path] = []
+    seen: set[str] = set()
+
+    def add_path(path_value: Path) -> None:
+        norm = str(path_value)
+        if norm in seen:
+            return
+        seen.add(norm)
+        candidates.append(path_value)
+
+    if str(primary_path).strip():
+        add_path(primary_path)
+
+    for token in parse_csv_tokens(path_list_csv):
+        add_path(resolve_path(token))
+
+    repo_root = resolve_path(".")
+    for pattern in parse_csv_tokens(path_glob_csv):
+        try:
+            matches = sorted(repo_root.glob(pattern))
+        except Exception:
+            matches = []
+        for match in matches:
+            if not match.is_file():
+                continue
+            add_path(match.resolve())
+
+    return candidates
 
 
 def run_backtest_json(
@@ -381,32 +444,71 @@ def aggregate_dataset_results(items: Iterable[Dict[str, Any]]) -> Dict[str, Any]
     }
 
 
-def summarize_live_exit_reasons(path: Path) -> Dict[str, Any]:
+def summarize_live_exit_reasons(
+    paths: List[Path],
+    deny_reasons: set[str],
+) -> Dict[str, Any]:
     result: Dict[str, Any] = {
-        "path": str(path),
-        "exists": path.exists(),
+        "paths": [str(path) for path in paths],
+        "existing_paths": [str(path) for path in paths if path.exists()],
+        "exists": any(path.exists() for path in paths),
+        "matched_exit_count_raw": 0,
         "matched_exit_count": 0,
+        "duplicate_event_count": 0,
+        "deny_reasons": sorted(deny_reasons),
         "exit_reason_counts": {},
         "exit_market_counts": {},
+        "exit_market_reason_counts": {},
+        "source_file_match_counts": {},
     }
-    if not path.exists():
+    if not paths:
         return result
 
     reason_counts: Dict[str, int] = {}
     market_counts: Dict[str, int] = {}
-    pattern = re.compile(r"Position exited:\s*([A-Z0-9\-]+)\s*\|.*?\|\s*reason=([A-Za-z0-9_]+)")
-    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        match = pattern.search(raw)
-        if not match:
-            continue
-        market = str(match.group(1)).strip() or "unknown"
-        reason = str(match.group(2)).strip() or "unknown"
-        reason_counts[reason] = reason_counts.get(reason, 0) + 1
-        market_counts[market] = market_counts.get(market, 0) + 1
+    market_reason_counts: Dict[str, int] = {}
+    source_counts: Dict[str, int] = {}
+    seen_events: set[str] = set()
+    raw_count = 0
+    duplicate_count = 0
 
+    pattern = re.compile(r"Position exited:\s*([A-Z0-9\-]+)\s*\|.*?\|\s*reason=([A-Za-z0-9_]+)")
+    timestamp_pattern = re.compile(r"^\s*\[([^\]]+)\]")
+
+    for path in paths:
+        if not path.exists():
+            continue
+        file_match_count = 0
+        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            match = pattern.search(raw)
+            if not match:
+                continue
+            raw_count += 1
+            file_match_count += 1
+            market = str(match.group(1)).strip() or "unknown"
+            reason = str(match.group(2)).strip() or "unknown"
+            if reason.lower() in deny_reasons:
+                continue
+            ts_match = timestamp_pattern.search(raw)
+            ts_token = str(ts_match.group(1)).strip() if ts_match else ""
+            event_key = f"{ts_token}|{market}|{reason}"
+            if event_key in seen_events:
+                duplicate_count += 1
+                continue
+            seen_events.add(event_key)
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            market_counts[market] = market_counts.get(market, 0) + 1
+            mk_key = f"{market}|{reason}"
+            market_reason_counts[mk_key] = market_reason_counts.get(mk_key, 0) + 1
+        source_counts[str(path)] = file_match_count
+
+    result["matched_exit_count_raw"] = int(raw_count)
     result["matched_exit_count"] = int(sum(reason_counts.values()))
+    result["duplicate_event_count"] = int(duplicate_count)
     result["exit_reason_counts"] = reason_counts
     result["exit_market_counts"] = market_counts
+    result["exit_market_reason_counts"] = market_reason_counts
+    result["source_file_match_counts"] = source_counts
     return result
 
 
@@ -442,6 +544,12 @@ def main() -> int:
     live_execution_log_path = resolve_path(args.live_execution_log_jsonl)
     backtest_execution_log_path = resolve_path(args.backtest_execution_log_jsonl)
     live_runtime_log_path = resolve_path(args.live_runtime_log)
+    live_runtime_log_paths = resolve_existing_log_paths(
+        primary_path=live_runtime_log_path,
+        path_list_csv=args.live_runtime_log_list,
+        path_glob_csv=args.live_runtime_log_glob,
+    )
+    live_exit_reason_denylist = {x.lower() for x in parse_csv_tokens(args.live_exit_reason_denylist)}
     output_path = resolve_path(args.output_json)
 
     if not exe_path.exists():
@@ -518,7 +626,10 @@ def main() -> int:
     backtest_decision_snapshot = summarize_policy_decision_log(backtest_decision_log_path)
     live_execution_snapshot = summarize_execution_log(live_execution_log_path)
     backtest_execution_snapshot = summarize_execution_log(backtest_execution_log_path)
-    live_exit_reason_snapshot = summarize_live_exit_reasons(live_runtime_log_path)
+    live_exit_reason_snapshot = summarize_live_exit_reasons(
+        live_runtime_log_paths,
+        live_exit_reason_denylist,
+    )
 
     entry_side_shadow_parity_pass = (
         shadow_snapshot["status"] == "pass"
@@ -560,6 +671,8 @@ def main() -> int:
             "backtest_decision_log_jsonl": str(backtest_decision_log_path),
             "live_execution_log_jsonl": str(live_execution_log_path),
             "backtest_execution_log_jsonl": str(backtest_execution_log_path),
+            "live_runtime_logs": [str(path) for path in live_runtime_log_paths],
+            "live_exit_reason_denylist": sorted(live_exit_reason_denylist),
         },
         "dataset_results": dataset_results,
         "aggregate": aggregate,

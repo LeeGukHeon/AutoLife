@@ -2018,6 +2018,19 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
             - 상태: `해결중`
             - `build/Release/logs/exit_reason_mapping_gap_20260225_recheck_v5_overlap_canonical.json`
             - `build/Release/logs/exit_reason_mapping_gap_20260225_recheck_v6_postpatch_canonical.json`
+            - multilog refresh:
+              - `build/Release/logs/strategyless_exit_audit_5set_20260225_multilog_dedup.json`
+              - live dedup snapshot:
+                - `matched_exit_count_raw=4`
+                - `matched_exit_count=4`
+                - `exit_reason_counts={stop_loss:2, take_profit_full_due_to_min_order:2}`
+            - threshold sensitivity:
+              - strict:
+                - `build/Release/logs/exit_reason_mapping_gap_20260225_multilog_dedup_min10.json`
+                - `sample_size_ready=false`, `mapping_gap_observed=false`, `mapping_gap_observed_raw=true`
+              - exploratory:
+                - `build/Release/logs/exit_reason_mapping_gap_20260225_multilog_dedup_min4.json`
+                - `sample_size_ready=true`, `mapping_gap_observed=true`
             - params: `--min-live-exits 10 --min-backtest-exits 10`
             - snapshot:
               - `comparable=true`, `overlap_ready=true`
