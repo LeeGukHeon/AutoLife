@@ -207,7 +207,6 @@ private:
     
     // Win Rate >= 60%, Profit Factor >= 1.5?????ъ????뺣?
     // 湲곌?湲??깅뒫 湲곗? ?곸슜
-    double calculatePositionScaleMultiplier();
     
     // Historical P&L ?곗씠?곗뿉??理쒖쟻 ?꾪꽣媛??숈뒿 (ML)
     // ?댁쟾 嫄곕옒 ?깃낵?먯꽌 理쒖쟻???꾪꽣 ?꾧퀎媛??먮룞 怨꾩궛
@@ -269,11 +268,9 @@ private:
     
     // ?ъ????뺣? 諛곗닔 (湲곕낯 1.0, 理쒕? 2.5)
     // Win Rate ??60%, PF ??1.5?????먮룞 利앷?
-    double position_scale_multiplier_ = 1.0;
     
     // ML 紐⑤뱢???꾪븳 理쒖쟻 ?꾪꽣媛??숈뒿 ?곗씠??
     // key: ?꾪꽣媛? value: ?대떦 ?꾪꽣媛믪뿉?쒖쓽 ?밸쪧
-    int scans_without_new_entry_ = 0;
     double market_hostility_ewma_ = 0.0;
     int hostile_pause_scans_remaining_ = 0;
     
