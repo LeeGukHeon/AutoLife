@@ -2115,6 +2115,19 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
     - exit reasons: `{BacktestEOD:5} -> {StopLoss:17, TakeProfit1:10}`
 - safety recheck:
   - `python scripts/run_ci_operational_gate.py --include-backtest --strict-execution-parity` -> `pass`
+- OFF/ON 5-set gate result:
+  - verification OFF:
+    - `build/Release/logs/verification_report_correctness_runtime_mapping_hardonly_off_5set_20260225.json`
+    - `overall_gate_pass=true`
+  - verification ON:
+    - `build/Release/logs/verification_report_correctness_runtime_mapping_hardonly_on_5set_20260225.json`
+    - `overall_gate_pass=false`
+  - daily OOS delta:
+    - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_hardonly_on_vs_off_5set_20260225.json`
+    - `profit_sum_delta=-221.083891`
+    - `nonpositive_day_count_delta=+3`
+- decision:
+  - fail-closed 유지. v24 하드온리 모드는 baseline 미적용(default OFF 유지).
 
 ## Guardrails
 - Sequential only (`--max-workers 1` policy).

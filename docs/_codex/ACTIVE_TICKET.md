@@ -1327,3 +1327,24 @@ Last updated: 2026-02-25
 - interpretation:
   - hard-only mapping removes strategy-less runtime `BacktestEOD` concentration in backtest probe.
   - next step remains live-overlap sample expansion for strict reason-gap conclusion.
+- gate validation (OFF vs ON hard-only, 5-set):
+  - verification OFF:
+    - `build/Release/logs/verification_report_correctness_runtime_mapping_hardonly_off_5set_20260225.json`
+    - `avg_profit_factor=2.9577`, `avg_expectancy_krw=14.7159`, `overall_gate_pass=true`
+  - verification ON:
+    - `build/Release/logs/verification_report_correctness_runtime_mapping_hardonly_on_5set_20260225.json`
+    - `avg_profit_factor=0.4136`, `avg_expectancy_krw=-13.9982`, `overall_gate_pass=false`
+  - daily OOS OFF:
+    - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_hardonly_off_5set_3m7d_20260225.json`
+    - `status=fail`, `nonpositive_day_ratio=0.421053`, `total_profit_sum=-248.681425`
+  - daily OOS ON:
+    - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_hardonly_on_5set_3m7d_20260225.json`
+    - `status=fail`, `nonpositive_day_ratio=0.529412`, `total_profit_sum=-469.765316`
+  - delta:
+    - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_hardonly_on_vs_off_5set_20260225.json`
+    - `profit_sum_delta=-221.083891`, `nonpositive_day_count_delta=+3`
+- decision:
+  - fail-closed keep:
+    - `backtest_strategyless_runtime_live_exit_mapping=false`
+    - `backtest_strategyless_runtime_live_exit_mapping_hard_exit_only=false`
+  - v24 probe code remains as default-OFF instrumentation only.

@@ -3,7 +3,7 @@ Last updated: 2026-02-25
 
 ## Repository
 - Branch: `main`
-- Commit snapshot (pushed): `754963c`
+- Commit snapshot (pushed): `02abe90`
 
 ## Active ticket
 - Source of truth: `docs/_codex/ACTIVE_TICKET.md`
@@ -1014,6 +1014,20 @@ Last updated: 2026-02-25
 - Remaining:
   - strict gap conclusion still blocked by live overlap sample policy in fixed-window compare;
     continue sample expansion and recheck.
+- Gate impact check (OFF vs ON hard-only):
+  - verification OFF:
+    - `build/Release/logs/verification_report_correctness_runtime_mapping_hardonly_off_5set_20260225.json`
+    - `overall_gate_pass=true`
+  - verification ON:
+    - `build/Release/logs/verification_report_correctness_runtime_mapping_hardonly_on_5set_20260225.json`
+    - `overall_gate_pass=false`
+  - daily OOS delta:
+    - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_hardonly_on_vs_off_5set_20260225.json`
+    - `profit_sum_delta=-221.083891`
+    - `nonpositive_day_count_delta=+3`
+- Decision:
+  - keep both correctness probe flags default OFF (fail-closed).
+  - do not promote v24 hard-only mode to baseline.
 
 ## Detailed history references
 - `docs/TODO_STAGE15_EXECUTION_PLAN_2026-02-13.md`
