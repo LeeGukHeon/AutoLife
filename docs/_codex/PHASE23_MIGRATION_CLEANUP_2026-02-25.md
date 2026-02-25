@@ -23,17 +23,22 @@ Last updated: 2026-02-25
    - `src/runtime/BacktestRuntime.cpp`
    - now uses only `enable_uptrend_rescue_prefilter_tail_guard`
 
+## Cleanup Applied (Wave 2)
+1. Removed backtest-only correctness probe flags:
+   - deleted: `backtest_strategyless_runtime_live_exit_mapping`
+   - deleted: `backtest_strategyless_runtime_live_exit_mapping_hard_exit_only`
+2. Removed disabled-by-default strategyless mapping branch in backtest exit path:
+   - `src/runtime/BacktestRuntime.cpp`
+3. Tightened websocket activation to real-live-order mode only:
+   - `src/runtime/LiveTradingRuntime.cpp`
+   - myOrder WS now starts only when `mode=LIVE && !dry_run && allow_live_orders=true`
+
 ## Why This Is Safe
 - Alias default was OFF and no active config uses this key.
 - Effective runtime behavior remains unchanged unless old key was explicitly used.
 - Live/Backtest use the same single flag after cleanup.
 
-## Intentionally Not Removed (This Wave)
-- `backtest_strategyless_runtime_live_exit_mapping`
-- `backtest_strategyless_runtime_live_exit_mapping_hard_exit_only`
-- Reason: these are active correctness-audit scaffolding paths and still referenced by current ticket evidence.
-
 ## Next Cleanup Waves (Candidate)
-1. Separate correctness-only probes from runtime core via compile-unit isolation.
-2. Retire stale probe-only scripts once ticket status becomes `closed`.
-3. Remove residual docs references to deleted aliases after ticket handoff is updated.
+1. Remove stale references to retired probe flags from historical codex logs.
+2. Separate analysis-only scripts from gate-critical scripts via explicit manifest.
+3. Add workflow reachability check to fail when unreferenced scripts re-accumulate.

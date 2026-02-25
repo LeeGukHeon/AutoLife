@@ -19,6 +19,10 @@ Last updated: 2026-02-25
   - `docs/_codex/CH01_PHASE3_FINAL_DELIVERY_2026-02-25.md`
 - Phase 2/3 migration cleanup wave-1 was documented:
   - `docs/_codex/PHASE23_MIGRATION_CLEANUP_2026-02-25.md`
+- Phase 2/3 migration cleanup wave-2 applied:
+  - retired backtest strategyless exit-mapping probe flags
+  - disabled-by-default backtest strategyless mapping branch removed
+  - myOrder websocket activation narrowed to real-live-order mode only
 - Full-source validation rerun passed (build/unit/script-suite/strict parity gate).
 - Unreferenced Python helper scripts removed:
   - `scripts/run_probabilistic_fetch_live.py`
@@ -46,7 +50,6 @@ Last updated: 2026-02-25
 - Contracts touched:
   - none
 - Flags added/changed:
-  - `backtest_strategyless_runtime_live_exit_mapping` (default `false`)
   - `enable_uptrend_rescue_prefilter_tail_guard` (default `false`)
 
 ## Implementation plan

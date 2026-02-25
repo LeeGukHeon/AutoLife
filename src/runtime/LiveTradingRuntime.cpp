@@ -1996,10 +1996,15 @@ TradingEngine::TradingEngine(
     policy_controller_ = std::make_unique<AdaptivePolicyController>();
     performance_store_ = std::make_unique<PerformanceStore>();
     risk_manager_ = std::make_unique<risk::RiskManager>(config.initial_capital);
+    const bool enable_my_order_ws =
+        config.mode == TradingMode::LIVE &&
+        !config.dry_run &&
+        config.allow_live_orders;
     order_manager_ = std::make_unique<execution::OrderManager>(
         http_client,
-        config.mode == TradingMode::LIVE
+        enable_my_order_ws
     );
+    LOG_INFO("Order manager WS mode: {}", enable_my_order_ws ? "enabled" : "disabled");
     regime_detector_ = std::make_unique<analytics::RegimeDetector>();
     learning_state_store_ = std::make_unique<core::LearningStateStoreJson>(
         utils::PathUtils::resolveRelativePath("state/learning_state.json")

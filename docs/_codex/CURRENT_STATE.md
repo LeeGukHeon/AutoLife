@@ -46,14 +46,18 @@ Last updated: 2026-02-25
   6. strict parity result
 
 ## Migration cleanup status (2026-02-25)
-- Status: `wave-1 applied (parity-safe)`
+- Status: `wave-1/wave-2 applied (parity-safe)`
 - Document:
   - `docs/_codex/PHASE23_MIGRATION_CLEANUP_2026-02-25.md`
 - Applied:
   - removed deprecated alias `enable_v21_rescue_prefiltered_pair_probe`
   - unified runtime guard flag path to `enable_uptrend_rescue_prefilter_tail_guard`
+  - removed backtest strategyless exit-mapping probe flags/branch
+  - narrowed myOrder websocket activation to real-live-order mode only
 
 ## Correctness audit snapshot
+- Note:
+  - detailed `strategyless_runtime_live_exit_mapping` entries below are historical probe records; probe flags are retired from active runtime config.
 - Live exit reference (`src/runtime/LiveTradingRuntime.cpp:4231`~`src/runtime/LiveTradingRuntime.cpp:4299`):
   - `updatePosition -> applyAdaptiveRiskControls -> strategy shouldExit(optional) -> partial TP1 -> shouldExitPosition`
 - Backtest mismatch confirmed (`src/runtime/BacktestRuntime.cpp:2191`~`src/runtime/BacktestRuntime.cpp:2375`):
