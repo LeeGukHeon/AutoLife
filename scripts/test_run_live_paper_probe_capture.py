@@ -20,13 +20,13 @@ class RunLivePaperProbeCaptureTests(unittest.TestCase):
             )
 
             parsed = probe.parse_trading_overrides(
-                trading_overrides_json='{"min_order_krw": 2000.0, "manager_soft_queue_enabled": false}',
+                trading_overrides_json='{"min_order_krw": 2000.0, "probabilistic_runtime_scan_prefilter_enabled": false}',
                 trading_overrides_file=str(overrides_file),
             )
 
             self.assertEqual(2000.0, float(parsed.get("min_order_krw", 0.0)))
             self.assertEqual(2, int(parsed.get("max_new_orders_per_scan", 0)))
-            self.assertFalse(bool(parsed.get("manager_soft_queue_enabled", True)))
+            self.assertFalse(bool(parsed.get("probabilistic_runtime_scan_prefilter_enabled", True)))
 
     def test_build_probe_config_payload_keeps_base_immutable(self):
         base_payload = {

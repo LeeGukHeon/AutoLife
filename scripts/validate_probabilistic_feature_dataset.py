@@ -97,8 +97,8 @@ BASELINE_NUMERIC_COLUMNS = [
 ]
 
 BASELINE_LABEL_COLUMNS = ["label_up_h1", "label_up_h5"]
-PIPELINE_TO_DATASET_VERSION = {"v1": "prob_features_v1", "v2": "prob_features_v2_draft"}
-PIPELINE_TO_CONTRACT_VERSION = {"v1": "v1", "v2": "v2_draft"}
+PIPELINE_TO_DATASET_VERSION = {"v2": "prob_features_v2_draft"}
+PIPELINE_TO_CONTRACT_VERSION = {"v2": "v2_draft"}
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -107,11 +107,11 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--dataset-manifest-json",
-        default=r".\data\model_input\probabilistic_features_v1\feature_dataset_manifest.json",
+        default=r".\data\model_input\probabilistic_features_v2_draft_latest\feature_dataset_manifest.json",
     )
     parser.add_argument(
         "--contract-json",
-        default=r".\config\model\probabilistic_feature_contract_v1.json",
+        default=r".\config\model\probabilistic_feature_contract_v2.json",
     )
     parser.add_argument(
         "--output-json",
@@ -120,7 +120,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument(
         "--pipeline-version",
         "--pipeline_version",
-        choices=("auto", "v1", "v2"),
+        choices=("auto", "v2"),
         default="auto",
         help="Gate profile selector. auto infers from manifest.",
     )
@@ -155,23 +155,21 @@ def normalize_nonempty_str_list(raw: Any) -> List[str]:
 
 def infer_pipeline_from_manifest(manifest: Dict[str, Any]) -> str:
     explicit = str(manifest.get("pipeline_version", "")).strip().lower()
-    if explicit in ("v1", "v2"):
+    if explicit == "v2":
         return explicit
     version = str(manifest.get("version", "")).strip().lower()
     if "v2" in version:
         return "v2"
-    return "v1"
+    return "v2"
 
 
 def infer_pipeline_from_contract(contract: Dict[str, Any]) -> str:
     version = str(contract.get("version", "")).strip().lower()
     if version == "v2_draft":
         return "v2"
-    if version == "v1":
-        return "v1"
     if "v2" in version:
         return "v2"
-    return "v1"
+    return "v2"
 
 
 def read_float(row: Dict[str, str], key: str) -> Tuple[bool, float]:
@@ -463,8 +461,8 @@ def main(argv=None) -> int:
     requested_pipeline = str(args.pipeline_version).strip().lower()
     manifest_pipeline = infer_pipeline_from_manifest(manifest)
     contract_pipeline = infer_pipeline_from_contract(contract)
-    resolved_pipeline = requested_pipeline if requested_pipeline in ("v1", "v2") else manifest_pipeline
-    gate_profile = "v2_strict" if resolved_pipeline == "v2" else "v1"
+    resolved_pipeline = requested_pipeline if requested_pipeline == "v2" else manifest_pipeline
+    gate_profile = "v2_strict"
 
     expected_dataset_version = PIPELINE_TO_DATASET_VERSION[resolved_pipeline]
     expected_contract_version = PIPELINE_TO_CONTRACT_VERSION[resolved_pipeline]
@@ -496,9 +494,7 @@ def main(argv=None) -> int:
             (contract_column_count <= 0) or (contract_column_count == len(contract_header))
         ),
         "manifest_contract_tag_matches_pipeline": (
-            manifest_feature_contract_version in ("", "v1")
-            if resolved_pipeline == "v1"
-            else (manifest_feature_contract_version == "v2_draft")
+            manifest_feature_contract_version == "v2_draft"
         ),
     }
     preflight_errors = [key for key, value in preflight_checks.items() if not bool(value)]

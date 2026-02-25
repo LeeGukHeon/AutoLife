@@ -56,18 +56,26 @@ def load_supported_markets_from_runtime_bundle(bundle_path: pathlib.Path) -> Dic
     with bundle_path.open("r", encoding="utf-8") as fp:
         payload = json.load(fp)
     bundle_version = str(payload.get("version", "")).strip()
-    expected_pipeline = "v1"
-    if bundle_version == "probabilistic_runtime_bundle_v1":
-        expected_pipeline = "v1"
-    elif bundle_version == "probabilistic_runtime_bundle_v2_draft":
-        expected_pipeline = "v2"
-    elif bundle_version:
-        raise RuntimeError(f"Unsupported runtime bundle version for verification: {bundle_version}")
+    expected_pipeline = "v2"
+    if bundle_version != "probabilistic_runtime_bundle_v2_draft":
+        raise RuntimeError(f"Unsupported runtime bundle version for verification: {bundle_version or 'missing'}")
     declared_pipeline = str(payload.get("pipeline_version", expected_pipeline)).strip().lower() or expected_pipeline
     if declared_pipeline != expected_pipeline:
         raise RuntimeError(
             "Runtime bundle pipeline mismatch: "
             f"version={bundle_version or 'unknown'} pipeline_version={declared_pipeline}"
+        )
+    feature_contract_version = str(payload.get("feature_contract_version", "")).strip().lower()
+    runtime_bundle_contract_version = str(payload.get("runtime_bundle_contract_version", "")).strip().lower()
+    if feature_contract_version != "v2_draft":
+        raise RuntimeError(
+            "Runtime bundle contract mismatch for verification: "
+            f"feature_contract_version={feature_contract_version or 'missing'}"
+        )
+    if runtime_bundle_contract_version != "v2_draft":
+        raise RuntimeError(
+            "Runtime bundle contract mismatch for verification: "
+            f"runtime_bundle_contract_version={runtime_bundle_contract_version or 'missing'}"
         )
     markets_field = payload.get("markets", [])
     supported_markets: set[str] = set()
@@ -98,16 +106,18 @@ def resolve_verification_pipeline_version(
 ) -> str:
     requested = str(requested_pipeline_version or "auto").strip().lower()
     bundle_pipeline = str(bundle_meta.get("pipeline_version", "")).strip().lower()
-    if requested in ("v1", "v2"):
+    if requested == "v2":
         if bundle_pipeline and bundle_pipeline != requested:
             raise RuntimeError(
                 "Verification pipeline version mismatches runtime bundle: "
                 f"requested={requested} bundle={bundle_pipeline}"
             )
         return requested
-    if bundle_pipeline in ("v1", "v2"):
+    if requested not in ("", "auto"):
+        raise RuntimeError(f"Unsupported verification pipeline version: {requested}")
+    if bundle_pipeline == "v2":
         return bundle_pipeline
-    return "v1"
+    return "v2"
 
 
 def resolve_probabilistic_bundle_path(exe_path: pathlib.Path, config_payload: Dict[str, Any]) -> pathlib.Path:
@@ -2359,9 +2369,9 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--pipeline-version",
         "--pipeline_version",
-        choices=("auto", "v1", "v2"),
+        choices=("auto", "v2"),
         default="auto",
-        help="Gate profile selector. auto infers from runtime bundle when available.",
+        help="Gate profile selector. auto infers from runtime bundle when available (v2 only).",
     )
     args = parser.parse_args(argv)
 
@@ -2628,32 +2638,23 @@ def main(argv=None) -> int:
         current_report=report,
         baseline_report_path=baseline_report_path,
     )
-    if pipeline_version == "v2":
-        contract = baseline_comparison_for_gate.get("non_degradation_contract", {})
-        if not isinstance(contract, dict):
-            contract = {}
-        v2_checks = {
-            "threshold_gate_pass": bool(threshold_gate_pass),
-            "adaptive_verdict_pass": bool(adaptive_pass),
-            "baseline_available": bool(baseline_comparison_for_gate.get("available", False)),
-            "dataset_set_comparable": bool(baseline_comparison_for_gate.get("comparable_dataset_set", False)),
-            "non_degradation_contract_applied": bool(contract.get("applied", False)),
-            "non_degradation_contract_pass": bool(contract.get("all_pass", False)),
-        }
-        overall_gate_pass = all(bool(x) for x in v2_checks.values())
-        report["gate_profile"] = {
-            "name": "v2_strict",
-            "checks": v2_checks,
-            "all_pass": bool(overall_gate_pass),
-        }
-    else:
-        report["gate_profile"] = {
-            "name": "v1",
-            "checks": {
-                "adaptive_verdict_pass": bool(adaptive_pass),
-            },
-            "all_pass": bool(overall_gate_pass),
-        }
+    contract = baseline_comparison_for_gate.get("non_degradation_contract", {})
+    if not isinstance(contract, dict):
+        contract = {}
+    v2_checks = {
+        "threshold_gate_pass": bool(threshold_gate_pass),
+        "adaptive_verdict_pass": bool(adaptive_pass),
+        "baseline_available": bool(baseline_comparison_for_gate.get("available", False)),
+        "dataset_set_comparable": bool(baseline_comparison_for_gate.get("comparable_dataset_set", False)),
+        "non_degradation_contract_applied": bool(contract.get("applied", False)),
+        "non_degradation_contract_pass": bool(contract.get("all_pass", False)),
+    }
+    overall_gate_pass = all(bool(x) for x in v2_checks.values())
+    report["gate_profile"] = {
+        "name": "v2_strict",
+        "checks": v2_checks,
+        "all_pass": bool(overall_gate_pass),
+    }
     report["overall_gate_pass"] = bool(overall_gate_pass)
     report["baseline_comparison"] = build_baseline_comparison(
         current_report=report,
@@ -2712,9 +2713,7 @@ def main(argv=None) -> int:
             f"reason={reason or 'baseline_report_missing_or_invalid'}"
         )
     print(f"[Verification] report_json={output_json}")
-    if pipeline_version == "v2" and not bool(overall_gate_pass):
-        return 2
-    return 0
+    return 0 if bool(overall_gate_pass) else 2
 
 
 if __name__ == "__main__":

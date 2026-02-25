@@ -8,12 +8,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from _script_common import dump_json, ensure_parent_directory, load_json_or_none, resolve_repo_path
 
-DEFAULT_FEATURE_DIR_V1 = r".\data\model_input\probabilistic_features_v1_latest"
-DEFAULT_FEATURE_DIR_V2 = r".\data\model_input\probabilistic_features_v2_draft_latest"
-DEFAULT_FEATURE_CONTRACT_V1 = r".\config\model\probabilistic_feature_contract_v1.json"
-DEFAULT_FEATURE_CONTRACT_V2 = r".\config\model\probabilistic_feature_contract_v2.json"
-DEFAULT_RUNTIME_BUNDLE_V1 = r".\config\model\probabilistic_runtime_bundle_v1.json"
-DEFAULT_RUNTIME_BUNDLE_V2 = r".\config\model\probabilistic_runtime_bundle_v2.json"
+DEFAULT_FEATURE_DIR = r".\data\model_input\probabilistic_features_v2_draft_latest"
+DEFAULT_FEATURE_CONTRACT = r".\config\model\probabilistic_feature_contract_v2.json"
+DEFAULT_RUNTIME_BUNDLE = r".\config\model\probabilistic_runtime_bundle_v2.json"
 
 
 def utc_now_iso() -> str:
@@ -36,7 +33,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument(
         "--pipeline-version",
         "--pipeline_version",
-        choices=("auto", "v1", "v2"),
+        choices=("auto", "v2"),
         default="auto",
     )
     parser.add_argument("--skip-missing", action="store_true")
@@ -105,8 +102,10 @@ def parse_touched_areas(raw: str) -> List[str]:
 
 def infer_pipeline_version(args: argparse.Namespace) -> str:
     requested = str(args.pipeline_version).strip().lower()
-    if requested in ("v1", "v2"):
+    if requested == "v2":
         return requested
+    if requested not in ("", "auto"):
+        raise RuntimeError(f"Unsupported pipeline version: {requested}")
     bundle_path_raw = str(args.runtime_bundle_json).strip()
     if bundle_path_raw:
         bundle_path = resolve_repo_path(bundle_path_raw)
@@ -117,13 +116,13 @@ def infer_pipeline_version(args: argparse.Namespace) -> str:
                 if isinstance(payload, dict):
                     version = str(payload.get("version", "")).strip().lower()
                     pipeline = str(payload.get("pipeline_version", "")).strip().lower()
-                    if pipeline in ("v1", "v2"):
+                    if pipeline == "v2":
                         return pipeline
                     if "v2" in version:
                         return "v2"
             except Exception:
                 pass
-    return "v1"
+    return "v2"
 
 
 def latest_file(glob_pattern: str) -> Optional[pathlib.Path]:
@@ -135,7 +134,8 @@ def latest_file(glob_pattern: str) -> Optional[pathlib.Path]:
 
 
 def resolve_feature_inputs(args: argparse.Namespace, pipeline_version: str) -> Dict[str, pathlib.Path]:
-    feature_dir = resolve_repo_path(DEFAULT_FEATURE_DIR_V1 if pipeline_version == "v1" else DEFAULT_FEATURE_DIR_V2)
+    _ = pipeline_version
+    feature_dir = resolve_repo_path(DEFAULT_FEATURE_DIR)
     manifest = (
         resolve_repo_path(args.feature_dataset_manifest_json)
         if str(args.feature_dataset_manifest_json).strip()
@@ -144,18 +144,19 @@ def resolve_feature_inputs(args: argparse.Namespace, pipeline_version: str) -> D
     contract = (
         resolve_repo_path(args.feature_contract_json)
         if str(args.feature_contract_json).strip()
-        else resolve_repo_path(DEFAULT_FEATURE_CONTRACT_V1 if pipeline_version == "v1" else DEFAULT_FEATURE_CONTRACT_V2)
+        else resolve_repo_path(DEFAULT_FEATURE_CONTRACT)
     )
     output = resolve_repo_path(args.feature_output_json)
     return {"manifest": manifest, "contract": contract, "output": output}
 
 
 def resolve_parity_inputs(args: argparse.Namespace, pipeline_version: str) -> Dict[str, pathlib.Path]:
-    feature_dir = resolve_repo_path(DEFAULT_FEATURE_DIR_V1 if pipeline_version == "v1" else DEFAULT_FEATURE_DIR_V2)
+    _ = pipeline_version
+    feature_dir = resolve_repo_path(DEFAULT_FEATURE_DIR)
     runtime_bundle = (
         resolve_repo_path(args.runtime_bundle_json)
         if str(args.runtime_bundle_json).strip()
-        else resolve_repo_path(DEFAULT_RUNTIME_BUNDLE_V1 if pipeline_version == "v1" else DEFAULT_RUNTIME_BUNDLE_V2)
+        else resolve_repo_path(DEFAULT_RUNTIME_BUNDLE)
     )
     train_summary = (
         resolve_repo_path(args.train_summary_json)
@@ -168,13 +169,7 @@ def resolve_parity_inputs(args: argparse.Namespace, pipeline_version: str) -> Di
     split_manifest = (
         resolve_repo_path(args.split_manifest_json)
         if str(args.split_manifest_json).strip()
-        else (
-            feature_dir / (
-                "probabilistic_split_manifest_v1.json"
-                if pipeline_version == "v1"
-                else "probabilistic_split_manifest_v2_draft.json"
-            )
-        )
+        else (feature_dir / "probabilistic_split_manifest_v2_draft.json")
     )
     output = resolve_repo_path(args.parity_output_json)
     return {
@@ -478,7 +473,7 @@ def main(argv=None) -> int:
     out = evaluate(args)
     print("[CodexContextRefreshChecks] completed", flush=True)
     print(f"status={out.get('status', 'fail')}", flush=True)
-    print(f"pipeline_version={out.get('pipeline_version', 'v1')}", flush=True)
+    print(f"pipeline_version={out.get('pipeline_version', 'v2')}", flush=True)
     print(f"steps={len(out.get('steps', []) or [])}", flush=True)
     print(f"errors={len(out.get('errors', []) or [])}", flush=True)
     print(f"output={out.get('artifacts', {}).get('output_json', '')}", flush=True)

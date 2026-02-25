@@ -25,15 +25,15 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--runtime-bundle-json",
-        default=r".\config\model\probabilistic_runtime_bundle_v1.json",
+        default=r".\config\model\probabilistic_runtime_bundle_v2.json",
     )
     parser.add_argument(
         "--train-summary-json",
-        default=r".\build\Release\logs\probabilistic_model_train_summary_full_20260220.json",
+        default=r".\build\Release\logs\probabilistic_model_train_summary_global_latest.json",
     )
     parser.add_argument(
         "--split-manifest-json",
-        default=r".\data\model_input\probabilistic_features_v1_full_20260220_181345\probabilistic_split_manifest_v1.json",
+        default=r".\data\model_input\probabilistic_features_v2_draft_latest\probabilistic_split_manifest_v2_draft.json",
     )
     parser.add_argument(
         "--output-json",
@@ -52,9 +52,7 @@ def utc_now_iso() -> str:
 
 def infer_pipeline_from_bundle(bundle: Dict[str, Any]) -> Dict[str, str]:
     bundle_version = str(bundle.get("version", "")).strip()
-    if bundle_version == "probabilistic_runtime_bundle_v1":
-        expected = "v1"
-    elif bundle_version == "probabilistic_runtime_bundle_v2_draft":
+    if bundle_version == "probabilistic_runtime_bundle_v2_draft":
         expected = "v2"
     else:
         raise RuntimeError(f"unsupported runtime bundle version: {bundle_version}")
@@ -79,22 +77,22 @@ def infer_pipeline_from_bundle(bundle: Dict[str, Any]) -> Dict[str, str]:
 
 def infer_pipeline_from_train_summary(summary: Dict[str, Any]) -> str:
     explicit = str(summary.get("pipeline_version", "")).strip().lower()
-    if explicit in ("v1", "v2"):
+    if explicit == "v2":
         return explicit
     summary_version = str(summary.get("version", "")).strip().lower()
     if "v2" in summary_version:
         return "v2"
-    return "v1"
+    raise RuntimeError("unsupported train summary pipeline version (expected v2)")
 
 
 def infer_pipeline_from_split_manifest(split_manifest: Dict[str, Any]) -> str:
     explicit = str(split_manifest.get("pipeline_version", "")).strip().lower()
-    if explicit in ("v1", "v2"):
+    if explicit == "v2":
         return explicit
     source_manifest_version = str(split_manifest.get("source_manifest_version", "")).strip().lower()
     if "v2" in source_manifest_version:
         return "v2"
-    return "v1"
+    raise RuntimeError("unsupported split manifest pipeline version (expected v2)")
 
 
 def sigmoid(z: np.ndarray) -> np.ndarray:
@@ -433,7 +431,7 @@ def main(argv=None) -> int:
         "generated_at_utc": utc_now_iso(),
         "status": status,
         "mode": mode,
-        "gate_profile": "v2_strict" if bundle_meta["pipeline_version"] == "v2" else "v1",
+        "gate_profile": "v2_strict",
         "runtime_bundle_json": str(bundle_path),
         "train_summary_json": str(summary_path),
         "split_manifest_json": str(split_path),

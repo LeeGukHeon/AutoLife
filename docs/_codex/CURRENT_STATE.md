@@ -5,6 +5,21 @@ Last updated: 2026-02-25
 - Branch: `main`
 - Commit snapshot (pushed): `02abe90`
 
+## Runtime path audit update (2026-02-25)
+- Added startup->sell/risk full path audit document:
+  - `docs/_codex/START_TO_EXIT_PATH_AUDIT_2026-02-25.md`
+- Scope:
+  - runtime-active code path only (no script-side behavior changes)
+  - live/backtest parity boundary and intentional divergence points documented
+  - residual hardcoded-tuning hotspots inventoried (fallback/supply/soft-queue/dynamic thresholds)
+- Small code cleanup applied during audit:
+  - removed unused locals in `src/runtime/LiveTradingRuntime.cpp`
+  - removed unused local in `src/strategy/FoundationRiskPipeline.cpp`
+- Post-cleanup gate status:
+  - `CIGate PASSED`
+  - `ExecutionParity PASSED`
+  - `should_exit_parity_report.json: verdict=pass, critical_findings=0`
+
 ## Validation and script cleanup update (2026-02-25)
 - Full-source validation run completed (build + unit test executables + script suite + strict parity gate).
 - Latest gate verdict remains:
@@ -93,6 +108,17 @@ Last updated: 2026-02-25
 
 ## Phase 3 delivery status (2026-02-25)
 - Status: `delivery summary finalized (Phase 3 only)`
+- Runtime default promotion (2026-02-25):
+  - default bundle path switched to `config/model/probabilistic_runtime_bundle_v2.json`
+  - v2 bundle now includes `phase3` block with all phase3 toggles enabled by default
+- Cleanup sweep (2026-02-25, started):
+  - runtime bundle loader now accepts only `probabilistic_runtime_bundle_v2_draft`
+  - removed `step8ai`-style micro-tail guard branches from:
+    - probabilistic primary rescue minimum gate (live/backtest)
+    - risk manager adaptive stop special-case contexts
+  - removed legacy `enable_uptrend_rescue_prefilter_tail_guard` runtime config field
+  - removed `uptrend_low_flow_probe` path from `FoundationAdaptiveStrategy` entry/risk/size/reason branches
+  - promoted active pipeline scripts to v2-only (no v1 fallback in core train/export/verify/shadow/promotion flow)
 - Final handoff document:
   - `docs/_codex/CH01_PHASE3_FINAL_DELIVERY_2026-02-25.md`
 - Contains required 6 sections:

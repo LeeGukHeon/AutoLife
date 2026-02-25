@@ -22,14 +22,14 @@ def parse_args(argv=None) -> argparse.Namespace:
         description="Build leakage-safe probabilistic feature dataset from fetched MTF OHLCV CSV files."
     )
     parser.add_argument("--input-dir", default=r".\data\backtest_probabilistic")
-    parser.add_argument("--output-dir", default=r".\data\model_input\probabilistic_features_v1")
+    parser.add_argument("--output-dir", default=r".\data\model_input\probabilistic_features_v2_draft_latest")
     parser.add_argument(
         "--summary-json",
         default=r".\build\Release\logs\probabilistic_feature_build_summary.json",
     )
     parser.add_argument(
         "--manifest-json",
-        default=r".\data\model_input\probabilistic_features_v1\feature_dataset_manifest.json",
+        default=r".\data\model_input\probabilistic_features_v2_draft_latest\feature_dataset_manifest.json",
     )
     parser.add_argument("--markets", default="")
     parser.add_argument("--max-rows-per-market", type=int, default=0)
@@ -107,9 +107,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument(
         "--pipeline-version",
         "--pipeline_version",
-        choices=("v1", "v2"),
-        default="v1",
-        help="MODE switch. v1 keeps current baseline behavior; v2 is explicit draft path.",
+        choices=("v2",),
+        default="v2",
+        help="MODE switch. v2 only.",
     )
     parser.add_argument(
         "--universe-file",
@@ -485,7 +485,7 @@ def build_market_dataset(
         }
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    out_path = output_dir / f"prob_features_{safe_market}_1m_v1.csv"
+    out_path = output_dir / f"prob_features_{safe_market}_1m_v2_draft.csv"
     ensure_parent_directory(out_path)
     normalized_sample_mode = normalize_sample_mode(sample_mode)
     sample_threshold_value = float(sample_threshold)
@@ -915,7 +915,7 @@ def main(argv=None) -> int:
                         "market": market,
                         "status": "skipped_missing_anchor_non_universe",
                         "anchor_input_path": str(anchor_path),
-                        "output_path": str(output_dir / f"prob_features_{market_to_safe(market)}_1m_v1.csv"),
+                        "output_path": str(output_dir / f"prob_features_{market_to_safe(market)}_1m_v2_draft.csv"),
                         "anchor_rows": 0,
                         "feature_rows_written": 0,
                         "skipped_warmup": 0,
@@ -995,7 +995,7 @@ def main(argv=None) -> int:
         1 for x in jobs if str(x.get("status", "")).strip().lower() == "skipped_missing_anchor_non_universe"
     )
     finished = utc_now_iso()
-    dataset_version = "prob_features_v1" if pipeline_version == "v1" else "prob_features_v2_draft"
+    dataset_version = "prob_features_v2_draft"
     payload = {
         "version": dataset_version,
         "started_at_utc": started,
@@ -1036,9 +1036,8 @@ def main(argv=None) -> int:
         "failed": failed,
         "warnings": warnings,
     }
-    if pipeline_version != "v1":
-        payload["pipeline_version"] = str(pipeline_version)
-        payload["feature_contract_version"] = "v2_draft"
+    payload["pipeline_version"] = str(pipeline_version)
+    payload["feature_contract_version"] = "v2_draft"
     dump_json(summary_json, payload)
     dump_json(manifest_json, payload)
 

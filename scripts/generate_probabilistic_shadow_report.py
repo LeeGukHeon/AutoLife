@@ -46,7 +46,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument(
         "--pipeline-version",
         "--pipeline_version",
-        choices=("auto", "v1", "v2"),
+        choices=("auto", "v2"),
         default="auto",
     )
     parser.add_argument(
@@ -87,7 +87,7 @@ def infer_pipeline_from_bundle_version(version: str) -> str:
     v = str(version or "").strip().lower()
     if "v2" in v:
         return "v2"
-    return "v1"
+    return "v2"
 
 
 def canonical_strategy_token(value: Any) -> str:
@@ -128,7 +128,7 @@ def load_bundle_meta(path_value) -> Dict[str, Any]:
     version = str(payload.get("version", "")).strip()
     out["version"] = version
     declared_pipeline = str(payload.get("pipeline_version", "")).strip().lower()
-    if declared_pipeline in ("v1", "v2"):
+    if declared_pipeline == "v2":
         out["pipeline_version"] = declared_pipeline
     else:
         out["pipeline_version"] = infer_pipeline_from_bundle_version(version)
@@ -209,20 +209,23 @@ def resolve_pipeline_version(
     candidates: List[str] = []
     for meta in (live_bundle, backtest_bundle):
         token = str(meta.get("pipeline_version", "")).strip().lower()
-        if token in ("v1", "v2"):
+        if token == "v2":
             candidates.append(token)
     unique_candidates = sorted(set(candidates))
 
-    if requested_norm in ("v1", "v2"):
+    if requested_norm == "v2":
         if any(x != requested_norm for x in unique_candidates):
             errors.append("shadow_bundle_pipeline_mismatch")
         return requested_norm, errors
+    if requested_norm not in ("", "auto"):
+        errors.append("shadow_requested_pipeline_unsupported")
+        return "v2", errors
     if len(unique_candidates) > 1:
         errors.append("shadow_bundle_pipeline_conflict")
-        return "v1", errors
+        return "v2", errors
     if len(unique_candidates) == 1:
         return unique_candidates[0], errors
-    return "v1", errors
+    return "v2", errors
 
 
 def compare_logs(live_log: Dict[str, Any], backtest_log: Dict[str, Any]) -> Dict[str, Any]:
@@ -368,7 +371,7 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
         checks["same_candles"] and
         checks["distinct_log_paths"]
     )
-    gate_profile_name = "v2_strict" if resolved_pipeline == "v2" else "v1"
+    gate_profile_name = "v2_strict"
     status = "pass" if (overall_pass and len(errors) == 0) else "fail"
 
     runtime_bundle_version = ""

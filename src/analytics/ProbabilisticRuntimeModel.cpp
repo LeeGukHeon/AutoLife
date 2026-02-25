@@ -496,25 +496,19 @@ bool validateBundleVersionAndContracts(
     std::string* error_message
 ) {
     const std::string bundle_version = root.value("version", std::string{});
-    std::string expected_pipeline;
-    if (bundle_version == "probabilistic_runtime_bundle_v1") {
-        expected_pipeline = "v1";
-    } else if (bundle_version == "probabilistic_runtime_bundle_v2_draft") {
-        expected_pipeline = "v2";
-    } else {
+    const std::string expected_pipeline = "v2";
+    if (bundle_version != "probabilistic_runtime_bundle_v2_draft") {
         if (error_message != nullptr) {
             *error_message = "unsupported_bundle_version";
         }
         return false;
     }
 
-    if (expected_pipeline == "v2") {
-        if (!root.contains("pipeline_version") || !root["pipeline_version"].is_string()) {
-            if (error_message != nullptr) {
-                *error_message = "missing_pipeline_version_for_v2";
-            }
-            return false;
+    if (!root.contains("pipeline_version") || !root["pipeline_version"].is_string()) {
+        if (error_message != nullptr) {
+            *error_message = "missing_pipeline_version_for_v2";
         }
+        return false;
     }
 
     std::string declared_pipeline = root.value("pipeline_version", expected_pipeline);
@@ -526,37 +520,35 @@ bool validateBundleVersionAndContracts(
         return false;
     }
 
-    if (expected_pipeline == "v2") {
-        if (!root.contains("feature_contract_version") || !root["feature_contract_version"].is_string()) {
-            if (error_message != nullptr) {
-                *error_message = "missing_feature_contract_version_for_v2";
-            }
-            return false;
+    if (!root.contains("feature_contract_version") || !root["feature_contract_version"].is_string()) {
+        if (error_message != nullptr) {
+            *error_message = "missing_feature_contract_version_for_v2";
         }
-        if (!root.contains("runtime_bundle_contract_version") ||
-            !root["runtime_bundle_contract_version"].is_string()) {
-            if (error_message != nullptr) {
-                *error_message = "missing_runtime_bundle_contract_version_for_v2";
-            }
-            return false;
+        return false;
+    }
+    if (!root.contains("runtime_bundle_contract_version") ||
+        !root["runtime_bundle_contract_version"].is_string()) {
+        if (error_message != nullptr) {
+            *error_message = "missing_runtime_bundle_contract_version_for_v2";
         }
+        return false;
+    }
 
-        const std::string feature_contract_version =
-            lowerCopy(root.value("feature_contract_version", std::string{}));
-        const std::string runtime_contract_version =
-            lowerCopy(root.value("runtime_bundle_contract_version", std::string{}));
-        if (feature_contract_version != "v2_draft") {
-            if (error_message != nullptr) {
-                *error_message = "unsupported_feature_contract_version";
-            }
-            return false;
+    const std::string feature_contract_version =
+        lowerCopy(root.value("feature_contract_version", std::string{}));
+    const std::string runtime_contract_version =
+        lowerCopy(root.value("runtime_bundle_contract_version", std::string{}));
+    if (feature_contract_version != "v2_draft") {
+        if (error_message != nullptr) {
+            *error_message = "unsupported_feature_contract_version";
         }
-        if (runtime_contract_version != "v2_draft") {
-            if (error_message != nullptr) {
-                *error_message = "unsupported_runtime_bundle_contract_version";
-            }
-            return false;
+        return false;
+    }
+    if (runtime_contract_version != "v2_draft") {
+        if (error_message != nullptr) {
+            *error_message = "unsupported_runtime_bundle_contract_version";
         }
+        return false;
     }
     return true;
 }

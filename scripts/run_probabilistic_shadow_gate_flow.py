@@ -11,7 +11,6 @@ import generate_probabilistic_shadow_report as shadow_generate
 import validate_probabilistic_shadow_report as shadow_validate
 from _script_common import dump_json, resolve_repo_path
 
-DEFAULT_RUNTIME_BUNDLE_V1 = r".\config\model\probabilistic_runtime_bundle_v1.json"
 DEFAULT_RUNTIME_BUNDLE_V2 = r".\config\model\probabilistic_runtime_bundle_v2.json"
 DEFAULT_LIVE_DECISION_LOG_JSONL = r".\build\Release\logs\policy_decisions.jsonl"
 DEFAULT_BACKTEST_DECISION_LOG_JSONL = r".\build\Release\logs\policy_decisions_backtest.jsonl"
@@ -35,7 +34,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument(
         "--pipeline-version",
         "--pipeline_version",
-        choices=("auto", "v1", "v2"),
+        choices=("auto", "v2"),
         default="auto",
     )
     parser.add_argument(
@@ -127,27 +126,29 @@ def parse_args(argv=None) -> argparse.Namespace:
 
 def infer_pipeline_version(args: argparse.Namespace) -> str:
     requested = str(args.pipeline_version).strip().lower()
-    if requested in ("v1", "v2"):
+    if requested == "v2":
         return requested
+    if requested not in ("", "auto"):
+        raise RuntimeError(f"unsupported pipeline version: {requested}")
     bundle_raw = str(args.runtime_bundle_json).strip()
     bundle_path = (
         resolve_repo_path(bundle_raw)
         if bundle_raw
-        else resolve_repo_path(DEFAULT_RUNTIME_BUNDLE_V2 if resolve_repo_path(DEFAULT_RUNTIME_BUNDLE_V2).exists() else DEFAULT_RUNTIME_BUNDLE_V1)
+        else resolve_repo_path(DEFAULT_RUNTIME_BUNDLE_V2)
     )
     if bundle_path.exists():
         try:
             payload = json.loads(bundle_path.read_text(encoding="utf-8-sig"))
             if isinstance(payload, dict):
                 explicit = str(payload.get("pipeline_version", "")).strip().lower()
-                if explicit in ("v1", "v2"):
+                if explicit == "v2":
                     return explicit
                 version = str(payload.get("version", "")).strip().lower()
                 if "v2" in version:
                     return "v2"
         except Exception:
             pass
-    return "v1"
+    return "v2"
 
 
 def check_required_inputs(required: Dict[str, str]) -> List[str]:
@@ -181,7 +182,7 @@ def latest_file_for_patterns(
     ordered = sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)
 
     expected = str(expected_pipeline).strip().lower()
-    if expected in ("v1", "v2"):
+    if expected == "v2":
         matched_candidates: List[pathlib.Path] = []
         for item in ordered:
             if item.suffix.lower() != ".json":
@@ -193,7 +194,7 @@ def latest_file_for_patterns(
             if not isinstance(payload, dict):
                 continue
             token = str(payload.get("pipeline_version", "")).strip().lower()
-            if token in ("v1", "v2"):
+            if token == "v2":
                 if token == expected:
                     matched_candidates.append(item)
                 continue
@@ -242,7 +243,7 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
     runtime_bundle_json = (
         str(resolve_repo_path(args.runtime_bundle_json))
         if str(args.runtime_bundle_json).strip()
-        else str(resolve_repo_path(DEFAULT_RUNTIME_BUNDLE_V2 if resolved_pipeline == "v2" else DEFAULT_RUNTIME_BUNDLE_V1))
+        else str(resolve_repo_path(DEFAULT_RUNTIME_BUNDLE_V2))
     )
     shadow_report_json = str(resolve_repo_path(args.shadow_report_json))
     shadow_validation_json = str(resolve_repo_path(args.shadow_validation_json))

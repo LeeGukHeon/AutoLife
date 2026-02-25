@@ -78,14 +78,6 @@ bool isHostileRegime(analytics::MarketRegime regime) {
            regime == analytics::MarketRegime::TRENDING_DOWN;
 }
 
-bool isRangePullbackLossTailRiskCell(
-    const strategy::Signal& signal,
-    analytics::MarketRegime regime
-) {
-    return isRangePullbackArchetype(signal.entry_archetype) &&
-           regime == analytics::MarketRegime::RANGING;
-}
-
 bool isTrendContinuationStyleSignal(const strategy::Signal& signal) {
     if (isBreakoutContinuationArchetype(signal.entry_archetype) ||
         isTrendReaccelerationArchetype(signal.entry_archetype) ||

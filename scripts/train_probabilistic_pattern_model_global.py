@@ -32,7 +32,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--split-manifest-json",
-        default=r".\data\model_input\probabilistic_features_v1_full_20260220_181345\probabilistic_split_manifest_v1.json",
+        default=r".\data\model_input\probabilistic_features_v2_draft_latest\probabilistic_split_manifest_v2_draft.json",
     )
     parser.add_argument(
         "--baseline-json",
@@ -42,7 +42,7 @@ def parse_args(argv=None) -> argparse.Namespace:
         "--output-json",
         default=r".\build\Release\logs\probabilistic_model_train_summary_global_full_20260220.json",
     )
-    parser.add_argument("--model-dir", default=r".\build\Release\models\probabilistic_pattern_global_v1")
+    parser.add_argument("--model-dir", default=r".\build\Release\models\probabilistic_pattern_global_v2_draft")
     parser.add_argument("--batch-size", type=int, default=4096)
     parser.add_argument("--infer-batch-size", type=int, default=8192)
     parser.add_argument("--alpha", type=float, default=1e-5)
@@ -105,9 +105,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument(
         "--pipeline-version",
         "--pipeline_version",
-        choices=("v1", "v2"),
-        default="v1",
-        help="MODE switch. v1 keeps baseline summary contract; v2 uses draft summary version.",
+        choices=("v2",),
+        default="v2",
+        help="MODE switch. v2 only.",
     )
     parser.add_argument(
         "--ensemble-k",
@@ -148,12 +148,12 @@ def parse_dataset_fold_windows(dataset: Dict[str, Any]) -> Dict[int, Dict[str, i
 
 def infer_split_manifest_pipeline_version(split_manifest: Dict[str, Any]) -> str:
     explicit = str(split_manifest.get("pipeline_version", "")).strip().lower()
-    if explicit in ("v1", "v2"):
+    if explicit == "v2":
         return explicit
     source_manifest_version = str(split_manifest.get("source_manifest_version", "")).strip().lower()
     if "v2" in source_manifest_version:
         return "v2"
-    return "v1"
+    raise RuntimeError("unsupported split manifest pipeline version (expected v2)")
 
 
 def build_global_state(fold_id: int, args: argparse.Namespace) -> Dict[str, Any]:
@@ -503,11 +503,7 @@ def main(argv=None) -> int:
         status = "partial_fail"
 
     out = {
-        "version": (
-            "probabilistic_pattern_model_global_v1"
-            if pipeline_version == "v1"
-            else "probabilistic_pattern_model_global_v2_draft"
-        ),
+        "version": "probabilistic_pattern_model_global_v2_draft",
         "scope": "global_cross_market",
         "started_at_utc": started_at,
         "finished_at_utc": ended_at,
@@ -558,9 +554,8 @@ def main(argv=None) -> int:
         "baseline_comparison": baseline_compare,
         "datasets": dataset_results,
     }
-    if pipeline_version != "v1":
-        out["pipeline_version"] = str(pipeline_version)
-        out["feature_contract_version"] = "v2_draft"
+    out["pipeline_version"] = str(pipeline_version)
+    out["feature_contract_version"] = "v2_draft"
     purge_embargo_cfg = split_policy.get("purge_embargo", {})
     if isinstance(purge_embargo_cfg, dict) and bool(purge_embargo_cfg.get("enabled", False)):
         out["purge_embargo"] = purge_embargo_cfg

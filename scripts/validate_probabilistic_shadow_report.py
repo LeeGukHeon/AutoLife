@@ -21,7 +21,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument(
         "--pipeline-version",
         "--pipeline_version",
-        choices=("auto", "v1", "v2"),
+        choices=("auto", "v2"),
         default="auto",
     )
     parser.add_argument(
@@ -49,7 +49,7 @@ def extract_gate_profile_name(payload: Dict[str, Any]) -> str:
 
 def infer_pipeline_from_shadow(shadow_payload: Dict[str, Any]) -> str:
     explicit = str(shadow_payload.get("pipeline_version", "")).strip().lower()
-    if explicit in ("v1", "v2"):
+    if explicit == "v2":
         return explicit
     runtime_bundle_version = str(shadow_payload.get("runtime_bundle_version", "")).strip().lower()
     if "v2" in runtime_bundle_version:
@@ -57,7 +57,7 @@ def infer_pipeline_from_shadow(shadow_payload: Dict[str, Any]) -> str:
     gate_profile = extract_gate_profile_name(shadow_payload).strip().lower()
     if gate_profile == "v2_strict":
         return "v2"
-    return "v1"
+    return "v2"
 
 
 def shadow_report_pass(shadow_payload: Dict[str, Any]) -> bool:
@@ -110,7 +110,7 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
             "generated_at_utc": utc_now_iso(),
             "status": "fail",
             "shadow_report_ok": False,
-            "pipeline_version": "v1" if requested_pipeline == "auto" else requested_pipeline,
+            "pipeline_version": "v2" if requested_pipeline == "auto" else requested_pipeline,
             "checks": checks,
             "errors": errors,
             "inputs": {
@@ -147,8 +147,7 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
 
     gate_profile = extract_gate_profile_name(shadow_payload)
     gate_profile_ok = (
-        resolved_pipeline != "v2"
-        or not gate_profile
+        not gate_profile
         or gate_profile.strip().lower() == "v2_strict"
     )
     checks["gate_profile_consistency"] = {

@@ -1,7 +1,6 @@
 #include "strategy/FoundationAdaptiveStrategy.h"
 
 #include "analytics/TechnicalIndicators.h"
-#include "common/Config.h"
 
 #include <algorithm>
 #include <chrono>
@@ -31,15 +30,6 @@ double rollingReturn(const std::vector<double>& closes, std::size_t lookback) {
         return 0.0;
     }
     return (now - prev) / prev;
-}
-
-bool isSignalSupplyFallbackEnabled() {
-    const auto& cfg = Config::getInstance().getEngineConfig();
-    if (!cfg.foundation_signal_supply_fallback_enabled) {
-        return false;
-    }
-    // Keep fallback tied to probabilistic-aware runtime path.
-    return cfg.enable_probabilistic_runtime_model && cfg.probabilistic_runtime_primary_mode;
 }
 
 struct MtfConfirmation {
@@ -176,44 +166,6 @@ bool isLowLiquidityUptrendOpportunity(
     );
 }
 
-bool isUptrendLowFlowProbeOpportunity(
-    const analytics::CoinMetrics& metrics,
-    const std::vector<double>& closes,
-    double current_price,
-    double ema_fast,
-    double ema_slow,
-    double rsi
-) {
-    if (metrics.liquidity_score < 22.0 || metrics.liquidity_score >= 40.0) {
-        return false;
-    }
-    if (metrics.volume_surge_ratio < 0.48 || metrics.volume_surge_ratio > 1.85) {
-        return false;
-    }
-    if (metrics.orderbook_snapshot.valid && metrics.orderbook_snapshot.spread_pct > 0.0024) {
-        return false;
-    }
-    if (metrics.order_book_imbalance < -0.08) {
-        return false;
-    }
-    if (metrics.buy_pressure < (metrics.sell_pressure * 0.88)) {
-        return false;
-    }
-
-    const double ret3 = rollingReturn(closes, 3);
-    const double ret8 = rollingReturn(closes, 8);
-    const double ret20 = rollingReturn(closes, 20);
-    if (ret3 < -0.0012 || ret8 < -0.0018 || ret20 < 0.0001) {
-        return false;
-    }
-
-    return (
-        current_price >= ema_fast * 0.9988 &&
-        ema_fast >= ema_slow * 0.9988 &&
-        rsi >= 41.0 && rsi <= 65.0
-    );
-}
-
 bool isThinLiquidityAdaptiveOpportunity(
     const analytics::CoinMetrics& metrics,
     const std::vector<double>& closes,
@@ -276,58 +228,6 @@ bool isThinLiquidityAdaptiveOpportunity(
     }
 }
 
-bool isUltraThinLiquidityProbeOpportunity(
-    const analytics::CoinMetrics& metrics,
-    const std::vector<double>& closes,
-    double current_price,
-    double ema_fast,
-    double ema_slow,
-    double rsi,
-    double bb_middle,
-    analytics::MarketRegime regime
-) {
-    if (metrics.liquidity_score < 18.0 || metrics.liquidity_score >= 36.0) {
-        return false;
-    }
-    if (metrics.volume_surge_ratio < 0.70 || metrics.volume_surge_ratio > 2.00) {
-        return false;
-    }
-    if (metrics.orderbook_snapshot.valid && metrics.orderbook_snapshot.spread_pct > 0.0032) {
-        return false;
-    }
-
-    const double ret3 = rollingReturn(closes, 3);
-    const double ret5 = rollingReturn(closes, 5);
-    const double ret20 = rollingReturn(closes, 20);
-
-    switch (regime) {
-        case analytics::MarketRegime::TRENDING_UP:
-            return (
-                current_price >= ema_fast * 0.9998 &&
-                ema_fast >= ema_slow * 0.9995 &&
-                rsi >= 46.0 && rsi <= 63.0 &&
-                ret5 >= 0.0001 &&
-                ret20 >= 0.0012 &&
-                metrics.order_book_imbalance >= -0.02 &&
-                metrics.buy_pressure >= (metrics.sell_pressure * 0.95)
-            );
-        case analytics::MarketRegime::RANGING:
-            return (
-                current_price <= bb_middle * 1.0018 &&
-                rsi >= 34.0 && rsi <= 45.0 &&
-                ret3 <= 0.0012 &&
-                ret20 >= -0.0010 &&
-                metrics.order_book_imbalance >= 0.0 &&
-                metrics.buy_pressure >= metrics.sell_pressure
-            );
-        case analytics::MarketRegime::TRENDING_DOWN:
-        case analytics::MarketRegime::HIGH_VOLATILITY:
-        case analytics::MarketRegime::UNKNOWN:
-        default:
-            return false;
-    }
-}
-
 bool isRangingLowFlowOpportunity(
     const analytics::CoinMetrics& metrics,
     const std::vector<double>& closes,
@@ -356,97 +256,6 @@ bool isRangingLowFlowOpportunity(
         ret8 >= -0.0034 &&
         metrics.order_book_imbalance > -0.14 &&
         metrics.buy_pressure >= (metrics.sell_pressure * 0.82)
-    );
-}
-
-bool isRangingSignalSupplyFallbackOpportunity(
-    const analytics::CoinMetrics& metrics,
-    const std::vector<double>& closes,
-    double current_price,
-    double ema_fast,
-    double rsi,
-    double bb_middle
-) {
-    if (metrics.liquidity_score < 20.0 || metrics.liquidity_score >= 56.0) {
-        return false;
-    }
-    if (metrics.volume_surge_ratio < 0.28 || metrics.volume_surge_ratio > 1.70) {
-        return false;
-    }
-    if (metrics.orderbook_snapshot.valid &&
-        metrics.orderbook_snapshot.spread_pct > 0.0028) {
-        return false;
-    }
-    if (metrics.order_book_imbalance < -0.24) {
-        return false;
-    }
-    if (metrics.buy_pressure < (metrics.sell_pressure * 0.80)) {
-        return false;
-    }
-    const double ret3 = rollingReturn(closes, 3);
-    const double ret8 = rollingReturn(closes, 8);
-    const bool very_thin_liquidity = metrics.liquidity_score < 32.0;
-    if (very_thin_liquidity) {
-        if (metrics.orderbook_snapshot.valid &&
-            metrics.orderbook_snapshot.spread_pct > 0.0022) {
-            return false;
-        }
-        if (metrics.order_book_imbalance < -0.08) {
-            return false;
-        }
-        if (metrics.buy_pressure < (metrics.sell_pressure * 0.95)) {
-            return false;
-        }
-        return (
-            current_price <= bb_middle * 1.0018 &&
-            current_price >= ema_fast * 0.9960 &&
-            rsi >= 32.0 && rsi <= 47.0 &&
-            ret3 <= 0.0012 &&
-            ret8 >= -0.0018
-        );
-    }
-    return (
-        current_price <= bb_middle * 1.0030 &&
-        current_price >= ema_fast * 0.9945 &&
-        rsi >= 30.0 && rsi <= 50.0 &&
-        ret3 <= 0.0018 &&
-        ret8 >= -0.0032
-    );
-}
-
-bool isRangingMinimalProbeOpportunity(
-    const analytics::CoinMetrics& metrics,
-    const std::vector<double>& closes,
-    double current_price,
-    double ema_fast,
-    double rsi,
-    double bb_middle
-) {
-    if (metrics.liquidity_score < 10.0 || metrics.liquidity_score >= 55.0) {
-        return false;
-    }
-    if (metrics.volume_surge_ratio < 0.14 || metrics.volume_surge_ratio > 2.20) {
-        return false;
-    }
-    if (metrics.orderbook_snapshot.valid &&
-        metrics.orderbook_snapshot.spread_pct > 0.0060) {
-        return false;
-    }
-    if (metrics.order_book_imbalance < -0.40) {
-        return false;
-    }
-    if (metrics.buy_pressure < (metrics.sell_pressure * 0.60)) {
-        return false;
-    }
-
-    const double ret3 = rollingReturn(closes, 3);
-    const double ret8 = rollingReturn(closes, 8);
-    return (
-        current_price <= bb_middle * 1.0080 &&
-        current_price >= ema_fast * 0.9860 &&
-        rsi >= 22.0 && rsi <= 60.0 &&
-        ret3 <= 0.0052 &&
-        ret8 >= -0.0105
     );
 }
 
@@ -493,12 +302,9 @@ struct EntryGateDecision {
     const char* reject_reason = "foundation_no_signal_entry_gate_unknown";
     bool core_liquidity_pass = false;
     bool low_liquidity_relaxed_path = false;
-    bool uptrend_low_flow_probe_path = false;
     bool thin_liquidity_adaptive_path = false;
-    bool ultra_thin_liquidity_probe_path = false;
     bool ranging_low_flow_path = false;
     bool downtrend_low_flow_rebound_path = false;
-    bool signal_supply_fallback_path = false;
 };
 
 EntryGateDecision evaluateEntryGate(
@@ -509,8 +315,7 @@ EntryGateDecision evaluateEntryGate(
     double ema_slow,
     double rsi,
     double bb_middle,
-    analytics::MarketRegime regime,
-    bool enable_signal_supply_fallback
+    analytics::MarketRegime regime
 ) {
     EntryGateDecision decision;
     const bool base_liquidity_pass = (
@@ -583,29 +388,8 @@ EntryGateDecision evaluateEntryGate(
         metrics.order_book_imbalance > -0.18 &&
         metrics.buy_pressure >= (metrics.sell_pressure * 0.80)
     );
-    decision.uptrend_low_flow_probe_path =
-        regime == analytics::MarketRegime::TRENDING_UP &&
-        isUptrendLowFlowProbeOpportunity(
-            metrics,
-            closes,
-            current_price,
-            ema_fast,
-            ema_slow,
-            rsi
-        );
     decision.thin_liquidity_adaptive_path =
         isThinLiquidityAdaptiveOpportunity(
-            metrics,
-            closes,
-            current_price,
-            ema_fast,
-            ema_slow,
-            rsi,
-            bb_middle,
-            regime
-        );
-    decision.ultra_thin_liquidity_probe_path =
-        isUltraThinLiquidityProbeOpportunity(
             metrics,
             closes,
             current_price,
@@ -635,27 +419,6 @@ EntryGateDecision evaluateEntryGate(
             ema_slow,
             rsi
         );
-    decision.signal_supply_fallback_path =
-        enable_signal_supply_fallback &&
-        regime == analytics::MarketRegime::RANGING &&
-        (
-            isRangingSignalSupplyFallbackOpportunity(
-                metrics,
-                closes,
-                current_price,
-                ema_fast,
-                rsi,
-                bb_middle
-            ) ||
-            isRangingMinimalProbeOpportunity(
-                metrics,
-                closes,
-                current_price,
-                ema_fast,
-                rsi,
-                bb_middle
-            )
-        );
 
     if (!decision.core_liquidity_pass) {
         if (regime == analytics::MarketRegime::TRENDING_UP &&
@@ -670,10 +433,6 @@ EntryGateDecision evaluateEntryGate(
             decision.pass = true;
             return decision;
         }
-        if (decision.uptrend_low_flow_probe_path) {
-            decision.pass = true;
-            return decision;
-        }
         if (decision.ranging_low_flow_path) {
             decision.pass = true;
             return decision;
@@ -682,15 +441,7 @@ EntryGateDecision evaluateEntryGate(
             decision.pass = true;
             return decision;
         }
-        if (decision.signal_supply_fallback_path) {
-            decision.pass = true;
-            return decision;
-        }
         if (decision.thin_liquidity_adaptive_path) {
-            decision.pass = true;
-            return decision;
-        }
-        if (decision.ultra_thin_liquidity_probe_path) {
             decision.pass = true;
             return decision;
         }
@@ -819,8 +570,7 @@ EntryEvaluationSnapshot evaluateEntrySnapshot(
     const analytics::CoinMetrics& metrics,
     const std::vector<Candle>& candles,
     double current_price,
-    analytics::MarketRegime regime,
-    bool signal_supply_experiment_enabled
+    analytics::MarketRegime regime
 ) {
     EntryEvaluationSnapshot snapshot;
     const std::vector<double> closes = analytics::TechnicalIndicators::extractClosePrices(candles);
@@ -843,8 +593,7 @@ EntryEvaluationSnapshot evaluateEntrySnapshot(
         snapshot.ema_slow,
         snapshot.rsi,
         snapshot.bb_middle,
-        regime,
-        signal_supply_experiment_enabled
+        regime
     );
     if (!snapshot.entry_gate.pass) {
         snapshot.reject_reason = snapshot.entry_gate.reject_reason;
@@ -905,13 +654,11 @@ Signal FoundationAdaptiveStrategy::generateSignal(
         return signal;
     }
 
-    const bool signal_supply_experiment_enabled = isSignalSupplyFallbackEnabled();
     const EntryEvaluationSnapshot entry_snapshot = evaluateEntrySnapshot(
         metrics,
         candles,
         current_price,
-        regime.regime,
-        signal_supply_experiment_enabled
+        regime.regime
     );
     if (!entry_snapshot.pass) {
         signal.reason = entry_snapshot.reject_reason;
@@ -927,12 +674,9 @@ Signal FoundationAdaptiveStrategy::generateSignal(
     const double atr_pct = atr / std::max(1e-9, current_price);
 
     const bool low_liquidity_relaxed_path = entry_gate.low_liquidity_relaxed_path;
-    const bool uptrend_low_flow_probe_path = entry_gate.uptrend_low_flow_probe_path;
     const bool thin_liquidity_adaptive_path = entry_gate.thin_liquidity_adaptive_path;
-    const bool ultra_thin_liquidity_probe_path = entry_gate.ultra_thin_liquidity_probe_path;
     const bool ranging_low_flow_path = entry_gate.ranging_low_flow_path;
     const bool downtrend_low_flow_rebound_path = entry_gate.downtrend_low_flow_rebound_path;
-    const bool signal_supply_fallback_path = entry_gate.signal_supply_fallback_path;
     const bool thin_low_vol_context =
         (metrics.liquidity_score < 55.0 &&
          metrics.volatility > 0.0 &&
@@ -950,12 +694,6 @@ Signal FoundationAdaptiveStrategy::generateSignal(
     if (thin_liquidity_adaptive_path) {
         risk_pct = std::clamp(risk_pct * 0.74, 0.0024, 0.0088);
         reward_risk = std::max(reward_risk, 2.10);
-    } else if (uptrend_low_flow_probe_path) {
-        risk_pct = std::clamp(risk_pct * 0.68, 0.0022, 0.0078);
-        reward_risk = std::max(reward_risk, 2.05);
-    } else if (ultra_thin_liquidity_probe_path) {
-        risk_pct = std::clamp(risk_pct * 0.66, 0.0022, 0.0075);
-        reward_risk = std::max(reward_risk, 2.35);
     } else if (downtrend_low_flow_rebound_path) {
         risk_pct = std::clamp(risk_pct * 0.58, 0.0020, 0.0068);
         reward_risk = std::max(reward_risk, 2.00);
@@ -966,10 +704,6 @@ Signal FoundationAdaptiveStrategy::generateSignal(
     if (ranging_low_flow_path) {
         risk_pct = std::clamp(risk_pct * 0.78, 0.0024, 0.0088);
         reward_risk = std::max(reward_risk, 1.80);
-    }
-    if (signal_supply_fallback_path) {
-        risk_pct = std::clamp(risk_pct * 0.72, 0.0022, 0.0085);
-        reward_risk = std::max(reward_risk, 1.95);
     }
     if (thin_low_vol_context) {
         risk_pct = std::clamp(risk_pct * 0.88, 0.0025, 0.0098);
@@ -1003,10 +737,6 @@ Signal FoundationAdaptiveStrategy::generateSignal(
     }
     if (thin_liquidity_adaptive_path) {
         strength += 0.03;
-    } else if (uptrend_low_flow_probe_path) {
-        strength += 0.01;
-    } else if (ultra_thin_liquidity_probe_path) {
-        strength -= 0.02;
     } else if (downtrend_low_flow_rebound_path) {
         strength += 0.00;
     } else if (ranging_low_flow_path) {
@@ -1036,18 +766,12 @@ Signal FoundationAdaptiveStrategy::generateSignal(
         signal.stop_loss,
         metrics
     );
-    if (ultra_thin_liquidity_probe_path) {
-        signal.position_size *= 0.40;
-    } else if (uptrend_low_flow_probe_path) {
-        signal.position_size *= 0.42;
-    } else if (thin_liquidity_adaptive_path) {
+    if (thin_liquidity_adaptive_path) {
         signal.position_size *= 0.48;
     } else if (downtrend_low_flow_rebound_path) {
         signal.position_size *= 0.32;
     } else if (ranging_low_flow_path) {
         signal.position_size *= 0.50;
-    } else if (signal_supply_fallback_path) {
-        signal.position_size *= 0.46;
     } else if (thin_low_vol_uptrend_context) {
         signal.position_size *= 0.55;
     } else if (thin_low_vol_context) {
@@ -1080,18 +804,12 @@ Signal FoundationAdaptiveStrategy::generateSignal(
     signal.sell_order_type = OrderTypePolicy::LIMIT_WITH_FALLBACK;
     signal.max_retries = 2;
     signal.retry_wait_ms = 700;
-    if (ultra_thin_liquidity_probe_path) {
-        signal.reason = "foundation_adaptive_regime_entry_ultra_thin_probe";
-    } else if (uptrend_low_flow_probe_path) {
-        signal.reason = "foundation_adaptive_regime_entry_uptrend_low_flow_probe";
-    } else if (thin_liquidity_adaptive_path) {
+    if (thin_liquidity_adaptive_path) {
         signal.reason = "foundation_adaptive_regime_entry_thin_liq_adaptive";
     } else if (downtrend_low_flow_rebound_path) {
         signal.reason = "foundation_adaptive_regime_entry_downtrend_low_flow_rebound";
     } else if (ranging_low_flow_path) {
         signal.reason = "foundation_adaptive_regime_entry_ranging_low_flow";
-    } else if (signal_supply_fallback_path) {
-        signal.reason = "foundation_adaptive_regime_entry_signal_supply_fallback";
     } else if (thin_low_vol_uptrend_context) {
         signal.reason = "foundation_adaptive_regime_entry_thin_lowvol_guarded";
     } else if (low_liquidity_relaxed_path) {
@@ -1115,13 +833,11 @@ bool FoundationAdaptiveStrategy::shouldEnter(
     if (!enabled_ || current_price <= 0.0 || candles.size() < 80) {
         return false;
     }
-    const bool signal_supply_experiment_enabled = isSignalSupplyFallbackEnabled();
     const EntryEvaluationSnapshot entry_snapshot = evaluateEntrySnapshot(
         metrics,
         candles,
         current_price,
-        regime.regime,
-        signal_supply_experiment_enabled
+        regime.regime
     );
     return entry_snapshot.pass;
 }

@@ -223,12 +223,6 @@ FilterDecision evaluateFilter(const FilterInput& input) {
         out.required_expected_value += 0.00005 * no_trade_bias_scale;
     }
 
-    const std::string signal_reason = signal.reason;
-    const bool supply_probe_reason =
-        signal_reason.find("signal_supply_fallback") != std::string::npos ||
-        signal_reason.find("ranging_low_flow") != std::string::npos ||
-        signal_reason.find("uptrend_low_flow_probe") != std::string::npos ||
-        signal_reason.find("low_liq_uptrend") != std::string::npos;
     const bool low_vol_low_liq_context =
         !input.hostile_regime &&
         signal.liquidity_score >= 22.0 &&
@@ -241,7 +235,7 @@ FilterDecision evaluateFilter(const FilterInput& input) {
         signal.probabilistic_h5_calibrated >= 0.54 &&
         signal.probabilistic_h5_margin >= -0.01 &&
         signal.liquidity_score >= 28.0;
-    if ((supply_probe_reason && low_vol_low_liq_context) || probabilistic_supply_relief) {
+    if ((low_vol_low_liq_context && probabilistic_primary_signal) || probabilistic_supply_relief) {
         const double relief_scale = probabilistic_supply_relief
             ? std::clamp(0.55 + (0.45 * probabilistic_confidence), 0.55, 1.0)
             : 0.70;

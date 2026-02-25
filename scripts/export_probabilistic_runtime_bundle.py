@@ -16,11 +16,11 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--train-summary-json",
-        default=r".\build\Release\logs\probabilistic_model_train_summary_full_20260220.json",
+        default=r".\build\Release\logs\probabilistic_model_train_summary_global_v2_gate4_20260224.json",
     )
     parser.add_argument(
         "--output-json",
-        default=r".\config\model\probabilistic_runtime_bundle_v1.json",
+        default=r".\config\model\probabilistic_runtime_bundle_v2.json",
     )
     parser.add_argument(
         "--export-mode",
@@ -41,9 +41,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument(
         "--pipeline-version",
         "--pipeline_version",
-        choices=("v1", "v2"),
-        default="v1",
-        help="MODE switch. v1 exports active bundle contract; v2 exports draft v2 contract.",
+        choices=("v2",),
+        default="v2",
+        help="MODE switch. v2 exports active runtime bundle contract.",
     )
     return parser.parse_args(argv)
 
@@ -54,48 +54,64 @@ def utc_now_iso() -> str:
 
 def infer_train_summary_pipeline_version(summary: Dict[str, Any]) -> str:
     explicit = str(summary.get("pipeline_version", "")).strip().lower()
-    if explicit in ("v1", "v2"):
+    if explicit == "v2":
         return explicit
     summary_version = str(summary.get("version", "")).strip().lower()
     if "v2" in summary_version:
         return "v2"
-    return "v1"
+    return "unknown"
 
 
 def default_phase3_bundle_config() -> Dict[str, Any]:
     return {
-        "phase3_frontier_enabled": False,
-        "phase3_ev_calibration_enabled": False,
-        "phase3_cost_tail_enabled": False,
-        "phase3_adaptive_ev_blend_enabled": False,
-        "phase3_diagnostics_v2_enabled": False,
+        "phase3_frontier_enabled": True,
+        "phase3_ev_calibration_enabled": True,
+        "phase3_cost_tail_enabled": True,
+        "phase3_adaptive_ev_blend_enabled": True,
+        "phase3_diagnostics_v2_enabled": True,
         "frontier": {
-            "enabled": False,
-            "k_margin": 0.0,
-            "k_uncertainty": 0.0,
-            "k_cost_tail": 0.0,
+            "enabled": True,
+            "k_margin": 0.08,
+            "k_uncertainty": 0.0004,
+            "k_cost_tail": 0.2,
             "min_required_ev": -0.0002,
             "max_required_ev": 0.0050,
-            "margin_floor": -1.0,
-            "ev_confidence_floor": 0.0,
+            "margin_floor": -0.25,
+            "ev_confidence_floor": 0.10,
             "ev_confidence_penalty": 0.0,
             "cost_tail_penalty": 0.0,
-            "cost_tail_reject_threshold_pct": 1.0,
+            "cost_tail_reject_threshold_pct": 0.03,
         },
         "ev_calibration": {
-            "enabled": False,
+            "enabled": True,
             "use_quantile_map": False,
-            "min_bucket_samples": 64,
-            "default_confidence": 1.0,
+            "min_bucket_samples": 32,
+            "default_confidence": 0.90,
             "min_confidence": 0.10,
             "ood_penalty": 0.10,
-            "buckets": [],
+            "buckets": [
+                {
+                    "name": "default_all",
+                    "regime": "ANY",
+                    "volatility_bucket": "ANY",
+                    "liquidity_bucket": "ANY",
+                    "slope": 0.95,
+                    "intercept_bps": 1.0,
+                    "sample_size": 500,
+                    "confidence": 0.88,
+                    "vol_bps_min": -1.0,
+                    "vol_bps_max": -1.0,
+                    "liquidity_ratio_min": -1.0,
+                    "liquidity_ratio_max": -1.0,
+                    "quantile_map": [],
+                }
+            ],
         },
         "cost_model": {
-            "enabled": False,
-            "mode": "mean_mode",
-            "entry_multiplier": 0.50,
-            "exit_multiplier": 0.50,
+            "enabled": True,
+            "mode": "hybrid_mode",
+            "entry_multiplier": 0.55,
+            "exit_multiplier": 0.45,
             "entry_add_bps": 0.0,
             "exit_add_bps": 0.0,
             "tail_markup_ratio": 0.35,
@@ -103,7 +119,7 @@ def default_phase3_bundle_config() -> Dict[str, Any]:
             "hybrid_lambda": 0.50,
         },
         "adaptive_ev_blend": {
-            "enabled": False,
+            "enabled": True,
             "min": 0.05,
             "max": 0.40,
             "base": 0.20,
@@ -114,7 +130,7 @@ def default_phase3_bundle_config() -> Dict[str, Any]:
             "low_confidence_penalty": 0.10,
             "cost_penalty": 0.06,
         },
-        "diagnostics_v2": {"enabled": False},
+        "diagnostics_v2": {"enabled": True},
     }
 
 
@@ -172,6 +188,16 @@ def extract_linear(payload: Dict[str, Any]) -> Dict[str, Any]:
         "coef": [float(x) for x in coef],
         "intercept": float(intercept),
     }
+
+
+def finite_float(value: Any, default: float = 0.0) -> float:
+    try:
+        out = float(value)
+    except Exception:
+        return float(default)
+    if not np.isfinite(out):
+        return float(default)
+    return float(out)
 
 
 def extract_edge_regressor(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -280,29 +306,29 @@ def make_runtime_entry(
             },
         },
         "selected_fold_metrics": {
-            "h5_test_calibrated_logloss": float(
+            "h5_test_calibrated_logloss": finite_float(
                 chosen.get("metrics", {})
                 .get("h5", {})
                 .get("test_calibrated", {})
-                .get("logloss", float("nan"))
+                .get("logloss", 0.0)
             ),
-            "h5_test_calibrated_brier": float(
+            "h5_test_calibrated_brier": finite_float(
                 chosen.get("metrics", {})
                 .get("h5", {})
                 .get("test_calibrated", {})
-                .get("brier", float("nan"))
+                .get("brier", 0.0)
             ),
-            "h5_test_trade_selected_coverage": float(
+            "h5_test_trade_selected_coverage": finite_float(
                 chosen.get("metrics", {})
                 .get("h5", {})
                 .get("test_trade_metrics", {})
-                .get("coverage", float("nan"))
+                .get("coverage", 0.0)
             ),
-            "h5_test_trade_selected_mean_edge_bps": float(
+            "h5_test_trade_selected_mean_edge_bps": finite_float(
                 chosen.get("metrics", {})
                 .get("h5", {})
                 .get("test_trade_metrics", {})
-                .get("mean_edge_bps", float("nan"))
+                .get("mean_edge_bps", 0.0)
             ),
         },
     }
@@ -461,11 +487,7 @@ def main(argv=None) -> int:
     phase3_bundle = build_phase3_bundle_config(summary)
 
     out = {
-        "version": (
-            "probabilistic_runtime_bundle_v1"
-            if pipeline_version == "v1"
-            else "probabilistic_runtime_bundle_v2_draft"
-        ),
+        "version": "probabilistic_runtime_bundle_v2_draft",
         "generated_at_utc": utc_now_iso(),
         "source_train_summary_json": str(train_summary_path),
         "selection_policy": str(args.fold_policy),
@@ -490,10 +512,9 @@ def main(argv=None) -> int:
         "phase3_adaptive_ev_blend_enabled": bool(phase3_bundle.get("phase3_adaptive_ev_blend_enabled", False)),
         "phase3_diagnostics_v2_enabled": bool(phase3_bundle.get("phase3_diagnostics_v2_enabled", False)),
     }
-    if pipeline_version != "v1":
-        out["pipeline_version"] = str(pipeline_version)
-        out["feature_contract_version"] = "v2_draft"
-        out["runtime_bundle_contract_version"] = "v2_draft"
+    out["pipeline_version"] = str(pipeline_version)
+    out["feature_contract_version"] = "v2_draft"
+    out["runtime_bundle_contract_version"] = "v2_draft"
     if ensemble_summary_meta:
         out["ensemble"] = ensemble_summary_meta
     dump_json(output_path, out)

@@ -54,7 +54,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument(
         "--pipeline-version",
         "--pipeline_version",
-        choices=("auto", "v1", "v2"),
+        choices=("auto", "v2"),
         default="auto",
     )
     parser.add_argument(
@@ -74,42 +74,42 @@ def to_bool(value: Any) -> bool:
 
 def infer_pipeline_from_manifest_payload(payload: Dict[str, Any]) -> str:
     explicit = str(payload.get("pipeline_version", "")).strip().lower()
-    if explicit in ("v1", "v2"):
+    if explicit == "v2":
         return explicit
     version = str(payload.get("version", "")).strip().lower()
     if "v2" in version:
         return "v2"
-    return "v1"
+    return "v2"
 
 
 def infer_pipeline_from_feature_validation(feature_validation: Dict[str, Any]) -> str:
     explicit = str(feature_validation.get("pipeline_version", "")).strip().lower()
-    if explicit in ("v1", "v2"):
+    if explicit == "v2":
         return explicit
     manifest_path = str(feature_validation.get("dataset_manifest_json", "")).strip()
     if not manifest_path:
-        return "v1"
+        return "v2"
     manifest_payload = load_json_or_none(pathlib.Path(manifest_path))
     if isinstance(manifest_payload, dict):
         return infer_pipeline_from_manifest_payload(manifest_payload)
-    return "v1"
+    return "v2"
 
 
 def infer_pipeline_from_parity(parity: Dict[str, Any]) -> str:
     explicit = str(parity.get("pipeline_version", "")).strip().lower()
-    if explicit in ("v1", "v2"):
+    if explicit == "v2":
         return explicit
     bundle_version = str(parity.get("runtime_bundle_version", "")).strip().lower()
     if "v2" in bundle_version:
         return "v2"
-    return "v1"
+    return "v2"
 
 
 def infer_pipeline_from_verification(verification: Dict[str, Any]) -> str:
     explicit = str(verification.get("pipeline_version", "")).strip().lower()
-    if explicit in ("v1", "v2"):
+    if explicit == "v2":
         return explicit
-    return "v1"
+    return "v2"
 
 
 def extract_gate_profile_name(payload: Dict[str, Any]) -> str:
@@ -121,7 +121,7 @@ def extract_gate_profile_name(payload: Dict[str, Any]) -> str:
 
 def infer_pipeline_from_shadow(shadow_payload: Dict[str, Any]) -> str:
     explicit = str(shadow_payload.get("pipeline_version", "")).strip().lower()
-    if explicit in ("v1", "v2"):
+    if explicit == "v2":
         return explicit
     runtime_bundle_version = str(shadow_payload.get("runtime_bundle_version", "")).strip().lower()
     if "v2" in runtime_bundle_version:
@@ -129,7 +129,7 @@ def infer_pipeline_from_shadow(shadow_payload: Dict[str, Any]) -> str:
     gate_profile = extract_gate_profile_name(shadow_payload).strip().lower()
     if gate_profile == "v2_strict":
         return "v2"
-    return "v1"
+    return "v2"
 
 
 def shadow_report_pass(shadow_payload: Dict[str, Any]) -> bool:
@@ -223,12 +223,12 @@ def evaluate(args: argparse.Namespace) -> Dict[str, Any]:
     if not verification_ok:
         errors.append("gate3_verification_failed_or_missing")
 
-    feature_pipeline = infer_pipeline_from_feature_validation(feature_validation) if isinstance(feature_validation, dict) else "v1"
-    parity_pipeline = infer_pipeline_from_parity(parity) if isinstance(parity, dict) else "v1"
-    verification_pipeline = infer_pipeline_from_verification(verification) if isinstance(verification, dict) else "v1"
+    feature_pipeline = infer_pipeline_from_feature_validation(feature_validation) if isinstance(feature_validation, dict) else "v2"
+    parity_pipeline = infer_pipeline_from_parity(parity) if isinstance(parity, dict) else "v2"
+    verification_pipeline = infer_pipeline_from_verification(verification) if isinstance(verification, dict) else "v2"
     requested_pipeline = str(args.pipeline_version).strip().lower()
     resolved_pipeline = parity_pipeline
-    if requested_pipeline in ("v1", "v2"):
+    if requested_pipeline == "v2":
         resolved_pipeline = requested_pipeline
 
     pipeline_consistent = (

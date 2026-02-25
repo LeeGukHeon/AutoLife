@@ -15,8 +15,9 @@ Status: implementation complete (validation artifacts captured)
 ## Invariants
 - Live/Backtest/StrategyManager/FoundationRiskPipeline parity must hold.
 - Deterministic inputs and rule ordering must hold.
-- Feature flags default OFF.
-- OFF path must reproduce legacy behavior.
+- Phase 3 feature flags remain available for rollback/A-B, but default runtime config is ON.
+- Explicit OFF path must still reproduce legacy behavior.
+- Runtime bundle contract is v2-only (`probabilistic_runtime_bundle_v2_draft`).
 
 ## Source touch map
 - Runtime inference + bundle parsing:
@@ -54,7 +55,7 @@ python scripts/run_ci_operational_gate.py `
   --should-exit-audit-live-runtime-log-glob "build/Release/logs/live_probe_stdout*.txt" `
   --should-exit-audit-live-runtime-log-mode-filter exclude_backtest `
   --strict-should-exit-parity
-python scripts/run_verification.py --pipeline-version auto `
+python scripts/run_verification.py --pipeline-version v2 `
   --data-dir .\build\Release\data\backtest_real_live `
   --dataset-names upbit_KRW_BTC_1m_live.csv
 ```

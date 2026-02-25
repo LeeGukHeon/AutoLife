@@ -13,6 +13,7 @@ Last updated: 2026-02-25
 5. If ticket touches live/backtest parity, read:
    - `docs/_codex/PARITY_BOUNDARY.md`
    - `docs/_codex/PHASE2_CLOSURE_2026-02-25.md` (current Phase 2 closure baseline)
+   - `docs/_codex/START_TO_EXIT_PATH_AUDIT_2026-02-25.md` (startup->sell/risk runtime path audit)
 6. If ticket touches migration cleanup for Phase 2/3 paths, read:
    - `docs/_codex/PHASE23_MIGRATION_CLEANUP_2026-02-25.md`
 7. If ticket touches folder/build structure cleanup, read:
@@ -41,7 +42,10 @@ python scripts/run_ci_operational_gate.py `
 
 ## Baseline reminder
 - Baseline behavior is authoritative and must remain unchanged unless explicitly versioned.
-- Extensions are opt-in and default OFF.
+- Phase 3 runtime policy is now baseline ON in default config (`config/model/probabilistic_runtime_bundle_v2.json`).
+- Runtime bundle contract support is `v2_draft` only (legacy `v1` bundle is no longer accepted in runtime loader).
+- Core probabilistic ops scripts now run on `v2`-only policy (`run_probabilistic_hybrid_cycle`, `run_verification`, `validate_runtime_bundle_parity`, shadow/promotion helpers).
+- Non-Phase3 experimental extensions remain opt-in and default OFF.
 - Live trading remains disabled unless all gates pass.
 - Source/script/docs/config text files must be `UTF-8 (No BOM)`.
 - CSV files are the only exception and use `UTF-8 with BOM`.

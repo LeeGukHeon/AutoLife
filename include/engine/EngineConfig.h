@@ -62,7 +62,7 @@ struct EngineConfig {
     };
     // Probabilistic runtime overlay (shared in live/backtest).
     bool enable_probabilistic_runtime_model = true;
-    std::string probabilistic_runtime_bundle_path = "config/model/probabilistic_runtime_bundle_v1.json";
+    std::string probabilistic_runtime_bundle_path = "config/model/probabilistic_runtime_bundle_v2.json";
     bool probabilistic_runtime_hard_gate = false;
     double probabilistic_runtime_hard_gate_margin = -0.08;
     double probabilistic_runtime_score_weight = 0.12;
@@ -104,10 +104,6 @@ struct EngineConfig {
     double probabilistic_regime_hostile_threshold_add = 0.030;
     double probabilistic_regime_volatile_size_multiplier = 0.50;
     double probabilistic_regime_hostile_size_multiplier = 0.20;
-    double probabilistic_primary_promotion_min_margin = -0.02;
-    double probabilistic_primary_promotion_min_calibrated = 0.47;
-    double probabilistic_primary_promotion_max_strength_gap = 0.12;
-    double probabilistic_primary_promotion_max_ev_gap = 0.00045;
     // Probabilistic-primary minimum conditions:
     // rank by probabilistic confidence first, but enforce these baseline
     // operating constraints before entry.
@@ -115,12 +111,6 @@ struct EngineConfig {
     double probabilistic_primary_min_h5_margin = -0.03;
     double probabilistic_primary_min_liquidity_score = 42.0;
     double probabilistic_primary_min_signal_strength = 0.34;
-    // Candidate supply controls (runtime primary path).
-    bool foundation_signal_supply_fallback_enabled = true;
-    bool manager_soft_queue_enabled = true;
-    double manager_soft_queue_position_scale = 0.70;
-    double manager_soft_queue_max_strength_gap = 0.05;
-    double manager_soft_queue_max_ev_gap = 0.00015;
     double min_expected_edge_pct = 0.0010; // 0.10% after cost
     double min_reward_risk = 1.20;         // TP/SL ratio
     double min_rr_weak_signal = 1.80;      // dynamic RR target for weak signals
@@ -231,8 +221,6 @@ struct EngineConfig {
     // Gate4 shadow evidence helper: keep policy decisions flowing without
     // position-state side effects during backtest replays.
     bool backtest_shadow_policy_only = false;
-    // Guard flag (default OFF): prefilter-qualified uptrend rescue tail guard.
-    bool enable_uptrend_rescue_prefilter_tail_guard = false;
     std::vector<std::string> enabled_strategies;
 
     EngineConfig()

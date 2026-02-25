@@ -286,10 +286,10 @@ void Config::load(const std::string& path) {
             engine_config_.enable_probabilistic_runtime_model =
                 t.value("enable_probabilistic_runtime_model", true);
             engine_config_.probabilistic_runtime_bundle_path = trimCopy(
-                t.value("probabilistic_runtime_bundle_path", "config/model/probabilistic_runtime_bundle_v1.json")
+                t.value("probabilistic_runtime_bundle_path", "config/model/probabilistic_runtime_bundle_v2.json")
             );
             if (engine_config_.probabilistic_runtime_bundle_path.empty()) {
-                engine_config_.probabilistic_runtime_bundle_path = "config/model/probabilistic_runtime_bundle_v1.json";
+                engine_config_.probabilistic_runtime_bundle_path = "config/model/probabilistic_runtime_bundle_v2.json";
             }
             engine_config_.probabilistic_runtime_hard_gate =
                 t.value("probabilistic_runtime_hard_gate", false);
@@ -452,26 +452,6 @@ void Config::load(const std::string& path) {
                 0.01,
                 engine_config_.probabilistic_regime_volatile_size_multiplier
             );
-            engine_config_.probabilistic_primary_promotion_min_margin = std::clamp(
-                t.value("probabilistic_primary_promotion_min_margin", -0.02),
-                -0.20,
-                0.10
-            );
-            engine_config_.probabilistic_primary_promotion_min_calibrated = std::clamp(
-                t.value("probabilistic_primary_promotion_min_calibrated", 0.47),
-                0.0,
-                1.0
-            );
-            engine_config_.probabilistic_primary_promotion_max_strength_gap = std::clamp(
-                t.value("probabilistic_primary_promotion_max_strength_gap", 0.12),
-                0.0,
-                0.50
-            );
-            engine_config_.probabilistic_primary_promotion_max_ev_gap = std::clamp(
-                t.value("probabilistic_primary_promotion_max_ev_gap", 0.00045),
-                0.0,
-                0.010
-            );
             engine_config_.probabilistic_primary_min_h5_calibrated = std::clamp(
                 t.value("probabilistic_primary_min_h5_calibrated", 0.48),
                 0.0,
@@ -491,25 +471,6 @@ void Config::load(const std::string& path) {
                 t.value("probabilistic_primary_min_signal_strength", 0.34),
                 0.0,
                 1.0
-            );
-            engine_config_.foundation_signal_supply_fallback_enabled =
-                t.value("foundation_signal_supply_fallback_enabled", true);
-            engine_config_.manager_soft_queue_enabled =
-                t.value("manager_soft_queue_enabled", true);
-            engine_config_.manager_soft_queue_position_scale = std::clamp(
-                t.value("manager_soft_queue_position_scale", 0.70),
-                0.30,
-                1.00
-            );
-            engine_config_.manager_soft_queue_max_strength_gap = std::clamp(
-                t.value("manager_soft_queue_max_strength_gap", 0.05),
-                0.0,
-                0.25
-            );
-            engine_config_.manager_soft_queue_max_ev_gap = std::clamp(
-                t.value("manager_soft_queue_max_ev_gap", 0.00015),
-                0.0,
-                0.00200
             );
             engine_config_.initial_capital = initial_capital_;
 
@@ -697,8 +658,6 @@ void Config::load(const std::string& path) {
             engine_config_.hostility_pause_recent_win_rate = t.value("hostility_pause_recent_win_rate", 0.40);
             engine_config_.backtest_hostility_pause_candles = t.value("backtest_hostility_pause_candles", 36);
             engine_config_.backtest_hostility_pause_candles_extreme = t.value("backtest_hostility_pause_candles_extreme", 60);
-            engine_config_.enable_uptrend_rescue_prefilter_tail_guard =
-                t.value("enable_uptrend_rescue_prefilter_tail_guard", false);
 
             if (t.contains("enabled_strategies")) {
                 engine_config_.enabled_strategies = t["enabled_strategies"].get<std::vector<std::string>>();

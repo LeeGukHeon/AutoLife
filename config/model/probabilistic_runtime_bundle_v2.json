@@ -1,6 +1,6 @@
 {
   "version": "probabilistic_runtime_bundle_v2_draft",
-  "generated_at_utc": "2026-02-24T05:34:03.342529+00:00",
+  "generated_at_utc": "2026-02-25T09:18:24.669627+00:00",
   "source_train_summary_json": "D:\\MyApps\\AutoLife\\build\\Release\\logs\\probabilistic_model_train_summary_global_v2_gate4_20260224.json",
   "selection_policy": "latest",
   "export_mode": "global_only",
@@ -217,12 +217,88 @@
       "h5_test_calibrated_logloss": 0.6914869133343776,
       "h5_test_calibrated_brier": 0.2491706323756457,
       "h5_test_trade_selected_coverage": 0.0,
-      "h5_test_trade_selected_mean_edge_bps": NaN
+      "h5_test_trade_selected_mean_edge_bps": 0.0
     },
     "source": "global_cross_market"
   },
   "markets": [],
   "cost_model": {},
+  "phase3": {
+    "phase3_frontier_enabled": true,
+    "phase3_ev_calibration_enabled": true,
+    "phase3_cost_tail_enabled": true,
+    "phase3_adaptive_ev_blend_enabled": true,
+    "phase3_diagnostics_v2_enabled": true,
+    "frontier": {
+      "enabled": true,
+      "k_margin": 0.08,
+      "k_uncertainty": 0.0004,
+      "k_cost_tail": 0.2,
+      "min_required_ev": -0.0002,
+      "max_required_ev": 0.005,
+      "margin_floor": -0.25,
+      "ev_confidence_floor": 0.1,
+      "ev_confidence_penalty": 0.0,
+      "cost_tail_penalty": 0.0,
+      "cost_tail_reject_threshold_pct": 0.03
+    },
+    "ev_calibration": {
+      "enabled": true,
+      "use_quantile_map": false,
+      "min_bucket_samples": 32,
+      "default_confidence": 0.9,
+      "min_confidence": 0.1,
+      "ood_penalty": 0.1,
+      "buckets": [
+        {
+          "name": "default_all",
+          "regime": "ANY",
+          "volatility_bucket": "ANY",
+          "liquidity_bucket": "ANY",
+          "slope": 0.95,
+          "intercept_bps": 1.0,
+          "sample_size": 500,
+          "confidence": 0.88,
+          "vol_bps_min": -1.0,
+          "vol_bps_max": -1.0,
+          "liquidity_ratio_min": -1.0,
+          "liquidity_ratio_max": -1.0,
+          "quantile_map": []
+        }
+      ]
+    },
+    "cost_model": {
+      "enabled": true,
+      "mode": "hybrid_mode",
+      "entry_multiplier": 0.55,
+      "exit_multiplier": 0.45,
+      "entry_add_bps": 0.0,
+      "exit_add_bps": 0.0,
+      "tail_markup_ratio": 0.35,
+      "tail_add_bps": 0.0,
+      "hybrid_lambda": 0.5
+    },
+    "adaptive_ev_blend": {
+      "enabled": true,
+      "min": 0.05,
+      "max": 0.4,
+      "base": 0.2,
+      "trend_bonus": 0.08,
+      "ranging_penalty": 0.06,
+      "hostile_penalty": 0.08,
+      "high_confidence_bonus": 0.05,
+      "low_confidence_penalty": 0.1,
+      "cost_penalty": 0.06
+    },
+    "diagnostics_v2": {
+      "enabled": true
+    }
+  },
+  "phase3_frontier_enabled": true,
+  "phase3_ev_calibration_enabled": true,
+  "phase3_cost_tail_enabled": true,
+  "phase3_adaptive_ev_blend_enabled": true,
+  "phase3_diagnostics_v2_enabled": true,
   "pipeline_version": "v2",
   "feature_contract_version": "v2_draft",
   "runtime_bundle_contract_version": "v2_draft"
