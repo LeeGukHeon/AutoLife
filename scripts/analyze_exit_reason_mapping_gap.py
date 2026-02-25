@@ -38,6 +38,18 @@ def parse_args(argv=None) -> argparse.Namespace:
         default=20,
         help="Top N rows for detailed delta tables.",
     )
+    parser.add_argument(
+        "--min-live-exits",
+        type=int,
+        default=0,
+        help="Minimum live exit count required for mapping-gap conclusion (0 disables the threshold).",
+    )
+    parser.add_argument(
+        "--min-backtest-exits",
+        type=int,
+        default=0,
+        help="Minimum backtest exit count required for mapping-gap conclusion (0 disables the threshold).",
+    )
     return parser.parse_args(argv)
 
 
@@ -49,6 +61,31 @@ def normalize_reason(reason: str) -> str:
 def normalize_market(market: str) -> str:
     value = str(market or "").strip()
     return value if value else "unknown"
+
+
+def canonical_reason(reason: str) -> str:
+    raw = normalize_reason(reason).strip().lower().replace("-", "_")
+    aliases = {
+        "stoploss": "STOP_LOSS",
+        "stop_loss": "STOP_LOSS",
+        "takeprofit1": "TAKE_PROFIT_1",
+        "take_profit_1": "TAKE_PROFIT_1",
+        "takeprofit2": "TAKE_PROFIT_2",
+        "take_profit": "TAKE_PROFIT_2",
+        "take_profit_2": "TAKE_PROFIT_2",
+        "takeprofitfullduetominorder": "TAKE_PROFIT_FULL_DUE_TO_MIN_ORDER",
+        "take_profit_full_due_to_min_order": "TAKE_PROFIT_FULL_DUE_TO_MIN_ORDER",
+        "strategyexit": "STRATEGY_OR_RISK_EXIT",
+        "strategy_exit": "STRATEGY_OR_RISK_EXIT",
+        "riskmanagerexit": "STRATEGY_OR_RISK_EXIT",
+        "risk_manager_exit": "STRATEGY_OR_RISK_EXIT",
+        "backtesteod": "BACKTEST_EOD",
+        "backtest_eod": "BACKTEST_EOD",
+        "unknown": "UNKNOWN",
+    }
+    if raw in aliases:
+        return aliases[raw]
+    return raw.upper()
 
 
 def parse_dataset_market(dataset_name: str) -> str:
@@ -76,6 +113,19 @@ def parse_live_market_reason_counts_from_log(log_path: Path) -> Dict[str, int]:
         key = f"{market}|{reason}"
         counts[key] = counts.get(key, 0) + 1
     return counts
+
+
+def canonicalize_market_reason_counter(counter: Dict[str, int]) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    for key, count in counter.items():
+        market, reason = "unknown", "unknown"
+        if "|" in key:
+            market, reason = key.split("|", 1)
+        norm_market = normalize_market(market)
+        norm_reason = canonical_reason(reason)
+        mapped_key = f"{norm_market}|{norm_reason}"
+        out[mapped_key] = out.get(mapped_key, 0) + int(count)
+    return out
 
 
 def split_market_reason(counter: Dict[str, int]) -> Tuple[Dict[str, int], Dict[str, int]]:
@@ -124,6 +174,8 @@ def main(argv=None) -> int:
     audit_path = resolve_repo_path(args.audit_json)
     out_path = resolve_repo_path(args.output_json)
     top_n = max(1, int(args.top_n))
+    min_live_exits = max(0, int(args.min_live_exits))
+    min_backtest_exits = max(0, int(args.min_backtest_exits))
 
     if not audit_path.exists():
         raise FileNotFoundError(f"audit json not found: {audit_path}")
@@ -158,8 +210,11 @@ def main(argv=None) -> int:
     live_log_path = resolve_repo_path(str(live_log_path_raw)) if live_log_path_raw else Path("")
     live_market_reason_counts = parse_live_market_reason_counts_from_log(live_log_path)
 
-    live_market_counts, live_reason_counts = split_market_reason(live_market_reason_counts)
-    backtest_market_counts, backtest_reason_counts = split_market_reason(backtest_market_reason_counts)
+    live_market_reason_counts_canonical = canonicalize_market_reason_counter(live_market_reason_counts)
+    backtest_market_reason_counts_canonical = canonicalize_market_reason_counter(backtest_market_reason_counts)
+
+    live_market_counts, live_reason_counts = split_market_reason(live_market_reason_counts_canonical)
+    backtest_market_counts, backtest_reason_counts = split_market_reason(backtest_market_reason_counts_canonical)
 
     reason_only_live = sorted(set(live_reason_counts.keys()) - set(backtest_reason_counts.keys()))
     reason_only_backtest = sorted(set(backtest_reason_counts.keys()) - set(live_reason_counts.keys()))
@@ -169,26 +224,30 @@ def main(argv=None) -> int:
 
     live_total = int(sum(live_reason_counts.values()))
     backtest_total = int(sum(backtest_reason_counts.values()))
+    sample_size_ready = live_total >= min_live_exits and backtest_total >= min_backtest_exits
     comparable = live_total > 0 and backtest_total > 0
 
     stoploss_vs_backtesteod_signature = (
-        int(live_reason_counts.get("stop_loss", 0)) > 0
-        and int(backtest_reason_counts.get("BacktestEOD", 0)) > 0
-        and int(backtest_reason_counts.get("stop_loss", 0)) == 0
+        int(live_reason_counts.get("STOP_LOSS", 0)) > 0
+        and int(backtest_reason_counts.get("BACKTEST_EOD", 0)) > 0
+        and int(backtest_reason_counts.get("STOP_LOSS", 0)) == 0
     )
-    mapping_gap_observed = (
+    mapping_gap_observed_raw = (
         stoploss_vs_backtesteod_signature
         or bool(reason_only_live)
         or bool(reason_only_backtest)
         or bool(market_only_live)
         or bool(market_only_backtest)
     )
+    mapping_gap_observed = bool(mapping_gap_observed_raw and sample_size_ready)
     overlap_ready = comparable and len(common_markets) > 0
 
     if not comparable:
         next_step_hint = "collect_more_live_exit_reasons"
     elif not overlap_ready:
         next_step_hint = "collect_live_exits_on_backtest_overlap_markets"
+    elif not sample_size_ready:
+        next_step_hint = "increase_overlap_exit_samples_before_mapping_decision"
     elif mapping_gap_observed:
         next_step_hint = "narrow_correctness_patch_scope_to_runtime_strategyless_exit_mapping"
     else:
@@ -205,13 +264,17 @@ def main(argv=None) -> int:
             "total_exits": live_total,
             "reason_counts": live_reason_counts,
             "market_counts": live_market_counts,
-            "market_reason_counts": live_market_reason_counts,
+            "market_reason_counts": live_market_reason_counts_canonical,
         },
         "backtest_runtime_sample": {
             "total_exits": backtest_total,
             "reason_counts": backtest_reason_counts,
             "market_counts": backtest_market_counts,
-            "market_reason_counts": backtest_market_reason_counts,
+            "market_reason_counts": backtest_market_reason_counts_canonical,
+        },
+        "raw_reason_snapshot": {
+            "live_market_reason_counts": live_market_reason_counts,
+            "backtest_market_reason_counts": backtest_market_reason_counts,
         },
         "gap_analysis": {
             "reason_only_in_live": reason_only_live,
@@ -230,7 +293,12 @@ def main(argv=None) -> int:
         "readiness": {
             "comparable": comparable,
             "overlap_ready": overlap_ready,
+            "sample_size_ready": sample_size_ready,
+            "min_live_exits": min_live_exits,
+            "min_backtest_exits": min_backtest_exits,
             "mapping_gap_observed": mapping_gap_observed,
+            "mapping_gap_observed_raw": mapping_gap_observed_raw,
+            "mapping_gap_inconclusive_due_to_sample_size": bool(mapping_gap_observed_raw and not sample_size_ready),
             "stoploss_vs_backtesteod_signature": stoploss_vs_backtesteod_signature,
             "next_step_hint": next_step_hint,
         },
@@ -240,6 +308,8 @@ def main(argv=None) -> int:
     print(
         "[ExitReasonGap] comparable="
         f"{str(report['readiness']['comparable']).lower()} "
+        "sample_size_ready="
+        f"{str(report['readiness']['sample_size_ready']).lower()} "
         "mapping_gap_observed="
         f"{str(report['readiness']['mapping_gap_observed']).lower()} "
         "next_step_hint="

@@ -1,4 +1,4 @@
-﻿# Stage 15 Execution TODO (Active)
+# Stage 15 Execution TODO (Active)
 
 Last updated: 2026-02-24
 Status: `PROBABILISTIC_TRANSITION_ACTIVE`
@@ -2016,19 +2016,26 @@ Status: `PROBABILISTIC_TRANSITION_ACTIVE`
         - 백-라이브 엑시트/검증정확도 재점검 (`2026-02-25`):
           - 엑시트 reason mapping gap:
             - 상태: `해결중`
-            - `build/Release/logs/exit_reason_mapping_gap_20260225_recheck_v5_overlap.json`
+            - `build/Release/logs/exit_reason_mapping_gap_20260225_recheck_v5_overlap_canonical.json`
+            - `build/Release/logs/exit_reason_mapping_gap_20260225_recheck_v6_postpatch_canonical.json`
+            - params: `--min-live-exits 10 --min-backtest-exits 10`
             - snapshot:
-              - `mapping_gap_observed=true`
-              - live reason set: `stop_loss`, `take_profit_full_due_to_min_order`
-              - backtest runtime sample reason set: `BacktestEOD`
+              - `comparable=true`, `overlap_ready=true`
+              - `sample_size_ready=false` (live exits 3건)
+              - `mapping_gap_observed=false` (`mapping_gap_observed_raw=true`)
+              - next: `increase_overlap_exit_samples_before_mapping_decision`
           - delta 집계 정합성 리스크:
-            - 상태: `해결중`
+            - 상태: `완료`
+            - 코드:
+              - `scripts/analyze_daily_oos_delta.py`
+              - `scripts/run_probe_spillover_gate.py`
             - gate report(평가일):
               - `evaluated_day_count=19`, `nonpositive_day_count=7`
-            - delta summary(전체 day-row):
-              - `day_count=35`, `baseline_nonpositive_day_count=23`
-            - 조치:
-              - delta/spillover workflow에 평가일 기준 집계를 추가해 병행 리포팅.
+            - delta summary(병행집계):
+              - `day_count=35` (all-day-row 기준 유지)
+              - `summary.gate_aligned.profit_sum_delta=+150.836392`
+              - `summary.gate_aligned.nonpositive_day_count_delta=-1`
+              - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v22_rename_on_vs_off_5set_20260225_recheck_evalaligned.json`
           - 미사용 함수 정리:
             - 상태: `완료`
             - `src/runtime/BacktestRuntime.cpp` 미사용 `edgeGapBucket` 제거.

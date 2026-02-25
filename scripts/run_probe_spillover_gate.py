@@ -39,6 +39,20 @@ def _load_json(path: Path) -> Dict[str, Any]:
         return json.load(fp)
 
 
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run occupancy spillover gate workflow for a probe candidate."
@@ -123,6 +137,19 @@ def main() -> int:
     delta_payload = _load_json(delta_json)
     v15_payload = _load_json(v15_json)
     v16_payload = _load_json(v16_json)
+    delta_summary = delta_payload.get("summary", {})
+    if not isinstance(delta_summary, dict):
+        delta_summary = {}
+    gate_aligned = delta_summary.get("gate_aligned", {})
+    if not isinstance(gate_aligned, dict):
+        gate_aligned = {}
+    daily_profit_sum_delta = _safe_float(delta_summary.get("profit_sum_delta"))
+    daily_nonpositive_day_count_delta = _safe_int(delta_summary.get("nonpositive_day_count_delta"))
+    gate_profit_sum_delta = _safe_float(gate_aligned.get("profit_sum_delta"), daily_profit_sum_delta)
+    gate_nonpositive_day_count_delta = _safe_int(
+        gate_aligned.get("nonpositive_day_count_delta"),
+        daily_nonpositive_day_count_delta,
+    )
 
     result = {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -139,8 +166,10 @@ def main() -> int:
             "v16_lock_json": str(v16_json),
         },
         "summary": {
-            "daily_profit_sum_delta": delta_payload.get("summary", {}).get("profit_sum_delta"),
-            "daily_nonpositive_day_count_delta": delta_payload.get("summary", {}).get("nonpositive_day_count_delta"),
+            "daily_profit_sum_delta": daily_profit_sum_delta,
+            "daily_nonpositive_day_count_delta": daily_nonpositive_day_count_delta,
+            "daily_profit_sum_delta_gate_aligned": gate_profit_sum_delta,
+            "daily_nonpositive_day_count_delta_gate_aligned": gate_nonpositive_day_count_delta,
             "v15_adverse_day_cell_count": v15_payload.get("summary", {}).get("adverse_day_cell_count"),
             "v16_lock_status": v16_payload.get("status"),
             "v16_fail_reasons": v16_payload.get("fail_reasons", []),
@@ -154,6 +183,7 @@ def main() -> int:
         "[ProbeSpilloverGate] "
         f"status={result['status']} "
         f"daily_profit_sum_delta={result['summary']['daily_profit_sum_delta']} "
+        f"daily_profit_sum_delta_gate_aligned={result['summary']['daily_profit_sum_delta_gate_aligned']} "
         f"v16_fail_reasons={result['summary']['v16_fail_reasons']}"
     )
     return 0

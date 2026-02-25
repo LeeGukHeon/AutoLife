@@ -1,4 +1,4 @@
-﻿# Current State
+# Current State
 Last updated: 2026-02-25
 
 ## Repository
@@ -470,22 +470,35 @@ Last updated: 2026-02-25
     - backtest-live exit reason gap:
       - status: `해결중`
       - artifact:
-        - `build/Release/logs/exit_reason_mapping_gap_20260225_recheck_v5_overlap.json`
+        - `build/Release/logs/exit_reason_mapping_gap_20260225_recheck_v5_overlap_canonical.json`
+        - `build/Release/logs/exit_reason_mapping_gap_20260225_recheck_v6_postpatch_canonical.json`
+        - params: `--min-live-exits 10 --min-backtest-exits 10`
       - snapshot:
-        - `mapping_gap_observed=true`
-        - live reason set: `stop_loss`, `take_profit_full_due_to_min_order`
-        - backtest runtime sample reason set: `BacktestEOD`
+        - `comparable=true`, `overlap_ready=true`
+        - `sample_size_ready=false` (live exit sample 3건)
+        - `mapping_gap_observed=false` (`mapping_gap_observed_raw=true`)
+        - v5 canonical reason:
+          - live: `STOP_LOSS`, `TAKE_PROFIT_FULL_DUE_TO_MIN_ORDER`
+          - backtest: `BACKTEST_EOD`
+        - v6 canonical reason:
+          - live: `STOP_LOSS`, `TAKE_PROFIT_FULL_DUE_TO_MIN_ORDER`
+          - backtest: `STOP_LOSS`, `TAKE_PROFIT_1`, `TAKE_PROFIT_2`
+      - next:
+        - `increase_overlap_exit_samples_before_mapping_decision`
     - delta aggregation consistency risk:
-      - status: `해결중`
+      - status: `완료`
+      - code:
+        - `scripts/analyze_daily_oos_delta.py`
+        - `scripts/run_probe_spillover_gate.py`
       - evidence:
         - daily gate report:
           - `evaluated_day_count=19`, `nonpositive_day_count=7`
           - `build/Release/logs/daily_oos_stability_report_correctness_runtime_mapping_on_guard_v22_rename_off_5set_3m7d_20260225.json`
         - delta workflow summary:
-          - `day_count=35`, `baseline_nonpositive_day_count=23`
-          - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v22_rename_on_vs_off_5set_20260225.json`
-      - note:
-        - gate와 delta의 집계 대상(평가일 vs 전체 day-row) 차이로 해석 리스크 존재.
+          - `day_count=35` (all-day-row 유지)
+          - `summary.gate_aligned.profit_sum_delta=+150.836392`
+          - `summary.gate_aligned.nonpositive_day_count_delta=-1`
+          - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v22_rename_on_vs_off_5set_20260225_recheck_evalaligned.json`
     - unused function cleanup:
       - status: `완료`
       - removed:

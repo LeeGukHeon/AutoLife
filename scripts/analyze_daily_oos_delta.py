@@ -17,6 +17,7 @@ class DayRow:
     day_utc: str
     total_profit: float
     total_trades: int
+    evaluated: bool
     profitable: bool
     nonpositive_profit: bool
     cell_map: Dict[str, Dict[str, float]]
@@ -63,6 +64,7 @@ def _index_daily_rows(report: Dict) -> Dict[Tuple[str, str], DayRow]:
             day_utc=day_utc,
             total_profit=_safe_float(row.get("total_profit", 0.0)),
             total_trades=_safe_int(row.get("total_trades", 0)),
+            evaluated=bool(row.get("evaluated", False)),
             profitable=bool(row.get("profitable", False)),
             nonpositive_profit=bool(row.get("nonpositive_profit", False)),
             cell_map=cell_map,
@@ -76,10 +78,62 @@ def _empty_row(dataset: str, day_utc: str) -> DayRow:
         day_utc=day_utc,
         total_profit=0.0,
         total_trades=0,
+        evaluated=False,
         profitable=False,
         nonpositive_profit=False,
         cell_map={},
     )
+
+
+def _extract_gate_aggregates(report: Dict) -> Dict[str, float]:
+    aggregates = report.get("aggregates", {})
+    if not isinstance(aggregates, dict):
+        aggregates = {}
+    return {
+        "evaluated_day_count": float(_safe_int(aggregates.get("evaluated_day_count", 0))),
+        "nonpositive_day_count": float(_safe_int(aggregates.get("nonpositive_day_count", 0))),
+        "total_profit_sum": float(_safe_float(aggregates.get("total_profit_sum", 0.0))),
+    }
+
+
+def _summarize_evaluated_scope(day_delta_rows: List[Dict]) -> Dict:
+    union_rows = [row for row in day_delta_rows if bool(row.get("baseline_evaluated")) or bool(row.get("candidate_evaluated"))]
+    intersection_rows = [row for row in union_rows if bool(row.get("baseline_evaluated")) and bool(row.get("candidate_evaluated"))]
+
+    baseline_profit_sum_union = sum(
+        _safe_float(row.get("baseline_profit", 0.0)) for row in union_rows if bool(row.get("baseline_evaluated"))
+    )
+    candidate_profit_sum_union = sum(
+        _safe_float(row.get("candidate_profit", 0.0)) for row in union_rows if bool(row.get("candidate_evaluated"))
+    )
+    baseline_nonpositive_union = sum(
+        1 for row in union_rows if bool(row.get("baseline_evaluated")) and bool(row.get("baseline_nonpositive"))
+    )
+    candidate_nonpositive_union = sum(
+        1 for row in union_rows if bool(row.get("candidate_evaluated")) and bool(row.get("candidate_nonpositive"))
+    )
+
+    baseline_profit_sum_intersection = sum(_safe_float(row.get("baseline_profit", 0.0)) for row in intersection_rows)
+    candidate_profit_sum_intersection = sum(_safe_float(row.get("candidate_profit", 0.0)) for row in intersection_rows)
+    baseline_nonpositive_intersection = sum(1 for row in intersection_rows if bool(row.get("baseline_nonpositive")))
+    candidate_nonpositive_intersection = sum(1 for row in intersection_rows if bool(row.get("candidate_nonpositive")))
+
+    return {
+        "union_day_count": len(union_rows),
+        "intersection_day_count": len(intersection_rows),
+        "baseline_profit_sum_union": baseline_profit_sum_union,
+        "candidate_profit_sum_union": candidate_profit_sum_union,
+        "profit_sum_delta_union": candidate_profit_sum_union - baseline_profit_sum_union,
+        "baseline_nonpositive_day_count_union": baseline_nonpositive_union,
+        "candidate_nonpositive_day_count_union": candidate_nonpositive_union,
+        "nonpositive_day_count_delta_union": candidate_nonpositive_union - baseline_nonpositive_union,
+        "baseline_profit_sum_intersection": baseline_profit_sum_intersection,
+        "candidate_profit_sum_intersection": candidate_profit_sum_intersection,
+        "profit_sum_delta_intersection": candidate_profit_sum_intersection - baseline_profit_sum_intersection,
+        "baseline_nonpositive_day_count_intersection": baseline_nonpositive_intersection,
+        "candidate_nonpositive_day_count_intersection": candidate_nonpositive_intersection,
+        "nonpositive_day_count_delta_intersection": candidate_nonpositive_intersection - baseline_nonpositive_intersection,
+    }
 
 
 def _archetype_aggregate(cell_map: Dict[str, Dict[str, float]]) -> Dict[str, Dict[str, float]]:
@@ -170,6 +224,8 @@ def main() -> int:
     candidate_report = _load_json(candidate_path)
     baseline_rows = _index_daily_rows(baseline_report)
     candidate_rows = _index_daily_rows(candidate_report)
+    baseline_gate = _extract_gate_aggregates(baseline_report)
+    candidate_gate = _extract_gate_aggregates(candidate_report)
 
     focus_datasets = _parse_csv_set(args.focus_datasets)
     focus_days = _parse_csv_set(args.focus_days)
@@ -192,6 +248,8 @@ def main() -> int:
             "baseline_trades": baseline.total_trades,
             "candidate_trades": candidate.total_trades,
             "trade_delta": candidate.total_trades - baseline.total_trades,
+            "baseline_evaluated": baseline.evaluated,
+            "candidate_evaluated": candidate.evaluated,
             "baseline_nonpositive": baseline.nonpositive_profit,
             "candidate_nonpositive": candidate.nonpositive_profit,
             "dominant_archetype_baseline": dominant_baseline,
@@ -234,6 +292,13 @@ def main() -> int:
     focus_candidate_profit_sum = sum(_safe_float(row["candidate_profit"]) for row in focus_rows)
     focus_baseline_nonpositive_days = sum(1 for row in focus_rows if bool(row["baseline_nonpositive"]))
     focus_candidate_nonpositive_days = sum(1 for row in focus_rows if bool(row["candidate_nonpositive"]))
+    evaluated_row_alignment = _summarize_evaluated_scope(day_delta_rows)
+    gate_aligned_profit_sum_delta = _safe_float(candidate_gate.get("total_profit_sum", 0.0)) - _safe_float(
+        baseline_gate.get("total_profit_sum", 0.0)
+    )
+    gate_aligned_nonpositive_day_count_delta = _safe_int(candidate_gate.get("nonpositive_day_count", 0)) - _safe_int(
+        baseline_gate.get("nonpositive_day_count", 0)
+    )
 
     result = {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -245,6 +310,7 @@ def main() -> int:
             "top_k": top_k,
         },
         "summary": {
+            "summary_basis": "all_day_rows_union",
             "day_count": len(day_delta_rows),
             "baseline_profit_sum": baseline_profit_sum,
             "candidate_profit_sum": candidate_profit_sum,
@@ -261,6 +327,17 @@ def main() -> int:
             "focus_day_count": len(focus_rows),
             "focus_profit_sum_delta": focus_candidate_profit_sum - focus_baseline_profit_sum,
             "focus_nonpositive_day_count_delta": focus_candidate_nonpositive_days - focus_baseline_nonpositive_days,
+            "gate_aligned": {
+                "baseline_evaluated_day_count": _safe_int(baseline_gate.get("evaluated_day_count", 0)),
+                "candidate_evaluated_day_count": _safe_int(candidate_gate.get("evaluated_day_count", 0)),
+                "baseline_nonpositive_day_count": _safe_int(baseline_gate.get("nonpositive_day_count", 0)),
+                "candidate_nonpositive_day_count": _safe_int(candidate_gate.get("nonpositive_day_count", 0)),
+                "nonpositive_day_count_delta": gate_aligned_nonpositive_day_count_delta,
+                "baseline_total_profit_sum": _safe_float(baseline_gate.get("total_profit_sum", 0.0)),
+                "candidate_total_profit_sum": _safe_float(candidate_gate.get("total_profit_sum", 0.0)),
+                "profit_sum_delta": gate_aligned_profit_sum_delta,
+            },
+            "evaluated_row_alignment": evaluated_row_alignment,
         },
         "top_negative_profit_deltas": top_negative_profit_deltas,
         "negative_trade_expansion_days": negative_trade_expansion_days,
@@ -274,7 +351,9 @@ def main() -> int:
     print(
         "[DailyOOSDelta] "
         f"profit_sum_delta={result['summary']['profit_sum_delta']:.6f} "
-        f"nonpositive_day_count_delta={result['summary']['nonpositive_day_count_delta']}"
+        f"nonpositive_day_count_delta={result['summary']['nonpositive_day_count_delta']} "
+        f"gate_profit_sum_delta={result['summary']['gate_aligned']['profit_sum_delta']:.6f} "
+        f"gate_nonpositive_day_count_delta={result['summary']['gate_aligned']['nonpositive_day_count_delta']}"
     )
     return 0
 

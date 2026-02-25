@@ -1,4 +1,4 @@
-﻿# Active Ticket Snapshot
+# Active Ticket Snapshot
 Last updated: 2026-02-25
 
 ## Header
@@ -1191,26 +1191,39 @@ Last updated: 2026-02-25
 ## Exit parity recheck (2026-02-25)
 - 1) 백-라이브 엑시트 로직 괴리:
   - status: `해결중`
-  - recheck artifact:
-    - `build/Release/logs/exit_reason_mapping_gap_20260225_recheck_v5_overlap.json`
+  - recheck artifact (canonical + sample-size gate):
+    - `build/Release/logs/exit_reason_mapping_gap_20260225_recheck_v5_overlap_canonical.json`
+    - `build/Release/logs/exit_reason_mapping_gap_20260225_recheck_v6_postpatch_canonical.json`
+    - params: `--min-live-exits 10 --min-backtest-exits 10`
   - snapshot:
-    - `mapping_gap_observed=true`
-    - live reason: `stop_loss`, `take_profit_full_due_to_min_order`
-    - backtest runtime sample reason: `BacktestEOD`
+    - `comparable=true`, `overlap_ready=true`
+    - `sample_size_ready=false` (live exit sample 3건)
+    - `mapping_gap_observed=false` (`mapping_gap_observed_raw=true`는 유지)
+    - v5 canonical reason:
+      - live: `STOP_LOSS`, `TAKE_PROFIT_FULL_DUE_TO_MIN_ORDER`
+      - backtest: `BACKTEST_EOD`
+    - v6 canonical reason:
+      - live: `STOP_LOSS`, `TAKE_PROFIT_FULL_DUE_TO_MIN_ORDER`
+      - backtest: `STOP_LOSS`, `TAKE_PROFIT_1`, `TAKE_PROFIT_2`
   - next:
-    - `narrow_correctness_patch_scope_to_runtime_strategyless_exit_mapping`
+    - `increase_overlap_exit_samples_before_mapping_decision`
 - 2) 검증 정확도 리스크(일별 델타 집계 기준):
-  - status: `해결중`
-  - observed mismatch:
+  - status: `완료`
+  - 조치:
+    - `scripts/analyze_daily_oos_delta.py`:
+      - `summary.gate_aligned` 추가
+      - `summary.evaluated_row_alignment` 추가
+    - `scripts/run_probe_spillover_gate.py`:
+      - gate-aligned delta 병행 리포팅 필드 추가
+  - recheck artifact:
+    - `build/Release/logs/daily_oos_delta_correctness_runtime_mapping_on_guard_v22_rename_on_vs_off_5set_20260225_recheck_evalaligned.json`
+  - 결과:
     - daily gate report 기준: `evaluated_day_count=19`, `nonpositive_day_count=7`
       (`daily_oos_stability_report_correctness_runtime_mapping_on_guard_v22_rename_off_5set_3m7d_20260225.json`)
-    - delta workflow 기준: `day_count=35`, `baseline_nonpositive_day_count=23`
-      (`daily_oos_delta_correctness_runtime_mapping_on_guard_v22_rename_on_vs_off_5set_20260225.json`)
-  - interpretation:
-    - gate는 평가일 중심, delta는 전체 day-row(무거래일 포함) 중심 집계라
-      수치 해석 차이가 발생할 수 있음.
-  - next:
-    - delta/spillover workflow에 평가일 기준 집계 옵션 추가 후 병행 보고.
+    - delta report:
+      - `summary.day_count=35` (all-day-row 기준은 유지)
+      - `summary.gate_aligned.profit_sum_delta=+150.836392`
+      - `summary.gate_aligned.nonpositive_day_count_delta=-1`
 - 3) 미사용 함수 정리:
   - status: `완료`
   - removed:
