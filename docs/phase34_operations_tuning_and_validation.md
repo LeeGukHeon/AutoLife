@@ -248,3 +248,32 @@ Before closing any Phase 3/4 tuning cycle, run the checklist:
 
 Hard gate:
 - If any checklist item fails, freeze promotion and return to candidate revision.
+
+## 16. Execution Log (2026-02-26, R2.1/R3.1/R4.1)
+- Scope:
+  - R2.1 protocol redesign (time split + purge preserved) with cumulative prefix split for Val/Quarantine sample recovery.
+  - R3.1 Phase3 2-knob sweep (`required_ev_offset`, `k_margin_scale`) with `K=5`.
+  - R4.1 Phase4 cap relaxation sweep with `K=4` (`off + cap_low + cap_mid + cap_high`).
+- R2.1 result:
+  - `time_split_applied=true`, `purge_gap_applied=true (240m)`, `leak_proximity_rows_remaining=0`.
+  - Core sample sufficiency (diff basis):
+    - validation core candidate total: `1627` (>=100)
+    - quarantine core candidate total: `1405` (>=100)
+- R3.1 result (core pass-rate, diff basis):
+  - neutral: val `0.061%`, qua `0.356%`
+  - step1: val `0.742%`, qua `3.524%`
+  - step2: val `4.523%`, qua `12.999%`
+  - step3: val `16.357%`, qua `27.878%`
+  - step4: val `2.539%`, qua `10.180%`
+  - Note: 5%-15% target not jointly satisfied yet (step2/step4 are nearest trade-off points).
+- R4.1 result (all_purged ON/OFF comparison):
+  - cap_low selection rate: `0.3387`
+  - cap_mid selection rate: `0.4393`
+  - cap_high selection rate: `0.6798` (target 0.6-0.9 satisfied)
+  - filtering active with non-zero rejects (`rejected_by_budget`), no full wipeout.
+- Reference artifacts:
+  - `build/Release/logs/phase34_round_next_action_report_r21_r31_r41.json`
+  - `build/Release/logs/time_split_manifest_r21_prefix.json`
+  - `build/Release/logs/r31_candidate_summary.json`
+  - `build/Release/logs/r41b_phase4_caps_summary.json`
+  - `build/Release/logs/phase4_on_off_comparison_r41b_cap_high.json`

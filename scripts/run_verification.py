@@ -2899,6 +2899,32 @@ def main(argv=None) -> int:
             "Comparison output is embedded into verification_report.json."
         ),
     )
+    parser.add_argument(
+        "--split-manifest-json",
+        default="",
+        help="Optional time-split/purge manifest JSON path to attach protocol evidence into report.",
+    )
+    parser.add_argument(
+        "--split-name",
+        default="",
+        help="Optional split label (e.g., development/validation/quarantine/all_purged).",
+    )
+    parser.add_argument(
+        "--split-time-based",
+        action="store_true",
+        help="Mark report as time-split protocol run (for explicit protocol evidence).",
+    )
+    parser.add_argument(
+        "--split-purge-gap-minutes",
+        type=int,
+        default=-1,
+        help="Optional purge gap minutes applied to split boundaries.",
+    )
+    parser.add_argument(
+        "--split-note",
+        default="",
+        help="Optional operator note attached to split protocol evidence.",
+    )
     args = parser.parse_args(argv)
 
     exe_path = resolve_path(args.exe_path, "Executable")
@@ -3002,6 +3028,14 @@ def main(argv=None) -> int:
     dataset_diagnostics: List[Dict[str, Any]] = []
     adaptive_dataset_profiles: List[Dict[str, Any]] = []
     phase4_off_on_comparison: Dict[str, Any] = {}
+    split_manifest_payload: Dict[str, Any] = {}
+    split_manifest_path_value = str(args.split_manifest_json).strip()
+    if split_manifest_path_value:
+        split_manifest_path = resolve_path(split_manifest_path_value, "Split manifest", must_exist=True)
+        loaded_manifest = load_report_json(split_manifest_path)
+        if isinstance(loaded_manifest, dict):
+            split_manifest_payload = loaded_manifest
+
     with verification_lock(
         lock_path,
         timeout_sec=int(args.verification_lock_timeout_sec),
@@ -3156,8 +3190,29 @@ def main(argv=None) -> int:
             "source_config_path": str(source_config_path),
             "runtime_bundle_path": str(bundle_meta.get("bundle_path", "")) if bundle_meta else "",
             "runtime_bundle_version": str(bundle_meta.get("bundle_version", "")) if bundle_meta else "",
+            "split_manifest_json": split_manifest_path_value,
         },
     }
+    split_protocol: Dict[str, Any] = {
+        "time_split_applied": bool(args.split_time_based or split_manifest_payload),
+        "split_name": str(args.split_name).strip(),
+        "purge_gap_applied": bool(int(args.split_purge_gap_minutes) >= 0),
+        "purge_gap_minutes": max(-1, int(args.split_purge_gap_minutes)),
+        "note": str(args.split_note).strip(),
+    }
+    if split_manifest_payload:
+        split_protocol["manifest_path"] = split_manifest_path_value
+        split_protocol["manifest_protocol"] = split_manifest_payload.get("protocol", {})
+        split_protocol["manifest_checks"] = split_manifest_payload.get("checks", {})
+        split_protocol["manifest_totals"] = split_manifest_payload.get("totals", {})
+        split_protocol["manifest_time_bounds"] = split_manifest_payload.get("time_bounds", {})
+        if int(split_protocol.get("purge_gap_minutes", -1)) < 0:
+            proto = split_manifest_payload.get("protocol", {})
+            if isinstance(proto, dict):
+                split_protocol["purge_gap_minutes"] = int(proto.get("purge_gap_minutes", -1))
+                split_protocol["purge_gap_applied"] = bool(int(split_protocol.get("purge_gap_minutes", -1)) >= 0)
+    report["protocol_split"] = split_protocol
+
     if bool(args.phase4_off_on_compare):
         report["phase4_off_on_comparison"] = phase4_off_on_comparison
     baseline_comparison_for_gate = build_baseline_comparison(
@@ -3260,6 +3315,14 @@ def main(argv=None) -> int:
                 "[Verification] phase4_off_on_comparison=unavailable "
                 f"reason={reason or 'phase4_off_on_compare_failed'}"
             )
+    protocol_split = report.get("protocol_split", {})
+    if isinstance(protocol_split, dict) and bool(protocol_split.get("time_split_applied", False)):
+        print(
+            "[Verification] protocol_split "
+            f"name={protocol_split.get('split_name', '') or 'unspecified'} "
+            f"purge_gap_minutes={protocol_split.get('purge_gap_minutes', -1)} "
+            f"manifest={protocol_split.get('manifest_path', '')}"
+        )
     print(f"[Verification] report_json={output_json}")
     return 0 if bool(overall_gate_pass) else 2
 
