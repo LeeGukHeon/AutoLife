@@ -441,6 +441,8 @@ public:
             double penalty_weight = 0.0;
             double penalty_utilization_trigger = 0.85;
             double penalty_reject_threshold = 1.0e9;
+            // If true, allocator skips cap-violating ranked candidates and refills from next ranked items.
+            bool cluster_cap_reallocate_in_allocator = false;
         };
         struct ExecutionAwareSizingPolicy {
             bool enabled = false;

@@ -285,6 +285,7 @@ struct ProbabilisticRuntimeSnapshot {
 constexpr size_t kPhase4CandidateSnapshotSampleLimit = 1200;
 constexpr size_t kPhase4CorrelationNearCapSampleLimit = 48;
 constexpr size_t kPhase4CorrelationPenaltyScoreSampleLimit = 96;
+constexpr size_t kPhase4ClusterCapDebugSampleLimit = 64;
 
 double correlationNearCapDistance(
     const BacktestEngine::Result::Phase4CorrelationNearCapSample& sample
@@ -2897,18 +2898,189 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     candidate_signals,
                     probabilistic_snapshot.phase4_portfolio_allocator_policy
                 );
+                std::vector<std::size_t> allocator_selected_indices =
+                    allocator_result.selected_indices;
+                autolife::common::phase4::AllocatorClusterCapReallocateResult
+                    allocator_reallocate_result{};
+                bool allocator_reallocate_applied = false;
                 phase4_ranked_snapshot = autolife::common::phase4::materializeSignalsByIndex(
                     candidate_signals,
                     allocator_result.ranked_indices
                 );
+                if (probabilistic_snapshot.phase4_correlation_control_enabled) {
+                    const auto& corr_policy =
+                        probabilistic_snapshot.phase4_correlation_control_policy;
+                    if (corr_policy.cluster_cap_reallocate_in_allocator &&
+                        !allocator_result.ranked_indices.empty()) {
+                        const auto runtime_metrics = risk_manager_->getRiskMetrics();
+                        const double total_capital = std::max(1e-9, runtime_metrics.total_capital);
+                        std::map<std::string, double> existing_cluster_exposure;
+                        for (const auto& pos : risk_manager_->getAllPositions()) {
+                            const std::string cluster_id =
+                                autolife::common::phase4::clusterIdForMarket(
+                                    pos.market,
+                                    corr_policy
+                                );
+                            const double exposure = std::clamp(
+                                pos.invested_amount / total_capital,
+                                0.0,
+                                10.0
+                            );
+                            existing_cluster_exposure[cluster_id] += exposure;
+                        }
+                        allocator_reallocate_result =
+                            autolife::common::phase4::selectAllocatorCandidatesWithClusterCapReallocate(
+                                candidate_signals,
+                                allocator_result.ranked_indices,
+                                probabilistic_snapshot.phase4_portfolio_allocator_policy,
+                                corr_policy,
+                                existing_cluster_exposure
+                            );
+                        allocator_selected_indices =
+                            allocator_reallocate_result.selected_indices;
+                        allocator_reallocate_applied = true;
+                    }
+                }
                 candidate_signals = autolife::common::phase4::materializeSignalsByIndex(
                     candidate_signals,
-                    allocator_result.selected_indices
+                    allocator_selected_indices
                 );
                 phase4_selected_count = static_cast<int>(candidate_signals.size());
-                if (probabilistic_snapshot.phase4_portfolio_diagnostics_enabled &&
-                    allocator_result.rejected_by_budget > 0) {
-                    phase4_portfolio_diagnostics_.rejected_by_budget += allocator_result.rejected_by_budget;
+                if (probabilistic_snapshot.phase4_portfolio_diagnostics_enabled) {
+                    int budget_rejected = allocator_result.rejected_by_budget;
+                    if (allocator_reallocate_applied) {
+                        const auto& telemetry_rows = allocator_reallocate_result.telemetry_rows;
+                        int cluster_cap_would_exceed_count_this_round = 0;
+                        int cluster_exposure_update_count_this_round = 0;
+                        phase4_portfolio_diagnostics_.correlation_constraint_apply_stage =
+                            "allocator_selection";
+                        phase4_portfolio_diagnostics_.correlation_constraint_unit =
+                            "position_size_notional_fraction_of_total_capital";
+                        phase4_portfolio_diagnostics_.correlation_cluster_eval_count +=
+                            static_cast<int>(telemetry_rows.size());
+                        std::map<std::string, double> final_exposure_after_allocator;
+                        std::vector<autolife::common::phase4::ClusterFilterResult::TelemetryRow>
+                            near_rows;
+                        near_rows.reserve(telemetry_rows.size());
+                        for (const auto& row : telemetry_rows) {
+                            const std::string cluster =
+                                row.cluster_id.empty() ? "unclustered" : row.cluster_id;
+                            phase4_portfolio_diagnostics_
+                                .correlation_cluster_cap_values[cluster] = std::max(
+                                phase4_portfolio_diagnostics_
+                                    .correlation_cluster_cap_values[cluster],
+                                std::max(0.0, row.cluster_cap_value)
+                            );
+                            phase4_portfolio_diagnostics_
+                                .correlation_cluster_exposure_current[cluster] = std::max(
+                                phase4_portfolio_diagnostics_
+                                    .correlation_cluster_exposure_current[cluster],
+                                std::max(0.0, row.exposure_current)
+                            );
+                            if (row.rejected_by_cluster_cap) {
+                                cluster_cap_would_exceed_count_this_round += 1;
+                                near_rows.push_back(row);
+                            } else {
+                                cluster_exposure_update_count_this_round += 1;
+                                final_exposure_after_allocator[cluster] = std::max(
+                                    final_exposure_after_allocator[cluster],
+                                    std::max(0.0, row.projected_exposure)
+                                );
+                            }
+                            if (phase4_portfolio_diagnostics_.cluster_cap_debug_trace_samples.size() <
+                                kPhase4ClusterCapDebugSampleLimit) {
+                                Result::Phase4ClusterCapDebugSample debug_sample;
+                                debug_sample.market = row.market;
+                                debug_sample.cluster = cluster;
+                                debug_sample.cluster_exposure_before = std::max(0.0, row.exposure_current);
+                                debug_sample.candidate_notional_fraction =
+                                    std::max(0.0, row.candidate_position_size);
+                                debug_sample.cluster_cap_value = std::max(0.0, row.cluster_cap_value);
+                                debug_sample.would_exceed = row.rejected_by_cluster_cap;
+                                debug_sample.after_accept_cluster_exposure = row.rejected_by_cluster_cap
+                                    ? std::max(0.0, row.exposure_current)
+                                    : std::max(0.0, row.projected_exposure);
+                                phase4_portfolio_diagnostics_.cluster_cap_debug_trace_samples.push_back(
+                                    std::move(debug_sample)
+                                );
+                            }
+                        }
+                        phase4_portfolio_diagnostics_.cluster_cap_would_exceed_count +=
+                            cluster_cap_would_exceed_count_this_round;
+                        phase4_portfolio_diagnostics_.cluster_exposure_update_count +=
+                            cluster_exposure_update_count_this_round;
+                        phase4_portfolio_diagnostics_.cluster_cap_skips_count +=
+                            cluster_cap_would_exceed_count_this_round;
+                        if (cluster_cap_would_exceed_count_this_round > 0) {
+                            phase4_portfolio_diagnostics_.rejected_by_cluster_cap +=
+                                cluster_cap_would_exceed_count_this_round;
+                        }
+                        budget_rejected = std::max(
+                            0,
+                            budget_rejected -
+                                cluster_cap_would_exceed_count_this_round
+                        );
+                        for (const auto& pair : final_exposure_after_allocator) {
+                            const std::string cluster = pair.first.empty() ? "unclustered" : pair.first;
+                            phase4_portfolio_diagnostics_
+                                .correlation_cluster_exposure_current[cluster] = std::max(
+                                phase4_portfolio_diagnostics_
+                                    .correlation_cluster_exposure_current[cluster],
+                                std::max(0.0, pair.second)
+                            );
+                        }
+                        if (near_rows.empty()) {
+                            near_rows = telemetry_rows;
+                        }
+                        std::stable_sort(
+                            near_rows.begin(),
+                            near_rows.end(),
+                            [](const auto& lhs, const auto& rhs) {
+                                const double lhs_cap = std::max(1.0e-9, lhs.cluster_cap_value);
+                                const double rhs_cap = std::max(1.0e-9, rhs.cluster_cap_value);
+                                const double lhs_ratio = std::fabs(
+                                    lhs.cluster_cap_value - lhs.projected_exposure
+                                ) / lhs_cap;
+                                const double rhs_ratio = std::fabs(
+                                    rhs.cluster_cap_value - rhs.projected_exposure
+                                ) / rhs_cap;
+                                if (std::fabs(lhs_ratio - rhs_ratio) > 1.0e-12) {
+                                    return lhs_ratio < rhs_ratio;
+                                }
+                                if (lhs.market != rhs.market) {
+                                    return lhs.market < rhs.market;
+                                }
+                                return lhs.cluster_id < rhs.cluster_id;
+                            }
+                        );
+                        const std::size_t near_take =
+                            std::min<std::size_t>(near_rows.size(), 6);
+                        for (std::size_t i = 0; i < near_take; ++i) {
+                            const auto& row = near_rows[i];
+                            const std::string cluster =
+                                row.cluster_id.empty() ? "unclustered" : row.cluster_id;
+                            Result::Phase4CorrelationNearCapSample sample;
+                            sample.market = row.market;
+                            sample.cluster = cluster;
+                            sample.exposure_current = std::max(0.0, row.exposure_current);
+                            sample.cluster_cap_value = std::max(0.0, row.cluster_cap_value);
+                            sample.candidate_position_size =
+                                std::max(0.0, row.candidate_position_size);
+                            sample.projected_exposure = std::max(0.0, row.projected_exposure);
+                            sample.headroom_before =
+                                sample.cluster_cap_value - sample.exposure_current;
+                            sample.rejected_by_cluster_cap = row.rejected_by_cluster_cap;
+                            upsertCorrelationNearCapSample(
+                                phase4_portfolio_diagnostics_,
+                                std::move(sample)
+                            );
+                            phase4_portfolio_diagnostics_.correlation_cluster_near_cap_count +=
+                                1;
+                        }
+                    }
+                    if (budget_rejected > 0) {
+                        phase4_portfolio_diagnostics_.rejected_by_budget += budget_rejected;
+                    }
                 }
             }
         }

@@ -163,6 +163,15 @@ public:
             double score_after_penalty = 0.0;
             bool rejected_by_penalty = false;
         };
+        struct Phase4ClusterCapDebugSample {
+            std::string market;
+            std::string cluster;
+            double cluster_exposure_before = 0.0;
+            double candidate_notional_fraction = 0.0;
+            double cluster_cap_value = 0.0;
+            bool would_exceed = false;
+            double after_accept_cluster_exposure = 0.0;
+        };
         struct Phase4PortfolioDiagnostics {
             bool enabled = false;
             bool phase4_portfolio_allocator_enabled = false;
@@ -188,6 +197,9 @@ public:
             int rejected_by_budget = 0;
             int rejected_by_cluster_cap = 0;
             int rejected_by_correlation_penalty = 0;
+            int cluster_cap_skips_count = 0;
+            int cluster_cap_would_exceed_count = 0;
+            int cluster_exposure_update_count = 0;
             int rejected_by_execution_cap = 0;
             int rejected_by_drawdown_governor = 0;
             int candidate_snapshot_total = 0;
@@ -204,6 +216,7 @@ public:
             std::map<std::string, double> correlation_cluster_cap_values;
             std::vector<Phase4CorrelationNearCapSample> correlation_near_cap_candidates;
             std::vector<Phase4CorrelationPenaltyScoreSample> correlation_penalty_score_samples;
+            std::vector<Phase4ClusterCapDebugSample> cluster_cap_debug_trace_samples;
         };
         struct Phase4CandidateSnapshotSample {
             std::string market;

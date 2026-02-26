@@ -2950,6 +2950,8 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         0.0,
         1.0e9
     );
+    phase4_policy_.correlation_control.cluster_cap_reallocate_in_allocator =
+        phase4_correlation_control_node.value("cluster_cap_reallocate_in_allocator", false);
     phase4_policy_.correlation_control.market_cluster_map.clear();
     const auto cluster_map_node = phase4_correlation_control_node.value(
         "market_cluster_map",

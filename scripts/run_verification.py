@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 import argparse
-from collections import Counter
+import bisect
+from collections import Counter, deque
 import copy
 import csv
 import json
+import math
 import os
 import pathlib
 import re
@@ -13,6 +15,13 @@ import uuid
 from typing import Any, Dict, List
 
 from _script_common import verification_lock
+
+
+VOL_BUCKET_LOW = "LOW"
+VOL_BUCKET_MID = "MID"
+VOL_BUCKET_HIGH = "HIGH"
+VOL_BUCKET_NONE = "NONE"
+VOL_BUCKET_ORDER = [VOL_BUCKET_LOW, VOL_BUCKET_MID, VOL_BUCKET_HIGH, VOL_BUCKET_NONE]
 
 
 def resolve_path(path_value: str, label: str, must_exist: bool = True) -> pathlib.Path:
@@ -73,6 +82,40 @@ def extract_phase4_market_cluster_map(bundle_payload: Dict[str, Any]) -> Dict[st
     return out
 
 
+def extract_risk_adjusted_score_policy(bundle_payload: Dict[str, Any]) -> Dict[str, Any]:
+    phase3 = bundle_payload.get("phase3", {})
+    if not isinstance(phase3, dict):
+        return {}
+    gate = phase3.get("operations_dynamic_gate", {})
+    if not isinstance(gate, dict):
+        return {}
+    policy = gate.get("risk_adjusted_score_policy", {})
+    if not isinstance(policy, dict):
+        return {}
+    out: Dict[str, Any] = {}
+    for key, value in policy.items():
+        token = str(key).strip()
+        if not token:
+            continue
+        if isinstance(value, (int, float, bool, str)):
+            out[token] = value
+    return out
+
+
+def extract_risk_adjusted_score_guard_policy(bundle_payload: Dict[str, Any]) -> Dict[str, Any]:
+    phase3 = bundle_payload.get("phase3", {})
+    if not isinstance(phase3, dict):
+        return {}
+    gate = phase3.get("operations_dynamic_gate", {})
+    if not isinstance(gate, dict):
+        return {}
+    policy = gate.get("risk_adjusted_score_guard", {})
+    if not isinstance(policy, dict):
+        return {}
+    # Keep nested policy payload intact (lookup/dist/uncertainty blocks are nested).
+    return copy.deepcopy(policy)
+
+
 def load_supported_markets_from_runtime_bundle(bundle_path: pathlib.Path) -> Dict[str, Any]:
     with bundle_path.open("r", encoding="utf-8") as fp:
         payload = json.load(fp)
@@ -119,6 +162,8 @@ def load_supported_markets_from_runtime_bundle(bundle_path: pathlib.Path) -> Dic
         "global_fallback_enabled": bool(global_fallback_enabled),
         "export_mode": str(payload.get("export_mode", "")).strip(),
         "phase4_market_cluster_map": extract_phase4_market_cluster_map(payload),
+        "risk_adjusted_score_policy": extract_risk_adjusted_score_policy(payload),
+        "risk_adjusted_score_guard_policy": extract_risk_adjusted_score_guard_policy(payload),
     }
 
 
@@ -227,6 +272,9 @@ def aggregate_phase4_compare_diags(diags: List[Dict[str, Any]]) -> Dict[str, Any
         "rejected_by_budget",
         "rejected_by_cluster_cap",
         "rejected_by_correlation_penalty",
+        "cluster_cap_skips_count",
+        "cluster_cap_would_exceed_count",
+        "cluster_exposure_update_count",
         "rejected_by_execution_cap",
         "rejected_by_drawdown_governor",
         "candidate_snapshot_total",
@@ -275,6 +323,9 @@ def aggregate_phase4_compare_diags(diags: List[Dict[str, Any]]) -> Dict[str, Any
             "rejected_by_budget": int(counters.get("rejected_by_budget", 0)),
             "rejected_by_cluster_cap": int(counters.get("rejected_by_cluster_cap", 0)),
             "rejected_by_correlation_penalty": int(counters.get("rejected_by_correlation_penalty", 0)),
+            "cluster_cap_skips_count": int(counters.get("cluster_cap_skips_count", 0)),
+            "cluster_cap_would_exceed_count": int(counters.get("cluster_cap_would_exceed_count", 0)),
+            "cluster_exposure_update_count": int(counters.get("cluster_exposure_update_count", 0)),
             "rejected_by_execution_cap": int(counters.get("rejected_by_execution_cap", 0)),
             "rejected_by_drawdown_governor": int(counters.get("rejected_by_drawdown_governor", 0)),
         },
@@ -539,7 +590,1051 @@ def run_backtest(
         cwd=str(exe_path.parent),
         env=env,
     )
-    return parse_backtest_json(proc)
+    parsed = parse_backtest_json(proc)
+    parsed["phase3_pass_ev_samples"] = load_policy_decision_ev_samples(exe_path.parent)
+    parsed["policy_decision_volatility_samples"] = load_policy_decision_volatility_samples(exe_path.parent)
+    return parsed
+
+
+def load_policy_decision_ev_samples(exe_dir: pathlib.Path) -> List[Dict[str, Any]]:
+    artifact_path = (exe_dir / "logs" / "policy_decisions_backtest.jsonl").resolve()
+    if not artifact_path.exists():
+        return []
+    samples: List[Dict[str, Any]] = []
+    try:
+        with artifact_path.open("r", encoding="utf-8", errors="ignore") as fp:
+            for raw_line in fp:
+                line = str(raw_line).strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                ts_value = max(0, to_int(payload.get("ts", 0)))
+                decisions = payload.get("decisions", [])
+                if not isinstance(decisions, list):
+                    continue
+                for row in decisions:
+                    if not isinstance(row, dict):
+                        continue
+                    expected_pct = to_float(row.get("expected_value", 0.0))
+                    if not math.isfinite(expected_pct):
+                        continue
+                    expected_bps = expected_pct * 10000.0
+                    samples.append(
+                        {
+                            "ts": int(ts_value),
+                            "market": str(row.get("market", "")).strip(),
+                            "strategy": str(row.get("strategy", "")).strip(),
+                            "selected": bool(row.get("selected", False)),
+                            "reason": str(row.get("reason", "")).strip(),
+                            "expected_edge_after_cost_pct": round(float(expected_pct), 10),
+                            "expected_edge_after_cost_bps": round(float(expected_bps), 6),
+                        }
+                    )
+    except Exception:
+        return []
+    if not samples:
+        return []
+    samples.sort(
+        key=lambda item: (
+            int(item.get("ts", 0)),
+            str(item.get("market", "")),
+            str(item.get("strategy", "")),
+        )
+    )
+    return samples[:5000]
+
+
+def load_policy_decision_volatility_samples(
+    exe_dir: pathlib.Path,
+    *,
+    sample_cap: int = 120000,
+) -> List[Dict[str, Any]]:
+    artifact_path = (exe_dir / "logs" / "policy_decisions_backtest.jsonl").resolve()
+    if not artifact_path.exists():
+        return []
+    samples: List[Dict[str, Any]] = []
+    try:
+        with artifact_path.open("r", encoding="utf-8", errors="ignore") as fp:
+            for raw_line in fp:
+                line = str(raw_line).strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                ts_value = max(0, to_int(payload.get("ts", 0)))
+                if ts_value <= 0:
+                    continue
+                dominant_regime = str(payload.get("dominant_regime", "")).strip()
+                decisions = payload.get("decisions", [])
+                if not isinstance(decisions, list):
+                    continue
+                for decision in decisions:
+                    if not isinstance(decision, dict):
+                        continue
+                    market = str(decision.get("market", "")).strip().upper()
+                    if not market:
+                        continue
+                    volatility = to_float(decision.get("volatility", float("nan")))
+                    if not math.isfinite(volatility):
+                        continue
+                    regime = str(decision.get("regime", dominant_regime)).strip()
+                    if not regime:
+                        regime = dominant_regime
+                    samples.append(
+                        {
+                            "ts": int(ts_value),
+                            "market": market,
+                            "regime": regime or "UNKNOWN",
+                            "volatility": round(float(volatility), 10),
+                        }
+                    )
+    except Exception:
+        return []
+    if not samples:
+        return []
+    samples.sort(
+        key=lambda item: (
+            str(item.get("market", "")),
+            int(item.get("ts", 0)),
+            str(item.get("regime", "")),
+        )
+    )
+    deduped: List[Dict[str, Any]] = []
+    last_market = ""
+    last_ts = -1
+    for row in samples:
+        market = str(row.get("market", ""))
+        ts_value = int(row.get("ts", 0))
+        if market == last_market and ts_value == last_ts and deduped:
+            deduped[-1] = row
+            continue
+        deduped.append(row)
+        last_market = market
+        last_ts = ts_value
+    cap = max(0, int(sample_cap))
+    if cap > 0 and len(deduped) > cap:
+        return deduped[:cap]
+    return deduped
+
+
+def resolve_vol_bucket_pct_policy(raw_policy: Dict[str, Any]) -> Dict[str, Any]:
+    window_size = max(5, to_int(raw_policy.get("window_size", 240)))
+    min_points_raw = to_int(raw_policy.get("min_points", 0))
+    auto_min_points = int(math.ceil(float(window_size) * 0.7))
+    min_points = max(1, min_points_raw) if min_points_raw > 0 else max(1, auto_min_points)
+    min_points = min(window_size, min_points)
+    lower_q = clamp_value(to_float(raw_policy.get("lower_q", 0.33)), 0.01, 0.49)
+    upper_q = clamp_value(to_float(raw_policy.get("upper_q", 0.67)), 0.51, 0.99)
+    if upper_q <= lower_q:
+        upper_q = min(0.99, lower_q + 0.01)
+    fixed_low_cut = to_float(raw_policy.get("fixed_low_cut", 1.8))
+    fixed_high_cut = to_float(raw_policy.get("fixed_high_cut", 3.5))
+    if fixed_high_cut < fixed_low_cut:
+        fixed_high_cut = fixed_low_cut
+    return {
+        "window_size": int(window_size),
+        "min_points": int(min_points),
+        "lower_q": float(lower_q),
+        "upper_q": float(upper_q),
+        "fixed_low_cut": float(fixed_low_cut),
+        "fixed_high_cut": float(fixed_high_cut),
+        "source": "verification_policy",
+    }
+
+
+def quantile_from_sorted_values(sorted_values: List[float], q: float) -> float:
+    if not sorted_values:
+        return 0.0
+    qv = clamp_value(float(q), 0.0, 1.0)
+    if len(sorted_values) == 1:
+        return float(sorted_values[0])
+    pos = qv * float(len(sorted_values) - 1)
+    lo = int(math.floor(pos))
+    hi = int(math.ceil(pos))
+    if lo == hi:
+        return float(sorted_values[lo])
+    weight = pos - float(lo)
+    return float(sorted_values[lo]) + (float(sorted_values[hi]) - float(sorted_values[lo])) * float(weight)
+
+
+def make_bucket_counts() -> Dict[str, int]:
+    return {
+        VOL_BUCKET_LOW: 0,
+        VOL_BUCKET_MID: 0,
+        VOL_BUCKET_HIGH: 0,
+        VOL_BUCKET_NONE: 0,
+    }
+
+
+def bucket_ratios_from_counts(counts: Dict[str, int]) -> Dict[str, float]:
+    total = sum(max(0, to_int(v)) for v in counts.values())
+    denom = float(max(1, total))
+    return {
+        VOL_BUCKET_LOW: round(float(max(0, to_int(counts.get(VOL_BUCKET_LOW, 0)))) / denom, 6),
+        VOL_BUCKET_MID: round(float(max(0, to_int(counts.get(VOL_BUCKET_MID, 0)))) / denom, 6),
+        VOL_BUCKET_HIGH: round(float(max(0, to_int(counts.get(VOL_BUCKET_HIGH, 0)))) / denom, 6),
+        VOL_BUCKET_NONE: round(float(max(0, to_int(counts.get(VOL_BUCKET_NONE, 0)))) / denom, 6),
+    }
+
+
+def summarize_values_quantiles(values: List[float]) -> Dict[str, Any]:
+    clean = [float(v) for v in values if math.isfinite(to_float(v))]
+    clean.sort()
+    if not clean:
+        return {
+            "count": 0,
+            "p10": 0.0,
+            "p25": 0.0,
+            "p50": 0.0,
+            "p75": 0.0,
+            "p90": 0.0,
+        }
+    return {
+        "count": int(len(clean)),
+        "p10": round(quantile_from_sorted_values(clean, 0.10), 8),
+        "p25": round(quantile_from_sorted_values(clean, 0.25), 8),
+        "p50": round(quantile_from_sorted_values(clean, 0.50), 8),
+        "p75": round(quantile_from_sorted_values(clean, 0.75), 8),
+        "p90": round(quantile_from_sorted_values(clean, 0.90), 8),
+    }
+
+
+def classify_fixed_vol_bucket(volatility: float, low_cut: float, high_cut: float) -> str:
+    if not math.isfinite(to_float(volatility)):
+        return VOL_BUCKET_NONE
+    value = float(volatility)
+    if value <= float(low_cut):
+        return VOL_BUCKET_LOW
+    if value <= float(high_cut):
+        return VOL_BUCKET_MID
+    return VOL_BUCKET_HIGH
+
+
+def classify_percentile_vol_bucket(volatility: float, p_low: float, p_high: float) -> str:
+    if (
+        not math.isfinite(to_float(volatility))
+        or not math.isfinite(to_float(p_low))
+        or not math.isfinite(to_float(p_high))
+    ):
+        return VOL_BUCKET_NONE
+    low = float(min(p_low, p_high))
+    high = float(max(p_low, p_high))
+    value = float(volatility)
+    if value <= low:
+        return VOL_BUCKET_LOW
+    if value <= high:
+        return VOL_BUCKET_MID
+    return VOL_BUCKET_HIGH
+
+
+def build_rolling_percentile_vol_bucket_samples(
+    volatility_samples: Any,
+    policy: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    if not isinstance(volatility_samples, list):
+        return []
+    resolved_policy = resolve_vol_bucket_pct_policy(policy if isinstance(policy, dict) else {})
+    by_market: Dict[str, List[Dict[str, Any]]] = {}
+    for raw in volatility_samples:
+        if not isinstance(raw, dict):
+            continue
+        market = str(raw.get("market", "")).strip().upper()
+        ts_value = max(0, to_int(raw.get("ts", 0)))
+        volatility = to_float(raw.get("volatility", float("nan")))
+        if not market or ts_value <= 0 or not math.isfinite(volatility):
+            continue
+        regime = str(raw.get("regime", "")).strip() or "UNKNOWN"
+        by_market.setdefault(market, []).append(
+            {
+                "market": market,
+                "ts": int(ts_value),
+                "regime": regime,
+                "volatility": float(volatility),
+            }
+        )
+    output_rows: List[Dict[str, Any]] = []
+    for market in sorted(by_market.keys()):
+        rows = sorted(
+            by_market.get(market, []),
+            key=lambda item: (int(item.get("ts", 0)), str(item.get("regime", ""))),
+        )
+        if not rows:
+            continue
+        rolling_window_values = deque()
+        sorted_window_values: List[float] = []
+        window_size = int(resolved_policy.get("window_size", 240))
+        min_points = int(resolved_policy.get("min_points", max(1, int(math.ceil(window_size * 0.7)))))
+        lower_q = float(resolved_policy.get("lower_q", 0.33))
+        upper_q = float(resolved_policy.get("upper_q", 0.67))
+        fixed_low_cut = float(resolved_policy.get("fixed_low_cut", 1.8))
+        fixed_high_cut = float(resolved_policy.get("fixed_high_cut", 3.5))
+        for row in rows:
+            volatility = float(to_float(row.get("volatility", float("nan"))))
+            rolling_window_values.append(volatility)
+            bisect.insort(sorted_window_values, volatility)
+            if len(rolling_window_values) > window_size:
+                removed = float(rolling_window_values.popleft())
+                remove_idx = bisect.bisect_left(sorted_window_values, removed)
+                if 0 <= remove_idx < len(sorted_window_values):
+                    sorted_window_values.pop(remove_idx)
+            sample_count = len(sorted_window_values)
+            p33_value = None
+            p67_value = None
+            pct_bucket = VOL_BUCKET_NONE
+            if sample_count >= min_points:
+                p33_value = quantile_from_sorted_values(sorted_window_values, lower_q)
+                p67_value = quantile_from_sorted_values(sorted_window_values, upper_q)
+                pct_bucket = classify_percentile_vol_bucket(volatility, p33_value, p67_value)
+            fixed_bucket = classify_fixed_vol_bucket(volatility, fixed_low_cut, fixed_high_cut)
+            output_rows.append(
+                {
+                    "market": market,
+                    "ts": int(row.get("ts", 0)),
+                    "regime": str(row.get("regime", "")).strip() or "UNKNOWN",
+                    "volatility": round(volatility, 10),
+                    "p33": round(float(p33_value), 10) if p33_value is not None else None,
+                    "p67": round(float(p67_value), 10) if p67_value is not None else None,
+                    "window_sample_size": int(sample_count),
+                    "vol_bucket_fixed": fixed_bucket,
+                    "vol_bucket_pct": pct_bucket,
+                }
+            )
+    output_rows.sort(
+        key=lambda item: (
+            str(item.get("market", "")),
+            int(item.get("ts", 0)),
+            str(item.get("regime", "")),
+        )
+    )
+    return output_rows
+
+
+def build_vol_bucket_pct_distribution_summary(
+    rolling_samples: Any,
+) -> Dict[str, Any]:
+    if not isinstance(rolling_samples, list):
+        return {
+            "sample_count_total": 0,
+            "bucket_counts": make_bucket_counts(),
+            "bucket_ratios": bucket_ratios_from_counts(make_bucket_counts()),
+            "coverage": 0.0,
+            "by_market": [],
+            "p33_summary": summarize_values_quantiles([]),
+            "p67_summary": summarize_values_quantiles([]),
+        }
+
+    overall_counts = make_bucket_counts()
+    market_counts: Dict[str, Dict[str, int]] = {}
+    market_p33_values: Dict[str, List[float]] = {}
+    market_p67_values: Dict[str, List[float]] = {}
+    all_p33_values: List[float] = []
+    all_p67_values: List[float] = []
+    for raw in rolling_samples:
+        if not isinstance(raw, dict):
+            continue
+        market = str(raw.get("market", "")).strip().upper()
+        bucket = str(raw.get("vol_bucket_pct", VOL_BUCKET_NONE)).strip().upper() or VOL_BUCKET_NONE
+        if bucket not in VOL_BUCKET_ORDER:
+            bucket = VOL_BUCKET_NONE
+        overall_counts[bucket] = overall_counts.get(bucket, 0) + 1
+        if market:
+            slot = market_counts.setdefault(market, make_bucket_counts())
+            slot[bucket] = slot.get(bucket, 0) + 1
+            p33 = raw.get("p33", None)
+            p67 = raw.get("p67", None)
+            if p33 is not None and math.isfinite(to_float(p33)):
+                market_p33_values.setdefault(market, []).append(float(p33))
+                all_p33_values.append(float(p33))
+            if p67 is not None and math.isfinite(to_float(p67)):
+                market_p67_values.setdefault(market, []).append(float(p67))
+                all_p67_values.append(float(p67))
+
+    market_rows: List[Dict[str, Any]] = []
+    for market in sorted(market_counts.keys()):
+        counts = market_counts.get(market, make_bucket_counts())
+        total = sum(max(0, to_int(v)) for v in counts.values())
+        covered = (
+            max(0, to_int(counts.get(VOL_BUCKET_LOW, 0)))
+            + max(0, to_int(counts.get(VOL_BUCKET_MID, 0)))
+            + max(0, to_int(counts.get(VOL_BUCKET_HIGH, 0)))
+        )
+        market_rows.append(
+            {
+                "market": market,
+                "sample_count": int(total),
+                "bucket_counts": counts,
+                "bucket_ratios": bucket_ratios_from_counts(counts),
+                "coverage": round(float(covered) / float(max(1, total)), 6),
+                "none_ratio": round(
+                    float(max(0, to_int(counts.get(VOL_BUCKET_NONE, 0)))) / float(max(1, total)),
+                    6,
+                ),
+                "p33_summary": summarize_values_quantiles(market_p33_values.get(market, [])),
+                "p67_summary": summarize_values_quantiles(market_p67_values.get(market, [])),
+            }
+        )
+
+    total_count = sum(max(0, to_int(v)) for v in overall_counts.values())
+    covered_total = (
+        max(0, to_int(overall_counts.get(VOL_BUCKET_LOW, 0)))
+        + max(0, to_int(overall_counts.get(VOL_BUCKET_MID, 0)))
+        + max(0, to_int(overall_counts.get(VOL_BUCKET_HIGH, 0)))
+    )
+    return {
+        "sample_count_total": int(total_count),
+        "bucket_counts": overall_counts,
+        "bucket_ratios": bucket_ratios_from_counts(overall_counts),
+        "coverage": round(float(covered_total) / float(max(1, total_count)), 6),
+        "none_ratio": round(
+            float(max(0, to_int(overall_counts.get(VOL_BUCKET_NONE, 0)))) / float(max(1, total_count)),
+            6,
+        ),
+        "by_market": market_rows,
+        "p33_summary": summarize_values_quantiles(all_p33_values),
+        "p67_summary": summarize_values_quantiles(all_p67_values),
+    }
+
+
+def build_trade_rows_for_vol_bucket_diagnostics(
+    trade_history_samples: Any,
+    *,
+    fixed_low_cut: float,
+    fixed_high_cut: float,
+) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    if not isinstance(trade_history_samples, list):
+        return rows
+    for raw in trade_history_samples:
+        if not isinstance(raw, dict):
+            continue
+        market = str(raw.get("market", "")).strip().upper()
+        if not market:
+            continue
+        entry_time = max(0, to_int(raw.get("entry_time", raw.get("entry_ts", raw.get("ts", 0)))))
+        exit_time = max(0, to_int(raw.get("exit_time", 0)))
+        ts_value = entry_time if entry_time > 0 else exit_time
+        regime = str(raw.get("regime", "")).strip() or "UNKNOWN"
+        volatility = to_float(raw.get("volatility", float("nan")))
+        fixed_bucket = classify_fixed_vol_bucket(volatility, fixed_low_cut, fixed_high_cut)
+        rows.append(
+            {
+                "market": market,
+                "ts": int(ts_value),
+                "entry_time": int(entry_time),
+                "exit_time": int(exit_time),
+                "regime": regime,
+                "volatility": float(volatility) if math.isfinite(volatility) else float("nan"),
+                "profit_loss_krw": round(to_float(raw.get("profit_loss_krw", 0.0)), 8),
+                "profit_loss_pct": round(to_float(raw.get("profit_loss_pct", 0.0)), 10),
+                "vol_bucket_fixed": fixed_bucket,
+                "vol_bucket_pct": VOL_BUCKET_NONE,
+                "vol_bucket_pct_ref_ts": 0,
+                "vol_bucket_pct_ref_p33": None,
+                "vol_bucket_pct_ref_p67": None,
+            }
+        )
+    rows.sort(
+        key=lambda item: (
+            str(item.get("market", "")),
+            int(item.get("ts", 0)),
+            str(item.get("regime", "")),
+            float(item.get("profit_loss_krw", 0.0)),
+        )
+    )
+    return rows
+
+
+def attach_percentile_bucket_to_trade_rows(
+    trade_rows: Any,
+    rolling_samples: Any,
+) -> List[Dict[str, Any]]:
+    if not isinstance(trade_rows, list):
+        return []
+    market_rows: Dict[str, List[Dict[str, Any]]] = {}
+    if isinstance(rolling_samples, list):
+        for raw in rolling_samples:
+            if not isinstance(raw, dict):
+                continue
+            market = str(raw.get("market", "")).strip().upper()
+            ts_value = max(0, to_int(raw.get("ts", 0)))
+            if not market or ts_value <= 0:
+                continue
+            market_rows.setdefault(market, []).append(raw)
+    market_index: Dict[str, Dict[str, Any]] = {}
+    for market in sorted(market_rows.keys()):
+        rows = sorted(
+            market_rows.get(market, []),
+            key=lambda item: int(item.get("ts", 0)),
+        )
+        market_index[market] = {
+            "ts": [int(x.get("ts", 0)) for x in rows],
+            "rows": rows,
+        }
+
+    out: List[Dict[str, Any]] = []
+    for raw_trade in trade_rows:
+        if not isinstance(raw_trade, dict):
+            continue
+        trade = dict(raw_trade)
+        trade["vol_bucket_pct"] = VOL_BUCKET_NONE
+        trade["vol_bucket_pct_ref_ts"] = 0
+        trade["vol_bucket_pct_ref_p33"] = None
+        trade["vol_bucket_pct_ref_p67"] = None
+        market = str(trade.get("market", "")).strip().upper()
+        ts_value = max(0, to_int(trade.get("ts", 0)))
+        volatility = to_float(trade.get("volatility", float("nan")))
+        if market and ts_value > 0 and math.isfinite(volatility):
+            lookup = market_index.get(market, {})
+            ts_list = lookup.get("ts", [])
+            row_list = lookup.get("rows", [])
+            if isinstance(ts_list, list) and isinstance(row_list, list) and ts_list and row_list:
+                ref_idx = bisect.bisect_right(ts_list, ts_value) - 1
+                if ref_idx >= 0 and ref_idx < len(row_list):
+                    ref = row_list[ref_idx]
+                    p33 = ref.get("p33", None)
+                    p67 = ref.get("p67", None)
+                    trade["vol_bucket_pct_ref_ts"] = int(ref.get("ts", 0))
+                    trade["vol_bucket_pct_ref_p33"] = (
+                        round(float(to_float(p33)), 10)
+                        if p33 is not None and math.isfinite(to_float(p33))
+                        else None
+                    )
+                    trade["vol_bucket_pct_ref_p67"] = (
+                        round(float(to_float(p67)), 10)
+                        if p67 is not None and math.isfinite(to_float(p67))
+                        else None
+                    )
+                    if (
+                        str(ref.get("vol_bucket_pct", VOL_BUCKET_NONE)).strip().upper() != VOL_BUCKET_NONE
+                        and p33 is not None
+                        and p67 is not None
+                        and math.isfinite(to_float(p33))
+                        and math.isfinite(to_float(p67))
+                    ):
+                        trade["vol_bucket_pct"] = classify_percentile_vol_bucket(
+                            volatility,
+                            to_float(p33),
+                            to_float(p67),
+                        )
+        out.append(trade)
+    out.sort(
+        key=lambda item: (
+            str(item.get("market", "")),
+            int(item.get("ts", 0)),
+            str(item.get("regime", "")),
+            float(item.get("profit_loss_krw", 0.0)),
+        )
+    )
+    return out
+
+
+def summarize_trade_pnl_by_regime_and_bucket(
+    trade_rows: Any,
+    *,
+    bucket_field: str,
+    include_none: bool = False,
+) -> Dict[str, Any]:
+    if not isinstance(trade_rows, list):
+        return {
+            "trade_count_total": 0,
+            "trade_count_used": 0,
+            "excluded_trade_count": 0,
+            "negative_profit_abs_krw": 0.0,
+            "ranging_low_loss_contribution": 0.0,
+            "cells": [],
+            "by_market": [],
+        }
+
+    total_count = 0
+    used_count = 0
+    excluded_count = 0
+    by_cell: Dict[str, Dict[str, Any]] = {}
+    by_market_cell: Dict[str, Dict[str, Any]] = {}
+
+    def _cell_key(regime: str, bucket: str) -> str:
+        return f"{regime}|{bucket}"
+
+    def _market_cell_key(market: str, regime: str, bucket: str) -> str:
+        return f"{market}|{regime}|{bucket}"
+
+    for raw in trade_rows:
+        if not isinstance(raw, dict):
+            continue
+        total_count += 1
+        market = str(raw.get("market", "")).strip().upper() or "UNKNOWN"
+        regime = str(raw.get("regime", "")).strip() or "UNKNOWN"
+        bucket = str(raw.get(bucket_field, VOL_BUCKET_NONE)).strip().upper() or VOL_BUCKET_NONE
+        if bucket not in VOL_BUCKET_ORDER:
+            bucket = VOL_BUCKET_NONE
+        if not include_none and bucket == VOL_BUCKET_NONE:
+            excluded_count += 1
+            continue
+        used_count += 1
+        profit_krw = to_float(raw.get("profit_loss_krw", 0.0))
+        profit_pct = to_float(raw.get("profit_loss_pct", 0.0))
+
+        key = _cell_key(regime, bucket)
+        cell = by_cell.setdefault(
+            key,
+            {
+                "regime": regime,
+                "vol_bucket": bucket,
+                "trade_count": 0,
+                "total_profit_krw": 0.0,
+                "total_profit_pct": 0.0,
+            },
+        )
+        cell["trade_count"] += 1
+        cell["total_profit_krw"] += float(profit_krw)
+        cell["total_profit_pct"] += float(profit_pct)
+
+        market_key = _market_cell_key(market, regime, bucket)
+        market_cell = by_market_cell.setdefault(
+            market_key,
+            {
+                "market": market,
+                "regime": regime,
+                "vol_bucket": bucket,
+                "trade_count": 0,
+                "total_profit_krw": 0.0,
+                "total_profit_pct": 0.0,
+            },
+        )
+        market_cell["trade_count"] += 1
+        market_cell["total_profit_krw"] += float(profit_krw)
+        market_cell["total_profit_pct"] += float(profit_pct)
+
+    cells: List[Dict[str, Any]] = []
+    negative_total_abs = 0.0
+    for raw in by_cell.values():
+        total_profit_krw = float(to_float(raw.get("total_profit_krw", 0.0)))
+        if total_profit_krw < 0.0:
+            negative_total_abs += abs(total_profit_krw)
+    for raw in by_cell.values():
+        trade_count = max(0, to_int(raw.get("trade_count", 0)))
+        total_profit_krw = float(to_float(raw.get("total_profit_krw", 0.0)))
+        total_profit_pct = float(to_float(raw.get("total_profit_pct", 0.0)))
+        cells.append(
+            {
+                "regime": str(raw.get("regime", "")),
+                "vol_bucket": str(raw.get("vol_bucket", VOL_BUCKET_NONE)),
+                "trade_count": int(trade_count),
+                "avg_profit_krw": round(total_profit_krw / float(max(1, trade_count)), 8),
+                "avg_profit_pct": round(total_profit_pct / float(max(1, trade_count)), 10),
+                "total_profit_krw": round(total_profit_krw, 8),
+                "total_profit_pct": round(total_profit_pct, 10),
+                "loss_contribution": round(
+                    (abs(total_profit_krw) / float(negative_total_abs))
+                    if total_profit_krw < 0.0 and negative_total_abs > 0.0
+                    else 0.0,
+                    6,
+                ),
+            }
+        )
+    cells.sort(
+        key=lambda item: (
+            to_float(item.get("total_profit_krw", 0.0)),
+            -to_int(item.get("trade_count", 0)),
+            str(item.get("regime", "")),
+            str(item.get("vol_bucket", "")),
+        )
+    )
+
+    market_grouped_cells: Dict[str, List[Dict[str, Any]]] = {}
+    for raw in by_market_cell.values():
+        market = str(raw.get("market", "")).strip().upper() or "UNKNOWN"
+        trade_count = max(0, to_int(raw.get("trade_count", 0)))
+        total_profit_krw = float(to_float(raw.get("total_profit_krw", 0.0)))
+        total_profit_pct = float(to_float(raw.get("total_profit_pct", 0.0)))
+        market_grouped_cells.setdefault(market, []).append(
+            {
+                "market": market,
+                "regime": str(raw.get("regime", "")),
+                "vol_bucket": str(raw.get("vol_bucket", VOL_BUCKET_NONE)),
+                "trade_count": int(trade_count),
+                "avg_profit_krw": round(total_profit_krw / float(max(1, trade_count)), 8),
+                "avg_profit_pct": round(total_profit_pct / float(max(1, trade_count)), 10),
+                "total_profit_krw": round(total_profit_krw, 8),
+                "total_profit_pct": round(total_profit_pct, 10),
+            }
+        )
+
+    by_market_rows: List[Dict[str, Any]] = []
+    for market in sorted(market_grouped_cells.keys()):
+        market_cells = market_grouped_cells.get(market, [])
+        market_cells.sort(
+            key=lambda item: (
+                to_float(item.get("total_profit_krw", 0.0)),
+                -to_int(item.get("trade_count", 0)),
+                str(item.get("regime", "")),
+                str(item.get("vol_bucket", "")),
+            )
+        )
+        market_negative_abs = sum(
+            abs(to_float(x.get("total_profit_krw", 0.0)))
+            for x in market_cells
+            if to_float(x.get("total_profit_krw", 0.0)) < 0.0
+        )
+        for cell in market_cells:
+            cell_total = to_float(cell.get("total_profit_krw", 0.0))
+            cell["loss_contribution_in_market"] = round(
+                (abs(cell_total) / float(market_negative_abs))
+                if cell_total < 0.0 and market_negative_abs > 0.0
+                else 0.0,
+                6,
+            )
+        by_market_rows.append(
+            {
+                "market": market,
+                "negative_profit_abs_krw": round(market_negative_abs, 8),
+                "cells": market_cells,
+            }
+        )
+
+    ranging_low_loss = 0.0
+    for cell in cells:
+        if str(cell.get("regime", "")).upper() == "RANGING" and str(cell.get("vol_bucket", "")) == VOL_BUCKET_LOW:
+            ranging_low_loss = to_float(cell.get("loss_contribution", 0.0))
+            break
+
+    return {
+        "trade_count_total": int(total_count),
+        "trade_count_used": int(used_count),
+        "excluded_trade_count": int(excluded_count),
+        "negative_profit_abs_krw": round(negative_total_abs, 8),
+        "ranging_low_loss_contribution": round(ranging_low_loss, 6),
+        "cells": cells,
+        "by_market": by_market_rows,
+    }
+
+
+def project_pnl_summary_with_bucket_field(
+    summary: Dict[str, Any],
+    *,
+    bucket_field_name: str,
+) -> Dict[str, Any]:
+    def _format_bucket(bucket_value: Any) -> str:
+        token = str(bucket_value).strip().upper() or VOL_BUCKET_NONE
+        if bucket_field_name == "vol_bucket_pct":
+            if token == VOL_BUCKET_LOW:
+                return "vol_low_pct"
+            if token == VOL_BUCKET_MID:
+                return "vol_mid_pct"
+            if token == VOL_BUCKET_HIGH:
+                return "vol_high_pct"
+            return "none"
+        if token == VOL_BUCKET_LOW:
+            return "vol_low"
+        if token == VOL_BUCKET_MID:
+            return "vol_mid"
+        if token == VOL_BUCKET_HIGH:
+            return "vol_high"
+        return "none"
+
+    cells_in = summary.get("cells", []) if isinstance(summary, dict) else []
+    by_market_in = summary.get("by_market", []) if isinstance(summary, dict) else []
+    cells_out: List[Dict[str, Any]] = []
+    if isinstance(cells_in, list):
+        for raw in cells_in:
+            if not isinstance(raw, dict):
+                continue
+            row = {k: v for k, v in raw.items() if k != "vol_bucket"}
+            row[bucket_field_name] = _format_bucket(raw.get("vol_bucket", VOL_BUCKET_NONE))
+            cells_out.append(row)
+    by_market_out: List[Dict[str, Any]] = []
+    if isinstance(by_market_in, list):
+        for raw_market in by_market_in:
+            if not isinstance(raw_market, dict):
+                continue
+            cells = raw_market.get("cells", [])
+            projected_cells: List[Dict[str, Any]] = []
+            if isinstance(cells, list):
+                for raw_cell in cells:
+                    if not isinstance(raw_cell, dict):
+                        continue
+                    row = {k: v for k, v in raw_cell.items() if k != "vol_bucket"}
+                    row[bucket_field_name] = _format_bucket(raw_cell.get("vol_bucket", VOL_BUCKET_NONE))
+                    projected_cells.append(row)
+            out_market = {k: v for k, v in raw_market.items() if k != "cells"}
+            out_market["cells"] = projected_cells
+            by_market_out.append(out_market)
+    output = {k: v for k, v in summary.items()} if isinstance(summary, dict) else {}
+    output["cells"] = cells_out
+    output["by_market"] = by_market_out
+    return output
+
+
+def build_top_loss_cells_by_market(
+    pct_summary: Dict[str, Any],
+    *,
+    top_n: int = 3,
+) -> Dict[str, Any]:
+    def _pct_bucket_label(bucket_value: Any) -> str:
+        token = str(bucket_value).strip().upper() or VOL_BUCKET_NONE
+        if token == VOL_BUCKET_LOW:
+            return "vol_low_pct"
+        if token == VOL_BUCKET_MID:
+            return "vol_mid_pct"
+        if token == VOL_BUCKET_HIGH:
+            return "vol_high_pct"
+        return "none"
+
+    out_markets: List[Dict[str, Any]] = []
+    overall_candidates: List[Dict[str, Any]] = []
+    by_market = pct_summary.get("by_market", []) if isinstance(pct_summary, dict) else []
+    if not isinstance(by_market, list):
+        by_market = []
+    top_count = max(1, int(top_n))
+    for raw_market in by_market:
+        if not isinstance(raw_market, dict):
+            continue
+        market = str(raw_market.get("market", "")).strip().upper() or "UNKNOWN"
+        cells = raw_market.get("cells", [])
+        if not isinstance(cells, list):
+            cells = []
+        ordered_cells = sorted(
+            [x for x in cells if isinstance(x, dict)],
+            key=lambda item: (
+                to_float(item.get("total_profit_krw", 0.0)),
+                -to_int(item.get("trade_count", 0)),
+                str(item.get("regime", "")),
+                str(item.get("vol_bucket", "")),
+            ),
+        )
+        negative_cells = [x for x in ordered_cells if to_float(x.get("total_profit_krw", 0.0)) < 0.0]
+        selected = negative_cells[:top_count] if negative_cells else ordered_cells[:top_count]
+        top_rows: List[Dict[str, Any]] = []
+        for rank, cell in enumerate(selected, start=1):
+            row = {
+                "rank": int(rank),
+                "market": market,
+                "regime": str(cell.get("regime", "")),
+                "vol_bucket_pct": _pct_bucket_label(cell.get("vol_bucket", VOL_BUCKET_NONE)),
+                "trade_count": int(to_int(cell.get("trade_count", 0))),
+                "avg_profit_krw": round(to_float(cell.get("avg_profit_krw", 0.0)), 8),
+                "total_profit_krw": round(to_float(cell.get("total_profit_krw", 0.0)), 8),
+                "loss_contribution_in_market": round(
+                    to_float(cell.get("loss_contribution_in_market", 0.0)),
+                    6,
+                ),
+            }
+            top_rows.append(row)
+            overall_candidates.append(row)
+        out_markets.append(
+            {
+                "market": market,
+                "top_loss_cells": top_rows,
+            }
+        )
+    overall_candidates.sort(
+        key=lambda item: (
+            to_float(item.get("total_profit_krw", 0.0)),
+            -to_int(item.get("trade_count", 0)),
+            str(item.get("market", "")),
+            str(item.get("regime", "")),
+        )
+    )
+    return {
+        "markets": out_markets,
+        "overall_top_loss_cells": overall_candidates[: max(6, top_count * 4)],
+    }
+
+
+def build_vol_bucket_pct_dataset_profile(
+    dataset_name: str,
+    backtest_result: Dict[str, Any],
+    policy: Dict[str, Any],
+) -> Dict[str, Any]:
+    resolved_policy = resolve_vol_bucket_pct_policy(policy if isinstance(policy, dict) else {})
+    rolling_samples = build_rolling_percentile_vol_bucket_samples(
+        backtest_result.get("policy_decision_volatility_samples", []),
+        resolved_policy,
+    )
+    trade_rows = build_trade_rows_for_vol_bucket_diagnostics(
+        backtest_result.get("trade_history_samples", []),
+        fixed_low_cut=float(resolved_policy.get("fixed_low_cut", 1.8)),
+        fixed_high_cut=float(resolved_policy.get("fixed_high_cut", 3.5)),
+    )
+    trade_rows = attach_percentile_bucket_to_trade_rows(trade_rows, rolling_samples)
+    distribution = build_vol_bucket_pct_distribution_summary(rolling_samples)
+    pnl_fixed = summarize_trade_pnl_by_regime_and_bucket(
+        trade_rows,
+        bucket_field="vol_bucket_fixed",
+        include_none=False,
+    )
+    pnl_pct = summarize_trade_pnl_by_regime_and_bucket(
+        trade_rows,
+        bucket_field="vol_bucket_pct",
+        include_none=False,
+    )
+    top_loss_cells = build_top_loss_cells_by_market(pnl_pct, top_n=3)
+    return {
+        "dataset": str(dataset_name),
+        "enabled": bool(rolling_samples or trade_rows),
+        "policy": resolved_policy,
+        "distribution": distribution,
+        "pnl_fixed": pnl_fixed,
+        "pnl_pct": pnl_pct,
+        "top_loss_cells_regime_vol_pct": top_loss_cells,
+        "rolling_samples": rolling_samples,
+        "trade_rows": trade_rows,
+    }
+
+
+def build_quarantine_vol_bucket_pct_artifacts(
+    dataset_profiles: Any,
+    *,
+    split_name: str,
+) -> Dict[str, Any]:
+    if not isinstance(dataset_profiles, list):
+        dataset_profiles = []
+    valid_profiles: List[Dict[str, Any]] = [
+        x for x in dataset_profiles if isinstance(x, dict)
+    ]
+    profile_names = [str(x.get("dataset", "")).strip() for x in valid_profiles]
+    combined_rolling_samples: List[Dict[str, Any]] = []
+    combined_trade_rows: List[Dict[str, Any]] = []
+    per_dataset_distribution: List[Dict[str, Any]] = []
+    per_dataset_fixed: List[Dict[str, Any]] = []
+    per_dataset_pct: List[Dict[str, Any]] = []
+
+    for profile in valid_profiles:
+        dataset = str(profile.get("dataset", "")).strip()
+        distribution = profile.get("distribution", {})
+        pnl_fixed = profile.get("pnl_fixed", {})
+        pnl_pct = profile.get("pnl_pct", {})
+        if isinstance(distribution, dict):
+            per_dataset_distribution.append({"dataset": dataset, **distribution})
+        if isinstance(pnl_fixed, dict):
+            per_dataset_fixed.append({"dataset": dataset, **pnl_fixed})
+        if isinstance(pnl_pct, dict):
+            per_dataset_pct.append({"dataset": dataset, **pnl_pct})
+        rolling_samples = profile.get("rolling_samples", [])
+        if isinstance(rolling_samples, list):
+            for row in rolling_samples:
+                if not isinstance(row, dict):
+                    continue
+                combined_rolling_samples.append({"dataset": dataset, **row})
+        trade_rows = profile.get("trade_rows", [])
+        if isinstance(trade_rows, list):
+            for row in trade_rows:
+                if not isinstance(row, dict):
+                    continue
+                combined_trade_rows.append({"dataset": dataset, **row})
+
+    aggregate_distribution = build_vol_bucket_pct_distribution_summary(combined_rolling_samples)
+    aggregate_fixed_raw = summarize_trade_pnl_by_regime_and_bucket(
+        combined_trade_rows,
+        bucket_field="vol_bucket_fixed",
+        include_none=False,
+    )
+    aggregate_pct_raw = summarize_trade_pnl_by_regime_and_bucket(
+        combined_trade_rows,
+        bucket_field="vol_bucket_pct",
+        include_none=False,
+    )
+    aggregate_fixed = project_pnl_summary_with_bucket_field(
+        aggregate_fixed_raw,
+        bucket_field_name="vol_bucket_fixed",
+    )
+    aggregate_pct = project_pnl_summary_with_bucket_field(
+        aggregate_pct_raw,
+        bucket_field_name="vol_bucket_pct",
+    )
+    top_loss_pct = build_top_loss_cells_by_market(aggregate_pct_raw, top_n=3)
+
+    dist_payload = {
+        "split_name": str(split_name).strip(),
+        "dataset_count": len(valid_profiles),
+        "datasets": profile_names,
+        "policy": (
+            valid_profiles[0].get("policy", {})
+            if valid_profiles and isinstance(valid_profiles[0].get("policy", {}), dict)
+            else {}
+        ),
+        "overall": aggregate_distribution,
+        "per_dataset": per_dataset_distribution,
+    }
+    fixed_payload = {
+        "split_name": str(split_name).strip(),
+        "dataset_count": len(valid_profiles),
+        "datasets": profile_names,
+        "overall": aggregate_fixed,
+        "per_dataset": [
+            {
+                "dataset": str(x.get("dataset", "")),
+                **project_pnl_summary_with_bucket_field(
+                    x,
+                    bucket_field_name="vol_bucket_fixed",
+                ),
+            }
+            for x in per_dataset_fixed
+        ],
+    }
+    if isinstance(fixed_payload.get("overall", {}), dict):
+        fixed_payload["overall"]["ranging_vol_low_loss_contribution"] = round(
+            to_float(aggregate_fixed_raw.get("ranging_low_loss_contribution", 0.0)),
+            6,
+        )
+    pct_payload = {
+        "split_name": str(split_name).strip(),
+        "dataset_count": len(valid_profiles),
+        "datasets": profile_names,
+        "overall": aggregate_pct,
+        "per_dataset": [
+            {
+                "dataset": str(x.get("dataset", "")),
+                **project_pnl_summary_with_bucket_field(
+                    x,
+                    bucket_field_name="vol_bucket_pct",
+                ),
+            }
+            for x in per_dataset_pct
+        ],
+    }
+    if isinstance(pct_payload.get("overall", {}), dict):
+        pct_payload["overall"]["ranging_vol_low_pct_loss_contribution"] = round(
+            to_float(aggregate_pct_raw.get("ranging_low_loss_contribution", 0.0)),
+            6,
+        )
+    top_loss_payload = {
+        "split_name": str(split_name).strip(),
+        "dataset_count": len(valid_profiles),
+        "datasets": profile_names,
+        "top_loss_cells_by_market": top_loss_pct.get("markets", []),
+        "overall_top_loss_cells": top_loss_pct.get("overall_top_loss_cells", []),
+    }
+    summary = {
+        "enabled": bool(valid_profiles),
+        "dataset_count": len(valid_profiles),
+        "coverage": round(to_float(aggregate_distribution.get("coverage", 0.0)), 6),
+        "none_ratio": round(to_float(aggregate_distribution.get("none_ratio", 0.0)), 6),
+        "ranging_vol_low_loss_contribution_fixed": round(
+            to_float(aggregate_fixed_raw.get("ranging_low_loss_contribution", 0.0)),
+            6,
+        ),
+        "ranging_vol_low_loss_contribution_pct": round(
+            to_float(aggregate_pct_raw.get("ranging_low_loss_contribution", 0.0)),
+            6,
+        ),
+        "overall_vol_bucket_pct_ratios": aggregate_distribution.get("bucket_ratios", {}),
+    }
+    return {
+        "distribution_payload": dist_payload,
+        "pnl_fixed_payload": fixed_payload,
+        "pnl_pct_payload": pct_payload,
+        "top_loss_payload": top_loss_payload,
+        "summary": summary,
+    }
 
 
 def resolve_core_dataset_paths(
@@ -611,6 +1706,7 @@ def run_core_window_direct_report(
     require_higher_tf_companions: bool,
     disable_adaptive_state_io: bool,
     phase4_market_cluster_map: Dict[str, str],
+    risk_adjusted_score_policy: Dict[str, Any],
 ) -> Dict[str, Any]:
     rows: List[Dict[str, Any]] = []
     dataset_diagnostics: List[Dict[str, Any]] = []
@@ -631,7 +1727,11 @@ def run_core_window_direct_report(
             )
         )
         adaptive_dataset_profiles.append(
-            build_adaptive_dataset_profile(dataset_name=dataset_path.name, backtest_result=result)
+            build_adaptive_dataset_profile(
+                dataset_name=dataset_path.name,
+                backtest_result=result,
+                risk_adjusted_score_policy=risk_adjusted_score_policy,
+            )
         )
     summary = summarize_verification_rows(rows)
     aggregate_diagnostics = aggregate_dataset_diagnostics(dataset_diagnostics)
@@ -705,6 +1805,481 @@ def load_report_json(path_value: pathlib.Path) -> Dict[str, Any]:
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def clamp_value(value: float, low: float, high: float) -> float:
+    return max(float(low), min(float(high), float(value)))
+
+
+def quantile(values: List[float], q: float) -> float:
+    clean = sorted(
+        float(x)
+        for x in values
+        if math.isfinite(to_float(x))
+    )
+    if not clean:
+        return 0.0
+    qv = clamp_value(float(q), 0.0, 1.0)
+    if len(clean) == 1:
+        return float(clean[0])
+    pos = qv * float(len(clean) - 1)
+    lo = int(math.floor(pos))
+    hi = int(math.ceil(pos))
+    if lo == hi:
+        return float(clean[lo])
+    weight = pos - float(lo)
+    return float(clean[lo]) + (float(clean[hi]) - float(clean[lo])) * float(weight)
+
+
+def dominant_label_from_rows(rows: Any, default: str = "ANY") -> str:
+    if not isinstance(rows, list):
+        return str(default)
+    best_label = str(default)
+    best_count = -1
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        label = str(row.get("label", "")).strip()
+        if not label:
+            continue
+        candidate_total = max(0, to_int(row.get("candidate_total", 0)))
+        if candidate_total > best_count or (candidate_total == best_count and label < best_label):
+            best_label = label
+            best_count = candidate_total
+    return best_label if best_count >= 0 else str(default)
+
+
+def match_bucket_token(value: str, pattern: Any) -> bool:
+    token = str(pattern).strip().upper()
+    if token in ("", "ANY", "*"):
+        return True
+    return str(value).strip().upper() == token
+
+
+def match_fallback_mode_token(fallback_mode: bool, pattern: Any) -> bool:
+    token = str(pattern).strip().lower()
+    if token in ("", "any", "*"):
+        return True
+    if token in ("fallback", "fallback_core_zero", "true", "1", "yes"):
+        return bool(fallback_mode)
+    if token in ("core", "normal", "false", "0", "no"):
+        return not bool(fallback_mode)
+    return True
+
+
+def combine_limits(lookup_value: float, dist_value: float, mode: str) -> float:
+    token = str(mode).strip().lower()
+    if token == "min":
+        return float(min(float(lookup_value), float(dist_value)))
+    if token == "mean":
+        return float((float(lookup_value) + float(dist_value)) * 0.5)
+    return float(max(float(lookup_value), float(dist_value)))
+
+
+def lookup_limit_with_context(
+    rows: Any,
+    *,
+    regime: str,
+    volatility_bucket: str,
+    liquidity_bucket: str,
+    fallback_mode: bool,
+    default_limit: float,
+) -> float:
+    if not isinstance(rows, list):
+        return float(default_limit)
+    best_score = -1
+    best_limits: List[float] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        rg = str(row.get("regime", "ANY")).strip()
+        vb = str(row.get("volatility_bucket", row.get("vol_bucket", "ANY"))).strip()
+        lb = str(row.get("liquidity_bucket", row.get("liq_bucket", "ANY"))).strip()
+        fb = row.get("fallback_mode", row.get("core_mode", "ANY"))
+        if not match_bucket_token(regime, rg):
+            continue
+        if not match_bucket_token(volatility_bucket, vb):
+            continue
+        if not match_bucket_token(liquidity_bucket, lb):
+            continue
+        if not match_fallback_mode_token(fallback_mode, fb):
+            continue
+        score = 0
+        if str(rg).strip().upper() not in ("", "ANY", "*"):
+            score += 1
+        if str(vb).strip().upper() not in ("", "ANY", "*"):
+            score += 1
+        if str(lb).strip().upper() not in ("", "ANY", "*"):
+            score += 1
+        if str(fb).strip().lower() not in ("", "any", "*"):
+            score += 1
+        limit_value = to_float(row.get("limit", default_limit))
+        if score > best_score:
+            best_score = score
+            best_limits = [float(limit_value)]
+        elif score == best_score:
+            best_limits.append(float(limit_value))
+    if not best_limits:
+        return float(default_limit)
+    return float(max(best_limits))
+
+
+def build_risk_score_guard_context(
+    aggregate_diagnostics: Dict[str, Any],
+    core_window_direct_report: Dict[str, Any],
+) -> Dict[str, Any]:
+    phase3_diag = nested_get(
+        aggregate_diagnostics,
+        ["phase3_diagnostics_v2"],
+        {},
+    )
+    if not isinstance(phase3_diag, dict):
+        phase3_diag = {}
+    regime_rows = phase3_diag.get("pass_rate_by_regime", [])
+    vol_rows = phase3_diag.get("pass_rate_by_vol_bucket", [])
+    liq_rows = phase3_diag.get("pass_rate_by_liquidity_bucket", [])
+    report_candidate_total = max(
+        0,
+        to_int(
+            nested_get(
+                phase3_diag,
+                ["funnel_breakdown", "candidate_total"],
+                0,
+            )
+        ),
+    )
+    core_candidate_total = -1
+    fallback_core_zero_mode = False
+    if isinstance(core_window_direct_report, dict) and bool(core_window_direct_report.get("available", False)):
+        core_candidate_total = max(
+            0,
+            to_int(
+                nested_get(
+                    core_window_direct_report,
+                    ["diagnostics", "aggregate", "phase3_diagnostics_v2", "funnel_breakdown", "candidate_total"],
+                    0,
+                )
+            ),
+        )
+        fallback_core_zero_mode = bool(core_candidate_total <= 0 and report_candidate_total > 0)
+    return {
+        "regime": dominant_label_from_rows(regime_rows, "ANY"),
+        "volatility_bucket": dominant_label_from_rows(vol_rows, "ANY"),
+        "liquidity_bucket": dominant_label_from_rows(liq_rows, "ANY"),
+        "fallback_core_zero_mode": bool(fallback_core_zero_mode),
+        "core_candidate_total": int(core_candidate_total),
+        "report_candidate_total": int(report_candidate_total),
+    }
+
+
+def load_risk_score_guard_history(
+    policy: Dict[str, Any],
+) -> Dict[str, Any]:
+    if not isinstance(policy, dict):
+        return {
+            "scores": [],
+            "ess_values": [],
+            "sources": [],
+        }
+    raw_paths = policy.get("history_report_jsons", [])
+    if not isinstance(raw_paths, list):
+        raw_paths = []
+    split_allowlist = {
+        str(x).strip().lower()
+        for x in policy.get("history_split_allowlist", ["development", "validation"])
+        if str(x).strip()
+    }
+    split_denylist = {
+        str(x).strip().lower()
+        for x in policy.get("history_split_denylist", [])
+        if str(x).strip()
+    }
+    if bool(policy.get("exclude_quarantine", True)):
+        split_denylist.add("quarantine")
+    use_core_window_direct = bool(policy.get("history_use_core_window_direct", True))
+
+    scores: List[float] = []
+    ess_values: List[float] = []
+    sources: List[Dict[str, Any]] = []
+    for raw_path in raw_paths:
+        token = str(raw_path).strip()
+        if not token:
+            continue
+        path_obj = pathlib.Path(token)
+        if not path_obj.is_absolute():
+            path_obj = (pathlib.Path.cwd() / path_obj).resolve()
+        report = load_report_json(path_obj)
+        if not isinstance(report, dict) or not report:
+            continue
+        split_name = str(
+            nested_get(report, ["protocol_split", "split_name"], "")
+        ).strip().lower()
+        if split_allowlist and split_name and split_name not in split_allowlist:
+            continue
+        if split_name in split_denylist:
+            continue
+
+        source_mode = "adaptive_validation"
+        score = to_float(
+            nested_get(
+                report,
+                ["adaptive_validation", "aggregates", "avg_risk_adjusted_score"],
+                0.0,
+            )
+        )
+        ess_value = to_float(
+            nested_get(
+                report,
+                ["adaptive_validation", "aggregates", "loss_tail_aggregate", "tail_metric_ess"],
+                0.0,
+            )
+        )
+        if use_core_window_direct and bool(nested_get(report, ["core_window_direct", "available"], False)):
+            source_mode = "core_window_direct"
+            score = to_float(
+                nested_get(
+                    report,
+                    ["core_window_direct", "adaptive_validation", "aggregates", "avg_risk_adjusted_score"],
+                    score,
+                )
+            )
+            ess_value = to_float(
+                nested_get(
+                    report,
+                    ["core_window_direct", "adaptive_validation", "aggregates", "loss_tail_aggregate", "tail_metric_ess"],
+                    ess_value,
+                )
+            )
+        if not math.isfinite(float(score)):
+            continue
+        scores.append(float(score))
+        if math.isfinite(float(ess_value)):
+            ess_values.append(max(0.0, float(ess_value)))
+        sources.append(
+            {
+                "path": str(path_obj),
+                "split_name": split_name,
+                "source_mode": source_mode,
+                "score": round(float(score), 6),
+                "tail_metric_ess": round(max(0.0, float(ess_value)), 6),
+            }
+        )
+    return {
+        "scores": scores,
+        "ess_values": ess_values,
+        "sources": sources,
+    }
+
+
+def evaluate_risk_adjusted_score_guard(
+    *,
+    avg_score: float,
+    min_risk_adjusted_score: float,
+    policy: Dict[str, Any],
+    context: Dict[str, Any],
+    observed_ess: float,
+    history_scores: List[float],
+    history_ess_values: List[float],
+) -> Dict[str, Any]:
+    guard_policy = policy if isinstance(policy, dict) else {}
+    dynamic_enabled = bool(guard_policy.get("enabled", False))
+    regime = str(context.get("regime", "ANY")).strip() or "ANY"
+    volatility_bucket = str(context.get("volatility_bucket", "ANY")).strip() or "ANY"
+    liquidity_bucket = str(context.get("liquidity_bucket", "ANY")).strip() or "ANY"
+    fallback_mode = bool(context.get("fallback_core_zero_mode", False))
+    observed_score = float(avg_score)
+    if not dynamic_enabled:
+        final_limit = float(min_risk_adjusted_score)
+        hard_fail = observed_score < final_limit
+        return {
+            "enabled": False,
+            "limit_mode": "absolute_threshold_legacy",
+            "avg_risk_adjusted_score": round(observed_score, 6),
+            "lookup_limit": round(final_limit, 6),
+            "dist_limit": round(final_limit, 6),
+            "dist_quantile_p": 0.0,
+            "dist_available": False,
+            "uncertainty_component": {
+                "enabled": False,
+                "metric": "ess",
+                "observed": round(max(0.0, float(observed_ess)), 6),
+                "lookup_limit": 0.0,
+                "dist_limit": 0.0,
+                "dist_available": False,
+                "final_limit": 0.0,
+                "sufficient": True,
+                "low_conf_action": "none",
+                "dist_weight_when_low_conf": 1.0,
+            },
+            "final_limit": round(final_limit, 6),
+            "hard_fail": bool(hard_fail),
+            "soft_fail": False,
+            "promotion_hold": False,
+            "status": "hard_fail" if hard_fail else "pass",
+            "guard_pass": not bool(hard_fail),
+            "fallback_core_zero_mode": bool(fallback_mode),
+            "history_count": 0,
+            "history_ess_count": 0,
+        }
+
+    lookup_default = to_float(
+        guard_policy.get("lookup_limit_default", min_risk_adjusted_score)
+    )
+    lookup_limit = lookup_limit_with_context(
+        guard_policy.get("lookup_limits", []),
+        regime=regime,
+        volatility_bucket=volatility_bucket,
+        liquidity_bucket=liquidity_bucket,
+        fallback_mode=fallback_mode,
+        default_limit=lookup_default,
+    )
+    dist_min_samples = max(1, to_int(guard_policy.get("dist_min_samples", 2)))
+    dist_q = clamp_value(to_float(guard_policy.get("dist_quantile_p", 0.3)), 0.0, 1.0)
+    clean_history_scores = [
+        float(x)
+        for x in history_scores
+        if math.isfinite(to_float(x))
+    ]
+    dist_available = len(clean_history_scores) >= dist_min_samples
+    dist_limit = float(lookup_limit)
+    if dist_available:
+        dist_limit = quantile(clean_history_scores, dist_q)
+
+    combine_mode = str(guard_policy.get("combine_mode", "max")).strip().lower() or "max"
+    pre_uncertainty_limit = combine_limits(
+        float(lookup_limit),
+        float(dist_limit),
+        combine_mode,
+    )
+
+    uncertainty = guard_policy.get("uncertainty_component", {})
+    if not isinstance(uncertainty, dict):
+        uncertainty = {}
+    uncertainty_enabled = bool(uncertainty.get("enabled", True))
+    uncertainty_metric = str(uncertainty.get("metric", "ess")).strip().lower() or "ess"
+    observed_confidence = max(0.0, float(observed_ess))
+    clean_history_ess = [
+        max(0.0, float(x))
+        for x in history_ess_values
+        if math.isfinite(to_float(x))
+    ]
+    confidence_lookup = 0.0
+    confidence_dist = 0.0
+    confidence_dist_available = False
+    confidence_final_limit = 0.0
+    confidence_sufficient = True
+    low_conf_action = "none"
+    dist_weight_when_low_conf = 1.0
+    dist_for_combine = float(dist_limit)
+
+    if uncertainty_enabled and uncertainty_metric in ("ess", "effective_sample_size"):
+        confidence_lookup_default = max(
+            0.0,
+            to_float(uncertainty.get("lookup_limit_default", 1.0)),
+        )
+        confidence_lookup = lookup_limit_with_context(
+            uncertainty.get("lookup_limits", []),
+            regime=regime,
+            volatility_bucket=volatility_bucket,
+            liquidity_bucket=liquidity_bucket,
+            fallback_mode=fallback_mode,
+            default_limit=confidence_lookup_default,
+        )
+        confidence_dist = float(confidence_lookup)
+        confidence_min_samples = max(1, to_int(uncertainty.get("dist_min_samples", 2)))
+        confidence_q = clamp_value(
+            to_float(uncertainty.get("dist_quantile_p", 0.2)),
+            0.0,
+            1.0,
+        )
+        confidence_dist_available = len(clean_history_ess) >= confidence_min_samples
+        if confidence_dist_available:
+            confidence_dist = quantile(clean_history_ess, confidence_q)
+        confidence_combine_mode = str(
+            uncertainty.get("combine_mode", "max")
+        ).strip().lower() or "max"
+        confidence_final_limit = combine_limits(
+            float(confidence_lookup),
+            float(confidence_dist),
+            confidence_combine_mode,
+        )
+        confidence_sufficient = observed_confidence >= confidence_final_limit
+        low_conf_action = str(
+            uncertainty.get("low_conf_action", "promotion_hold")
+        ).strip().lower() or "promotion_hold"
+        if low_conf_action not in ("promotion_hold", "soft_fail", "hard_fail"):
+            low_conf_action = "promotion_hold"
+        dist_weight_when_low_conf = clamp_value(
+            to_float(uncertainty.get("low_conf_dist_weight", 0.0)),
+            0.0,
+            1.0,
+        )
+        if not confidence_sufficient:
+            dist_for_combine = float(lookup_limit) + (
+                float(dist_limit) - float(lookup_limit)
+            ) * float(dist_weight_when_low_conf)
+
+    final_limit = combine_limits(
+        float(lookup_limit),
+        float(dist_for_combine),
+        combine_mode,
+    )
+    hard_fail = False
+    soft_fail = False
+    promotion_hold = False
+    status = "pass"
+    if observed_score < final_limit:
+        if uncertainty_enabled and not confidence_sufficient:
+            if low_conf_action == "promotion_hold":
+                promotion_hold = True
+                status = "promotion_hold"
+            elif low_conf_action == "soft_fail":
+                soft_fail = True
+                status = "soft_fail"
+            else:
+                hard_fail = True
+                status = "hard_fail"
+        else:
+            hard_fail = True
+            status = "hard_fail"
+
+    return {
+        "enabled": True,
+        "limit_mode": "dynamic_lookup_dist_uncertainty",
+        "avg_risk_adjusted_score": round(observed_score, 6),
+        "lookup_limit": round(float(lookup_limit), 6),
+        "dist_limit": round(float(dist_limit), 6),
+        "dist_quantile_p": round(float(dist_q), 6),
+        "dist_available": bool(dist_available),
+        "pre_uncertainty_limit": round(float(pre_uncertainty_limit), 6),
+        "uncertainty_component": {
+            "enabled": bool(uncertainty_enabled),
+            "metric": uncertainty_metric,
+            "observed": round(float(observed_confidence), 6),
+            "lookup_limit": round(float(confidence_lookup), 6),
+            "dist_limit": round(float(confidence_dist), 6),
+            "dist_available": bool(confidence_dist_available),
+            "final_limit": round(float(confidence_final_limit), 6),
+            "sufficient": bool(confidence_sufficient),
+            "low_conf_action": low_conf_action,
+            "dist_weight_when_low_conf": round(float(dist_weight_when_low_conf), 6),
+        },
+        "final_limit": round(float(final_limit), 6),
+        "hard_fail": bool(hard_fail),
+        "soft_fail": bool(soft_fail),
+        "promotion_hold": bool(promotion_hold),
+        "status": status,
+        "guard_pass": not bool(hard_fail),
+        "fallback_core_zero_mode": bool(fallback_mode),
+        "context": {
+            "regime": regime,
+            "volatility_bucket": volatility_bucket,
+            "liquidity_bucket": liquidity_bucket,
+        },
+        "history_count": int(len(clean_history_scores)),
+        "history_ess_count": int(len(clean_history_ess)),
+        "combine_mode": combine_mode,
+    }
 
 
 def normalize_dataset_list(value: Any) -> List[str]:
@@ -1051,6 +2626,94 @@ def build_phase3_diagnostics_v2(reason_counts: Dict[str, int]) -> Dict[str, Any]
     }
 
 
+def build_phase3_pass_ev_distribution(
+    pass_ev_samples: Any,
+    *,
+    sample_cap: int = 5000,
+) -> Dict[str, Any]:
+    rows: List[Dict[str, Any]] = []
+    if isinstance(pass_ev_samples, list):
+        for row in pass_ev_samples:
+            if not isinstance(row, dict):
+                continue
+            expected_bps = to_float(row.get("expected_edge_after_cost_bps", 0.0))
+            expected_pct = to_float(row.get("expected_edge_after_cost_pct", expected_bps / 10000.0))
+            if not math.isfinite(expected_bps):
+                continue
+            rows.append(
+                {
+                    "ts": max(0, to_int(row.get("ts", 0))),
+                    "market": str(row.get("market", "")).strip(),
+                    "strategy": str(row.get("strategy", "")).strip(),
+                    "selected": bool(row.get("selected", False)),
+                    "reason": str(row.get("reason", "")).strip(),
+                    "expected_edge_after_cost_bps": round(float(expected_bps), 6),
+                    "expected_edge_after_cost_pct": round(float(expected_pct), 10),
+                }
+            )
+    total_count = len(rows)
+    rows.sort(
+        key=lambda item: (
+            int(item.get("ts", 0)),
+            str(item.get("market", "")),
+            str(item.get("strategy", "")),
+            -int(bool(item.get("selected", False))),
+        )
+    )
+    cap = max(1, int(sample_cap))
+    sampled_rows = rows[:cap]
+    sampled_bps = [to_float(x.get("expected_edge_after_cost_bps", 0.0)) for x in sampled_rows]
+    selected_bps = [
+        to_float(x.get("expected_edge_after_cost_bps", 0.0))
+        for x in sampled_rows
+        if bool(x.get("selected", False))
+    ]
+
+    def _quantiles(values: List[float]) -> Dict[str, float]:
+        if not values:
+            return {
+                "p10": 0.0,
+                "p25": 0.0,
+                "p50": 0.0,
+                "p75": 0.0,
+                "p90": 0.0,
+            }
+        return {
+            "p10": round(quantile(values, 0.10), 6),
+            "p25": round(quantile(values, 0.25), 6),
+            "p50": round(quantile(values, 0.50), 6),
+            "p75": round(quantile(values, 0.75), 6),
+            "p90": round(quantile(values, 0.90), 6),
+        }
+
+    quantiles_bps = _quantiles(sampled_bps)
+    quantiles_pct = {
+        key: round(float(value) / 10000.0, 10)
+        for key, value in quantiles_bps.items()
+    }
+    selected_quantiles_bps = _quantiles(selected_bps)
+    selected_quantiles_pct = {
+        key: round(float(value) / 10000.0, 10)
+        for key, value in selected_quantiles_bps.items()
+    }
+
+    return {
+        "enabled": bool(total_count > 0),
+        "source": "policy_decisions_backtest_jsonl",
+        "sample_cap": int(cap),
+        "sample_size_total": int(total_count),
+        "sample_size_used": int(len(sampled_rows)),
+        "sample_truncated": bool(total_count > len(sampled_rows)),
+        "selected_sample_size_used": int(len(selected_bps)),
+        "quantiles_bps": quantiles_bps,
+        "quantiles_pct": quantiles_pct,
+        "selected_quantiles_bps": selected_quantiles_bps,
+        "selected_quantiles_pct": selected_quantiles_pct,
+        "samples_bps": [round(float(x), 6) for x in sampled_bps],
+        "samples": sampled_rows,
+    }
+
+
 def build_phase4_exposure_summary_from_samples(
     backtest_result: Dict[str, Any],
     phase4_market_cluster_map: Dict[str, str],
@@ -1128,6 +2791,15 @@ def build_phase4_portfolio_diagnostics(
         "rejected_by_cluster_cap": max(0, to_int(raw.get("rejected_by_cluster_cap", 0))),
         "rejected_by_correlation_penalty": max(
             0, to_int(raw.get("rejected_by_correlation_penalty", 0))
+        ),
+        "cluster_cap_skips_count": max(
+            0, to_int(raw.get("cluster_cap_skips_count", 0))
+        ),
+        "cluster_cap_would_exceed_count": max(
+            0, to_int(raw.get("cluster_cap_would_exceed_count", 0))
+        ),
+        "cluster_exposure_update_count": max(
+            0, to_int(raw.get("cluster_exposure_update_count", 0))
         ),
         "rejected_by_execution_cap": max(0, to_int(raw.get("rejected_by_execution_cap", 0))),
         "rejected_by_drawdown_governor": max(
@@ -1323,17 +2995,52 @@ def build_phase4_portfolio_diagnostics(
             )
     correlation_penalty_score_samples = correlation_penalty_score_samples[:12]
 
+    cluster_cap_debug_trace_samples: List[Dict[str, Any]] = []
+    raw_cluster_debug = raw.get("cluster_cap_debug_trace_samples", [])
+    if isinstance(raw_cluster_debug, list):
+        for row in raw_cluster_debug:
+            if not isinstance(row, dict):
+                continue
+            cluster_cap_debug_trace_samples.append(
+                {
+                    "market": str(row.get("market", "")).strip(),
+                    "cluster": str(row.get("cluster", "")).strip(),
+                    "cluster_exposure_before": round(
+                        max(0.0, to_float(row.get("cluster_exposure_before", 0.0))),
+                        8,
+                    ),
+                    "candidate_notional_fraction": round(
+                        max(0.0, to_float(row.get("candidate_notional_fraction", 0.0))),
+                        8,
+                    ),
+                    "cluster_cap_value": round(
+                        max(0.0, to_float(row.get("cluster_cap_value", 0.0))),
+                        8,
+                    ),
+                    "would_exceed": bool(row.get("would_exceed", False)),
+                    "after_accept_cluster_exposure": round(
+                        max(0.0, to_float(row.get("after_accept_cluster_exposure", 0.0))),
+                        8,
+                    ),
+                }
+            )
+    cluster_cap_debug_trace_samples = cluster_cap_debug_trace_samples[:20]
+
     correlation_applied_telemetry = {
         "constraint_apply_stage": correlation_stage,
         "constraint_unit": correlation_unit,
         "cluster_cap_checks_total": int(correlation_cluster_eval_count),
         "cluster_cap_near_cap_count": int(correlation_cluster_near_cap_count),
+        "cluster_cap_skips_count": int(counters["cluster_cap_skips_count"]),
+        "cluster_cap_would_exceed_count": int(counters["cluster_cap_would_exceed_count"]),
+        "cluster_exposure_update_count": int(counters["cluster_exposure_update_count"]),
         "corr_penalty_applied_count": int(correlation_penalty_applied_count),
         "corr_penalty_avg": float(correlation_penalty_avg),
         "corr_penalty_max": float(correlation_penalty_max),
         "penalty_score_samples": correlation_penalty_score_samples,
         "cluster_exposure_current": cluster_exposure_rows,
         "near_cap_candidates": correlation_near_cap_candidates,
+        "cluster_cap_debug_trace_samples": cluster_cap_debug_trace_samples,
         "binding_detected": bool(
             counters["rejected_by_cluster_cap"] > 0 or correlation_penalty_applied_count > 0
         ),
@@ -1368,6 +3075,9 @@ def build_phase4_portfolio_diagnostics(
             "rejected_by_budget": int(counters["rejected_by_budget"]),
             "rejected_by_cluster_cap": int(counters["rejected_by_cluster_cap"]),
             "rejected_by_correlation_penalty": int(counters["rejected_by_correlation_penalty"]),
+            "cluster_cap_skips_count": int(counters["cluster_cap_skips_count"]),
+            "cluster_cap_would_exceed_count": int(counters["cluster_cap_would_exceed_count"]),
+            "cluster_exposure_update_count": int(counters["cluster_exposure_update_count"]),
             "rejected_by_execution_cap": int(counters["rejected_by_execution_cap"]),
             "rejected_by_drawdown_governor": int(counters["rejected_by_drawdown_governor"]),
         },
@@ -1493,28 +3203,114 @@ def compute_risk_adjusted_score_components(
     *,
     expectancy_krw: float,
     profit_factor: float,
+    avg_fee_krw: float,
     max_drawdown_pct: float,
     downtrend_loss_per_trade_krw: float,
     downtrend_trade_share: float,
     total_trades: int,
-) -> Dict[str, float]:
-    expectancy_term = bounded(float(expectancy_krw) / 10.0, -3.0, 3.0)
-    profit_factor_term = bounded((float(profit_factor) - 1.0) * 2.0, -2.0, 2.0)
-    drawdown_penalty = bounded(float(max_drawdown_pct) / 6.0, 0.0, 3.0)
-    downtrend_loss_penalty = bounded(float(downtrend_loss_per_trade_krw) / 8.0, 0.0, 3.0)
+    risk_adjusted_score_policy: Dict[str, Any] = None,
+) -> Dict[str, Any]:
+    policy = risk_adjusted_score_policy if isinstance(risk_adjusted_score_policy, dict) else {}
+
+    def _float(key: str, default: float) -> float:
+        try:
+            value = policy.get(key, default)
+            return float(value)
+        except Exception:
+            return float(default)
+
+    def _int(key: str, default: int) -> int:
+        try:
+            value = policy.get(key, default)
+            return int(float(value))
+        except Exception:
+            return int(default)
+
+    expectancy_scale_krw = max(1.0e-9, _float("ev_expectancy_scale_krw", 10.0))
+    expectancy_multiplier = max(0.0, _float("ev_expectancy_term_multiplier", 1.0))
+    expectancy_term_cap = max(0.1, _float("ev_expectancy_term_cap", 3.0))
+
+    profit_factor_center = _float("ev_profit_factor_center", 1.0)
+    profit_factor_slope = _float("ev_profit_factor_slope", 2.0)
+    profit_factor_multiplier = max(0.0, _float("ev_profit_factor_term_multiplier", 1.0))
+    profit_factor_term_cap = max(0.1, _float("ev_profit_factor_term_cap", 2.0))
+
+    cost_fee_scale_krw = max(1.0e-9, _float("cost_fee_scale_krw", 500.0))
+    cost_term_multiplier = max(0.0, _float("cost_term_multiplier", 0.0))
+    cost_term_cap = max(0.0, _float("cost_term_cap", 1.5))
+
+    drawdown_scale_pct = max(1.0e-9, _float("risk_drawdown_scale_pct", 6.0))
+    risk_term_multiplier = max(0.0, _float("risk_term_multiplier", 1.0))
+    risk_term_cap = max(0.1, _float("risk_term_cap", 3.0))
+
+    hostility_loss_scale_krw = max(1.0e-9, _float("hostility_downtrend_loss_scale_krw", 8.0))
+    hostility_loss_multiplier = max(0.0, _float("hostility_downtrend_loss_multiplier", 1.0))
+    hostility_loss_cap = max(0.0, _float("hostility_downtrend_loss_cap", 3.0))
+
+    hostility_share_threshold = _float("hostility_downtrend_share_threshold", 0.50)
+    hostility_share_slope = _float("hostility_downtrend_share_slope", 4.0)
+    hostility_share_multiplier = max(0.0, _float("hostility_downtrend_share_multiplier", 1.0))
+    hostility_share_cap = max(0.0, _float("hostility_downtrend_share_cap", 2.0))
+
+    confidence_low_trade_threshold = max(1, _int("confidence_low_trade_threshold", 10))
+    confidence_low_trade_penalty = max(0.0, _float("confidence_low_trade_penalty", 0.5))
+    confidence_term_multiplier = max(0.0, _float("confidence_term_multiplier", 1.0))
+    confidence_term_cap = max(0.0, _float("confidence_term_cap", 2.0))
+
+    expectancy_term = bounded(
+        (float(expectancy_krw) / expectancy_scale_krw) * expectancy_multiplier,
+        -expectancy_term_cap,
+        expectancy_term_cap,
+    )
+    profit_factor_term = bounded(
+        ((float(profit_factor) - profit_factor_center) * profit_factor_slope) *
+        profit_factor_multiplier,
+        -profit_factor_term_cap,
+        profit_factor_term_cap,
+    )
+    ev_term = expectancy_term + profit_factor_term
+    cost_term = bounded(
+        (max(0.0, float(avg_fee_krw)) / cost_fee_scale_krw) * cost_term_multiplier,
+        0.0,
+        cost_term_cap,
+    )
+    drawdown_penalty = bounded(
+        (float(max_drawdown_pct) / drawdown_scale_pct) * risk_term_multiplier,
+        0.0,
+        risk_term_cap,
+    )
+    downtrend_loss_penalty = bounded(
+        (float(downtrend_loss_per_trade_krw) / hostility_loss_scale_krw) *
+        hostility_loss_multiplier,
+        0.0,
+        hostility_loss_cap,
+    )
     downtrend_share_penalty = (
-        bounded((float(downtrend_trade_share) - 0.50) * 4.0, 0.0, 2.0)
-        if float(downtrend_trade_share) > 0.50
+        bounded(
+            (float(downtrend_trade_share) - hostility_share_threshold) * hostility_share_slope *
+            hostility_share_multiplier,
+            0.0,
+            hostility_share_cap,
+        )
+        if float(downtrend_trade_share) > hostility_share_threshold
         else 0.0
     )
-    low_trade_penalty = 0.5 if int(total_trades) < 10 else 0.0
+    low_trade_penalty = (
+        confidence_low_trade_penalty if int(total_trades) < confidence_low_trade_threshold else 0.0
+    )
+    confidence_term = bounded(
+        low_trade_penalty * confidence_term_multiplier,
+        0.0,
+        confidence_term_cap,
+    )
+    hostility_term = downtrend_loss_penalty + downtrend_share_penalty
+    risk_term = drawdown_penalty
     score = (
-        expectancy_term
-        + profit_factor_term
-        - drawdown_penalty
-        - downtrend_loss_penalty
-        - downtrend_share_penalty
-        - low_trade_penalty
+        ev_term
+        - cost_term
+        - risk_term
+        - hostility_term
+        - confidence_term
     )
     return {
         "expectancy_term": round(expectancy_term, 4),
@@ -1523,7 +3319,39 @@ def compute_risk_adjusted_score_components(
         "downtrend_loss_penalty": round(downtrend_loss_penalty, 4),
         "downtrend_share_penalty": round(downtrend_share_penalty, 4),
         "low_trade_penalty": round(low_trade_penalty, 4),
+        "ev_term": round(ev_term, 4),
+        "cost_term": round(cost_term, 4),
+        "risk_term": round(risk_term, 4),
+        "hostility_term": round(hostility_term, 4),
+        "confidence_term": round(confidence_term, 4),
+        "score_total": round(score, 4),
         "score": round(score, 4),
+        "normalization": {
+            "ev_expectancy_scale_krw": round(expectancy_scale_krw, 8),
+            "ev_expectancy_term_multiplier": round(expectancy_multiplier, 8),
+            "ev_expectancy_term_cap": round(expectancy_term_cap, 8),
+            "ev_profit_factor_center": round(profit_factor_center, 8),
+            "ev_profit_factor_slope": round(profit_factor_slope, 8),
+            "ev_profit_factor_term_multiplier": round(profit_factor_multiplier, 8),
+            "ev_profit_factor_term_cap": round(profit_factor_term_cap, 8),
+            "cost_fee_scale_krw": round(cost_fee_scale_krw, 8),
+            "cost_term_multiplier": round(cost_term_multiplier, 8),
+            "cost_term_cap": round(cost_term_cap, 8),
+            "risk_drawdown_scale_pct": round(drawdown_scale_pct, 8),
+            "risk_term_multiplier": round(risk_term_multiplier, 8),
+            "risk_term_cap": round(risk_term_cap, 8),
+            "hostility_downtrend_loss_scale_krw": round(hostility_loss_scale_krw, 8),
+            "hostility_downtrend_loss_multiplier": round(hostility_loss_multiplier, 8),
+            "hostility_downtrend_loss_cap": round(hostility_loss_cap, 8),
+            "hostility_downtrend_share_threshold": round(hostility_share_threshold, 8),
+            "hostility_downtrend_share_slope": round(hostility_share_slope, 8),
+            "hostility_downtrend_share_multiplier": round(hostility_share_multiplier, 8),
+            "hostility_downtrend_share_cap": round(hostility_share_cap, 8),
+            "confidence_low_trade_threshold": int(confidence_low_trade_threshold),
+            "confidence_low_trade_penalty": round(confidence_low_trade_penalty, 8),
+            "confidence_term_multiplier": round(confidence_term_multiplier, 8),
+            "confidence_term_cap": round(confidence_term_cap, 8),
+        },
     }
 
 
@@ -1915,6 +3743,10 @@ def build_dataset_diagnostics(
         backtest_result.get("strategy_collection_summaries", [])
     )
     post_entry_telemetry = parse_post_entry_risk_telemetry(backtest_result)
+    phase3_pass_ev_distribution = build_phase3_pass_ev_distribution(
+        backtest_result.get("phase3_pass_ev_samples", []),
+        sample_cap=5000,
+    )
     top_loss_trade_samples = build_top_loss_trade_samples(
         backtest_result.get("trade_history_samples", []),
         limit=10,
@@ -1967,6 +3799,7 @@ def build_dataset_diagnostics(
         "strategy_funnel": strategy_diag,
         "strategy_collection": strategy_collection_diag,
         "post_entry_risk_telemetry": post_entry_telemetry,
+        "phase3_pass_ev_distribution": phase3_pass_ev_distribution,
         "phase3_diagnostics_v2": phase3_diag,
         "phase4_portfolio_diagnostics": phase4_diag,
         "shadow_funnel": {
@@ -2026,6 +3859,9 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
             "0.75_0.80": 0,
         },
     }
+    aggregate_phase3_pass_ev_samples_bps: List[float] = []
+    aggregate_phase3_pass_ev_selected_samples_bps: List[float] = []
+    aggregate_phase3_pass_ev_source_counts: Dict[str, int] = {}
     aggregate_shadow: Dict[str, Any] = {
         "rounds": 0,
         "primary_generated_signals": 0,
@@ -2065,6 +3901,9 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         "rejected_by_budget",
         "rejected_by_cluster_cap",
         "rejected_by_correlation_penalty",
+        "cluster_cap_skips_count",
+        "cluster_cap_would_exceed_count",
+        "cluster_exposure_update_count",
         "rejected_by_execution_cap",
         "rejected_by_drawdown_governor",
         "candidate_snapshot_total",
@@ -2092,6 +3931,7 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
     aggregate_phase4_corr_cluster_cap_max: Dict[str, float] = {}
     aggregate_phase4_corr_near_cap_rows: List[Dict[str, Any]] = []
     aggregate_phase4_corr_penalty_score_rows: List[Dict[str, Any]] = []
+    aggregate_phase4_corr_debug_trace_rows: List[Dict[str, Any]] = []
 
     for item in dataset_diagnostics:
         groups = item.get("bottleneck_groups", {})
@@ -2129,6 +3969,30 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
                     )
                     slot["candidate_total"] += max(0, to_int(row.get("candidate_total", 0)))
                     slot["pass_total"] += max(0, to_int(row.get("pass_total", 0)))
+
+        phase3_pass_ev = item.get("phase3_pass_ev_distribution", {})
+        if isinstance(phase3_pass_ev, dict) and bool(phase3_pass_ev.get("enabled", False)):
+            source_name = str(phase3_pass_ev.get("source", "")).strip() or "unknown"
+            aggregate_phase3_pass_ev_source_counts[source_name] = (
+                aggregate_phase3_pass_ev_source_counts.get(source_name, 0) + 1
+            )
+            sample_rows = phase3_pass_ev.get("samples", [])
+            if isinstance(sample_rows, list):
+                for row in sample_rows:
+                    if not isinstance(row, dict):
+                        continue
+                    v_bps = to_float(row.get("expected_edge_after_cost_bps", 0.0))
+                    if not math.isfinite(v_bps):
+                        continue
+                    aggregate_phase3_pass_ev_samples_bps.append(float(v_bps))
+                    if bool(row.get("selected", False)):
+                        aggregate_phase3_pass_ev_selected_samples_bps.append(float(v_bps))
+            elif isinstance(phase3_pass_ev.get("samples_bps", []), list):
+                for v in phase3_pass_ev.get("samples_bps", []):
+                    v_bps = to_float(v)
+                    if not math.isfinite(v_bps):
+                        continue
+                    aggregate_phase3_pass_ev_samples_bps.append(float(v_bps))
 
         phase4_diag = item.get("phase4_portfolio_diagnostics", {})
         if isinstance(phase4_diag, dict) and bool(phase4_diag.get("enabled", False)):
@@ -2269,6 +4133,43 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
                                 ),
                                 "rejected_by_penalty": bool(
                                     row.get("rejected_by_penalty", False)
+                                ),
+                            }
+                        )
+                debug_trace_rows = corr_telemetry.get("cluster_cap_debug_trace_samples", [])
+                if isinstance(debug_trace_rows, list):
+                    for row in debug_trace_rows:
+                        if not isinstance(row, dict):
+                            continue
+                        aggregate_phase4_corr_debug_trace_rows.append(
+                            {
+                                "dataset": str(item.get("dataset", "")).strip(),
+                                "market": str(row.get("market", "")).strip(),
+                                "cluster": str(row.get("cluster", "")).strip() or "unclustered",
+                                "cluster_exposure_before": round(
+                                    max(0.0, to_float(row.get("cluster_exposure_before", 0.0))),
+                                    8,
+                                ),
+                                "candidate_notional_fraction": round(
+                                    max(
+                                        0.0,
+                                        to_float(row.get("candidate_notional_fraction", 0.0)),
+                                    ),
+                                    8,
+                                ),
+                                "cluster_cap_value": round(
+                                    max(0.0, to_float(row.get("cluster_cap_value", 0.0))),
+                                    8,
+                                ),
+                                "would_exceed": bool(row.get("would_exceed", False)),
+                                "after_accept_cluster_exposure": round(
+                                    max(
+                                        0.0,
+                                        to_float(
+                                            row.get("after_accept_cluster_exposure", 0.0)
+                                        ),
+                                    ),
+                                    8,
                                 ),
                             }
                         )
@@ -2566,6 +4467,38 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         ),
         "top3_bottlenecks": phase3_reject_rows[:3],
     }
+    aggregate_phase3_pass_ev_samples_bps.sort()
+    aggregate_phase3_pass_ev_selected_samples_bps.sort()
+
+    def _ev_quantiles(values: List[float]) -> Dict[str, float]:
+        if not values:
+            return {
+                "p10": 0.0,
+                "p25": 0.0,
+                "p50": 0.0,
+                "p75": 0.0,
+                "p90": 0.0,
+            }
+        return {
+            "p10": round(quantile(values, 0.10), 6),
+            "p25": round(quantile(values, 0.25), 6),
+            "p50": round(quantile(values, 0.50), 6),
+            "p75": round(quantile(values, 0.75), 6),
+            "p90": round(quantile(values, 0.90), 6),
+        }
+
+    aggregate_phase3_pass_ev_quantiles_bps = _ev_quantiles(aggregate_phase3_pass_ev_samples_bps)
+    aggregate_phase3_pass_ev_quantiles_pct = {
+        key: round(float(value) / 10000.0, 10)
+        for key, value in aggregate_phase3_pass_ev_quantiles_bps.items()
+    }
+    aggregate_phase3_pass_ev_selected_quantiles_bps = _ev_quantiles(
+        aggregate_phase3_pass_ev_selected_samples_bps
+    )
+    aggregate_phase3_pass_ev_selected_quantiles_pct = {
+        key: round(float(value) / 10000.0, 10)
+        for key, value in aggregate_phase3_pass_ev_selected_quantiles_bps.items()
+    }
     phase4_reject_rows = sorted(
         [
             {"reason": key, "count": int(value)}
@@ -2661,6 +4594,15 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         )
     )
     aggregate_phase4_corr_penalty_score_rows = aggregate_phase4_corr_penalty_score_rows[:16]
+    aggregate_phase4_corr_debug_trace_rows.sort(
+        key=lambda item: (
+            -int(bool(item.get("would_exceed", False))),
+            -to_float(item.get("candidate_notional_fraction", 0.0)),
+            str(item.get("market", "")),
+            str(item.get("dataset", "")),
+        )
+    )
+    aggregate_phase4_corr_debug_trace_rows = aggregate_phase4_corr_debug_trace_rows[:20]
     aggregate_corr_applied_telemetry = {
         "constraint_apply_stage": aggregate_corr_stage,
         "constraint_apply_stage_votes": aggregate_phase4_corr_stage_votes,
@@ -2668,12 +4610,22 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         "constraint_unit_votes": aggregate_phase4_corr_unit_votes,
         "cluster_cap_checks_total": int(aggregate_phase4_corr_checks_total),
         "cluster_cap_near_cap_count": int(aggregate_phase4_corr_near_cap_count),
+        "cluster_cap_skips_count": int(
+            aggregate_phase4_counters.get("cluster_cap_skips_count", 0)
+        ),
+        "cluster_cap_would_exceed_count": int(
+            aggregate_phase4_counters.get("cluster_cap_would_exceed_count", 0)
+        ),
+        "cluster_exposure_update_count": int(
+            aggregate_phase4_counters.get("cluster_exposure_update_count", 0)
+        ),
         "corr_penalty_applied_count": int(aggregate_phase4_corr_penalty_applied_count),
         "corr_penalty_avg": round(float(aggregate_corr_penalty_avg), 8),
         "corr_penalty_max": round(float(aggregate_phase4_corr_penalty_max), 8),
         "penalty_score_samples": aggregate_phase4_corr_penalty_score_rows,
         "cluster_exposure_current": aggregate_corr_cluster_rows,
         "near_cap_candidates": aggregate_phase4_corr_near_cap_rows,
+        "cluster_cap_debug_trace_samples": aggregate_phase4_corr_debug_trace_rows,
         "binding_detected": bool(
             aggregate_phase4_counters.get("rejected_by_cluster_cap", 0) > 0
             or aggregate_phase4_corr_penalty_applied_count > 0
@@ -2705,6 +4657,15 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
             ),
             "rejected_by_correlation_penalty": int(
                 aggregate_phase4_counters.get("rejected_by_correlation_penalty", 0)
+            ),
+            "cluster_cap_skips_count": int(
+                aggregate_phase4_counters.get("cluster_cap_skips_count", 0)
+            ),
+            "cluster_cap_would_exceed_count": int(
+                aggregate_phase4_counters.get("cluster_cap_would_exceed_count", 0)
+            ),
+            "cluster_exposure_update_count": int(
+                aggregate_phase4_counters.get("cluster_exposure_update_count", 0)
             ),
             "rejected_by_execution_cap": int(
                 aggregate_phase4_counters.get("rejected_by_execution_cap", 0)
@@ -2752,6 +4713,20 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         },
         "top_non_execution_group_vote_counts": top_group_votes,
         "post_entry_risk_telemetry": aggregate_post_entry_telemetry,
+        "phase3_pass_ev_distribution": {
+            "enabled": bool(len(aggregate_phase3_pass_ev_samples_bps) > 0),
+            "source": "policy_decisions_backtest_jsonl",
+            "source_counts": aggregate_phase3_pass_ev_source_counts,
+            "sample_size_total": int(len(aggregate_phase3_pass_ev_samples_bps)),
+            "selected_sample_size_total": int(len(aggregate_phase3_pass_ev_selected_samples_bps)),
+            "quantiles_bps": aggregate_phase3_pass_ev_quantiles_bps,
+            "quantiles_pct": aggregate_phase3_pass_ev_quantiles_pct,
+            "selected_quantiles_bps": aggregate_phase3_pass_ev_selected_quantiles_bps,
+            "selected_quantiles_pct": aggregate_phase3_pass_ev_selected_quantiles_pct,
+            "samples_bps": [round(float(x), 6) for x in aggregate_phase3_pass_ev_samples_bps[:5000]],
+            "sample_cap": 5000,
+            "sample_truncated": bool(len(aggregate_phase3_pass_ev_samples_bps) > 5000),
+        },
         "phase3_diagnostics_v2": aggregate_phase3_diag,
         "phase4_portfolio_diagnostics": aggregate_phase4_diag,
         "shadow_funnel": aggregate_shadow_summary,
@@ -2922,7 +4897,11 @@ def parse_post_entry_risk_telemetry(backtest_result: Dict[str, Any]) -> Dict[str
     }
 
 
-def build_adaptive_dataset_profile(dataset_name: str, backtest_result: Dict[str, Any]) -> Dict[str, Any]:
+def build_adaptive_dataset_profile(
+    dataset_name: str,
+    backtest_result: Dict[str, Any],
+    risk_adjusted_score_policy: Dict[str, Any] = None,
+) -> Dict[str, Any]:
     regime_metrics = build_regime_metrics_from_patterns(backtest_result)
     post_entry_telemetry = parse_post_entry_risk_telemetry(backtest_result)
     loss_tail_decomposition = build_loss_tail_decomposition(
@@ -2941,15 +4920,18 @@ def build_adaptive_dataset_profile(dataset_name: str, backtest_result: Dict[str,
     total_trades = max(0, to_int(backtest_result.get("total_trades", 0)))
     profit_factor = max(0.0, to_float(backtest_result.get("profit_factor", 0.0)))
     expectancy_krw = to_float(backtest_result.get("expectancy_krw", 0.0))
+    avg_fee_krw = max(0.0, to_float(backtest_result.get("avg_fee_krw", 0.0)))
     max_drawdown_pct = max(0.0, to_float(backtest_result.get("max_drawdown", 0.0)) * 100.0)
 
     risk_score_components = compute_risk_adjusted_score_components(
         expectancy_krw=expectancy_krw,
         profit_factor=profit_factor,
+        avg_fee_krw=avg_fee_krw,
         max_drawdown_pct=max_drawdown_pct,
         downtrend_loss_per_trade_krw=downtrend_loss_per_trade,
         downtrend_trade_share=downtrend_trade_share,
         total_trades=total_trades,
+        risk_adjusted_score_policy=risk_adjusted_score_policy,
     )
     score = to_float(risk_score_components.get("score", 0.0))
 
@@ -3050,6 +5032,11 @@ def aggregate_adaptive_validation(dataset_profiles: List[Dict[str, Any]]) -> Dic
             "avg_risk_adjusted_score_components": {
                 "expectancy_term": 0.0,
                 "profit_factor_term": 0.0,
+                "ev_term": 0.0,
+                "cost_term": 0.0,
+                "risk_term": 0.0,
+                "hostility_term": 0.0,
+                "confidence_term": 0.0,
                 "drawdown_penalty": 0.0,
                 "downtrend_loss_penalty": 0.0,
                 "downtrend_share_penalty": 0.0,
@@ -3096,6 +5083,11 @@ def aggregate_adaptive_validation(dataset_profiles: List[Dict[str, Any]]) -> Dic
     }
     score_expectancy_terms: List[float] = []
     score_profit_factor_terms: List[float] = []
+    score_ev_terms: List[float] = []
+    score_cost_terms: List[float] = []
+    score_risk_terms: List[float] = []
+    score_hostility_terms: List[float] = []
+    score_confidence_terms: List[float] = []
     score_drawdown_penalties: List[float] = []
     score_downtrend_loss_penalties: List[float] = []
     score_downtrend_share_penalties: List[float] = []
@@ -3132,6 +5124,11 @@ def aggregate_adaptive_validation(dataset_profiles: List[Dict[str, Any]]) -> Dic
         if isinstance(components, dict):
             score_expectancy_terms.append(to_float(components.get("expectancy_term", 0.0)))
             score_profit_factor_terms.append(to_float(components.get("profit_factor_term", 0.0)))
+            score_ev_terms.append(to_float(components.get("ev_term", 0.0)))
+            score_cost_terms.append(to_float(components.get("cost_term", 0.0)))
+            score_risk_terms.append(to_float(components.get("risk_term", 0.0)))
+            score_hostility_terms.append(to_float(components.get("hostility_term", 0.0)))
+            score_confidence_terms.append(to_float(components.get("confidence_term", 0.0)))
             score_drawdown_penalties.append(to_float(components.get("drawdown_penalty", 0.0)))
             score_downtrend_loss_penalties.append(to_float(components.get("downtrend_loss_penalty", 0.0)))
             score_downtrend_share_penalties.append(to_float(components.get("downtrend_share_penalty", 0.0)))
@@ -3249,6 +5246,11 @@ def aggregate_adaptive_validation(dataset_profiles: List[Dict[str, Any]]) -> Dic
         "avg_risk_adjusted_score_components": {
             "expectancy_term": round(safe_avg(score_expectancy_terms), 4),
             "profit_factor_term": round(safe_avg(score_profit_factor_terms), 4),
+            "ev_term": round(safe_avg(score_ev_terms), 4),
+            "cost_term": round(safe_avg(score_cost_terms), 4),
+            "risk_term": round(safe_avg(score_risk_terms), 4),
+            "hostility_term": round(safe_avg(score_hostility_terms), 4),
+            "confidence_term": round(safe_avg(score_confidence_terms), 4),
             "drawdown_penalty": round(safe_avg(score_drawdown_penalties), 4),
             "downtrend_loss_penalty": round(safe_avg(score_downtrend_loss_penalties), 4),
             "downtrend_share_penalty": round(safe_avg(score_downtrend_share_penalties), 4),
@@ -3283,6 +5285,9 @@ def build_adaptive_verdict(
     min_avg_trades: float,
     peak_max_drawdown_pct: float,
     max_drawdown_pct_limit: float,
+    risk_adjusted_score_guard_policy: Dict[str, Any] = None,
+    risk_adjusted_score_guard_context: Dict[str, Any] = None,
+    risk_adjusted_score_guard_history: Dict[str, Any] = None,
 ) -> Dict[str, Any]:
     avg_downtrend_trade_share = to_float(adaptive_aggregates.get("avg_downtrend_trade_share", 0.0))
     avg_generated_signals = to_float(adaptive_aggregates.get("avg_generated_signals", 0.0))
@@ -3313,6 +5318,42 @@ def build_adaptive_verdict(
         min_opportunity_conversion = 0.018
     low_opportunity_observed = avg_generated_signals < 5.0
 
+    loss_tail = adaptive_aggregates.get("loss_tail_aggregate", {})
+    if not isinstance(loss_tail, dict):
+        loss_tail = {}
+    observed_tail_ess = max(0.0, to_float(loss_tail.get("tail_metric_ess", 0.0)))
+    guard_context = (
+        risk_adjusted_score_guard_context
+        if isinstance(risk_adjusted_score_guard_context, dict)
+        else {}
+    )
+    guard_history = (
+        risk_adjusted_score_guard_history
+        if isinstance(risk_adjusted_score_guard_history, dict)
+        else {}
+    )
+    risk_guard = evaluate_risk_adjusted_score_guard(
+        avg_score=to_float(adaptive_aggregates.get("avg_risk_adjusted_score", 0.0)),
+        min_risk_adjusted_score=float(min_risk_adjusted_score),
+        policy=(
+            risk_adjusted_score_guard_policy
+            if isinstance(risk_adjusted_score_guard_policy, dict)
+            else {}
+        ),
+        context=guard_context,
+        observed_ess=observed_tail_ess,
+        history_scores=(
+            guard_history.get("scores", [])
+            if isinstance(guard_history.get("scores", []), list)
+            else []
+        ),
+        history_ess_values=(
+            guard_history.get("ess_values", [])
+            if isinstance(guard_history.get("ess_values", []), list)
+            else []
+        ),
+    )
+
     checks = {
         "sample_size_guard_pass": float(avg_total_trades) >= float(effective_min_avg_trades),
         "drawdown_guard_pass": float(peak_max_drawdown_pct) <= float(max_drawdown_pct_limit),
@@ -3322,8 +5363,10 @@ def build_adaptive_verdict(
         <= float(max_downtrend_trade_share),
         "uptrend_expectancy_guard_pass": to_float(adaptive_aggregates.get("avg_uptrend_expectancy_krw", 0.0))
         >= float(min_uptrend_expectancy_krw),
-        "risk_adjusted_score_guard_pass": to_float(adaptive_aggregates.get("avg_risk_adjusted_score", 0.0))
-        >= float(min_risk_adjusted_score),
+        "risk_adjusted_score_guard_pass": bool(risk_guard.get("guard_pass", False)),
+        "risk_adjusted_score_guard_hard_fail": bool(risk_guard.get("hard_fail", False)),
+        "risk_adjusted_score_guard_soft_fail": bool(risk_guard.get("soft_fail", False)),
+        "risk_adjusted_score_guard_promotion_hold": bool(risk_guard.get("promotion_hold", False)),
         "opportunity_conversion_guard_pass": (
             True if low_opportunity_observed
             else (avg_opportunity_conversion >= float(min_opportunity_conversion))
@@ -3335,12 +5378,17 @@ def build_adaptive_verdict(
         "downtrend_loss_guard_pass",
         "downtrend_trade_share_guard_pass",
         "uptrend_expectancy_guard_pass",
-        "risk_adjusted_score_guard_pass",
     ]
-    hard_fail = any(not bool(checks.get(key, True)) for key in hard_fail_keys)
+    hard_fail = any(not bool(checks.get(key, True)) for key in hard_fail_keys) or bool(
+        checks.get("risk_adjusted_score_guard_hard_fail", False)
+    )
 
     if hard_fail:
         verdict = "fail"
+    elif bool(checks.get("risk_adjusted_score_guard_promotion_hold", False)):
+        verdict = "inconclusive"
+    elif bool(checks.get("risk_adjusted_score_guard_soft_fail", False)):
+        verdict = "inconclusive"
     elif (
         checks["sample_size_guard_pass"] and
         checks["opportunity_conversion_guard_pass"]
@@ -3356,6 +5404,7 @@ def build_adaptive_verdict(
             "effective_min_avg_trades": round(effective_min_avg_trades, 4),
             "hostile_sample_relax_factor": round(hostile_sample_relax_factor, 4),
             "min_opportunity_conversion": round(min_opportunity_conversion, 4),
+            "risk_adjusted_score_guard": risk_guard,
         },
         "context": {
             "avg_generated_signals": round(avg_generated_signals, 4),
@@ -3364,6 +5413,12 @@ def build_adaptive_verdict(
             "avg_shadow_candidate_conversion": round(avg_shadow_candidate_conversion, 4),
             "avg_shadow_candidate_supply_lift": round(avg_shadow_candidate_supply_lift, 4),
             "low_opportunity_observed": bool(low_opportunity_observed),
+            "risk_adjusted_score_guard_context": guard_context,
+            "risk_adjusted_score_guard_history_sources": (
+                guard_history.get("sources", [])
+                if isinstance(guard_history.get("sources", []), list)
+                else []
+            ),
         },
     }
 
@@ -3378,7 +5433,22 @@ def build_risk_adjusted_failure_decomposition(
     if not isinstance(checks, dict):
         checks = {}
     risk_guard_pass = bool(checks.get("risk_adjusted_score_guard_pass", False))
+    risk_guard_hard_fail = bool(checks.get("risk_adjusted_score_guard_hard_fail", False))
+    risk_guard_soft_fail = bool(checks.get("risk_adjusted_score_guard_soft_fail", False))
+    risk_guard_promotion_hold = bool(checks.get("risk_adjusted_score_guard_promotion_hold", False))
     avg_score = to_float(adaptive_aggregates.get("avg_risk_adjusted_score", 0.0))
+    risk_guard_detail = nested_get(
+        adaptive_verdict,
+        ["effective_thresholds", "risk_adjusted_score_guard"],
+        {},
+    )
+    if not isinstance(risk_guard_detail, dict):
+        risk_guard_detail = {}
+    dynamic_enabled = bool(risk_guard_detail.get("enabled", False))
+    dynamic_final_limit = to_float(
+        risk_guard_detail.get("final_limit", min_risk_adjusted_score)
+    )
+    score_gap = float(dynamic_final_limit) - float(avg_score)
     components = adaptive_aggregates.get("avg_risk_adjusted_score_components", {})
     if not isinstance(components, dict):
         components = {}
@@ -3389,16 +5459,29 @@ def build_risk_adjusted_failure_decomposition(
     downtrend_loss_penalty = to_float(components.get("downtrend_loss_penalty", 0.0))
     downtrend_share_penalty = to_float(components.get("downtrend_share_penalty", 0.0))
     low_trade_penalty = to_float(components.get("low_trade_penalty", 0.0))
+    ev_term = to_float(components.get("ev_term", expectancy_term + profit_factor_term))
+    cost_term = to_float(components.get("cost_term", 0.0))
+    risk_term = to_float(components.get("risk_term", drawdown_penalty))
+    hostility_term = to_float(
+        components.get(
+            "hostility_term",
+            downtrend_loss_penalty + downtrend_share_penalty,
+        )
+    )
+    confidence_term = to_float(components.get("confidence_term", low_trade_penalty))
     reconstructed_score = (
-        expectancy_term
-        + profit_factor_term
-        - drawdown_penalty
-        - downtrend_loss_penalty
-        - downtrend_share_penalty
-        - low_trade_penalty
+        ev_term
+        - cost_term
+        - risk_term
+        - hostility_term
+        - confidence_term
     )
 
     penalty_rows = [
+        {"name": "cost_term", "value": round(cost_term, 4)},
+        {"name": "risk_term", "value": round(risk_term, 4)},
+        {"name": "hostility_term", "value": round(hostility_term, 4)},
+        {"name": "confidence_term", "value": round(confidence_term, 4)},
         {"name": "drawdown_penalty", "value": round(drawdown_penalty, 4)},
         {"name": "downtrend_loss_penalty", "value": round(downtrend_loss_penalty, 4)},
         {"name": "downtrend_share_penalty", "value": round(downtrend_share_penalty, 4)},
@@ -3408,10 +5491,25 @@ def build_risk_adjusted_failure_decomposition(
     penalty_rows.sort(key=lambda x: (-to_float(x["value"]), str(x["name"])))
 
     positive_rows = [
+        {"name": "ev_term", "value": round(ev_term, 4)},
         {"name": "expectancy_term", "value": round(expectancy_term, 4)},
         {"name": "profit_factor_term", "value": round(profit_factor_term, 4)},
     ]
     positive_rows.sort(key=lambda x: (-to_float(x["value"]), str(x["name"])))
+
+    dominant_fail_term = ""
+    dominant_fail_magnitude = 0.0
+    dominant_candidates = [
+        ("ev_term", max(0.0, -ev_term)),
+        ("cost_term", max(0.0, cost_term)),
+        ("risk_term", max(0.0, risk_term)),
+        ("hostility_term", max(0.0, hostility_term)),
+        ("confidence_term", max(0.0, confidence_term)),
+    ]
+    dominant_candidates.sort(key=lambda x: (-float(x[1]), str(x[0])))
+    if dominant_candidates:
+        dominant_fail_term = str(dominant_candidates[0][0])
+        dominant_fail_magnitude = float(dominant_candidates[0][1])
 
     tail = adaptive_aggregates.get("loss_tail_aggregate", {})
     if not isinstance(tail, dict):
@@ -3426,7 +5524,6 @@ def build_risk_adjusted_failure_decomposition(
     if not isinstance(top_loss_cells, list):
         top_loss_cells = []
 
-    score_gap = float(min_risk_adjusted_score) - float(avg_score)
     recommended_focus: List[str] = []
     if not risk_guard_pass:
         recommended_focus.append(
@@ -3453,20 +5550,52 @@ def build_risk_adjusted_failure_decomposition(
             )
 
     return {
-        "active": not risk_guard_pass,
+        "active": bool(risk_guard_hard_fail),
         "risk_adjusted_score_guard_pass": bool(risk_guard_pass),
+        "risk_adjusted_score_guard_hard_fail": bool(risk_guard_hard_fail),
+        "risk_adjusted_score_guard_soft_fail": bool(risk_guard_soft_fail),
+        "risk_adjusted_score_guard_promotion_hold": bool(risk_guard_promotion_hold),
+        "risk_adjusted_score_guard_status": str(
+            risk_guard_detail.get(
+                "status",
+                (
+                    "hard_fail"
+                    if risk_guard_hard_fail
+                    else ("promotion_hold" if risk_guard_promotion_hold else ("soft_fail" if risk_guard_soft_fail else "pass"))
+                ),
+            )
+        ).strip(),
+        "risk_adjusted_score_limit_mode": str(
+            risk_guard_detail.get("limit_mode", "absolute_threshold_legacy")
+        ).strip(),
         "min_risk_adjusted_score": round(float(min_risk_adjusted_score), 4),
+        "dynamic_final_limit": round(float(dynamic_final_limit), 4),
+        "dynamic_lookup_limit": round(to_float(risk_guard_detail.get("lookup_limit", 0.0)), 4),
+        "dynamic_dist_limit": round(to_float(risk_guard_detail.get("dist_limit", 0.0)), 4),
+        "dynamic_uncertainty_component": (
+            risk_guard_detail.get("uncertainty_component", {})
+            if isinstance(risk_guard_detail.get("uncertainty_component", {}), dict)
+            else {}
+        ),
+        "fallback_core_zero_mode": bool(risk_guard_detail.get("fallback_core_zero_mode", False)),
         "avg_risk_adjusted_score": round(float(avg_score), 4),
         "score_gap_to_threshold": round(float(score_gap), 4),
         "score_components": {
             "expectancy_term": round(expectancy_term, 4),
             "profit_factor_term": round(profit_factor_term, 4),
+            "ev_term": round(ev_term, 4),
+            "cost_term": round(cost_term, 4),
+            "risk_term": round(risk_term, 4),
+            "hostility_term": round(hostility_term, 4),
+            "confidence_term": round(confidence_term, 4),
             "drawdown_penalty": round(drawdown_penalty, 4),
             "downtrend_loss_penalty": round(downtrend_loss_penalty, 4),
             "downtrend_share_penalty": round(downtrend_share_penalty, 4),
             "low_trade_penalty": round(low_trade_penalty, 4),
             "reconstructed_score": round(reconstructed_score, 4),
         },
+        "dominant_fail_term": dominant_fail_term,
+        "dominant_fail_magnitude": round(dominant_fail_magnitude, 4),
         "dominant_penalties": penalty_rows[:4],
         "positive_terms": positive_rows,
         "loss_tail": {
@@ -3571,6 +5700,62 @@ def main(argv=None) -> int:
             "development_core/validation_core/quarantine_core datasets."
         ),
     )
+    parser.add_argument(
+        "--vol-bucket-pct-window-size",
+        type=int,
+        default=240,
+        help="Rolling window size for percentile-based volatility buckets (verification-only).",
+    )
+    parser.add_argument(
+        "--vol-bucket-pct-min-points",
+        type=int,
+        default=0,
+        help="Minimum rolling sample size for percentile bucket assignment; 0 means ceil(window_size*0.7).",
+    )
+    parser.add_argument(
+        "--vol-bucket-pct-lower-q",
+        type=float,
+        default=0.33,
+        help="Lower quantile for rolling percentile volatility bucket (LOW <= q).",
+    )
+    parser.add_argument(
+        "--vol-bucket-pct-upper-q",
+        type=float,
+        default=0.67,
+        help="Upper quantile for rolling percentile volatility bucket (MID <= q).",
+    )
+    parser.add_argument(
+        "--vol-bucket-fixed-low-cut",
+        type=float,
+        default=1.8,
+        help="Fixed volatility LOW cutoff (atr_pct).",
+    )
+    parser.add_argument(
+        "--vol-bucket-fixed-high-cut",
+        type=float,
+        default=3.5,
+        help="Fixed volatility MID/HIGH cutoff (atr_pct).",
+    )
+    parser.add_argument(
+        "--quarantine-vol-bucket-pct-distribution-json",
+        default=r".\build\Release\logs\quarantine_vol_bucket_pct_distribution.json",
+        help="Output JSON path for percentile bucket distribution diagnostics.",
+    )
+    parser.add_argument(
+        "--quarantine-pnl-by-regime-x-vol-fixed-json",
+        default=r".\build\Release\logs\quarantine_pnl_by_regime_x_vol_fixed.json",
+        help="Output JSON path for (regime x fixed vol bucket) PnL cross table.",
+    )
+    parser.add_argument(
+        "--quarantine-pnl-by-regime-x-vol-pct-json",
+        default=r".\build\Release\logs\quarantine_pnl_by_regime_x_vol_pct.json",
+        help="Output JSON path for (regime x percentile vol bucket) PnL cross table.",
+    )
+    parser.add_argument(
+        "--top-loss-cells-regime-vol-pct-json",
+        default=r".\build\Release\logs\top_loss_cells_regime_vol_pct.json",
+        help="Output JSON path for top-loss market x regime x percentile-vol-bucket cells.",
+    )
     args = parser.parse_args(argv)
 
     exe_path = resolve_path(args.exe_path, "Executable")
@@ -3579,6 +5764,26 @@ def main(argv=None) -> int:
     data_dir = resolve_path(args.data_dir, "Data directory")
     output_csv = resolve_path(args.output_csv, "Output csv", must_exist=False)
     output_json = resolve_path(args.output_json, "Output json", must_exist=False)
+    vol_bucket_pct_distribution_json = resolve_path(
+        args.quarantine_vol_bucket_pct_distribution_json,
+        "Vol bucket percentile distribution json",
+        must_exist=False,
+    )
+    pnl_by_regime_x_vol_fixed_json = resolve_path(
+        args.quarantine_pnl_by_regime_x_vol_fixed_json,
+        "PnL by regime x fixed vol bucket json",
+        must_exist=False,
+    )
+    pnl_by_regime_x_vol_pct_json = resolve_path(
+        args.quarantine_pnl_by_regime_x_vol_pct_json,
+        "PnL by regime x percentile vol bucket json",
+        must_exist=False,
+    )
+    top_loss_cells_regime_vol_pct_json = resolve_path(
+        args.top_loss_cells_regime_vol_pct_json,
+        "Top loss cells regime vol pct json",
+        must_exist=False,
+    )
     baseline_report_path = resolve_path(
         args.baseline_report_path,
         "Baseline report",
@@ -3627,6 +5832,8 @@ def main(argv=None) -> int:
 
     bundle_meta: Dict[str, Any] = {}
     phase4_market_cluster_map: Dict[str, str] = {}
+    risk_adjusted_score_policy: Dict[str, Any] = {}
+    risk_adjusted_score_guard_policy: Dict[str, Any] = {}
     if not bool(args.skip_probabilistic_coverage_check):
         if str(bundle_path).strip() not in ("", ".", ".."):
             if not bundle_path.exists():
@@ -3642,6 +5849,12 @@ def main(argv=None) -> int:
                     for k, v in loaded_cluster_map.items()
                     if str(k).strip() and str(v).strip()
                 }
+            loaded_risk_score_policy = bundle_meta.get("risk_adjusted_score_policy", {})
+            if isinstance(loaded_risk_score_policy, dict):
+                risk_adjusted_score_policy = loaded_risk_score_policy
+            loaded_risk_guard_policy = bundle_meta.get("risk_adjusted_score_guard_policy", {})
+            if isinstance(loaded_risk_guard_policy, dict):
+                risk_adjusted_score_guard_policy = loaded_risk_guard_policy
             supported_markets = {
                 str(x).strip().upper()
                 for x in bundle_meta.get("supported_markets", [])
@@ -3663,6 +5876,17 @@ def main(argv=None) -> int:
                         + f" | bundle={bundle_meta.get('bundle_path', '')}"
                     )
     pipeline_version = resolve_verification_pipeline_version(args.pipeline_version, bundle_meta)
+    vol_bucket_pct_policy = resolve_vol_bucket_pct_policy(
+        {
+            "window_size": int(args.vol_bucket_pct_window_size),
+            "min_points": int(args.vol_bucket_pct_min_points),
+            "lower_q": float(args.vol_bucket_pct_lower_q),
+            "upper_q": float(args.vol_bucket_pct_upper_q),
+            "fixed_low_cut": float(args.vol_bucket_fixed_low_cut),
+            "fixed_high_cut": float(args.vol_bucket_fixed_high_cut),
+            "source": "cli_policy",
+        }
+    )
 
     if bool(args.require_higher_tf_companions):
         for dataset_path in dataset_paths:
@@ -3681,6 +5905,7 @@ def main(argv=None) -> int:
     rows: List[Dict[str, Any]] = []
     dataset_diagnostics: List[Dict[str, Any]] = []
     adaptive_dataset_profiles: List[Dict[str, Any]] = []
+    vol_bucket_pct_dataset_profiles: List[Dict[str, Any]] = []
     phase4_off_on_comparison: Dict[str, Any] = {}
     core_window_direct_report: Dict[str, Any] = {}
     split_manifest_payload: Dict[str, Any] = {}
@@ -3712,7 +5937,18 @@ def main(argv=None) -> int:
                 )
             )
             adaptive_dataset_profiles.append(
-                build_adaptive_dataset_profile(dataset_name=dataset_path.name, backtest_result=result)
+                build_adaptive_dataset_profile(
+                    dataset_name=dataset_path.name,
+                    backtest_result=result,
+                    risk_adjusted_score_policy=risk_adjusted_score_policy,
+                )
+            )
+            vol_bucket_pct_dataset_profiles.append(
+                build_vol_bucket_pct_dataset_profile(
+                    dataset_name=dataset_path.name,
+                    backtest_result=result,
+                    policy=vol_bucket_pct_policy,
+                )
             )
         if bool(args.phase4_off_on_compare):
             phase4_off_on_comparison = build_phase4_off_on_comparison(
@@ -3738,6 +5974,7 @@ def main(argv=None) -> int:
                     require_higher_tf_companions=bool(args.require_higher_tf_companions),
                     disable_adaptive_state_io=not bool(args.enable_adaptive_state_io),
                     phase4_market_cluster_map=phase4_market_cluster_map,
+                    risk_adjusted_score_policy=risk_adjusted_score_policy,
                 )
                 core_window_direct_report["split_name"] = split_name_for_core
                 core_window_direct_report["core_dir"] = str(core_paths_info.get("core_dir", ""))
@@ -3798,6 +6035,13 @@ def main(argv=None) -> int:
         aggregate_diagnostics=aggregate_diagnostics,
     )
     adaptive_aggregates = aggregate_adaptive_validation(adaptive_dataset_profiles)
+    risk_score_guard_context = build_risk_score_guard_context(
+        aggregate_diagnostics=aggregate_diagnostics,
+        core_window_direct_report=core_window_direct_report,
+    )
+    risk_score_guard_history = load_risk_score_guard_history(
+        risk_adjusted_score_guard_policy
+    )
     adaptive_verdict = build_adaptive_verdict(
         adaptive_aggregates=adaptive_aggregates,
         max_downtrend_loss_per_trade_krw=float(args.max_downtrend_loss_per_trade_krw),
@@ -3808,6 +6052,9 @@ def main(argv=None) -> int:
         min_avg_trades=float(args.min_avg_trades),
         peak_max_drawdown_pct=peak_max_drawdown_pct,
         max_drawdown_pct_limit=float(args.max_drawdown_pct),
+        risk_adjusted_score_guard_policy=risk_adjusted_score_guard_policy,
+        risk_adjusted_score_guard_context=risk_score_guard_context,
+        risk_adjusted_score_guard_history=risk_score_guard_history,
     )
     risk_adjusted_failure_decomposition = build_risk_adjusted_failure_decomposition(
         adaptive_aggregates=adaptive_aggregates,
@@ -3816,6 +6063,43 @@ def main(argv=None) -> int:
     )
     adaptive_pass = str(adaptive_verdict.get("verdict", "fail")) == "pass"
     overall_gate_pass = adaptive_pass
+    vol_bucket_pct_artifacts = build_quarantine_vol_bucket_pct_artifacts(
+        vol_bucket_pct_dataset_profiles,
+        split_name=str(args.split_name).strip(),
+    )
+
+    ensure_parent(vol_bucket_pct_distribution_json)
+    with vol_bucket_pct_distribution_json.open("w", encoding="utf-8", newline="\n") as fp:
+        json.dump(
+            vol_bucket_pct_artifacts.get("distribution_payload", {}),
+            fp,
+            ensure_ascii=False,
+            indent=4,
+        )
+    ensure_parent(pnl_by_regime_x_vol_fixed_json)
+    with pnl_by_regime_x_vol_fixed_json.open("w", encoding="utf-8", newline="\n") as fp:
+        json.dump(
+            vol_bucket_pct_artifacts.get("pnl_fixed_payload", {}),
+            fp,
+            ensure_ascii=False,
+            indent=4,
+        )
+    ensure_parent(pnl_by_regime_x_vol_pct_json)
+    with pnl_by_regime_x_vol_pct_json.open("w", encoding="utf-8", newline="\n") as fp:
+        json.dump(
+            vol_bucket_pct_artifacts.get("pnl_pct_payload", {}),
+            fp,
+            ensure_ascii=False,
+            indent=4,
+        )
+    ensure_parent(top_loss_cells_regime_vol_pct_json)
+    with top_loss_cells_regime_vol_pct_json.open("w", encoding="utf-8", newline="\n") as fp:
+        json.dump(
+            vol_bucket_pct_artifacts.get("top_loss_payload", {}),
+            fp,
+            ensure_ascii=False,
+            indent=4,
+        )
 
     report = {
         "mode": "verification_adaptive",
@@ -3857,6 +6141,24 @@ def main(argv=None) -> int:
                 "min_risk_adjusted_score": float(args.min_risk_adjusted_score),
                 "max_drawdown_pct": float(args.max_drawdown_pct),
             },
+            "risk_adjusted_score_policy": risk_adjusted_score_policy,
+            "risk_adjusted_score_guard_policy": risk_adjusted_score_guard_policy,
+            "vol_bucket_pct_policy": vol_bucket_pct_policy,
+            "risk_adjusted_score_guard_context": risk_score_guard_context,
+            "risk_adjusted_score_guard_history": {
+                "count": int(
+                    len(
+                        risk_score_guard_history.get("scores", [])
+                        if isinstance(risk_score_guard_history.get("scores", []), list)
+                        else []
+                    )
+                ),
+                "sources": (
+                    risk_score_guard_history.get("sources", [])
+                    if isinstance(risk_score_guard_history.get("sources", []), list)
+                    else []
+                ),
+            },
             "aggregates": adaptive_aggregates,
             "verdict": adaptive_verdict,
             "risk_adjusted_failure_decomposition": risk_adjusted_failure_decomposition,
@@ -3868,6 +6170,7 @@ def main(argv=None) -> int:
             "aggregate": aggregate_diagnostics,
             "per_dataset": dataset_diagnostics,
             "failure_attribution": failure_attribution,
+            "vol_bucket_pct_summary": vol_bucket_pct_artifacts.get("summary", {}),
         },
         "artifacts": {
             "output_csv": str(output_csv),
@@ -3878,6 +6181,10 @@ def main(argv=None) -> int:
             "runtime_bundle_path": str(bundle_meta.get("bundle_path", "")) if bundle_meta else "",
             "runtime_bundle_version": str(bundle_meta.get("bundle_version", "")) if bundle_meta else "",
             "split_manifest_json": split_manifest_path_value,
+            "quarantine_vol_bucket_pct_distribution_json": str(vol_bucket_pct_distribution_json),
+            "quarantine_pnl_by_regime_x_vol_fixed_json": str(pnl_by_regime_x_vol_fixed_json),
+            "quarantine_pnl_by_regime_x_vol_pct_json": str(pnl_by_regime_x_vol_pct_json),
+            "top_loss_cells_regime_vol_pct_json": str(top_loss_cells_regime_vol_pct_json),
         },
     }
     split_protocol: Dict[str, Any] = {
@@ -3988,6 +6295,14 @@ def main(argv=None) -> int:
         print(
             "[Verification] baseline_comparison=unavailable "
             f"reason={reason or 'baseline_report_missing_or_invalid'}"
+        )
+    vol_bucket_summary = vol_bucket_pct_artifacts.get("summary", {})
+    if isinstance(vol_bucket_summary, dict):
+        print(
+            "[Verification] vol_bucket_pct "
+            f"coverage={vol_bucket_summary.get('coverage', 0.0)} "
+            f"none_ratio={vol_bucket_summary.get('none_ratio', 0.0)} "
+            f"ranging_low_loss_pct={vol_bucket_summary.get('ranging_vol_low_loss_contribution_pct', 0.0)}"
         )
     if bool(args.phase4_off_on_compare):
         phase4_compare = report.get("phase4_off_on_comparison", {})

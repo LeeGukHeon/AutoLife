@@ -275,6 +275,56 @@ def phase3_context(payload: Dict[str, Any], hostile_labels: List[str]) -> Dict[s
     }
 
 
+def extract_phase3_pass_ev_distribution(
+    report: Dict[str, Any],
+    *,
+    prefer_core_direct: bool,
+) -> Dict[str, Any]:
+    payload = pick_eval_payload(report, prefer_core_direct)
+    dist = ng(payload, ["diagnostics", "aggregate", "phase3_pass_ev_distribution"], {})
+    if not isinstance(dist, dict):
+        dist = {}
+    samples_bps: List[float] = []
+    raw_samples = dist.get("samples_bps", [])
+    if isinstance(raw_samples, list):
+        for x in raw_samples:
+            v = f64(x, float("nan"))
+            if math.isfinite(v):
+                samples_bps.append(float(v))
+    sample_size = max(0, i64(dist.get("sample_size_total", len(samples_bps)), len(samples_bps)))
+    return {
+        "enabled": bool(dist.get("enabled", False)) and sample_size > 0,
+        "source": str(dist.get("source", "")).strip(),
+        "sample_size_total": int(sample_size),
+        "selected_sample_size_total": max(
+            0,
+            i64(dist.get("selected_sample_size_total", 0), 0),
+        ),
+        "samples_bps": samples_bps,
+        "quantiles_bps": dist.get("quantiles_bps", {}),
+        "quantiles_pct": dist.get("quantiles_pct", {}),
+    }
+
+
+def quantile_summary(values: List[float]) -> Dict[str, float]:
+    clean = [float(x) for x in values if math.isfinite(float(x))]
+    if not clean:
+        return {
+            "p10": 0.0,
+            "p25": 0.0,
+            "p50": 0.0,
+            "p75": 0.0,
+            "p90": 0.0,
+        }
+    return {
+        "p10": float(quantile(clean, 0.10)),
+        "p25": float(quantile(clean, 0.25)),
+        "p50": float(quantile(clean, 0.50)),
+        "p75": float(quantile(clean, 0.75)),
+        "p90": float(quantile(clean, 0.90)),
+    }
+
+
 def metric_value(payload: Dict[str, Any], metric_name: str, metric_policy: Dict[str, Any]) -> float:
     source = str(metric_policy.get("source", metric_name)).strip().lower()
     if source in ("tail_concentration", "top3_loss_concentration"):
@@ -925,6 +975,158 @@ def eval_lex(report: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any]
     return {"kpis": ks, "levels": {"p1": {"pass": p1, "checks": l1}, "p2": {"pass": p2, "checks": l2}, "p3": {"pass": p3, "checks": l3}, "p4": {"pass": p4, "checks": l4}}, "overall_pass": p4}
 
 
+def promotion_fail_rows(
+    report: Dict[str, Any],
+    evaluation: Dict[str, Any],
+    args: argparse.Namespace,
+    prev_scores: Dict[str, float],
+) -> List[Dict[str, Any]]:
+    if not isinstance(evaluation, dict):
+        return []
+    levels = evaluation.get("levels", {})
+    if not isinstance(levels, dict):
+        levels = {}
+    checks_p1 = ng(levels, ["p1", "checks"], {})
+    checks_p2 = ng(levels, ["p2", "checks"], {})
+    checks_p3 = ng(levels, ["p3", "checks"], {})
+    checks_p4 = ng(levels, ["p4", "checks"], {})
+    if not isinstance(checks_p1, dict):
+        checks_p1 = {}
+    if not isinstance(checks_p2, dict):
+        checks_p2 = {}
+    if not isinstance(checks_p3, dict):
+        checks_p3 = {}
+    if not isinstance(checks_p4, dict):
+        checks_p4 = {}
+
+    k = evaluation.get("kpis", {})
+    if not isinstance(k, dict):
+        k = {}
+    agg = report.get("aggregates", {}) if isinstance(report.get("aggregates"), dict) else {}
+    aad = ng(report, ["adaptive_validation", "aggregates"], {})
+    if not isinstance(aad, dict):
+        aad = {}
+    lta = aad.get("loss_tail_aggregate", {})
+    if not isinstance(lta, dict):
+        lta = {}
+
+    max_drawdown = float(args.max_drawdown_pct)
+    max_tail = float(args.max_tail_concentration)
+    max_avg_fee = float(args.max_avg_fee_krw)
+    min_profit_factor = float(args.min_profit_factor)
+    min_expectancy = float(args.min_expectancy_krw)
+    min_avg_trades = float(args.min_avg_trades)
+
+    value_drawdown = f64(k.get("risk_drawdown_pct", agg.get("peak_max_drawdown_pct", 0.0)), 0.0)
+    value_tail = f64(
+        k.get("risk_tail_loss_concentration", lta.get("avg_top3_loss_concentration", 0.0)),
+        0.0,
+    )
+    value_avg_fee = f64(k.get("risk_avg_fee_krw", agg.get("avg_fee_krw", 0.0)), 0.0)
+    value_profit_factor = f64(agg.get("avg_profit_factor", 0.0), 0.0)
+    value_expectancy = f64(k.get("quality_realized_edge_proxy_krw", agg.get("avg_expectancy_krw", 0.0)), 0.0)
+    value_throughput = f64(k.get("throughput_avg_trades", agg.get("avg_total_trades", 0.0)), 0.0)
+
+    rows: List[Dict[str, Any]] = []
+
+    def push_row(
+        reason_key: str,
+        group: str,
+        value: Any,
+        threshold: Any,
+        compare_mode: str,
+        contribution_score: float,
+    ) -> None:
+        prev = f64(prev_scores.get(reason_key, 0.0), 0.0) if isinstance(prev_scores, dict) else 0.0
+        rows.append(
+            {
+                "reason_key": str(reason_key),
+                "group": str(group),
+                "value": value,
+                "threshold": threshold,
+                "compare_mode": str(compare_mode),
+                "contribution_score": round(float(max(0.0, contribution_score)), 6),
+                "delta_vs_previous": round(float(max(0.0, contribution_score) - prev), 6),
+            }
+        )
+
+    if not bool(checks_p1.get("drawdown_ok", True)):
+        push_row(
+            reason_key="drawdown_fail",
+            group="p1_risk",
+            value=round(value_drawdown, 6),
+            threshold=round(max_drawdown, 6),
+            compare_mode="<=",
+            contribution_score=max(0.0, value_drawdown - max_drawdown),
+        )
+    if not bool(checks_p1.get("tail_ok", True)):
+        push_row(
+            reason_key="tail_concentration_fail",
+            group="p1_risk",
+            value=round(value_tail, 6),
+            threshold=round(max_tail, 6),
+            compare_mode="<=",
+            contribution_score=max(0.0, value_tail - max_tail),
+        )
+    if not bool(checks_p2.get("adaptive_verdict_not_fail", True)):
+        push_row(
+            reason_key="adaptive_verdict_fail",
+            group="p2_quality_alignment",
+            value="fail",
+            threshold="not_fail",
+            compare_mode="boolean",
+            contribution_score=1.0,
+        )
+    if not bool(checks_p2.get("avg_fee_ok", True)):
+        push_row(
+            reason_key="avg_fee_fail",
+            group="p2_quality_alignment",
+            value=round(value_avg_fee, 6),
+            threshold=round(max_avg_fee, 6),
+            compare_mode="<=",
+            contribution_score=max(0.0, value_avg_fee - max_avg_fee),
+        )
+    if not bool(checks_p2.get("strict_parity_ok", True)):
+        push_row(
+            reason_key="strict_parity_fail",
+            group="p2_quality_alignment",
+            value="false",
+            threshold="true",
+            compare_mode="boolean",
+            contribution_score=1.0,
+        )
+    if not bool(checks_p3.get("profit_factor_ok", True)):
+        push_row(
+            reason_key="profit_factor_fail",
+            group="p3_profitability",
+            value=round(value_profit_factor, 6),
+            threshold=round(min_profit_factor, 6),
+            compare_mode=">=",
+            contribution_score=max(0.0, min_profit_factor - value_profit_factor),
+        )
+    if not bool(checks_p3.get("expectancy_ok", True)):
+        push_row(
+            reason_key="expectancy_proxy_fail",
+            group="p3_profitability",
+            value=round(value_expectancy, 6),
+            threshold=round(min_expectancy, 6),
+            compare_mode=">=",
+            contribution_score=max(0.0, min_expectancy - value_expectancy),
+        )
+    if not bool(checks_p4.get("throughput_ok", True)):
+        push_row(
+            reason_key="throughput_fail",
+            group="p4_throughput",
+            value=round(value_throughput, 6),
+            threshold=round(min_avg_trades, 6),
+            compare_mode=">=",
+            contribution_score=max(0.0, min_avg_trades - value_throughput),
+        )
+
+    rows.sort(key=lambda item: (-f64(item.get("contribution_score", 0.0), 0.0), str(item.get("reason_key", ""))))
+    return rows
+
+
 def cmd_control(args: argparse.Namespace) -> int:
     bpath = resolve_repo_path(args.bundle_json)
     rpath = resolve_repo_path(args.verification_report_json)
@@ -1082,6 +1284,9 @@ def cmd_promotion(args: argparse.Namespace) -> int:
         state = {}
     ps = state.get("promotion_gate", {}) if isinstance(state.get("promotion_gate"), dict) else {}
     ev = eval_lex(rep, args)
+    prev_reason_scores = ps.get("last_failed_reason_scores", {}) if isinstance(ps.get("last_failed_reason_scores"), dict) else {}
+    fail_rows = promotion_fail_rows(rep, ev, args, prev_reason_scores)
+    top_fail_rows = fail_rows[:3]
     passed = bool(ev.get("overall_pass", False))
     stages = ["paper", "live10", "live30", "live100"]
     cur = str(args.current_stage).strip().lower()
@@ -1105,10 +1310,38 @@ def cmd_promotion(args: argparse.Namespace) -> int:
             c = 0
         else:
             action = "hold_live100"
-    ps.update({"last_updated_at": now_iso(), "current_stage": cur, "next_stage": nxt, "action": action, "rollback": rollback, "consecutive_ok": c, "min_consecutive_windows": req, "last_pass": passed})
+    ps.update({
+        "last_updated_at": now_iso(),
+        "current_stage": cur,
+        "next_stage": nxt,
+        "action": action,
+        "rollback": rollback,
+        "consecutive_ok": c,
+        "min_consecutive_windows": req,
+        "last_pass": passed,
+        "last_failed_reason_scores": {
+            str(row.get("reason_key", "")): f64(row.get("contribution_score", 0.0), 0.0)
+            for row in fail_rows
+            if str(row.get("reason_key", "")).strip()
+        },
+    })
     state["promotion_gate"] = ps
     dump_json(spath, state)
-    dump_json(resolve_repo_path(args.output_json), {"mode": "promotion_gate", "generated_at": now_iso(), "current_stage": cur, "next_stage": nxt, "action": action, "rollback": rollback, "consecutive_ok": c, "evaluation": ev, "state_path": str(spath)})
+    dump_json(
+        resolve_repo_path(args.output_json),
+        {
+            "mode": "promotion_gate",
+            "generated_at": now_iso(),
+            "current_stage": cur,
+            "next_stage": nxt,
+            "action": action,
+            "rollback": rollback,
+            "consecutive_ok": c,
+            "evaluation": ev,
+            "top_failed_reasons": top_fail_rows,
+            "state_path": str(spath),
+        },
+    )
     print(f"[Phase34Ops] mode=promotion current={cur} next={nxt} action={action}", flush=True)
     return 0 if not rollback else 2
 
@@ -1121,6 +1354,633 @@ def cmd_diff(args: argparse.Namespace) -> int:
     rows = bundle_diff(a, b)
     dump_json(resolve_repo_path(args.output_json), {"mode": "bundle_diff", "generated_at": now_iso(), "base_bundle_json": str(resolve_repo_path(args.base_bundle_json)), "candidate_bundle_json": str(resolve_repo_path(args.candidate_bundle_json)), "change_count": len(rows), "changes": rows})
     print(f"[Phase34Ops] mode=bundle_diff changes={len(rows)}", flush=True)
+    return 0
+
+
+def cmd_a6_required_ev_step(args: argparse.Namespace) -> int:
+    bundle = load_json_required(args.bundle_json, "bundle")
+    dev_report = load_json_required(args.development_report_json, "development_report")
+    val_report = load_json_required(args.validation_report_json, "validation_report")
+
+    phase3 = bundle.get("phase3", {})
+    if not isinstance(phase3, dict):
+        phase3 = {}
+    ops = phase3.get("operations_control", {})
+    if not isinstance(ops, dict):
+        ops = {}
+    dynamic_gate = phase3.get("operations_dynamic_gate", {})
+    if not isinstance(dynamic_gate, dict):
+        dynamic_gate = {}
+    step_policy = dynamic_gate.get("required_ev_offset_step_policy", {})
+    if not isinstance(step_policy, dict):
+        step_policy = {}
+
+    prefer_core_direct = bool(step_policy.get("history_use_core_window_direct", True))
+    fallback_on_core_zero = bool(
+        step_policy.get("fallback_to_split_report_on_core_zero", True)
+    )
+    q_cut = clamp(
+        f64(step_policy.get("ev_step_quantile", f64(args.ev_step_quantile, 0.15)), 0.15),
+        0.01,
+        0.49,
+    )
+    clamp_k = max(
+        0.0,
+        f64(step_policy.get("delta_clamp_median_k", f64(args.delta_clamp_median_k, 0.5)), 0.5),
+    )
+    clamp_enabled = bool(step_policy.get("delta_clamp_enabled", True))
+    reference_mode = str(step_policy.get("ev_floor_reference_mode", "required_ev_offset")).strip().lower()
+    direction = str(step_policy.get("conservative_direction", "increase")).strip().lower() or "increase"
+    if direction not in ("increase", "decrease"):
+        direction = "increase"
+
+    dev_dist = extract_phase3_pass_ev_distribution(
+        dev_report,
+        prefer_core_direct=prefer_core_direct,
+    )
+    val_dist = extract_phase3_pass_ev_distribution(
+        val_report,
+        prefer_core_direct=prefer_core_direct,
+    )
+    if fallback_on_core_zero:
+        if int(dev_dist.get("sample_size_total", 0)) <= 0:
+            fallback_dev_dist = extract_phase3_pass_ev_distribution(
+                dev_report,
+                prefer_core_direct=False,
+            )
+            if int(fallback_dev_dist.get("sample_size_total", 0)) > 0:
+                fallback_dev_dist["source"] = (
+                    str(fallback_dev_dist.get("source", "")).strip()
+                    or "report_fallback_core_zero"
+                )
+                dev_dist = fallback_dev_dist
+        if int(val_dist.get("sample_size_total", 0)) <= 0:
+            fallback_val_dist = extract_phase3_pass_ev_distribution(
+                val_report,
+                prefer_core_direct=False,
+            )
+            if int(fallback_val_dist.get("sample_size_total", 0)) > 0:
+                fallback_val_dist["source"] = (
+                    str(fallback_val_dist.get("source", "")).strip()
+                    or "report_fallback_core_zero"
+                )
+                val_dist = fallback_val_dist
+    dev_samples = dev_dist.get("samples_bps", []) if isinstance(dev_dist.get("samples_bps", []), list) else []
+    val_samples = val_dist.get("samples_bps", []) if isinstance(val_dist.get("samples_bps", []), list) else []
+    ev_samples_bps: List[float] = []
+    for x in list(dev_samples) + list(val_samples):
+        v = f64(x, float("nan"))
+        if math.isfinite(v):
+            ev_samples_bps.append(float(v))
+    ev_samples_pct = [float(x) / 10000.0 for x in ev_samples_bps]
+
+    sample_sizes_history = [
+        float(dev_dist.get("sample_size_total", 0)),
+        float(val_dist.get("sample_size_total", 0)),
+    ]
+    sample_sizes_history = [x for x in sample_sizes_history if math.isfinite(x) and x > 0.0]
+    hostile_labels = dynamic_gate.get("hostile_regime_labels", [])
+    if not isinstance(hostile_labels, list):
+        hostile_labels = []
+    context_payload = pick_eval_payload(val_report, prefer_core_direct)
+    context = phase3_context(context_payload, [str(x) for x in hostile_labels])
+
+    min_samples_lookup_default = max(
+        1.0,
+        f64(step_policy.get("min_samples_lookup_default", f64(args.min_samples_lookup_default, 32)), 32.0),
+    )
+    min_samples_lookup = lookup_limit(
+        step_policy.get("min_samples_lookup", []),
+        regime=str(context.get("regime", "ANY")),
+        volatility_bucket=str(context.get("volatility_bucket", "ANY")),
+        liquidity_bucket=str(context.get("liquidity_bucket", "ANY")),
+        default_limit=min_samples_lookup_default,
+    )
+    min_samples_dist_p = clamp(
+        f64(step_policy.get("min_samples_dist_quantile_p", f64(args.min_samples_dist_quantile_p, 0.2)), 0.2),
+        0.0,
+        1.0,
+    )
+    min_samples_dist = (
+        quantile(sample_sizes_history, min_samples_dist_p)
+        if sample_sizes_history
+        else float(min_samples_lookup_default)
+    )
+    min_samples_required = int(math.ceil(max(float(min_samples_lookup), float(min_samples_dist))))
+
+    sample_size = len(ev_samples_pct)
+    ev_cut_pct = quantile(ev_samples_pct, q_cut) if ev_samples_pct else 0.0
+    ev_median_pct = quantile(ev_samples_pct, 0.5) if ev_samples_pct else 0.0
+    quantiles_pct = quantile_summary(ev_samples_pct)
+    quantiles_bps = {k: (v * 10000.0) for k, v in quantiles_pct.items()}
+
+    required_ev_offset_old = f64(ops.get("required_ev_offset", 0.0), 0.0)
+    if reference_mode in ("required_ev_offset", "ops_required_ev_offset", "current_offset"):
+        ev_floor_reference = float(required_ev_offset_old)
+        ev_floor_reference_mode = "required_ev_offset"
+    else:
+        ev_floor_reference = 0.0
+        ev_floor_reference_mode = "zero"
+
+    notes: List[str] = []
+    if sample_size < min_samples_required:
+        raw_delta = 0.0
+        clamped_delta = 0.0
+        clamp_max = 0.0
+        notes.append("insufficient_sample_size_delta_forced_zero")
+    else:
+        raw_delta = max(0.0, float(ev_cut_pct) - float(ev_floor_reference))
+        clamp_max = max(0.0, abs(float(ev_median_pct)) * float(clamp_k))
+        clamped_delta = min(float(raw_delta), float(clamp_max)) if clamp_enabled else float(raw_delta)
+        if clamp_enabled and raw_delta > clamped_delta:
+            notes.append("delta_clamped_by_median_k")
+
+    if direction == "increase":
+        required_ev_offset_new = float(required_ev_offset_old) + float(clamped_delta)
+    else:
+        required_ev_offset_new = float(required_ev_offset_old) - float(clamped_delta)
+    conservative_direction_ok = required_ev_offset_new >= required_ev_offset_old
+    if not conservative_direction_ok:
+        notes.append("direction_not_conservative_check_failed")
+
+    out_bundle = copy.deepcopy(bundle)
+    out_phase3 = out_bundle.get("phase3", {})
+    if not isinstance(out_phase3, dict):
+        out_phase3 = {}
+    out_ops = out_phase3.get("operations_control", {})
+    if not isinstance(out_ops, dict):
+        out_ops = {}
+    out_ops["required_ev_offset"] = float(required_ev_offset_new)
+    out_phase3["operations_control"] = normalize_ops(out_ops)
+    out_bundle["phase3"] = out_phase3
+
+    release_meta = out_bundle.get("release_meta", {})
+    if not isinstance(release_meta, dict):
+        release_meta = {}
+    parent_version = str(release_meta.get("version", out_bundle.get("version", ""))).strip()
+    release_meta.update(
+        {
+            "version": str(args.release_version).strip() or f"a6_required_ev_step_{now_epoch()}",
+            "created_at": now_iso(),
+            "parent_version": parent_version,
+            "mode": "a6_required_ev_offset_distribution_step",
+            "change_summary": [
+                (
+                    "required_ev_offset:"
+                    f"{required_ev_offset_old}->{required_ev_offset_new}"
+                )
+            ],
+        }
+    )
+    out_bundle["release_meta"] = release_meta
+
+    dump_json(resolve_repo_path(args.output_bundle_json), out_bundle)
+
+    calc_report = {
+        "mode": "a6_required_ev_offset_distribution_step",
+        "generated_at": now_iso(),
+        "bundle_input": str(resolve_repo_path(args.bundle_json)),
+        "bundle_output": str(resolve_repo_path(args.output_bundle_json)),
+        "development_report_json": str(resolve_repo_path(args.development_report_json)),
+        "validation_report_json": str(resolve_repo_path(args.validation_report_json)),
+        "q_cut": float(q_cut),
+        "sample_size": int(sample_size),
+        "sample_size_required": int(min_samples_required),
+        "sample_size_lookup_component": float(min_samples_lookup),
+        "sample_size_dist_component": float(min_samples_dist),
+        "sample_size_dist_quantile_p": float(min_samples_dist_p),
+        "ev_distribution_quantiles_pct": {k: round(float(v), 10) for k, v in quantiles_pct.items()},
+        "ev_distribution_quantiles_bps": {k: round(float(v), 6) for k, v in quantiles_bps.items()},
+        "ev_cut_pct": round(float(ev_cut_pct), 10),
+        "ev_cut_bps": round(float(ev_cut_pct) * 10000.0, 6),
+        "ev_median_pct": round(float(ev_median_pct), 10),
+        "ev_median_bps": round(float(ev_median_pct) * 10000.0, 6),
+        "ev_floor_reference": {
+            "mode": ev_floor_reference_mode,
+            "value_pct": round(float(ev_floor_reference), 10),
+            "value_bps": round(float(ev_floor_reference) * 10000.0, 6),
+        },
+        "raw_delta": {
+            "pct": round(float(raw_delta), 10),
+            "bps": round(float(raw_delta) * 10000.0, 6),
+        },
+        "delta_clamp": {
+            "enabled": bool(clamp_enabled),
+            "median_k": float(clamp_k),
+            "clamp_max_pct": round(float(clamp_max), 10),
+            "clamp_max_bps": round(float(clamp_max) * 10000.0, 6),
+            "clamped_delta_pct": round(float(clamped_delta), 10),
+            "clamped_delta_bps": round(float(clamped_delta) * 10000.0, 6),
+        },
+        "required_ev_offset_old": round(float(required_ev_offset_old), 10),
+        "required_ev_offset_new": round(float(required_ev_offset_new), 10),
+        "conservative_direction": direction,
+        "required_ev_increased": bool(conservative_direction_ok),
+        "context": context,
+        "history_sources": {
+            "development": {
+                "enabled": bool(dev_dist.get("enabled", False)),
+                "sample_size_total": int(dev_dist.get("sample_size_total", 0)),
+                "source": str(dev_dist.get("source", "")),
+            },
+            "validation": {
+                "enabled": bool(val_dist.get("enabled", False)),
+                "sample_size_total": int(val_dist.get("sample_size_total", 0)),
+                "source": str(val_dist.get("source", "")),
+            },
+            "prefer_core_window_direct": bool(prefer_core_direct),
+            "fallback_to_split_report_on_core_zero": bool(fallback_on_core_zero),
+        },
+        "notes": notes,
+    }
+    dump_json(resolve_repo_path(args.output_json), calc_report)
+    print(
+        "[Phase34Ops] mode=a6_required_ev_step "
+        f"sample_size={sample_size} required={min_samples_required} "
+        f"delta_bps={round(float(clamped_delta) * 10000.0, 6)} "
+        f"offset_old={round(required_ev_offset_old, 10)} "
+        f"offset_new={round(required_ev_offset_new, 10)}",
+        flush=True,
+    )
+    return 0
+
+
+def set_nested_value(root: Dict[str, Any], path: List[str], value: Any) -> None:
+    cur = root
+    for key in path[:-1]:
+        child = cur.get(key)
+        if not isinstance(child, dict):
+            child = {}
+            cur[key] = child
+        cur = child
+    cur[path[-1]] = value
+
+
+def get_nested_value(root: Dict[str, Any], path: List[str], default: Any) -> Any:
+    cur: Any = root
+    for key in path:
+        if not isinstance(cur, dict):
+            return default
+        cur = cur.get(key)
+    return default if cur is None else cur
+
+
+def build_expectancy_proxy_breakdown(
+    report: Dict[str, Any],
+    bundle: Dict[str, Any],
+    *,
+    min_avg_trades: float,
+    max_drawdown_pct: float,
+) -> Dict[str, Any]:
+    agg = report.get("aggregates", {}) if isinstance(report.get("aggregates"), dict) else {}
+    aad = ng(report, ["adaptive_validation", "aggregates"], {})
+    if not isinstance(aad, dict):
+        aad = {}
+    loss_tail = aad.get("loss_tail_aggregate", {})
+    if not isinstance(loss_tail, dict):
+        loss_tail = {}
+    phase3_gate = ng(bundle, ["phase3", "operations_dynamic_gate"], {})
+    if not isinstance(phase3_gate, dict):
+        phase3_gate = {}
+    prefer_core = bool(phase3_gate.get("prefer_core_window_direct", True))
+    payload = pick_eval_payload(report, prefer_core)
+    fallback_on_core_zero = bool(phase3_gate.get("fallback_to_split_report_on_core_zero", True))
+    source_mode = "core_window_direct" if payload is not report else "report"
+    if fallback_on_core_zero and payload is not report:
+        funnel_probe = phase3_funnel(payload)
+        if funnel_probe["candidate_total"] <= 0:
+            payload = report
+            source_mode = "report_fallback_core_zero"
+    hostile_labels = phase3_gate.get("hostile_regime_labels", [])
+    if not isinstance(hostile_labels, list):
+        hostile_labels = []
+    context = phase3_context(payload, [str(x) for x in hostile_labels])
+    funnel = phase3_funnel(payload)
+
+    avg_expectancy_krw = f64(agg.get("avg_expectancy_krw", 0.0), 0.0)
+    avg_fee_krw = max(0.0, f64(agg.get("avg_fee_krw", 0.0), 0.0))
+    avg_total_trades = max(0.0, f64(agg.get("avg_total_trades", 0.0), 0.0))
+    peak_max_drawdown_pct = max(0.0, f64(agg.get("peak_max_drawdown_pct", 0.0), 0.0))
+    tail_concentration = max(0.0, f64(loss_tail.get("avg_top3_loss_concentration", 0.0), 0.0))
+    tail_exceed_rate = float(funnel.get("reject_cost_tail_fail", 0)) / float(
+        max(1, int(funnel.get("candidate_total", 0)))
+    )
+    avg_downtrend_trade_share = max(0.0, f64(aad.get("avg_downtrend_trade_share", 0.0), 0.0))
+    avg_downtrend_loss_per_trade_krw = max(
+        0.0,
+        f64(aad.get("avg_downtrend_loss_per_trade_krw", 0.0), 0.0),
+    )
+    hostile_share = max(0.0, f64(context.get("hostile_share", 0.0), 0.0))
+
+    frontier_k_cost_tail = max(0.0, f64(ng(bundle, ["phase3", "frontier", "k_cost_tail"], 0.2), 0.2))
+    tail_lambda = max(0.0, f64(ng(bundle, ["phase4", "portfolio_allocator", "lambda_tail"], 1.0), 1.0))
+    gross_expectancy_proxy_krw = float(avg_expectancy_krw) + float(avg_fee_krw)
+    cost_component = -float(avg_fee_krw) * max(0.0, frontier_k_cost_tail)
+    tail_scale_krw = max(1.0, abs(float(avg_expectancy_krw))) * max(0.25, 0.5 * tail_lambda)
+    tail_exceed_scale_krw = max(0.5, 0.25 * max(1.0, abs(float(avg_expectancy_krw))))
+    tail_penalty_component = -(
+        float(tail_concentration) * float(tail_scale_krw)
+        + float(tail_exceed_rate) * float(tail_exceed_scale_krw)
+    )
+    drawdown_scale_krw = max(0.5, 0.35 * max(1.0, abs(float(avg_expectancy_krw))))
+    drawdown_or_loss_streak_component = -(
+        (float(peak_max_drawdown_pct) / max(1.0, float(max_drawdown_pct))) * float(drawdown_scale_krw)
+    )
+    regime_share_scale_krw = max(0.5, 0.25 * max(1.0, abs(float(avg_expectancy_krw))))
+    regime_loss_scale_krw = 0.5
+    regime_hostility_component = -(
+        float(hostile_share) * float(regime_share_scale_krw)
+        + max(0.0, float(avg_downtrend_trade_share) - 0.35) * float(regime_share_scale_krw)
+        + float(avg_downtrend_loss_per_trade_krw) * float(regime_loss_scale_krw)
+    )
+    confidence_scale_krw = max(0.5, 0.5 * max(1.0, abs(float(avg_expectancy_krw))))
+    confidence_shortfall_ratio = max(
+        0.0,
+        (float(min_avg_trades) - float(avg_total_trades)) / max(1.0, float(min_avg_trades)),
+    )
+    confidence_component = -float(confidence_shortfall_ratio) * float(confidence_scale_krw)
+    expectancy_raw_component = float(avg_expectancy_krw)
+
+    expectancy_proxy_total = (
+        float(expectancy_raw_component)
+        + float(cost_component)
+        + float(tail_penalty_component)
+        + float(drawdown_or_loss_streak_component)
+        + float(regime_hostility_component)
+        + float(confidence_component)
+    )
+    components = {
+        "expectancy_raw_component": {
+            "value": round(float(expectancy_raw_component), 6),
+            "unit": "krw_per_trade",
+            "source": ["aggregates.avg_expectancy_krw"],
+            "scaling": {"scale": 1.0, "note": "net expectancy proxy"},
+        },
+        "cost_component": {
+            "value": round(float(cost_component), 6),
+            "unit": "krw_per_trade",
+            "source": ["aggregates.avg_fee_krw", "phase3.frontier.k_cost_tail"],
+            "scaling": {
+                "avg_fee_krw": round(float(avg_fee_krw), 6),
+                "k_cost_tail": round(float(frontier_k_cost_tail), 6),
+                "formula": "-avg_fee_krw * k_cost_tail",
+            },
+        },
+        "tail_penalty_component": {
+            "value": round(float(tail_penalty_component), 6),
+            "unit": "krw_proxy",
+            "source": [
+                "adaptive_validation.aggregates.loss_tail_aggregate.avg_top3_loss_concentration",
+                "diagnostics.aggregate.phase3_diagnostics_v2.funnel_breakdown.reject_cost_tail_fail",
+            ],
+            "scaling": {
+                "tail_concentration": round(float(tail_concentration), 6),
+                "tail_exceed_rate": round(float(tail_exceed_rate), 6),
+                "tail_scale_krw": round(float(tail_scale_krw), 6),
+                "tail_exceed_scale_krw": round(float(tail_exceed_scale_krw), 6),
+                "lambda_tail": round(float(tail_lambda), 6),
+                "formula": "-(tail_concentration*tail_scale_krw + tail_exceed_rate*tail_exceed_scale_krw)",
+            },
+        },
+        "drawdown_or_loss_streak_component": {
+            "value": round(float(drawdown_or_loss_streak_component), 6),
+            "unit": "krw_proxy",
+            "source": ["aggregates.peak_max_drawdown_pct"],
+            "scaling": {
+                "peak_max_drawdown_pct": round(float(peak_max_drawdown_pct), 6),
+                "max_drawdown_pct_limit": round(float(max_drawdown_pct), 6),
+                "drawdown_scale_krw": round(float(drawdown_scale_krw), 6),
+                "formula": "-(peak_max_drawdown_pct/max_drawdown_pct_limit)*drawdown_scale_krw",
+            },
+        },
+        "regime_hostility_component": {
+            "value": round(float(regime_hostility_component), 6),
+            "unit": "krw_proxy",
+            "source": [
+                "adaptive_validation.aggregates.avg_downtrend_trade_share",
+                "adaptive_validation.aggregates.avg_downtrend_loss_per_trade_krw",
+                "diagnostics.aggregate.phase3_diagnostics_v2.pass_rate_by_regime",
+            ],
+            "scaling": {
+                "hostile_share": round(float(hostile_share), 6),
+                "avg_downtrend_trade_share": round(float(avg_downtrend_trade_share), 6),
+                "avg_downtrend_loss_per_trade_krw": round(float(avg_downtrend_loss_per_trade_krw), 6),
+                "regime_share_scale_krw": round(float(regime_share_scale_krw), 6),
+                "regime_loss_scale_krw": round(float(regime_loss_scale_krw), 6),
+                "formula": "-(hostile + downtrend_share_excess + downtrend_loss)",
+            },
+        },
+        "confidence_component": {
+            "value": round(float(confidence_component), 6),
+            "unit": "krw_proxy",
+            "source": ["aggregates.avg_total_trades"],
+            "scaling": {
+                "avg_total_trades": round(float(avg_total_trades), 6),
+                "min_avg_trades": round(float(min_avg_trades), 6),
+                "shortfall_ratio": round(float(confidence_shortfall_ratio), 6),
+                "confidence_scale_krw": round(float(confidence_scale_krw), 6),
+                "formula": "-shortfall_ratio * confidence_scale_krw",
+            },
+        },
+    }
+    component_rows: List[Dict[str, Any]] = []
+    for name, payload in components.items():
+        if not isinstance(payload, dict):
+            continue
+        component_rows.append(
+            {
+                "name": str(name),
+                "value": round(float(f64(payload.get("value", 0.0), 0.0)), 6),
+            }
+        )
+    component_rows.sort(key=lambda item: (f64(item.get("value", 0.0), 0.0), str(item.get("name", ""))))
+    top3_negative_components = [
+        row for row in component_rows if f64(row.get("value", 0.0), 0.0) < 0.0
+    ][:3]
+    top1 = top3_negative_components[0]["name"] if top3_negative_components else ""
+    return {
+        "expectancy_proxy_total": round(float(expectancy_proxy_total), 6),
+        "expectancy_proxy_threshold": 0.0,
+        "components": components,
+        "component_values": component_rows,
+        "top3_negative_components": top3_negative_components,
+        "top1_negative_component": str(top1),
+        "context": {
+            "regime": str(context.get("regime", "ANY")),
+            "volatility_bucket": str(context.get("volatility_bucket", "ANY")),
+            "liquidity_bucket": str(context.get("liquidity_bucket", "ANY")),
+            "hostile_share": round(float(hostile_share), 6),
+            "source_mode": source_mode,
+        },
+    }
+
+
+def apply_a7_single_axis_fix(
+    bundle: Dict[str, Any],
+    report: Dict[str, Any],
+    breakdown: Dict[str, Any],
+) -> Dict[str, Any]:
+    top1 = str(breakdown.get("top1_negative_component", "")).strip()
+    context = breakdown.get("context", {}) if isinstance(breakdown.get("context"), dict) else {}
+    regime = str(context.get("regime", "ANY")).strip().upper()
+
+    candidate_bundle = copy.deepcopy(bundle)
+    case_id = "A7-4"
+    action_label = "regime_cut_step1"
+    notes: List[str] = []
+    path: List[str] = []
+    old_value = 0.0
+    new_value = 0.0
+
+    if top1 == "cost_component":
+        case_id = "A7-1"
+        action_label = "phase3_frontier_k_cost_tail_step_up"
+        path = ["phase3", "frontier", "k_cost_tail"]
+        old_value = f64(get_nested_value(candidate_bundle, path, 0.2), 0.2)
+        step = max(0.02, abs(old_value) * 0.15)
+        new_value = min(1.0, old_value + step)
+    elif top1 == "tail_penalty_component":
+        case_id = "A7-2"
+        phase4_enabled = bool(get_nested_value(candidate_bundle, ["phase4", "correlation_control", "enabled"], False))
+        has_cluster_caps = bool(get_nested_value(candidate_bundle, ["phase4", "correlation_control", "cluster_caps"], {}))
+        if phase4_enabled and has_cluster_caps:
+            action_label = "phase4_default_cluster_cap_tighten_step1"
+            path = ["phase4", "correlation_control", "default_cluster_cap"]
+            old_value = f64(get_nested_value(candidate_bundle, path, 1.0), 1.0)
+            new_value = max(0.08, old_value - 0.02)
+        else:
+            action_label = "phase3_cost_tail_reject_threshold_tighten_step1_fallback"
+            path = ["phase3", "frontier", "cost_tail_reject_threshold_pct"]
+            old_value = f64(get_nested_value(candidate_bundle, path, 0.03), 0.03)
+            new_value = max(0.005, old_value - 0.002)
+            notes.append("phase4_cluster_cap_not_active_fallback_to_phase3_tail_threshold")
+    elif top1 == "regime_hostility_component":
+        case_id = "A7-3"
+        action_label = "hostile_regime_budget_tighten_step1"
+        path = ["phase3", "manager_filter", "scan_prefilter_margin_add_hostile"]
+        old_value = f64(get_nested_value(candidate_bundle, path, 0.015), 0.015)
+        new_value = min(0.15, old_value + 0.005)
+    elif top1 == "expectancy_raw_component":
+        case_id = "A7-4"
+        action_label = "regime_cut_ranging_strength_step1"
+        if regime == "RANGING":
+            path = ["phase3", "manager_filter", "base_min_strength_ranging"]
+            old_value = f64(get_nested_value(candidate_bundle, path, 0.43), 0.43)
+            new_value = min(0.98, old_value + 0.01)
+        else:
+            path = ["phase3", "manager_filter", "base_min_strength_default"]
+            old_value = f64(get_nested_value(candidate_bundle, path, 0.4), 0.4)
+            new_value = min(0.98, old_value + 0.01)
+            notes.append("dominant_regime_not_ranging_fallback_to_base_min_strength_default")
+    else:
+        case_id = "A7-3"
+        action_label = "hostile_regime_budget_tighten_step1_fallback"
+        path = ["phase3", "manager_filter", "scan_prefilter_margin_add_hostile"]
+        old_value = f64(get_nested_value(candidate_bundle, path, 0.015), 0.015)
+        new_value = min(0.15, old_value + 0.005)
+        notes.append("top1_component_missing_fallback_applied")
+
+    if not path:
+        raise RuntimeError("A7 single-axis fix path resolution failed")
+    if abs(new_value - old_value) <= 1e-12:
+        notes.append("selected_axis_noop_after_clamp")
+
+    set_nested_value(candidate_bundle, path, float(new_value))
+    release_meta = candidate_bundle.get("release_meta", {})
+    if not isinstance(release_meta, dict):
+        release_meta = {}
+    parent_version = str(release_meta.get("version", candidate_bundle.get("version", ""))).strip()
+    release_meta.update(
+        {
+            "created_at": now_iso(),
+            "parent_version": parent_version,
+            "mode": "a7_expectancy_component_single_axis_fix",
+            "change_summary": [
+                f"{'.'.join(path)}:{old_value}->{new_value}",
+            ],
+        }
+    )
+    candidate_bundle["release_meta"] = release_meta
+    return {
+        "bundle": candidate_bundle,
+        "selected_case": case_id,
+        "selected_component": top1,
+        "action_label": action_label,
+        "changed_path": ".".join(path),
+        "old_value": float(old_value),
+        "new_value": float(new_value),
+        "delta": float(new_value - old_value),
+        "notes": notes,
+    }
+
+
+def cmd_a7_expectancy_component_fix(args: argparse.Namespace) -> int:
+    bundle = load_json_required(args.bundle_json, "bundle")
+    quarantine_report = load_json_required(args.quarantine_report_json, "quarantine_report")
+    breakdown = build_expectancy_proxy_breakdown(
+        quarantine_report,
+        bundle,
+        min_avg_trades=float(args.min_avg_trades),
+        max_drawdown_pct=float(args.max_drawdown_pct),
+    )
+    fix = apply_a7_single_axis_fix(bundle, quarantine_report, breakdown)
+    out_bundle = fix.get("bundle", {})
+    if not isinstance(out_bundle, dict):
+        raise RuntimeError("A7 failed to build output bundle")
+    release_meta = out_bundle.get("release_meta", {})
+    if not isinstance(release_meta, dict):
+        release_meta = {}
+    release_meta["version"] = str(args.release_version).strip() or f"a7_expectancy_component_fix_{now_epoch()}"
+    out_bundle["release_meta"] = release_meta
+    dump_json(resolve_repo_path(args.output_bundle_json), out_bundle)
+
+    out_report = {
+        "mode": "a7_expectancy_proxy_breakdown_single_axis_fix",
+        "generated_at": now_iso(),
+        "bundle_input": str(resolve_repo_path(args.bundle_json)),
+        "bundle_output": str(resolve_repo_path(args.output_bundle_json)),
+        "quarantine_report_json": str(resolve_repo_path(args.quarantine_report_json)),
+        "expectancy_proxy_total": breakdown.get("expectancy_proxy_total", 0.0),
+        "expectancy_proxy_threshold": breakdown.get("expectancy_proxy_threshold", 0.0),
+        "components": breakdown.get("components", {}),
+        "component_values": breakdown.get("component_values", []),
+        "top3_negative_components": breakdown.get("top3_negative_components", []),
+        "top1_negative_component": breakdown.get("top1_negative_component", ""),
+        "normalization_scaling_info": {
+            "component_units": {
+                "expectancy_raw_component": "krw_per_trade",
+                "cost_component": "krw_per_trade",
+                "tail_penalty_component": "krw_proxy",
+                "drawdown_or_loss_streak_component": "krw_proxy",
+                "regime_hostility_component": "krw_proxy",
+                "confidence_component": "krw_proxy",
+            },
+            "context": breakdown.get("context", {}),
+            "thresholds": {
+                "min_avg_trades": float(args.min_avg_trades),
+                "max_drawdown_pct": float(args.max_drawdown_pct),
+            },
+        },
+        "selected_fix": {
+            "selected_case": fix.get("selected_case", ""),
+            "selected_component": fix.get("selected_component", ""),
+            "action_label": fix.get("action_label", ""),
+            "changed_path": fix.get("changed_path", ""),
+            "old_value": round(f64(fix.get("old_value", 0.0), 0.0), 10),
+            "new_value": round(f64(fix.get("new_value", 0.0), 0.0), 10),
+            "delta": round(f64(fix.get("delta", 0.0), 0.0), 10),
+            "notes": fix.get("notes", []),
+        },
+    }
+    dump_json(resolve_repo_path(args.output_json), out_report)
+    print(
+        "[Phase34Ops] mode=a7_expectancy_component_fix "
+        f"top1={str(breakdown.get('top1_negative_component', ''))} "
+        f"case={str(fix.get('selected_case', ''))} "
+        f"path={str(fix.get('changed_path', ''))} "
+        f"delta={round(f64(fix.get('delta', 0.0), 0.0), 10)}",
+        flush=True,
+    )
     return 0
 
 
@@ -1837,6 +2697,27 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--candidate-bundle-json", required=True)
     d.add_argument("--output-json", default=r".\build\Release\logs\phase34_ops_bundle_diff.json")
 
+    a6 = s.add_parser("a6_required_ev_step")
+    a6.add_argument("--bundle-json", required=True)
+    a6.add_argument("--development-report-json", required=True)
+    a6.add_argument("--validation-report-json", required=True)
+    a6.add_argument("--output-bundle-json", required=True)
+    a6.add_argument("--output-json", required=True)
+    a6.add_argument("--release-version", default="")
+    a6.add_argument("--ev-step-quantile", type=float, default=0.15)
+    a6.add_argument("--delta-clamp-median-k", type=float, default=0.5)
+    a6.add_argument("--min-samples-lookup-default", type=float, default=32.0)
+    a6.add_argument("--min-samples-dist-quantile-p", type=float, default=0.2)
+
+    a7 = s.add_parser("a7_expectancy_component_fix")
+    a7.add_argument("--bundle-json", required=True)
+    a7.add_argument("--quarantine-report-json", required=True)
+    a7.add_argument("--output-bundle-json", required=True)
+    a7.add_argument("--output-json", required=True)
+    a7.add_argument("--release-version", default="")
+    a7.add_argument("--min-avg-trades", type=float, default=8.0)
+    a7.add_argument("--max-drawdown-pct", type=float, default=12.0)
+
     r3 = s.add_parser("dynamic_phase3_gate")
     r3.add_argument("--candidate-name", default="")
     r3.add_argument("--bundle-json", required=True)
@@ -1881,6 +2762,10 @@ def main(argv: List[str] = None) -> int:
         return cmd_promotion(args)
     if args.cmd == "bundle_diff":
         return cmd_diff(args)
+    if args.cmd == "a6_required_ev_step":
+        return cmd_a6_required_ev_step(args)
+    if args.cmd == "a7_expectancy_component_fix":
+        return cmd_a7_expectancy_component_fix(args)
     if args.cmd == "dynamic_phase3_gate":
         return cmd_dynamic_phase3_gate(args)
     if args.cmd == "phase4_exposure_summary":

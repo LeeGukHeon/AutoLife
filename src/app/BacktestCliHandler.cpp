@@ -171,6 +171,18 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
             {"rejected_by_penalty", row.rejected_by_penalty}
         });
     }
+    nlohmann::json cluster_cap_debug_rows = nlohmann::json::array();
+    for (const auto& row : result.phase4_portfolio_diagnostics.cluster_cap_debug_trace_samples) {
+        cluster_cap_debug_rows.push_back({
+            {"market", row.market},
+            {"cluster", row.cluster},
+            {"cluster_exposure_before", row.cluster_exposure_before},
+            {"candidate_notional_fraction", row.candidate_notional_fraction},
+            {"cluster_cap_value", row.cluster_cap_value},
+            {"would_exceed", row.would_exceed},
+            {"after_accept_cluster_exposure", row.after_accept_cluster_exposure}
+        });
+    }
     j["phase4_portfolio_diagnostics"] = {
         {"enabled", result.phase4_portfolio_diagnostics.enabled},
         {"phase4_portfolio_allocator_enabled",
@@ -210,6 +222,11 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
         {"rejected_by_cluster_cap", result.phase4_portfolio_diagnostics.rejected_by_cluster_cap},
         {"rejected_by_correlation_penalty",
          result.phase4_portfolio_diagnostics.rejected_by_correlation_penalty},
+        {"cluster_cap_skips_count", result.phase4_portfolio_diagnostics.cluster_cap_skips_count},
+        {"cluster_cap_would_exceed_count",
+         result.phase4_portfolio_diagnostics.cluster_cap_would_exceed_count},
+        {"cluster_exposure_update_count",
+         result.phase4_portfolio_diagnostics.cluster_exposure_update_count},
         {"rejected_by_execution_cap", result.phase4_portfolio_diagnostics.rejected_by_execution_cap},
         {"rejected_by_drawdown_governor",
          result.phase4_portfolio_diagnostics.rejected_by_drawdown_governor},
@@ -235,7 +252,8 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
         {"correlation_cluster_cap_values",
          result.phase4_portfolio_diagnostics.correlation_cluster_cap_values},
         {"correlation_near_cap_candidates", correlation_near_cap_rows},
-        {"correlation_penalty_score_samples", correlation_penalty_score_rows}
+        {"correlation_penalty_score_samples", correlation_penalty_score_rows},
+        {"cluster_cap_debug_trace_samples", cluster_cap_debug_rows}
     };
     j["strategyless_exit_diagnostics"] = {
         {"position_checks", result.strategyless_position_checks},

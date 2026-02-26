@@ -270,3 +270,64 @@ python scripts/apply_trading_preset.py -Preset safe
 - `legacy_gate` profile is retired; use `adaptive` profile only.
 - For Phase 3/4 tuning and promotion decisions, apply:
   - `docs/BACKTEST_REPRODUCTION_CHECKLIST.md`
+
+## A4-A8 Fixed Dataset Lock
+- For A4~A8 promotion/tuning/diagnostic runs, freeze dataset inputs to the exact baseline set below.
+- Fixed data root:
+  - `data/backtest_real`
+- Fixed 1m datasets:
+  - `upbit_KRW_ADA_1m_12000.csv`
+  - `upbit_KRW_BTC_1m_12000.csv`
+  - `upbit_KRW_DOGE_1m_12000.csv`
+  - `upbit_KRW_ETH_1m_12000.csv`
+  - `upbit_KRW_SOL_1m_12000.csv`
+  - `upbit_KRW_XRP_1m_12000.csv`
+- Always run with:
+  - `--require-higher-tf-companions`
+  - `--data-mode fixed`
+- Do not switch to split shard folders (`data/backtest_real_splits_time_r2/*`) for A4~A8 score comparison baselines.
+- Split shard folders can fail strict parity warmup (`4h/1h/15m` insufficient), producing `entry_rounds=0`, `candidate_total=0`, and empty diagnostics.
+- A8-0 verification-only runs must reuse the same fixed dataset lock, with tag-only separation (`--split-name validation` / `--split-name quarantine`) if needed.
+
+### A8-0 Repro Commands (Fixed Dataset Lock)
+```powershell
+python scripts/run_verification.py `
+  --data-mode fixed `
+  --data-dir data/backtest_real `
+  --dataset-names upbit_KRW_ADA_1m_12000.csv upbit_KRW_DOGE_1m_12000.csv upbit_KRW_ETH_1m_12000.csv upbit_KRW_SOL_1m_12000.csv upbit_KRW_XRP_1m_12000.csv upbit_KRW_BTC_1m_12000.csv `
+  --require-higher-tf-companions `
+  --skip-probabilistic-coverage-check `
+  --split-name validation `
+  --split-time-based `
+  --output-json build/Release/logs/verification_report_a8_0_validation.json `
+  --quarantine-vol-bucket-pct-distribution-json build/Release/logs/validation_vol_bucket_pct_distribution.json `
+  --quarantine-pnl-by-regime-x-vol-fixed-json build/Release/logs/validation_pnl_by_regime_x_vol_fixed.json `
+  --quarantine-pnl-by-regime-x-vol-pct-json build/Release/logs/validation_pnl_by_regime_x_vol_pct.json `
+  --top-loss-cells-regime-vol-pct-json build/Release/logs/validation_top_loss_cells_regime_vol_pct.json
+
+python scripts/run_verification.py `
+  --data-mode fixed `
+  --data-dir data/backtest_real `
+  --dataset-names upbit_KRW_ADA_1m_12000.csv upbit_KRW_DOGE_1m_12000.csv upbit_KRW_ETH_1m_12000.csv upbit_KRW_SOL_1m_12000.csv upbit_KRW_XRP_1m_12000.csv upbit_KRW_BTC_1m_12000.csv `
+  --require-higher-tf-companions `
+  --skip-probabilistic-coverage-check `
+  --split-name quarantine `
+  --split-time-based `
+  --output-json build/Release/logs/verification_report_a8_0_quarantine.json `
+  --quarantine-vol-bucket-pct-distribution-json build/Release/logs/quarantine_vol_bucket_pct_distribution.json `
+  --quarantine-pnl-by-regime-x-vol-fixed-json build/Release/logs/quarantine_pnl_by_regime_x_vol_fixed.json `
+  --quarantine-pnl-by-regime-x-vol-pct-json build/Release/logs/quarantine_pnl_by_regime_x_vol_pct.json `
+  --top-loss-cells-regime-vol-pct-json build/Release/logs/top_loss_cells_regime_vol_pct.json
+```
+
+## Current Round Hard Locks (Do Not Change)
+- Split manifest lock:
+  - `build/Release/logs/time_split_manifest_r21_prefix.json`
+  - Keep the current Quarantine window unchanged.
+- Bundle chain lock:
+  - `build/Release/config/model/probabilistic_runtime_bundle_v2_r35_strict_ev_step1_risk_score_dynamic_limit_a6.json`
+  - Do not mix in other intermediate bundle variants.
+- Data snapshot lock:
+  - Reuse the same Dev/Val/Qua dataset files for all comparisons in this round.
+  - Reuse the same policy decision artifact path:
+    - `build/Release/logs/policy_decisions_backtest.jsonl`

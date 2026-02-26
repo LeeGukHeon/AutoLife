@@ -49,6 +49,12 @@ struct ClusterFilterResult {
     std::vector<TelemetryRow> telemetry_rows;
 };
 
+struct AllocatorClusterCapReallocateResult {
+    std::vector<std::size_t> selected_indices;
+    int skipped_by_cluster_cap = 0;
+    std::vector<ClusterFilterResult::TelemetryRow> telemetry_rows;
+};
+
 struct ExecutionAwareFilterResult {
     std::vector<std::size_t> selected_indices;
     std::vector<double> adjusted_position_sizes;
@@ -315,6 +321,64 @@ inline ClusterFilterResult applyClusterCapFilter(
         }
         out.selected_indices.push_back(i);
         out.exposure_by_cluster_after[cluster_id] = projected;
+    }
+    return out;
+}
+
+inline AllocatorClusterCapReallocateResult selectAllocatorCandidatesWithClusterCapReallocate(
+    const std::vector<autolife::strategy::Signal>& candidates,
+    const std::vector<std::size_t>& ranked_indices,
+    const autolife::analytics::ProbabilisticRuntimeModel::Phase4Policy::PortfolioAllocatorPolicy&
+        allocator_policy,
+    const autolife::analytics::ProbabilisticRuntimeModel::Phase4Policy::CorrelationControlPolicy&
+        corr_policy,
+    const std::map<std::string, double>& existing_exposure_by_cluster
+) {
+    AllocatorClusterCapReallocateResult out;
+    if (candidates.empty() || ranked_indices.empty()) {
+        return out;
+    }
+
+    const int top_k = std::max(1, allocator_policy.top_k);
+    std::map<std::string, double> exposure_cursor = existing_exposure_by_cluster;
+    for (const std::size_t candidate_idx : ranked_indices) {
+        if (static_cast<int>(out.selected_indices.size()) >= top_k) {
+            break;
+        }
+        if (candidate_idx >= candidates.size()) {
+            continue;
+        }
+        const auto& signal = candidates[candidate_idx];
+        const double score = allocatorScore(signal, allocator_policy);
+        if (score < allocator_policy.min_score) {
+            continue;
+        }
+
+        const std::string cluster_id = clusterIdForMarket(signal.market, corr_policy);
+        const double cluster_cap = clusterCapForId(cluster_id, corr_policy);
+        const double position_size = std::clamp(signal.position_size, 0.0, 1.0);
+        const double exposure_current = exposure_cursor.count(cluster_id) > 0
+            ? exposure_cursor.at(cluster_id)
+            : 0.0;
+        const double projected_exposure = exposure_current + position_size;
+        const bool rejected = projected_exposure > cluster_cap + 1e-12;
+
+        ClusterFilterResult::TelemetryRow telemetry;
+        telemetry.market = signal.market;
+        telemetry.cluster_id = cluster_id;
+        telemetry.exposure_current = exposure_current;
+        telemetry.cluster_cap_value = cluster_cap;
+        telemetry.candidate_position_size = position_size;
+        telemetry.projected_exposure = projected_exposure;
+        telemetry.rejected_by_cluster_cap = rejected;
+        out.telemetry_rows.push_back(std::move(telemetry));
+
+        if (rejected) {
+            out.skipped_by_cluster_cap += 1;
+            continue;
+        }
+        out.selected_indices.push_back(candidate_idx);
+        exposure_cursor[cluster_id] = projected_exposure;
     }
     return out;
 }
