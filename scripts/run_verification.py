@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 from collections import Counter
+import copy
 import csv
 import json
 import os
@@ -8,6 +9,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import uuid
 from typing import Any, Dict, List
 
 from _script_common import verification_lock
@@ -135,6 +137,325 @@ def resolve_probabilistic_bundle_path(exe_path: pathlib.Path, config_payload: Di
     if not bundle_path.is_absolute():
         bundle_path = (exe_path.parent / bundle_path).resolve()
     return bundle_path
+
+
+def build_verification_row(dataset_name: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    row = {
+        "dataset": str(dataset_name).strip(),
+        "total_profit_krw": round(float(result.get("total_profit", 0.0)), 4),
+        "profit_factor": round(float(result.get("profit_factor", 0.0)), 4),
+        "expectancy_krw": round(float(result.get("expectancy_krw", 0.0)), 4),
+        "max_drawdown_pct": round(float(result.get("max_drawdown", 0.0)) * 100.0, 4),
+        "total_trades": int(result.get("total_trades", 0)),
+        "win_rate_pct": round(float(result.get("win_rate", 0.0)) * 100.0, 4),
+        "avg_fee_krw": round(float(result.get("avg_fee_krw", 0.0)), 4),
+    }
+    row["profitable"] = bool(float(row["total_profit_krw"]) > 0.0)
+    return row
+
+
+def summarize_verification_rows(rows: List[Dict[str, Any]]) -> Dict[str, float]:
+    profits = [float(x.get("total_profit_krw", 0.0)) for x in rows]
+    profit_factors = [float(x.get("profit_factor", 0.0)) for x in rows]
+    expectancies = [float(x.get("expectancy_krw", 0.0)) for x in rows]
+    drawdowns = [float(x.get("max_drawdown_pct", 0.0)) for x in rows]
+    win_rates = [float(x.get("win_rate_pct", 0.0)) for x in rows]
+    avg_fees = [float(x.get("avg_fee_krw", 0.0)) for x in rows]
+    trades = [max(0.0, float(x.get("total_trades", 0.0))) for x in rows]
+    profitable_ratio = (sum(1 for x in rows if bool(x.get("profitable", False))) / float(len(rows))) if rows else 0.0
+    return {
+        "avg_profit_factor": round(safe_weighted_avg(profit_factors, trades), 4),
+        "avg_expectancy_krw": round(safe_weighted_avg(expectancies, trades), 4),
+        "avg_win_rate_pct": round(safe_weighted_avg(win_rates, trades), 4),
+        "avg_total_trades": round(safe_avg(trades), 4),
+        "peak_max_drawdown_pct": round(max(drawdowns) if drawdowns else 0.0, 4),
+        "profitable_ratio": round(profitable_ratio, 4),
+        "total_profit_sum_krw": round(sum(profits), 4),
+        "avg_fee_krw": round(safe_weighted_avg(avg_fees, trades), 4),
+    }
+
+
+PHASE4_POLICY_BLOCKS = (
+    "portfolio_allocator",
+    "correlation_control",
+    "risk_budget",
+    "drawdown_governor",
+    "execution_aware_sizing",
+    "portfolio_diagnostics",
+)
+
+
+def with_phase4_flags(bundle_payload: Dict[str, Any], enabled: bool) -> Dict[str, Any]:
+    payload = copy.deepcopy(bundle_payload) if isinstance(bundle_payload, dict) else {}
+    phase4 = payload.get("phase4", {})
+    if not isinstance(phase4, dict):
+        phase4 = {}
+    for block_name in PHASE4_POLICY_BLOCKS:
+        block = phase4.get(block_name, {})
+        if not isinstance(block, dict):
+            block = {}
+        block["enabled"] = bool(enabled)
+        phase4[block_name] = block
+    payload["phase4"] = phase4
+    return payload
+
+
+def aggregate_phase4_compare_diags(diags: List[Dict[str, Any]]) -> Dict[str, Any]:
+    counter_keys = [
+        "candidates_total",
+        "selected_total",
+        "rejected_by_budget",
+        "rejected_by_cluster_cap",
+        "rejected_by_correlation_penalty",
+        "rejected_by_execution_cap",
+        "rejected_by_drawdown_governor",
+        "candidate_snapshot_total",
+        "candidate_snapshot_sampled",
+    ]
+    counters: Dict[str, int] = {k: 0 for k in counter_keys}
+    flags: Dict[str, bool] = {
+        "phase4_portfolio_allocator_enabled": False,
+        "phase4_correlation_control_enabled": False,
+        "phase4_risk_budget_enabled": False,
+        "phase4_drawdown_governor_enabled": False,
+        "phase4_execution_aware_sizing_enabled": False,
+        "phase4_portfolio_diagnostics_enabled": False,
+    }
+    for diag in diags:
+        if not isinstance(diag, dict):
+            continue
+        raw_counters = diag.get("counters", {})
+        if isinstance(raw_counters, dict):
+            for key in counter_keys:
+                counters[key] += max(0, to_int(raw_counters.get(key, 0)))
+        raw_flags = diag.get("flags", {})
+        if isinstance(raw_flags, dict):
+            for key in list(flags.keys()):
+                flags[key] = bool(flags[key] or bool(raw_flags.get(key, False)))
+
+    selection_rate = round(
+        float(counters.get("selected_total", 0)) / float(max(1, counters.get("candidates_total", 0))),
+        6,
+    )
+    top3 = sorted(
+        [
+            {"reason": key, "count": int(value)}
+            for key, value in counters.items()
+            if key.startswith("rejected_") and int(value) > 0
+        ],
+        key=lambda item: (-int(item["count"]), str(item["reason"])),
+    )[:3]
+    return {
+        "flags": flags,
+        "counters": {**counters, "selection_rate": float(selection_rate)},
+        "selection_breakdown": {
+            "candidates_total": int(counters.get("candidates_total", 0)),
+            "selected_total": int(counters.get("selected_total", 0)),
+            "selection_rate": float(selection_rate),
+            "rejected_by_budget": int(counters.get("rejected_by_budget", 0)),
+            "rejected_by_cluster_cap": int(counters.get("rejected_by_cluster_cap", 0)),
+            "rejected_by_correlation_penalty": int(counters.get("rejected_by_correlation_penalty", 0)),
+            "rejected_by_execution_cap": int(counters.get("rejected_by_execution_cap", 0)),
+            "rejected_by_drawdown_governor": int(counters.get("rejected_by_drawdown_governor", 0)),
+        },
+        "top3_bottlenecks": top3,
+    }
+
+
+def build_phase4_off_on_comparison(
+    exe_path: pathlib.Path,
+    dataset_paths: List[pathlib.Path],
+    require_higher_tf_companions: bool,
+    disable_adaptive_state_io: bool,
+    config_path: pathlib.Path,
+    config_payload: Dict[str, Any],
+    bundle_path: pathlib.Path,
+) -> Dict[str, Any]:
+    output: Dict[str, Any] = {
+        "available": False,
+        "reason": "",
+        "dataset_count": len(dataset_paths),
+        "datasets": [p.name for p in dataset_paths],
+    }
+    bundle_text = str(bundle_path).strip()
+    if not bundle_text or bundle_text in (".", ".."):
+        output["reason"] = "runtime_bundle_path_missing"
+        return output
+    if not bundle_path.exists() or not bundle_path.is_file():
+        output["reason"] = "runtime_bundle_path_missing_or_invalid"
+        return output
+    if not config_path.exists():
+        output["reason"] = "runtime_config_missing"
+        return output
+
+    base_bundle_payload: Dict[str, Any] = {}
+    try:
+        with bundle_path.open("r", encoding="utf-8") as fp:
+            loaded_bundle = json.load(fp)
+            if isinstance(loaded_bundle, dict):
+                base_bundle_payload = loaded_bundle
+    except Exception:
+        output["reason"] = "runtime_bundle_load_failed"
+        return output
+    if not base_bundle_payload:
+        output["reason"] = "runtime_bundle_empty_or_invalid"
+        return output
+
+    try:
+        original_config_text = config_path.read_text(encoding="utf-8")
+    except Exception:
+        output["reason"] = "runtime_config_load_failed"
+        return output
+
+    temp_bundle_paths: List[pathlib.Path] = []
+    mode_reports: Dict[str, Dict[str, Any]] = {}
+    compare_nonce = uuid.uuid4().hex[:10]
+    try:
+        for mode_name, enabled in (("off", False), ("on", True)):
+            mode_bundle_payload = with_phase4_flags(base_bundle_payload, enabled=enabled)
+            mode_bundle_path = (
+                config_path.parent
+                / f"probabilistic_runtime_bundle_v2_phase4_{mode_name}_{compare_nonce}.json"
+            )
+            temp_bundle_paths.append(mode_bundle_path)
+            mode_bundle_path.write_text(
+                json.dumps(mode_bundle_payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+
+            mode_config_payload = copy.deepcopy(config_payload) if isinstance(config_payload, dict) else {}
+            trading_cfg = mode_config_payload.get("trading", {})
+            if not isinstance(trading_cfg, dict):
+                trading_cfg = {}
+            trading_cfg["enable_probabilistic_runtime_model"] = True
+            trading_cfg["probabilistic_runtime_primary_mode"] = True
+            trading_cfg["probabilistic_runtime_bundle_path"] = str(mode_bundle_path)
+            mode_config_payload["trading"] = trading_cfg
+            config_path.write_text(
+                json.dumps(mode_config_payload, ensure_ascii=False, indent=4) + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+
+            mode_rows: List[Dict[str, Any]] = []
+            mode_phase4_diags: List[Dict[str, Any]] = []
+            for dataset_path in dataset_paths:
+                result = run_backtest(
+                    exe_path=exe_path,
+                    dataset_path=dataset_path,
+                    require_higher_tf_companions=bool(require_higher_tf_companions),
+                    disable_adaptive_state_io=bool(disable_adaptive_state_io),
+                )
+                mode_rows.append(build_verification_row(dataset_path.name, result))
+                mode_phase4_diags.append(build_phase4_portfolio_diagnostics(result))
+
+            mode_reports[mode_name] = {
+                "aggregates": summarize_verification_rows(mode_rows),
+                "rows": mode_rows,
+                "phase4_portfolio_diagnostics": aggregate_phase4_compare_diags(mode_phase4_diags),
+            }
+    except Exception as exc:
+        output["reason"] = f"phase4_off_on_compare_failed:{exc}"
+    finally:
+        try:
+            config_path.write_text(original_config_text, encoding="utf-8", newline="\n")
+        except Exception:
+            pass
+        for path_value in temp_bundle_paths:
+            try:
+                path_value.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    off_report = mode_reports.get("off", {})
+    on_report = mode_reports.get("on", {})
+    if not off_report or not on_report:
+        if not output.get("reason"):
+            output["reason"] = "phase4_off_on_compare_failed_missing_mode_reports"
+        return output
+
+    off_aggregates = off_report.get("aggregates", {}) if isinstance(off_report, dict) else {}
+    on_aggregates = on_report.get("aggregates", {}) if isinstance(on_report, dict) else {}
+    off_diag = (
+        off_report.get("phase4_portfolio_diagnostics", {})
+        if isinstance(off_report, dict)
+        else {}
+    )
+    on_diag = (
+        on_report.get("phase4_portfolio_diagnostics", {})
+        if isinstance(on_report, dict)
+        else {}
+    )
+    off_selection = off_diag.get("selection_breakdown", {}) if isinstance(off_diag, dict) else {}
+    on_selection = on_diag.get("selection_breakdown", {}) if isinstance(on_diag, dict) else {}
+
+    output.update(
+        {
+            "available": True,
+            "reason": "",
+            "coverage": {
+                "cost_proxy": "avg_fee_krw",
+                "exposure_distribution_available": False,
+                "exposure_distribution_note": "phase4 exposure-by-cluster is not emitted in backtest JSON yet",
+            },
+            "off": off_report,
+            "on": on_report,
+            "deltas": {
+                "avg_total_trades": round(
+                    to_float(on_aggregates.get("avg_total_trades", 0.0))
+                    - to_float(off_aggregates.get("avg_total_trades", 0.0)),
+                    6,
+                ),
+                "avg_profit_factor": round(
+                    to_float(on_aggregates.get("avg_profit_factor", 0.0))
+                    - to_float(off_aggregates.get("avg_profit_factor", 0.0)),
+                    6,
+                ),
+                "avg_expectancy_krw": round(
+                    to_float(on_aggregates.get("avg_expectancy_krw", 0.0))
+                    - to_float(off_aggregates.get("avg_expectancy_krw", 0.0)),
+                    6,
+                ),
+                "peak_max_drawdown_pct": round(
+                    to_float(on_aggregates.get("peak_max_drawdown_pct", 0.0))
+                    - to_float(off_aggregates.get("peak_max_drawdown_pct", 0.0)),
+                    6,
+                ),
+                "avg_fee_krw": round(
+                    to_float(on_aggregates.get("avg_fee_krw", 0.0))
+                    - to_float(off_aggregates.get("avg_fee_krw", 0.0)),
+                    6,
+                ),
+                "phase4_selection_rate": round(
+                    to_float(on_selection.get("selection_rate", 0.0))
+                    - to_float(off_selection.get("selection_rate", 0.0)),
+                    6,
+                ),
+                "phase4_selected_total": (
+                    to_int(on_selection.get("selected_total", 0))
+                    - to_int(off_selection.get("selected_total", 0))
+                ),
+                "phase4_rejected_by_budget": (
+                    to_int(on_selection.get("rejected_by_budget", 0))
+                    - to_int(off_selection.get("rejected_by_budget", 0))
+                ),
+                "phase4_rejected_by_cluster_cap": (
+                    to_int(on_selection.get("rejected_by_cluster_cap", 0))
+                    - to_int(off_selection.get("rejected_by_cluster_cap", 0))
+                ),
+                "phase4_rejected_by_execution_cap": (
+                    to_int(on_selection.get("rejected_by_execution_cap", 0))
+                    - to_int(off_selection.get("rejected_by_execution_cap", 0))
+                ),
+                "phase4_rejected_by_drawdown_governor": (
+                    to_int(on_selection.get("rejected_by_drawdown_governor", 0))
+                    - to_int(off_selection.get("rejected_by_drawdown_governor", 0))
+                ),
+            },
+        }
+    )
+    return output
 
 
 def parse_backtest_json(proc: subprocess.CompletedProcess) -> Dict[str, Any]:
@@ -277,6 +598,7 @@ def extract_report_metrics(report: Dict[str, Any]) -> Dict[str, Any]:
         "avg_profit_factor": to_float(nested_get(report, ["aggregates", "avg_profit_factor"], 0.0)),
         "avg_expectancy_krw": to_float(nested_get(report, ["aggregates", "avg_expectancy_krw"], 0.0)),
         "avg_total_trades": to_float(nested_get(report, ["aggregates", "avg_total_trades"], 0.0)),
+        "avg_fee_krw": to_float(nested_get(report, ["aggregates", "avg_fee_krw"], 0.0)),
         "peak_max_drawdown_pct": to_float(
             nested_get(report, ["aggregates", "peak_max_drawdown_pct"], 0.0)
         ),
@@ -359,6 +681,11 @@ def build_baseline_comparison(
         "peak_max_drawdown_pct": round(
             to_float(current_metrics.get("peak_max_drawdown_pct", 0.0))
             - to_float(baseline_metrics.get("peak_max_drawdown_pct", 0.0)),
+            6,
+        ),
+        "avg_fee_krw": round(
+            to_float(current_metrics.get("avg_fee_krw", 0.0))
+            - to_float(baseline_metrics.get("avg_fee_krw", 0.0)),
             6,
         ),
         "avg_primary_candidate_conversion": round(
@@ -582,6 +909,112 @@ def build_phase3_diagnostics_v2(reason_counts: Dict[str, int]) -> Dict[str, Any]
         "pass_rate_by_liquidity_bucket": pass_rate_by_liquidity_bucket,
         "pass_rate_edge_regressor_present_vs_fallback": pass_rate_by_edge_source,
         "pass_rate_by_cost_mode": pass_rate_by_cost_mode,
+        "top3_bottlenecks": reject_rows[:3],
+    }
+
+
+def build_phase4_portfolio_diagnostics(backtest_result: Dict[str, Any]) -> Dict[str, Any]:
+    raw = backtest_result.get("phase4_portfolio_diagnostics", {})
+    if not isinstance(raw, dict):
+        raw = {}
+
+    counters = {
+        "candidates_total": max(0, to_int(raw.get("candidates_total", 0))),
+        "selected_total": max(0, to_int(raw.get("selected_total", 0))),
+        "rejected_by_budget": max(0, to_int(raw.get("rejected_by_budget", 0))),
+        "rejected_by_cluster_cap": max(0, to_int(raw.get("rejected_by_cluster_cap", 0))),
+        "rejected_by_correlation_penalty": max(
+            0, to_int(raw.get("rejected_by_correlation_penalty", 0))
+        ),
+        "rejected_by_execution_cap": max(0, to_int(raw.get("rejected_by_execution_cap", 0))),
+        "rejected_by_drawdown_governor": max(
+            0, to_int(raw.get("rejected_by_drawdown_governor", 0))
+        ),
+        "candidate_snapshot_total": max(0, to_int(raw.get("candidate_snapshot_total", 0))),
+        "candidate_snapshot_sampled": max(0, to_int(raw.get("candidate_snapshot_sampled", 0))),
+    }
+    counters["selection_rate"] = round(
+        float(counters["selected_total"]) / float(max(1, counters["candidates_total"])),
+        6,
+    )
+
+    reject_rows = sorted(
+        [
+            {"reason": key, "count": int(value)}
+            for key, value in counters.items()
+            if key.startswith("rejected_") and int(value) > 0
+        ],
+        key=lambda item: (-int(item["count"]), str(item["reason"])),
+    )
+    enabled = bool(raw.get("enabled", False))
+    flags = {
+        "phase4_portfolio_allocator_enabled": bool(
+            raw.get("phase4_portfolio_allocator_enabled", False)
+        ),
+        "phase4_correlation_control_enabled": bool(
+            raw.get("phase4_correlation_control_enabled", False)
+        ),
+        "phase4_risk_budget_enabled": bool(raw.get("phase4_risk_budget_enabled", False)),
+        "phase4_drawdown_governor_enabled": bool(
+            raw.get("phase4_drawdown_governor_enabled", False)
+        ),
+        "phase4_execution_aware_sizing_enabled": bool(
+            raw.get("phase4_execution_aware_sizing_enabled", False)
+        ),
+        "phase4_portfolio_diagnostics_enabled": bool(
+            raw.get("phase4_portfolio_diagnostics_enabled", False)
+        ),
+    }
+    allocator_policy = {
+        "top_k": max(1, to_int(raw.get("allocator_top_k", 1))),
+        "min_score": round(to_float(raw.get("allocator_min_score", -1.0e6)), 8),
+    }
+    risk_budget_policy = {
+        "per_market_cap": round(to_float(raw.get("risk_budget_per_market_cap", 0.0)), 8),
+        "gross_cap": round(to_float(raw.get("risk_budget_gross_cap", 0.0)), 8),
+        "risk_budget_cap": round(to_float(raw.get("risk_budget_cap", 0.0)), 8),
+    }
+    drawdown_policy = {
+        "drawdown_current": round(to_float(raw.get("drawdown_current", 0.0)), 8),
+        "drawdown_budget_multiplier": round(
+            to_float(raw.get("drawdown_budget_multiplier", 1.0)), 8
+        ),
+    }
+    correlation_policy = {
+        "default_cluster_cap": round(
+            to_float(raw.get("correlation_default_cluster_cap", 0.0)), 8
+        ),
+        "market_cluster_count": max(0, to_int(raw.get("correlation_market_cluster_count", 0))),
+    }
+    execution_policy = {
+        "liquidity_low_threshold": round(
+            to_float(raw.get("execution_liquidity_low_threshold", 0.0)), 8
+        ),
+        "liquidity_mid_threshold": round(
+            to_float(raw.get("execution_liquidity_mid_threshold", 0.0)), 8
+        ),
+        "min_position_size": round(to_float(raw.get("execution_min_position_size", 0.0)), 8),
+    }
+
+    return {
+        "enabled": bool(enabled or counters["candidates_total"] > 0 or counters["selected_total"] > 0),
+        "flags": flags,
+        "allocator_policy": allocator_policy,
+        "risk_budget_policy": risk_budget_policy,
+        "drawdown_policy": drawdown_policy,
+        "correlation_policy": correlation_policy,
+        "execution_policy": execution_policy,
+        "counters": counters,
+        "selection_breakdown": {
+            "candidates_total": int(counters["candidates_total"]),
+            "selected_total": int(counters["selected_total"]),
+            "selection_rate": float(counters["selection_rate"]),
+            "rejected_by_budget": int(counters["rejected_by_budget"]),
+            "rejected_by_cluster_cap": int(counters["rejected_by_cluster_cap"]),
+            "rejected_by_correlation_penalty": int(counters["rejected_by_correlation_penalty"]),
+            "rejected_by_execution_cap": int(counters["rejected_by_execution_cap"]),
+            "rejected_by_drawdown_governor": int(counters["rejected_by_drawdown_governor"]),
+        },
         "top3_bottlenecks": reject_rows[:3],
     }
 
@@ -1068,6 +1501,7 @@ def build_dataset_diagnostics(dataset_name: str, backtest_result: Dict[str, Any]
 
     reason_counts = normalized_reason_counts(backtest_result.get("entry_rejection_reason_counts", {}))
     phase3_diag = build_phase3_diagnostics_v2(reason_counts)
+    phase4_diag = build_phase4_portfolio_diagnostics(backtest_result)
     no_signal_pattern_counts = normalized_reason_counts(backtest_result.get("no_signal_pattern_counts", {}))
     edge_gap_bucket_counts = normalized_reason_counts(
         backtest_result.get("entry_quality_edge_gap_buckets", {})
@@ -1171,6 +1605,7 @@ def build_dataset_diagnostics(dataset_name: str, backtest_result: Dict[str, Any]
         "strategy_collection": strategy_collection_diag,
         "post_entry_risk_telemetry": post_entry_telemetry,
         "phase3_diagnostics_v2": phase3_diag,
+        "phase4_portfolio_diagnostics": phase4_diag,
         "shadow_funnel": {
             "rounds": int(shadow_rounds),
             "primary_generated_signals": int(shadow_primary_generated_signals),
@@ -1261,6 +1696,26 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         "pass_rate_edge_regressor_present_vs_fallback": {},
         "pass_rate_by_cost_mode": {},
     }
+    phase4_counter_keys = [
+        "candidates_total",
+        "selected_total",
+        "rejected_by_budget",
+        "rejected_by_cluster_cap",
+        "rejected_by_correlation_penalty",
+        "rejected_by_execution_cap",
+        "rejected_by_drawdown_governor",
+        "candidate_snapshot_total",
+        "candidate_snapshot_sampled",
+    ]
+    aggregate_phase4_counters: Dict[str, int] = {k: 0 for k in phase4_counter_keys}
+    aggregate_phase4_flags: Dict[str, bool] = {
+        "phase4_portfolio_allocator_enabled": False,
+        "phase4_correlation_control_enabled": False,
+        "phase4_risk_budget_enabled": False,
+        "phase4_drawdown_governor_enabled": False,
+        "phase4_execution_aware_sizing_enabled": False,
+        "phase4_portfolio_diagnostics_enabled": False,
+    }
 
     for item in dataset_diagnostics:
         groups = item.get("bottleneck_groups", {})
@@ -1298,6 +1753,19 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
                     )
                     slot["candidate_total"] += max(0, to_int(row.get("candidate_total", 0)))
                     slot["pass_total"] += max(0, to_int(row.get("pass_total", 0)))
+
+        phase4_diag = item.get("phase4_portfolio_diagnostics", {})
+        if isinstance(phase4_diag, dict) and bool(phase4_diag.get("enabled", False)):
+            counters = phase4_diag.get("counters", {})
+            if isinstance(counters, dict):
+                for key in phase4_counter_keys:
+                    aggregate_phase4_counters[key] += max(0, to_int(counters.get(key, 0)))
+            flags = phase4_diag.get("flags", {})
+            if isinstance(flags, dict):
+                for key in aggregate_phase4_flags:
+                    aggregate_phase4_flags[key] = bool(
+                        aggregate_phase4_flags[key] or bool(flags.get(key, False))
+                    )
 
         no_signal_patterns = item.get("no_signal_pattern_counts", {})
         if isinstance(no_signal_patterns, dict):
@@ -1592,6 +2060,55 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         ),
         "top3_bottlenecks": phase3_reject_rows[:3],
     }
+    phase4_reject_rows = sorted(
+        [
+            {"reason": key, "count": int(value)}
+            for key, value in aggregate_phase4_counters.items()
+            if key.startswith("rejected_") and int(value) > 0
+        ],
+        key=lambda item: (-int(item["count"]), str(item["reason"])),
+    )
+    phase4_selection_rate = round(
+        float(aggregate_phase4_counters.get("selected_total", 0))
+        / float(max(1, aggregate_phase4_counters.get("candidates_total", 0))),
+        6,
+    )
+    aggregate_phase4_diag = {
+        "enabled": bool(
+            aggregate_phase4_counters.get("candidates_total", 0) > 0
+            or aggregate_phase4_counters.get("selected_total", 0) > 0
+        ),
+        "flags": aggregate_phase4_flags,
+        "counters": {
+            **{key: int(value) for key, value in aggregate_phase4_counters.items()},
+            "selection_rate": float(phase4_selection_rate),
+        },
+        "selection_breakdown": {
+            "candidates_total": int(aggregate_phase4_counters.get("candidates_total", 0)),
+            "selected_total": int(aggregate_phase4_counters.get("selected_total", 0)),
+            "selection_rate": float(phase4_selection_rate),
+            "rejected_by_budget": int(aggregate_phase4_counters.get("rejected_by_budget", 0)),
+            "rejected_by_cluster_cap": int(
+                aggregate_phase4_counters.get("rejected_by_cluster_cap", 0)
+            ),
+            "rejected_by_correlation_penalty": int(
+                aggregate_phase4_counters.get("rejected_by_correlation_penalty", 0)
+            ),
+            "rejected_by_execution_cap": int(
+                aggregate_phase4_counters.get("rejected_by_execution_cap", 0)
+            ),
+            "rejected_by_drawdown_governor": int(
+                aggregate_phase4_counters.get("rejected_by_drawdown_governor", 0)
+            ),
+            "candidate_snapshot_total": int(
+                aggregate_phase4_counters.get("candidate_snapshot_total", 0)
+            ),
+            "candidate_snapshot_sampled": int(
+                aggregate_phase4_counters.get("candidate_snapshot_sampled", 0)
+            ),
+        },
+        "top3_bottlenecks": phase4_reject_rows[:3],
+    }
 
     return {
         "dataset_count": len(dataset_diagnostics),
@@ -1624,6 +2141,7 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         "top_non_execution_group_vote_counts": top_group_votes,
         "post_entry_risk_telemetry": aggregate_post_entry_telemetry,
         "phase3_diagnostics_v2": aggregate_phase3_diag,
+        "phase4_portfolio_diagnostics": aggregate_phase4_diag,
         "shadow_funnel": aggregate_shadow_summary,
     }
 
@@ -2373,6 +2891,14 @@ def main(argv=None) -> int:
         default="auto",
         help="Gate profile selector. auto infers from runtime bundle when available (v2 only).",
     )
+    parser.add_argument(
+        "--phase4-off-on-compare",
+        action="store_true",
+        help=(
+            "Run additional OFF/ON comparison by forcing phase4 enabled flags in a temporary runtime bundle. "
+            "Comparison output is embedded into verification_report.json."
+        ),
+    )
     args = parser.parse_args(argv)
 
     exe_path = resolve_path(args.exe_path, "Executable")
@@ -2417,19 +2943,19 @@ def main(argv=None) -> int:
             + ",".join(duplicate_names)
         )
 
+    config_payload: Dict[str, Any] = {}
+    try:
+        with config_path.open("r", encoding="utf-8") as fp:
+            loaded = json.load(fp)
+            if isinstance(loaded, dict):
+                config_payload = loaded
+    except Exception:
+        config_payload = {}
+    bundle_path = resolve_probabilistic_bundle_path(exe_path, config_payload)
+
     bundle_meta: Dict[str, Any] = {}
     if not bool(args.skip_probabilistic_coverage_check):
-        config_payload: Dict[str, Any] = {}
-        try:
-            with config_path.open("r", encoding="utf-8") as fp:
-                loaded = json.load(fp)
-                if isinstance(loaded, dict):
-                    config_payload = loaded
-        except Exception:
-            config_payload = {}
-
-        bundle_path = resolve_probabilistic_bundle_path(exe_path, config_payload)
-        if str(bundle_path):
+        if str(bundle_path).strip() not in ("", ".", ".."):
             if not bundle_path.exists():
                 raise FileNotFoundError(
                     "Probabilistic runtime bundle configured but missing: "
@@ -2475,6 +3001,7 @@ def main(argv=None) -> int:
     rows: List[Dict[str, Any]] = []
     dataset_diagnostics: List[Dict[str, Any]] = []
     adaptive_dataset_profiles: List[Dict[str, Any]] = []
+    phase4_off_on_comparison: Dict[str, Any] = {}
     with verification_lock(
         lock_path,
         timeout_sec=int(args.verification_lock_timeout_sec),
@@ -2487,22 +3014,22 @@ def main(argv=None) -> int:
                 require_higher_tf_companions=bool(args.require_higher_tf_companions),
                 disable_adaptive_state_io=not bool(args.enable_adaptive_state_io),
             )
-            row = {
-                "dataset": dataset_path.name,
-                "total_profit_krw": round(float(result.get("total_profit", 0.0)), 4),
-                "profit_factor": round(float(result.get("profit_factor", 0.0)), 4),
-                "expectancy_krw": round(float(result.get("expectancy_krw", 0.0)), 4),
-                "max_drawdown_pct": round(float(result.get("max_drawdown", 0.0)) * 100.0, 4),
-                "total_trades": int(result.get("total_trades", 0)),
-                "win_rate_pct": round(float(result.get("win_rate", 0.0)) * 100.0, 4),
-            }
-            row["profitable"] = bool(float(row["total_profit_krw"]) > 0.0)
-            rows.append(row)
+            rows.append(build_verification_row(dataset_path.name, result))
             dataset_diagnostics.append(
                 build_dataset_diagnostics(dataset_name=dataset_path.name, backtest_result=result)
             )
             adaptive_dataset_profiles.append(
                 build_adaptive_dataset_profile(dataset_name=dataset_path.name, backtest_result=result)
+            )
+        if bool(args.phase4_off_on_compare):
+            phase4_off_on_comparison = build_phase4_off_on_comparison(
+                exe_path=exe_path,
+                dataset_paths=dataset_paths,
+                require_higher_tf_companions=bool(args.require_higher_tf_companions),
+                disable_adaptive_state_io=not bool(args.enable_adaptive_state_io),
+                config_path=config_path,
+                config_payload=config_payload,
+                bundle_path=bundle_path,
             )
 
     ensure_parent(output_csv)
@@ -2515,6 +3042,7 @@ def main(argv=None) -> int:
             "max_drawdown_pct",
             "total_trades",
             "win_rate_pct",
+            "avg_fee_krw",
             "profitable",
         ]
         writer = csv.DictWriter(fp, fieldnames=fieldnames)
@@ -2522,20 +3050,15 @@ def main(argv=None) -> int:
         for row in rows:
             writer.writerow(row)
 
-    profits = [float(x["total_profit_krw"]) for x in rows]
-    profit_factors = [float(x["profit_factor"]) for x in rows]
-    expectancies = [float(x["expectancy_krw"]) for x in rows]
-    drawdowns = [float(x["max_drawdown_pct"]) for x in rows]
-    win_rates = [float(x["win_rate_pct"]) for x in rows]
-    trades = [max(0.0, float(x["total_trades"])) for x in rows]
-    profitable_ratio = (sum(1 for x in rows if bool(x["profitable"])) / float(len(rows))) if rows else 0.0
-
-    avg_profit_factor = round(safe_weighted_avg(profit_factors, trades), 4)
-    avg_expectancy_krw = round(safe_weighted_avg(expectancies, trades), 4)
-    avg_win_rate_pct = round(safe_weighted_avg(win_rates, trades), 4)
-    avg_total_trades = round(safe_avg(trades), 4)
-    peak_max_drawdown_pct = round(max(drawdowns) if drawdowns else 0.0, 4)
-    total_profit_sum_krw = round(sum(profits), 4)
+    summary = summarize_verification_rows(rows)
+    avg_profit_factor = round(to_float(summary.get("avg_profit_factor", 0.0)), 4)
+    avg_expectancy_krw = round(to_float(summary.get("avg_expectancy_krw", 0.0)), 4)
+    avg_win_rate_pct = round(to_float(summary.get("avg_win_rate_pct", 0.0)), 4)
+    avg_total_trades = round(to_float(summary.get("avg_total_trades", 0.0)), 4)
+    peak_max_drawdown_pct = round(to_float(summary.get("peak_max_drawdown_pct", 0.0)), 4)
+    total_profit_sum_krw = round(to_float(summary.get("total_profit_sum_krw", 0.0)), 4)
+    profitable_ratio = round(to_float(summary.get("profitable_ratio", 0.0)), 4)
+    avg_fee_krw = round(to_float(summary.get("avg_fee_krw", 0.0)), 4)
 
     gate = {
         "gate_profit_factor_pass": avg_profit_factor >= float(args.min_profit_factor),
@@ -2596,8 +3119,9 @@ def main(argv=None) -> int:
             "avg_win_rate_pct": avg_win_rate_pct,
             "avg_total_trades": avg_total_trades,
             "peak_max_drawdown_pct": peak_max_drawdown_pct,
-            "profitable_ratio": round(profitable_ratio, 4),
+            "profitable_ratio": profitable_ratio,
             "total_profit_sum_krw": total_profit_sum_krw,
+            "avg_fee_krw": avg_fee_krw,
         },
         "threshold_gate": {
             "gate": gate,
@@ -2634,6 +3158,8 @@ def main(argv=None) -> int:
             "runtime_bundle_version": str(bundle_meta.get("bundle_version", "")) if bundle_meta else "",
         },
     }
+    if bool(args.phase4_off_on_compare):
+        report["phase4_off_on_comparison"] = phase4_off_on_comparison
     baseline_comparison_for_gate = build_baseline_comparison(
         current_report=report,
         baseline_report_path=baseline_report_path,
@@ -2712,6 +3238,28 @@ def main(argv=None) -> int:
             "[Verification] baseline_comparison=unavailable "
             f"reason={reason or 'baseline_report_missing_or_invalid'}"
         )
+    if bool(args.phase4_off_on_compare):
+        phase4_compare = report.get("phase4_off_on_comparison", {})
+        if isinstance(phase4_compare, dict) and bool(phase4_compare.get("available", False)):
+            deltas = phase4_compare.get("deltas", {})
+            if not isinstance(deltas, dict):
+                deltas = {}
+            print(
+                "[Verification] phase4_off_on_delta "
+                f"trades={deltas.get('avg_total_trades', 0.0)} "
+                f"pf={deltas.get('avg_profit_factor', 0.0)} "
+                f"exp={deltas.get('avg_expectancy_krw', 0.0)} "
+                f"mdd={deltas.get('peak_max_drawdown_pct', 0.0)} "
+                f"sel_rate={deltas.get('phase4_selection_rate', 0.0)}"
+            )
+        else:
+            reason = ""
+            if isinstance(phase4_compare, dict):
+                reason = str(phase4_compare.get("reason", "")).strip()
+            print(
+                "[Verification] phase4_off_on_comparison=unavailable "
+                f"reason={reason or 'phase4_off_on_compare_failed'}"
+            )
     print(f"[Verification] report_json={output_json}")
     return 0 if bool(overall_gate_pass) else 2
 

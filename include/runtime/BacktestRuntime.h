@@ -145,6 +145,63 @@ public:
             double adaptive_partial_ratio_sum = 0.0;
             std::array<int, 5> adaptive_partial_ratio_histogram{{0, 0, 0, 0, 0}};
         };
+        struct Phase4PortfolioDiagnostics {
+            bool enabled = false;
+            bool phase4_portfolio_allocator_enabled = false;
+            bool phase4_correlation_control_enabled = false;
+            bool phase4_risk_budget_enabled = false;
+            bool phase4_drawdown_governor_enabled = false;
+            bool phase4_execution_aware_sizing_enabled = false;
+            bool phase4_portfolio_diagnostics_enabled = false;
+            int allocator_top_k = 0;
+            double allocator_min_score = 0.0;
+            double risk_budget_per_market_cap = 0.0;
+            double risk_budget_gross_cap = 0.0;
+            double risk_budget_cap = 0.0;
+            double drawdown_current = 0.0;
+            double drawdown_budget_multiplier = 1.0;
+            double correlation_default_cluster_cap = 0.0;
+            int correlation_market_cluster_count = 0;
+            double execution_liquidity_low_threshold = 0.0;
+            double execution_liquidity_mid_threshold = 0.0;
+            double execution_min_position_size = 0.0;
+            int candidates_total = 0;
+            int selected_total = 0;
+            int rejected_by_budget = 0;
+            int rejected_by_cluster_cap = 0;
+            int rejected_by_correlation_penalty = 0;
+            int rejected_by_execution_cap = 0;
+            int rejected_by_drawdown_governor = 0;
+            int candidate_snapshot_total = 0;
+            int candidate_snapshot_sampled = 0;
+            double selection_rate = 0.0;
+        };
+        struct Phase4CandidateSnapshotSample {
+            std::string market;
+            long long decision_time = 0;
+            std::string strategy_name;
+            std::string regime;
+            std::string volatility_bucket;
+            std::string liquidity_bucket;
+            double expected_edge_after_cost_pct = 0.0;
+            double expected_edge_tail_after_cost_pct = 0.0;
+            double margin = 0.0;
+            double prob_confidence = 0.0;
+            double ev_confidence = 0.0;
+            double signal_strength = 0.0;
+            double liquidity_score = 0.0;
+            double volatility = 0.0;
+            double entry_cost_pct = 0.0;
+            double exit_cost_pct = 0.0;
+            double tail_cost_pct = 0.0;
+            std::string cost_mode = "mean_mode";
+            bool edge_regressor_used = false;
+            bool selected = false;
+            bool has_open_position = false;
+            double open_position_qty = 0.0;
+            double open_position_unrealized_pnl = 0.0;
+            double open_position_time_in_position_minutes = 0.0;
+        };
 
         double final_balance;
         double total_profit;
@@ -174,6 +231,8 @@ public:
         EntryFunnelSummary entry_funnel;
         ShadowFunnelSummary shadow_funnel;
         PostEntryRiskTelemetry post_entry_risk_telemetry;
+        Phase4PortfolioDiagnostics phase4_portfolio_diagnostics;
+        std::vector<Phase4CandidateSnapshotSample> phase4_candidate_snapshot_samples;
         int strategyless_position_checks = 0;
         int strategyless_runtime_archetype_checks = 0;
         int strategyless_risk_exit_signals = 0;
@@ -251,6 +310,8 @@ private:
     int strategyless_current_tp1_hits_ = 0;
     int strategyless_current_tp2_hits_ = 0;
     Result::ShadowFunnelSummary shadow_funnel_;
+    Result::Phase4PortfolioDiagnostics phase4_portfolio_diagnostics_;
+    std::vector<Result::Phase4CandidateSnapshotSample> phase4_candidate_snapshot_samples_;
 
     // Simulation Methods
     void processCandle(const Candle& candle);

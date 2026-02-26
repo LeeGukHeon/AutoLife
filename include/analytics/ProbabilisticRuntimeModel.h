@@ -37,6 +37,12 @@ struct ProbabilisticInference {
     bool phase3_cost_tail_enabled = false;
     bool phase3_adaptive_ev_blend_enabled = false;
     bool phase3_diagnostics_v2_enabled = false;
+    bool phase4_portfolio_allocator_enabled = false;
+    bool phase4_correlation_control_enabled = false;
+    bool phase4_risk_budget_enabled = false;
+    bool phase4_drawdown_governor_enabled = false;
+    bool phase4_execution_aware_sizing_enabled = false;
+    bool phase4_portfolio_diagnostics_enabled = false;
     std::string cost_mode = "mean_mode";
     bool select_h5 = false;
 };
@@ -90,6 +96,22 @@ public:
         double high_confidence_bonus = 0.05;
         double low_confidence_penalty = 0.10;
         double cost_penalty = 0.06;
+    };
+
+    struct Phase3OperationsControlPolicy {
+        bool enabled = false;
+        std::string mode = "manual";
+        double required_ev_offset = 0.0;
+        double required_ev_offset_min = -0.0030;
+        double required_ev_offset_max = 0.0030;
+        double k_margin_scale = 1.0;
+        double k_margin_scale_min = 0.50;
+        double k_margin_scale_max = 2.00;
+        double ev_blend_scale = 1.0;
+        double ev_blend_scale_min = 0.50;
+        double ev_blend_scale_max = 1.50;
+        double max_step_per_update = 0.05;
+        int min_update_interval_sec = 3600;
     };
 
     struct Phase3PrimaryMinimumPolicy {
@@ -376,11 +398,71 @@ public:
         Phase3EvCalibrationPolicy ev_calibration;
         Phase3CostPolicy cost_model;
         Phase3AdaptiveEvBlendPolicy adaptive_ev_blend;
+        Phase3OperationsControlPolicy operations_control;
         Phase3PrimaryMinimumPolicy primary_minimums;
         Phase3PrimaryPriorityPolicy primary_priority;
         Phase3PrimaryDecisionProfilePolicy primary_decision_profile;
         Phase3ManagerFilterPolicy manager_filter;
         Phase3DiagnosticsPolicy diagnostics_v2;
+    };
+
+    struct Phase4Policy {
+        struct PortfolioAllocatorPolicy {
+            bool enabled = false;
+            int top_k = 1;
+            double min_score = -1.0e6;
+            double lambda_tail = 1.0;
+            double lambda_cost = 1.0;
+            double lambda_uncertainty = 1.0;
+            double lambda_margin = 1.0;
+            double uncertainty_prob_weight = 0.50;
+            double uncertainty_ev_weight = 0.50;
+        };
+        struct RiskBudgetPolicy {
+            bool enabled = false;
+            double per_market_cap = 1.0;
+            double gross_cap = 1.0;
+            double risk_budget_cap = 1.0;
+            double risk_proxy_stop_pct = 0.03;
+        };
+        struct DrawdownGovernorPolicy {
+            bool enabled = false;
+            double dd_threshold_soft = 0.05;
+            double dd_threshold_hard = 0.10;
+            double budget_multiplier_soft = 0.70;
+            double budget_multiplier_hard = 0.40;
+        };
+        struct CorrelationControlPolicy {
+            bool enabled = false;
+            double default_cluster_cap = 1.0;
+            std::unordered_map<std::string, std::string> market_cluster_map;
+            std::unordered_map<std::string, double> cluster_caps;
+        };
+        struct ExecutionAwareSizingPolicy {
+            bool enabled = false;
+            double liquidity_low_threshold = 40.0;
+            double liquidity_mid_threshold = 65.0;
+            double liquidity_low_size_multiplier = 0.50;
+            double liquidity_mid_size_multiplier = 0.75;
+            double liquidity_high_size_multiplier = 1.00;
+            double tail_cost_soft_pct = 0.0015;
+            double tail_cost_hard_pct = 0.0030;
+            double tail_soft_multiplier = 0.80;
+            double tail_hard_multiplier = 0.60;
+            double min_position_size = 0.01;
+        };
+
+        bool phase4_portfolio_allocator_enabled = false;
+        bool phase4_correlation_control_enabled = false;
+        bool phase4_risk_budget_enabled = false;
+        bool phase4_drawdown_governor_enabled = false;
+        bool phase4_execution_aware_sizing_enabled = false;
+        bool phase4_portfolio_diagnostics_enabled = false;
+        PortfolioAllocatorPolicy portfolio_allocator;
+        RiskBudgetPolicy risk_budget;
+        DrawdownGovernorPolicy drawdown_governor;
+        CorrelationControlPolicy correlation_control;
+        ExecutionAwareSizingPolicy execution_aware_sizing;
     };
 
     bool loadFromFile(const std::string& path, std::string* error_message = nullptr);
@@ -390,6 +472,7 @@ public:
     bool hasDefaultModel() const { return has_default_entry_; }
     const std::vector<std::string>& featureColumns() const { return feature_columns_; }
     const Phase3Policy& phase3Policy() const { return phase3_policy_; }
+    const Phase4Policy& phase4Policy() const { return phase4_policy_; }
 
     // `transformed_features` must already match the runtime bundle transform contract.
     bool infer(
@@ -465,6 +548,7 @@ private:
     MarketEntry default_entry_;
     RuntimeCostModel cost_model_;
     Phase3Policy phase3_policy_;
+    Phase4Policy phase4_policy_;
     std::vector<EvCalibrationBucket> ev_calibration_buckets_;
     bool has_default_entry_ = false;
     bool prefer_default_entry_ = false;

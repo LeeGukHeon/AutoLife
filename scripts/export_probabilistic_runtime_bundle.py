@@ -126,6 +126,21 @@ def default_phase3_bundle_config() -> Dict[str, Any]:
             "low_confidence_penalty": 0.10,
             "cost_penalty": 0.06,
         },
+        "operations_control": {
+            "enabled": False,
+            "mode": "manual",
+            "required_ev_offset": 0.0,
+            "required_ev_offset_min": -0.0030,
+            "required_ev_offset_max": 0.0030,
+            "k_margin_scale": 1.0,
+            "k_margin_scale_min": 0.50,
+            "k_margin_scale_max": 2.00,
+            "ev_blend_scale": 1.0,
+            "ev_blend_scale_min": 0.50,
+            "ev_blend_scale_max": 1.50,
+            "max_step_per_update": 0.05,
+            "min_update_interval_sec": 3600,
+        },
         "primary_minimums": {
             "enabled": True,
             "min_h5_calibrated": 0.48,
@@ -401,6 +416,7 @@ def build_phase3_bundle_config(summary: Dict[str, Any]) -> Dict[str, Any]:
     merged["ev_calibration"]["enabled"] = bool(merged["ev_calibration"].get("enabled", False))
     merged["cost_model"]["enabled"] = bool(merged["cost_model"].get("enabled", False))
     merged["adaptive_ev_blend"]["enabled"] = bool(merged["adaptive_ev_blend"].get("enabled", False))
+    merged["operations_control"]["enabled"] = bool(merged["operations_control"].get("enabled", False))
     merged["diagnostics_v2"]["enabled"] = bool(merged["diagnostics_v2"].get("enabled", False))
     merged["primary_minimums"]["enabled"] = bool(merged["primary_minimums"].get("enabled", False))
     merged["primary_priority"]["enabled"] = bool(merged["primary_priority"].get("enabled", False))
@@ -408,6 +424,253 @@ def build_phase3_bundle_config(summary: Dict[str, Any]) -> Dict[str, Any]:
         merged["primary_decision_profile"].get("enabled", False)
     )
     merged["manager_filter"]["enabled"] = bool(merged["manager_filter"].get("enabled", False))
+    return merged
+
+
+def default_phase4_bundle_config() -> Dict[str, Any]:
+    return {
+        "portfolio_allocator": {
+            "enabled": False,
+            "top_k": 1,
+            "min_score": -1.0e6,
+            "lambda_tail": 1.0,
+            "lambda_cost": 1.0,
+            "lambda_uncertainty": 1.0,
+            "lambda_margin": 1.0,
+            "uncertainty_prob_weight": 0.50,
+            "uncertainty_ev_weight": 0.50,
+        },
+        "correlation_control": {
+            "enabled": False,
+            "default_cluster_cap": 1.0,
+            "market_cluster_map": {},
+            "cluster_caps": {},
+        },
+        "risk_budget": {
+            "enabled": False,
+            "per_market_cap": 1.0,
+            "gross_cap": 1.0,
+            "risk_budget_cap": 1.0,
+            "risk_proxy_stop_pct": 0.03,
+        },
+        "drawdown_governor": {
+            "enabled": False,
+            "dd_threshold_soft": 0.05,
+            "dd_threshold_hard": 0.10,
+            "budget_multiplier_soft": 0.70,
+            "budget_multiplier_hard": 0.40,
+        },
+        "execution_aware_sizing": {
+            "enabled": False,
+            "liquidity_low_threshold": 40.0,
+            "liquidity_mid_threshold": 65.0,
+            "liquidity_low_size_multiplier": 0.50,
+            "liquidity_mid_size_multiplier": 0.75,
+            "liquidity_high_size_multiplier": 1.00,
+            "tail_cost_soft_pct": 0.0015,
+            "tail_cost_hard_pct": 0.0030,
+            "tail_soft_multiplier": 0.80,
+            "tail_hard_multiplier": 0.60,
+            "min_position_size": 0.01,
+        },
+        "portfolio_diagnostics": {"enabled": False},
+    }
+
+
+def build_phase4_bundle_config(summary: Dict[str, Any]) -> Dict[str, Any]:
+    defaults = default_phase4_bundle_config()
+    raw = summary.get("phase4", {})
+    if not isinstance(raw, dict):
+        raw = {}
+    merged = merge_dicts(defaults, raw)
+    allocator = merged["portfolio_allocator"]
+    allocator["enabled"] = bool(allocator.get("enabled", False))
+    allocator["top_k"] = int(np.clip(round(finite_float(allocator.get("top_k", 1), 1.0)), 1, 256))
+    allocator["min_score"] = finite_float(allocator.get("min_score", -1.0e6), -1.0e6)
+    allocator["lambda_tail"] = max(0.0, finite_float(allocator.get("lambda_tail", 1.0), 1.0))
+    allocator["lambda_cost"] = max(0.0, finite_float(allocator.get("lambda_cost", 1.0), 1.0))
+    allocator["lambda_uncertainty"] = max(
+        0.0, finite_float(allocator.get("lambda_uncertainty", 1.0), 1.0)
+    )
+    allocator["lambda_margin"] = max(0.0, finite_float(allocator.get("lambda_margin", 1.0), 1.0))
+    prob_w = max(0.0, finite_float(allocator.get("uncertainty_prob_weight", 0.50), 0.50))
+    ev_w = max(0.0, finite_float(allocator.get("uncertainty_ev_weight", 0.50), 0.50))
+    if prob_w + ev_w <= 1e-9:
+        prob_w = 0.50
+        ev_w = 0.50
+    norm = prob_w + ev_w
+    allocator["uncertainty_prob_weight"] = prob_w / norm
+    allocator["uncertainty_ev_weight"] = ev_w / norm
+    correlation_control = merged["correlation_control"]
+    correlation_control["enabled"] = bool(correlation_control.get("enabled", False))
+    correlation_control["default_cluster_cap"] = float(
+        np.clip(
+            finite_float(correlation_control.get("default_cluster_cap", 1.0), 1.0),
+            0.0,
+            10.0,
+        )
+    )
+    raw_market_cluster_map = correlation_control.get("market_cluster_map", {})
+    if not isinstance(raw_market_cluster_map, dict):
+        raw_market_cluster_map = {}
+    correlation_control["market_cluster_map"] = {
+        str(k): str(v)
+        for k, v in raw_market_cluster_map.items()
+        if str(k).strip() and str(v).strip()
+    }
+    raw_cluster_caps = correlation_control.get("cluster_caps", {})
+    if not isinstance(raw_cluster_caps, dict):
+        raw_cluster_caps = {}
+    correlation_control["cluster_caps"] = {
+        str(k): float(np.clip(finite_float(v, correlation_control["default_cluster_cap"]), 0.0, 10.0))
+        for k, v in raw_cluster_caps.items()
+        if str(k).strip()
+    }
+    risk_budget = merged["risk_budget"]
+    risk_budget["enabled"] = bool(risk_budget.get("enabled", False))
+    risk_budget["per_market_cap"] = float(
+        np.clip(finite_float(risk_budget.get("per_market_cap", 1.0), 1.0), 0.0, 1.0)
+    )
+    risk_budget["gross_cap"] = float(
+        np.clip(finite_float(risk_budget.get("gross_cap", 1.0), 1.0), 0.0, 10.0)
+    )
+    risk_budget["risk_budget_cap"] = float(
+        np.clip(finite_float(risk_budget.get("risk_budget_cap", 1.0), 1.0), 0.0, 10.0)
+    )
+    risk_budget["risk_proxy_stop_pct"] = float(
+        np.clip(finite_float(risk_budget.get("risk_proxy_stop_pct", 0.03), 0.03), 0.0, 1.0)
+    )
+    drawdown_governor = merged["drawdown_governor"]
+    drawdown_governor["enabled"] = bool(drawdown_governor.get("enabled", False))
+    drawdown_governor["dd_threshold_soft"] = float(
+        np.clip(finite_float(drawdown_governor.get("dd_threshold_soft", 0.05), 0.05), 0.0, 1.0)
+    )
+    drawdown_governor["dd_threshold_hard"] = float(
+        np.clip(finite_float(drawdown_governor.get("dd_threshold_hard", 0.10), 0.10), 0.0, 1.0)
+    )
+    if drawdown_governor["dd_threshold_hard"] < drawdown_governor["dd_threshold_soft"]:
+        drawdown_governor["dd_threshold_soft"], drawdown_governor["dd_threshold_hard"] = (
+            drawdown_governor["dd_threshold_hard"],
+            drawdown_governor["dd_threshold_soft"],
+        )
+    drawdown_governor["budget_multiplier_soft"] = float(
+        np.clip(
+            finite_float(drawdown_governor.get("budget_multiplier_soft", 0.70), 0.70),
+            0.0,
+            1.0,
+        )
+    )
+    drawdown_governor["budget_multiplier_hard"] = float(
+        np.clip(
+            finite_float(drawdown_governor.get("budget_multiplier_hard", 0.40), 0.40),
+            0.0,
+            1.0,
+        )
+    )
+    if drawdown_governor["budget_multiplier_hard"] > drawdown_governor["budget_multiplier_soft"]:
+        drawdown_governor["budget_multiplier_soft"], drawdown_governor["budget_multiplier_hard"] = (
+            drawdown_governor["budget_multiplier_hard"],
+            drawdown_governor["budget_multiplier_soft"],
+        )
+    execution_aware_sizing = merged["execution_aware_sizing"]
+    execution_aware_sizing["enabled"] = bool(execution_aware_sizing.get("enabled", False))
+    execution_aware_sizing["liquidity_low_threshold"] = float(
+        np.clip(
+            finite_float(execution_aware_sizing.get("liquidity_low_threshold", 40.0), 40.0),
+            0.0,
+            100.0,
+        )
+    )
+    execution_aware_sizing["liquidity_mid_threshold"] = float(
+        np.clip(
+            finite_float(execution_aware_sizing.get("liquidity_mid_threshold", 65.0), 65.0),
+            0.0,
+            100.0,
+        )
+    )
+    if execution_aware_sizing["liquidity_mid_threshold"] < execution_aware_sizing["liquidity_low_threshold"]:
+        execution_aware_sizing["liquidity_low_threshold"], execution_aware_sizing["liquidity_mid_threshold"] = (
+            execution_aware_sizing["liquidity_mid_threshold"],
+            execution_aware_sizing["liquidity_low_threshold"],
+        )
+    execution_aware_sizing["liquidity_low_size_multiplier"] = float(
+        np.clip(
+            finite_float(
+                execution_aware_sizing.get("liquidity_low_size_multiplier", 0.50),
+                0.50,
+            ),
+            0.0,
+            1.0,
+        )
+    )
+    execution_aware_sizing["liquidity_mid_size_multiplier"] = float(
+        np.clip(
+            finite_float(
+                execution_aware_sizing.get("liquidity_mid_size_multiplier", 0.75),
+                0.75,
+            ),
+            0.0,
+            1.0,
+        )
+    )
+    execution_aware_sizing["liquidity_high_size_multiplier"] = float(
+        np.clip(
+            finite_float(
+                execution_aware_sizing.get("liquidity_high_size_multiplier", 1.00),
+                1.00,
+            ),
+            0.0,
+            1.0,
+        )
+    )
+    execution_aware_sizing["tail_cost_soft_pct"] = float(
+        np.clip(
+            finite_float(execution_aware_sizing.get("tail_cost_soft_pct", 0.0015), 0.0015),
+            0.0,
+            1.0,
+        )
+    )
+    execution_aware_sizing["tail_cost_hard_pct"] = float(
+        np.clip(
+            finite_float(execution_aware_sizing.get("tail_cost_hard_pct", 0.0030), 0.0030),
+            0.0,
+            1.0,
+        )
+    )
+    if execution_aware_sizing["tail_cost_hard_pct"] < execution_aware_sizing["tail_cost_soft_pct"]:
+        execution_aware_sizing["tail_cost_soft_pct"], execution_aware_sizing["tail_cost_hard_pct"] = (
+            execution_aware_sizing["tail_cost_hard_pct"],
+            execution_aware_sizing["tail_cost_soft_pct"],
+        )
+    execution_aware_sizing["tail_soft_multiplier"] = float(
+        np.clip(
+            finite_float(execution_aware_sizing.get("tail_soft_multiplier", 0.80), 0.80),
+            0.0,
+            1.0,
+        )
+    )
+    execution_aware_sizing["tail_hard_multiplier"] = float(
+        np.clip(
+            finite_float(execution_aware_sizing.get("tail_hard_multiplier", 0.60), 0.60),
+            0.0,
+            1.0,
+        )
+    )
+    if execution_aware_sizing["tail_hard_multiplier"] > execution_aware_sizing["tail_soft_multiplier"]:
+        execution_aware_sizing["tail_soft_multiplier"], execution_aware_sizing["tail_hard_multiplier"] = (
+            execution_aware_sizing["tail_hard_multiplier"],
+            execution_aware_sizing["tail_soft_multiplier"],
+        )
+    execution_aware_sizing["min_position_size"] = float(
+        np.clip(
+            finite_float(execution_aware_sizing.get("min_position_size", 0.01), 0.01),
+            0.0,
+            1.0,
+        )
+    )
+    merged["portfolio_diagnostics"]["enabled"] = bool(
+        merged["portfolio_diagnostics"].get("enabled", False)
+    )
     return merged
 
 
@@ -718,6 +981,7 @@ def main(argv=None) -> int:
     global_fallback_enabled = bool(default_model is not None)
     prefer_default_model = bool(default_model is not None)
     phase3_bundle = build_phase3_bundle_config(summary)
+    phase4_bundle = build_phase4_bundle_config(summary)
 
     out = {
         "version": "probabilistic_runtime_bundle_v2_draft",
@@ -739,6 +1003,7 @@ def main(argv=None) -> int:
         "markets": markets_out,
         "cost_model": summary.get("cost_model", {}),
         "phase3": phase3_bundle,
+        "phase4": phase4_bundle,
     }
     out["pipeline_version"] = str(pipeline_version)
     out["feature_contract_version"] = "v2_draft"

@@ -147,6 +147,52 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
             {"0.75_0.80", result.post_entry_risk_telemetry.adaptive_partial_ratio_histogram[4]}
         }}
     };
+    j["phase4_portfolio_diagnostics"] = {
+        {"enabled", result.phase4_portfolio_diagnostics.enabled},
+        {"phase4_portfolio_allocator_enabled",
+         result.phase4_portfolio_diagnostics.phase4_portfolio_allocator_enabled},
+        {"phase4_correlation_control_enabled",
+         result.phase4_portfolio_diagnostics.phase4_correlation_control_enabled},
+        {"phase4_risk_budget_enabled",
+         result.phase4_portfolio_diagnostics.phase4_risk_budget_enabled},
+        {"phase4_drawdown_governor_enabled",
+         result.phase4_portfolio_diagnostics.phase4_drawdown_governor_enabled},
+        {"phase4_execution_aware_sizing_enabled",
+         result.phase4_portfolio_diagnostics.phase4_execution_aware_sizing_enabled},
+        {"phase4_portfolio_diagnostics_enabled",
+         result.phase4_portfolio_diagnostics.phase4_portfolio_diagnostics_enabled},
+        {"allocator_top_k", result.phase4_portfolio_diagnostics.allocator_top_k},
+        {"allocator_min_score", result.phase4_portfolio_diagnostics.allocator_min_score},
+        {"risk_budget_per_market_cap",
+         result.phase4_portfolio_diagnostics.risk_budget_per_market_cap},
+        {"risk_budget_gross_cap", result.phase4_portfolio_diagnostics.risk_budget_gross_cap},
+        {"risk_budget_cap", result.phase4_portfolio_diagnostics.risk_budget_cap},
+        {"drawdown_current", result.phase4_portfolio_diagnostics.drawdown_current},
+        {"drawdown_budget_multiplier",
+         result.phase4_portfolio_diagnostics.drawdown_budget_multiplier},
+        {"correlation_default_cluster_cap",
+         result.phase4_portfolio_diagnostics.correlation_default_cluster_cap},
+        {"correlation_market_cluster_count",
+         result.phase4_portfolio_diagnostics.correlation_market_cluster_count},
+        {"execution_liquidity_low_threshold",
+         result.phase4_portfolio_diagnostics.execution_liquidity_low_threshold},
+        {"execution_liquidity_mid_threshold",
+         result.phase4_portfolio_diagnostics.execution_liquidity_mid_threshold},
+        {"execution_min_position_size",
+         result.phase4_portfolio_diagnostics.execution_min_position_size},
+        {"candidates_total", result.phase4_portfolio_diagnostics.candidates_total},
+        {"selected_total", result.phase4_portfolio_diagnostics.selected_total},
+        {"rejected_by_budget", result.phase4_portfolio_diagnostics.rejected_by_budget},
+        {"rejected_by_cluster_cap", result.phase4_portfolio_diagnostics.rejected_by_cluster_cap},
+        {"rejected_by_correlation_penalty",
+         result.phase4_portfolio_diagnostics.rejected_by_correlation_penalty},
+        {"rejected_by_execution_cap", result.phase4_portfolio_diagnostics.rejected_by_execution_cap},
+        {"rejected_by_drawdown_governor",
+         result.phase4_portfolio_diagnostics.rejected_by_drawdown_governor},
+        {"candidate_snapshot_total", result.phase4_portfolio_diagnostics.candidate_snapshot_total},
+        {"candidate_snapshot_sampled", result.phase4_portfolio_diagnostics.candidate_snapshot_sampled},
+        {"selection_rate", result.phase4_portfolio_diagnostics.selection_rate}
+    };
     j["strategyless_exit_diagnostics"] = {
         {"position_checks", result.strategyless_position_checks},
         {"runtime_archetype_checks", result.strategyless_runtime_archetype_checks},
@@ -277,6 +323,36 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
             {"probabilistic_runtime_applied", t.probabilistic_runtime_applied},
             {"probabilistic_h5_calibrated", t.probabilistic_h5_calibrated},
             {"probabilistic_h5_margin", t.probabilistic_h5_margin}
+        });
+    }
+
+    j["phase4_candidate_snapshot_samples"] = nlohmann::json::array();
+    for (const auto& s : result.phase4_candidate_snapshot_samples) {
+        j["phase4_candidate_snapshot_samples"].push_back({
+            {"market", s.market},
+            {"decision_time", s.decision_time},
+            {"strategy_name", s.strategy_name},
+            {"regime", s.regime},
+            {"volatility_bucket", s.volatility_bucket},
+            {"liquidity_bucket", s.liquidity_bucket},
+            {"expected_edge_after_cost_pct", s.expected_edge_after_cost_pct},
+            {"expected_edge_tail_after_cost_pct", s.expected_edge_tail_after_cost_pct},
+            {"margin", s.margin},
+            {"prob_confidence", s.prob_confidence},
+            {"ev_confidence", s.ev_confidence},
+            {"signal_strength", s.signal_strength},
+            {"liquidity_score", s.liquidity_score},
+            {"volatility", s.volatility},
+            {"entry_cost_pct", s.entry_cost_pct},
+            {"exit_cost_pct", s.exit_cost_pct},
+            {"tail_cost_pct", s.tail_cost_pct},
+            {"cost_mode", s.cost_mode},
+            {"edge_regressor_used", s.edge_regressor_used},
+            {"selected", s.selected},
+            {"has_open_position", s.has_open_position},
+            {"open_position_qty", s.open_position_qty},
+            {"open_position_unrealized_pnl", s.open_position_unrealized_pnl},
+            {"open_position_time_in_position_minutes", s.open_position_time_in_position_minutes}
         });
     }
 

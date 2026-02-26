@@ -2,50 +2,28 @@
 Last updated: 2026-02-25
 
 ## Session startup order
-1. Read `docs/_codex/CURRENT_STATE.md`.
+1. Read `docs/_codex/ACTIVE_TICKET.md`.
 2. Read `docs/_codex/MASTER_SPEC.md`.
-3. Read active ticket:
-   - `docs/_codex/ACTIVE_TICKET.md` (preferred)
-   - if missing, infer from PR title/body using `docs/_codex/TICKET_TEMPLATE.md`
-4. If ticket is CH-01 Phase 3 work, read:
-   - `docs/_codex/CH01_PHASE3_CONTEXT.md`
-   - `docs/_codex/CH01_PHASE3_FINAL_DELIVERY_2026-02-25.md` (final 6-section handoff)
-5. If ticket touches live/backtest parity, read:
+3. Read `docs/_codex/CURRENT_STATE.md`.
+4. If ticket is CH-01 Phase 4, read:
+   - `docs/_codex/CH01_PHASE4_CONTEXT.md`
+5. If ticket touches parity/gates, read:
    - `docs/_codex/PARITY_BOUNDARY.md`
-   - `docs/_codex/PHASE2_CLOSURE_2026-02-25.md` (current Phase 2 closure baseline)
-   - `docs/_codex/START_TO_EXIT_PATH_AUDIT_2026-02-25.md` (startup->sell/risk runtime path audit)
-6. If ticket touches migration cleanup for Phase 2/3 paths, read:
-   - `docs/_codex/PHASE23_MIGRATION_CLEANUP_2026-02-25.md`
-7. If ticket touches folder/build structure cleanup, read:
-   - `docs/_codex/WORKSPACE_STRUCTURE_AUDIT_2026-02-25.md`
-8. Check `docs/_codex/PR_CHECKLIST.md` before finalizing changes.
+   - `docs/_codex/PHASE2_CLOSURE_2026-02-25.md`
+6. Check `docs/_codex/PR_CHECKLIST.md` before finalizing.
 
 ## Immediate commands
 ```powershell
 git branch --show-current
 git rev-parse HEAD
-python scripts/run_codex_context_refresh_checks.py `
-  --touched-areas feature,model,runtime `
-  --pipeline-version auto `
-  --skip-missing
-python scripts/check_source_encoding.py `
-  --output-json .\build\Release\logs\source_encoding_check_bootstrap.json
-python scripts/run_ci_operational_gate.py `
-  --include-backtest `
-  --strict-execution-parity `
-  --run-should-exit-parity-analysis `
-  --refresh-should-exit-audit-from-logs `
-  --should-exit-audit-live-runtime-log-glob "build/Release/logs/live_probe_stdout*.txt" `
-  --should-exit-audit-live-runtime-log-mode-filter exclude_backtest `
-  --strict-should-exit-parity
+python scripts/check_source_encoding.py --output-json .\build\Release\logs\source_encoding_check_bootstrap.json
+python scripts/verify_script_suite.py --skip-help
+python scripts/run_ci_operational_gate.py --include-backtest --strict-execution-parity --run-should-exit-parity-analysis --refresh-should-exit-audit-from-logs --should-exit-audit-live-runtime-log-glob "build/Release/logs/live_probe_stdout*.txt" --should-exit-audit-live-runtime-log-mode-filter exclude_backtest --strict-should-exit-parity
 ```
 
 ## Baseline reminder
 - Baseline behavior is authoritative and must remain unchanged unless explicitly versioned.
-- Phase 3 runtime policy is now baseline ON in default config (`config/model/probabilistic_runtime_bundle_v2.json`).
-- Runtime bundle contract support is `v2_draft` only (legacy `v1` bundle is no longer accepted in runtime loader).
-- Core probabilistic ops scripts now run on `v2`-only policy (`run_probabilistic_hybrid_cycle`, `run_verification`, `validate_runtime_bundle_parity`, shadow/promotion helpers).
-- Non-Phase3 experimental extensions remain opt-in and default OFF.
+- Runtime bundle contract support is `v2_draft` only.
 - Live trading remains disabled unless all gates pass.
 - Source/script/docs/config text files must be `UTF-8 (No BOM)`.
-- CSV files are the only exception and use `UTF-8 with BOM`.
+- CSV files are the only exception and use `UTF-8 with BOM`.\n

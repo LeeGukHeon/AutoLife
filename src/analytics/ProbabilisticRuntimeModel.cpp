@@ -564,6 +564,7 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
     feature_columns_.clear();
     cost_model_ = RuntimeCostModel{};
     phase3_policy_ = Phase3Policy{};
+    phase4_policy_ = Phase4Policy{};
     ev_calibration_buckets_.clear();
 
     std::ifstream in(path, std::ios::binary);
@@ -641,6 +642,7 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
     const auto phase3_ev_calibration_node = phase3_root.value("ev_calibration", nlohmann::json::object());
     const auto phase3_cost_node = phase3_root.value("cost_model", nlohmann::json::object());
     const auto phase3_blend_node = phase3_root.value("adaptive_ev_blend", nlohmann::json::object());
+    const auto phase3_ops_node = phase3_root.value("operations_control", nlohmann::json::object());
     const auto phase3_primary_minimums_node = phase3_root.value("primary_minimums", nlohmann::json::object());
     const auto phase3_primary_priority_node = phase3_root.value("primary_priority", nlohmann::json::object());
     const auto phase3_primary_decision_profile_node =
@@ -886,6 +888,107 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         parseCostParam(phase3_blend_node, "low_confidence_penalty", 0.10, -1.0, 1.0);
     phase3_policy_.adaptive_ev_blend.cost_penalty =
         parseCostParam(phase3_blend_node, "cost_penalty", 0.06, -1.0, 1.0);
+
+    phase3_policy_.operations_control.enabled = phase3_ops_node.value("enabled", false);
+    phase3_policy_.operations_control.mode = lowerCopy(
+        phase3_ops_node.value("mode", std::string("manual"))
+    );
+    phase3_policy_.operations_control.required_ev_offset_min = parseCostParam(
+        phase3_ops_node,
+        "required_ev_offset_min",
+        -0.0030,
+        -0.20,
+        0.20
+    );
+    phase3_policy_.operations_control.required_ev_offset_max = parseCostParam(
+        phase3_ops_node,
+        "required_ev_offset_max",
+        0.0030,
+        -0.20,
+        0.20
+    );
+    if (phase3_policy_.operations_control.required_ev_offset_max <
+        phase3_policy_.operations_control.required_ev_offset_min) {
+        std::swap(
+            phase3_policy_.operations_control.required_ev_offset_min,
+            phase3_policy_.operations_control.required_ev_offset_max
+        );
+    }
+    phase3_policy_.operations_control.required_ev_offset = parseCostParam(
+        phase3_ops_node,
+        "required_ev_offset",
+        0.0,
+        phase3_policy_.operations_control.required_ev_offset_min,
+        phase3_policy_.operations_control.required_ev_offset_max
+    );
+    phase3_policy_.operations_control.k_margin_scale_min = parseCostParam(
+        phase3_ops_node,
+        "k_margin_scale_min",
+        0.50,
+        0.0,
+        10.0
+    );
+    phase3_policy_.operations_control.k_margin_scale_max = parseCostParam(
+        phase3_ops_node,
+        "k_margin_scale_max",
+        2.00,
+        0.0,
+        10.0
+    );
+    if (phase3_policy_.operations_control.k_margin_scale_max <
+        phase3_policy_.operations_control.k_margin_scale_min) {
+        std::swap(
+            phase3_policy_.operations_control.k_margin_scale_min,
+            phase3_policy_.operations_control.k_margin_scale_max
+        );
+    }
+    phase3_policy_.operations_control.k_margin_scale = parseCostParam(
+        phase3_ops_node,
+        "k_margin_scale",
+        1.0,
+        phase3_policy_.operations_control.k_margin_scale_min,
+        phase3_policy_.operations_control.k_margin_scale_max
+    );
+    phase3_policy_.operations_control.ev_blend_scale_min = parseCostParam(
+        phase3_ops_node,
+        "ev_blend_scale_min",
+        0.50,
+        0.0,
+        10.0
+    );
+    phase3_policy_.operations_control.ev_blend_scale_max = parseCostParam(
+        phase3_ops_node,
+        "ev_blend_scale_max",
+        1.50,
+        0.0,
+        10.0
+    );
+    if (phase3_policy_.operations_control.ev_blend_scale_max <
+        phase3_policy_.operations_control.ev_blend_scale_min) {
+        std::swap(
+            phase3_policy_.operations_control.ev_blend_scale_min,
+            phase3_policy_.operations_control.ev_blend_scale_max
+        );
+    }
+    phase3_policy_.operations_control.ev_blend_scale = parseCostParam(
+        phase3_ops_node,
+        "ev_blend_scale",
+        1.0,
+        phase3_policy_.operations_control.ev_blend_scale_min,
+        phase3_policy_.operations_control.ev_blend_scale_max
+    );
+    phase3_policy_.operations_control.max_step_per_update = parseCostParam(
+        phase3_ops_node,
+        "max_step_per_update",
+        0.05,
+        0.0,
+        1.0
+    );
+    phase3_policy_.operations_control.min_update_interval_sec = std::clamp(
+        phase3_ops_node.value("min_update_interval_sec", 3600),
+        0,
+        86400 * 30
+    );
 
     phase3_policy_.primary_minimums.enabled = phase3_primary_minimums_node.value("enabled", false);
     phase3_policy_.primary_minimums.min_h5_calibrated = parseCostParam(
@@ -2730,6 +2833,319 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
 
     phase3_policy_.diagnostics_v2.enabled = phase3_policy_.phase3_diagnostics_v2_enabled;
 
+    const auto phase4_root = root.value("phase4", nlohmann::json::object());
+    const auto phase4_portfolio_allocator_node =
+        phase4_root.value("portfolio_allocator", nlohmann::json::object());
+    const auto phase4_correlation_control_node =
+        phase4_root.value("correlation_control", nlohmann::json::object());
+    const auto phase4_risk_budget_node =
+        phase4_root.value("risk_budget", nlohmann::json::object());
+    const auto phase4_drawdown_governor_node =
+        phase4_root.value("drawdown_governor", nlohmann::json::object());
+    const auto phase4_execution_aware_sizing_node =
+        phase4_root.value("execution_aware_sizing", nlohmann::json::object());
+    const auto phase4_diagnostics_node =
+        phase4_root.value("portfolio_diagnostics", nlohmann::json::object());
+
+    phase4_policy_.portfolio_allocator.enabled =
+        phase4_portfolio_allocator_node.value("enabled", false);
+    phase4_policy_.portfolio_allocator.top_k = static_cast<int>(std::llround(parseCostParam(
+        phase4_portfolio_allocator_node,
+        "top_k",
+        1.0,
+        1.0,
+        256.0
+    )));
+    phase4_policy_.portfolio_allocator.min_score = parseCostParam(
+        phase4_portfolio_allocator_node,
+        "min_score",
+        -1.0e6,
+        -1.0e6,
+        1.0e6
+    );
+    phase4_policy_.portfolio_allocator.lambda_tail = parseCostParam(
+        phase4_portfolio_allocator_node,
+        "lambda_tail",
+        1.0,
+        0.0,
+        100.0
+    );
+    phase4_policy_.portfolio_allocator.lambda_cost = parseCostParam(
+        phase4_portfolio_allocator_node,
+        "lambda_cost",
+        1.0,
+        0.0,
+        100.0
+    );
+    phase4_policy_.portfolio_allocator.lambda_uncertainty = parseCostParam(
+        phase4_portfolio_allocator_node,
+        "lambda_uncertainty",
+        1.0,
+        0.0,
+        100.0
+    );
+    phase4_policy_.portfolio_allocator.lambda_margin = parseCostParam(
+        phase4_portfolio_allocator_node,
+        "lambda_margin",
+        1.0,
+        0.0,
+        100.0
+    );
+    phase4_policy_.portfolio_allocator.uncertainty_prob_weight = parseCostParam(
+        phase4_portfolio_allocator_node,
+        "uncertainty_prob_weight",
+        0.50,
+        0.0,
+        100.0
+    );
+    phase4_policy_.portfolio_allocator.uncertainty_ev_weight = parseCostParam(
+        phase4_portfolio_allocator_node,
+        "uncertainty_ev_weight",
+        0.50,
+        0.0,
+        100.0
+    );
+    const double uncertainty_weight_sum =
+        phase4_policy_.portfolio_allocator.uncertainty_prob_weight +
+        phase4_policy_.portfolio_allocator.uncertainty_ev_weight;
+    if (uncertainty_weight_sum > 1e-9) {
+        phase4_policy_.portfolio_allocator.uncertainty_prob_weight /=
+            uncertainty_weight_sum;
+        phase4_policy_.portfolio_allocator.uncertainty_ev_weight /=
+            uncertainty_weight_sum;
+    } else {
+        phase4_policy_.portfolio_allocator.uncertainty_prob_weight = 0.50;
+        phase4_policy_.portfolio_allocator.uncertainty_ev_weight = 0.50;
+    }
+
+    phase4_policy_.phase4_portfolio_allocator_enabled =
+        phase4_policy_.portfolio_allocator.enabled;
+    phase4_policy_.correlation_control.enabled =
+        phase4_correlation_control_node.value("enabled", false);
+    phase4_policy_.correlation_control.default_cluster_cap = parseCostParam(
+        phase4_correlation_control_node,
+        "default_cluster_cap",
+        1.0,
+        0.0,
+        10.0
+    );
+    phase4_policy_.correlation_control.market_cluster_map.clear();
+    const auto cluster_map_node = phase4_correlation_control_node.value(
+        "market_cluster_map",
+        nlohmann::json::object()
+    );
+    if (cluster_map_node.is_object()) {
+        for (auto it = cluster_map_node.begin(); it != cluster_map_node.end(); ++it) {
+            if (!it.value().is_string()) {
+                continue;
+            }
+            const std::string market = it.key();
+            const std::string cluster_id = it.value().get<std::string>();
+            if (market.empty() || cluster_id.empty()) {
+                continue;
+            }
+            phase4_policy_.correlation_control.market_cluster_map[market] = cluster_id;
+        }
+    }
+    phase4_policy_.correlation_control.cluster_caps.clear();
+    const auto cluster_caps_node = phase4_correlation_control_node.value(
+        "cluster_caps",
+        nlohmann::json::object()
+    );
+    if (cluster_caps_node.is_object()) {
+        for (auto it = cluster_caps_node.begin(); it != cluster_caps_node.end(); ++it) {
+            if (!it.value().is_number()) {
+                continue;
+            }
+            const std::string cluster_id = it.key();
+            if (cluster_id.empty()) {
+                continue;
+            }
+            phase4_policy_.correlation_control.cluster_caps[cluster_id] = std::clamp(
+                it.value().get<double>(),
+                0.0,
+                10.0
+            );
+        }
+    }
+    phase4_policy_.phase4_correlation_control_enabled =
+        phase4_policy_.correlation_control.enabled;
+    phase4_policy_.risk_budget.enabled =
+        phase4_risk_budget_node.value("enabled", false);
+    phase4_policy_.risk_budget.per_market_cap = parseCostParam(
+        phase4_risk_budget_node,
+        "per_market_cap",
+        1.0,
+        0.0,
+        1.0
+    );
+    phase4_policy_.risk_budget.gross_cap = parseCostParam(
+        phase4_risk_budget_node,
+        "gross_cap",
+        1.0,
+        0.0,
+        10.0
+    );
+    phase4_policy_.risk_budget.risk_budget_cap = parseCostParam(
+        phase4_risk_budget_node,
+        "risk_budget_cap",
+        1.0,
+        0.0,
+        10.0
+    );
+    phase4_policy_.risk_budget.risk_proxy_stop_pct = parseCostParam(
+        phase4_risk_budget_node,
+        "risk_proxy_stop_pct",
+        0.03,
+        0.0,
+        1.0
+    );
+    phase4_policy_.phase4_risk_budget_enabled =
+        phase4_policy_.risk_budget.enabled;
+    phase4_policy_.drawdown_governor.enabled =
+        phase4_drawdown_governor_node.value("enabled", false);
+    phase4_policy_.drawdown_governor.dd_threshold_soft = parseCostParam(
+        phase4_drawdown_governor_node,
+        "dd_threshold_soft",
+        0.05,
+        0.0,
+        1.0
+    );
+    phase4_policy_.drawdown_governor.dd_threshold_hard = parseCostParam(
+        phase4_drawdown_governor_node,
+        "dd_threshold_hard",
+        0.10,
+        0.0,
+        1.0
+    );
+    if (phase4_policy_.drawdown_governor.dd_threshold_hard <
+        phase4_policy_.drawdown_governor.dd_threshold_soft) {
+        std::swap(
+            phase4_policy_.drawdown_governor.dd_threshold_soft,
+            phase4_policy_.drawdown_governor.dd_threshold_hard
+        );
+    }
+    phase4_policy_.drawdown_governor.budget_multiplier_soft = parseCostParam(
+        phase4_drawdown_governor_node,
+        "budget_multiplier_soft",
+        0.70,
+        0.0,
+        1.0
+    );
+    phase4_policy_.drawdown_governor.budget_multiplier_hard = parseCostParam(
+        phase4_drawdown_governor_node,
+        "budget_multiplier_hard",
+        0.40,
+        0.0,
+        1.0
+    );
+    if (phase4_policy_.drawdown_governor.budget_multiplier_hard >
+        phase4_policy_.drawdown_governor.budget_multiplier_soft) {
+        std::swap(
+            phase4_policy_.drawdown_governor.budget_multiplier_soft,
+            phase4_policy_.drawdown_governor.budget_multiplier_hard
+        );
+    }
+    phase4_policy_.phase4_drawdown_governor_enabled =
+        phase4_policy_.drawdown_governor.enabled;
+    phase4_policy_.execution_aware_sizing.enabled =
+        phase4_execution_aware_sizing_node.value("enabled", false);
+    phase4_policy_.execution_aware_sizing.liquidity_low_threshold = parseCostParam(
+        phase4_execution_aware_sizing_node,
+        "liquidity_low_threshold",
+        40.0,
+        0.0,
+        100.0
+    );
+    phase4_policy_.execution_aware_sizing.liquidity_mid_threshold = parseCostParam(
+        phase4_execution_aware_sizing_node,
+        "liquidity_mid_threshold",
+        65.0,
+        0.0,
+        100.0
+    );
+    if (phase4_policy_.execution_aware_sizing.liquidity_mid_threshold <
+        phase4_policy_.execution_aware_sizing.liquidity_low_threshold) {
+        std::swap(
+            phase4_policy_.execution_aware_sizing.liquidity_low_threshold,
+            phase4_policy_.execution_aware_sizing.liquidity_mid_threshold
+        );
+    }
+    phase4_policy_.execution_aware_sizing.liquidity_low_size_multiplier = parseCostParam(
+        phase4_execution_aware_sizing_node,
+        "liquidity_low_size_multiplier",
+        0.50,
+        0.0,
+        1.0
+    );
+    phase4_policy_.execution_aware_sizing.liquidity_mid_size_multiplier = parseCostParam(
+        phase4_execution_aware_sizing_node,
+        "liquidity_mid_size_multiplier",
+        0.75,
+        0.0,
+        1.0
+    );
+    phase4_policy_.execution_aware_sizing.liquidity_high_size_multiplier = parseCostParam(
+        phase4_execution_aware_sizing_node,
+        "liquidity_high_size_multiplier",
+        1.00,
+        0.0,
+        1.0
+    );
+    phase4_policy_.execution_aware_sizing.tail_cost_soft_pct = parseCostParam(
+        phase4_execution_aware_sizing_node,
+        "tail_cost_soft_pct",
+        0.0015,
+        0.0,
+        1.0
+    );
+    phase4_policy_.execution_aware_sizing.tail_cost_hard_pct = parseCostParam(
+        phase4_execution_aware_sizing_node,
+        "tail_cost_hard_pct",
+        0.0030,
+        0.0,
+        1.0
+    );
+    if (phase4_policy_.execution_aware_sizing.tail_cost_hard_pct <
+        phase4_policy_.execution_aware_sizing.tail_cost_soft_pct) {
+        std::swap(
+            phase4_policy_.execution_aware_sizing.tail_cost_soft_pct,
+            phase4_policy_.execution_aware_sizing.tail_cost_hard_pct
+        );
+    }
+    phase4_policy_.execution_aware_sizing.tail_soft_multiplier = parseCostParam(
+        phase4_execution_aware_sizing_node,
+        "tail_soft_multiplier",
+        0.80,
+        0.0,
+        1.0
+    );
+    phase4_policy_.execution_aware_sizing.tail_hard_multiplier = parseCostParam(
+        phase4_execution_aware_sizing_node,
+        "tail_hard_multiplier",
+        0.60,
+        0.0,
+        1.0
+    );
+    if (phase4_policy_.execution_aware_sizing.tail_hard_multiplier >
+        phase4_policy_.execution_aware_sizing.tail_soft_multiplier) {
+        std::swap(
+            phase4_policy_.execution_aware_sizing.tail_soft_multiplier,
+            phase4_policy_.execution_aware_sizing.tail_hard_multiplier
+        );
+    }
+    phase4_policy_.execution_aware_sizing.min_position_size = parseCostParam(
+        phase4_execution_aware_sizing_node,
+        "min_position_size",
+        0.01,
+        0.0,
+        1.0
+    );
+    phase4_policy_.phase4_execution_aware_sizing_enabled =
+        phase4_policy_.execution_aware_sizing.enabled;
+    phase4_policy_.phase4_portfolio_diagnostics_enabled =
+        phase4_diagnostics_node.value("enabled", false);
+
     prefer_default_entry_ = root.value("prefer_default_model", false);
 
     const auto default_model = root.value("default_model", nlohmann::json{});
@@ -2871,6 +3287,12 @@ bool ProbabilisticRuntimeModel::infer(
     out.phase3_cost_tail_enabled = phase3_policy_.phase3_cost_tail_enabled;
     out.phase3_adaptive_ev_blend_enabled = phase3_policy_.phase3_adaptive_ev_blend_enabled;
     out.phase3_diagnostics_v2_enabled = phase3_policy_.phase3_diagnostics_v2_enabled;
+    out.phase4_portfolio_allocator_enabled = phase4_policy_.phase4_portfolio_allocator_enabled;
+    out.phase4_correlation_control_enabled = phase4_policy_.phase4_correlation_control_enabled;
+    out.phase4_risk_budget_enabled = phase4_policy_.phase4_risk_budget_enabled;
+    out.phase4_drawdown_governor_enabled = phase4_policy_.phase4_drawdown_governor_enabled;
+    out.phase4_execution_aware_sizing_enabled = phase4_policy_.phase4_execution_aware_sizing_enabled;
+    out.phase4_portfolio_diagnostics_enabled = phase4_policy_.phase4_portfolio_diagnostics_enabled;
 
     const double fallback_expected_edge_bps =
         (h5_cal_primary * entry->h5.edge_win_mean_bps) +

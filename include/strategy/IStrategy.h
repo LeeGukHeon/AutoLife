@@ -190,13 +190,16 @@ struct Signal {
         double cost_used_pct = 0.0;
         double adaptive_ev_blend = 0.20;
         double frontier_k_margin = 0.0;
+        double frontier_k_margin_scale = 1.0;
         double frontier_k_uncertainty = 0.0;
         double frontier_k_cost_tail = 0.0;
+        double required_ev_offset = 0.0;
         double frontier_min_required_ev = -0.0002;
         double frontier_max_required_ev = 0.0050;
         double frontier_margin_floor = -1.0;
         double frontier_ev_confidence_floor = 0.0;
         double frontier_cost_tail_reject_threshold_pct = 1.0;
+        double ev_blend_scale = 1.0;
         bool primary_minimums_enabled = false;
         double primary_min_h5_calibrated = 0.48;
         double primary_min_h5_margin = -0.03;

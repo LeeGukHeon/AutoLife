@@ -286,6 +286,21 @@
       "low_confidence_penalty": 0.1,
       "cost_penalty": 0.06
     },
+    "operations_control": {
+      "enabled": false,
+      "mode": "manual",
+      "required_ev_offset": 0.0,
+      "required_ev_offset_min": -0.003,
+      "required_ev_offset_max": 0.003,
+      "k_margin_scale": 1.0,
+      "k_margin_scale_min": 0.5,
+      "k_margin_scale_max": 2.0,
+      "ev_blend_scale": 1.0,
+      "ev_blend_scale_min": 0.5,
+      "ev_blend_scale_max": 1.5,
+      "max_step_per_update": 0.05,
+      "min_update_interval_sec": 3600
+    },
     "primary_minimums": {
       "enabled": true,
       "min_h5_calibrated": 0.48,
@@ -538,6 +553,55 @@
     },
     "diagnostics_v2": {
       "enabled": true
+    }
+  },
+  "phase4": {
+    "portfolio_allocator": {
+      "enabled": false,
+      "top_k": 1,
+      "min_score": -1000000.0,
+      "lambda_tail": 1.0,
+      "lambda_cost": 1.0,
+      "lambda_uncertainty": 1.0,
+      "lambda_margin": 1.0,
+      "uncertainty_prob_weight": 0.5,
+      "uncertainty_ev_weight": 0.5
+    },
+    "correlation_control": {
+      "enabled": false,
+      "default_cluster_cap": 1.0,
+      "market_cluster_map": {},
+      "cluster_caps": {}
+    },
+    "risk_budget": {
+      "enabled": false,
+      "per_market_cap": 1.0,
+      "gross_cap": 1.0,
+      "risk_budget_cap": 1.0,
+      "risk_proxy_stop_pct": 0.03
+    },
+    "drawdown_governor": {
+      "enabled": false,
+      "dd_threshold_soft": 0.05,
+      "dd_threshold_hard": 0.1,
+      "budget_multiplier_soft": 0.7,
+      "budget_multiplier_hard": 0.4
+    },
+    "execution_aware_sizing": {
+      "enabled": false,
+      "liquidity_low_threshold": 40.0,
+      "liquidity_mid_threshold": 65.0,
+      "liquidity_low_size_multiplier": 0.5,
+      "liquidity_mid_size_multiplier": 0.75,
+      "liquidity_high_size_multiplier": 1.0,
+      "tail_cost_soft_pct": 0.0015,
+      "tail_cost_hard_pct": 0.003,
+      "tail_soft_multiplier": 0.8,
+      "tail_hard_multiplier": 0.6,
+      "min_position_size": 0.01
+    },
+    "portfolio_diagnostics": {
+      "enabled": false
     }
   },
   "pipeline_version": "v2",
