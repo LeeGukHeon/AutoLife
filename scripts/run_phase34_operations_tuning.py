@@ -951,8 +951,424 @@ def kpis(report: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def eval_lex(report: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any]:
+def parse_time_range_hours(payload: Dict[str, Any], key: str) -> float:
+    if not isinstance(payload, dict):
+        return 0.0
+    value = payload.get(key)
+    if not isinstance(value, list) or len(value) < 2:
+        return 0.0
+    start_ts = i64(value[0], 0)
+    end_ts = i64(value[1], 0)
+    if end_ts <= start_ts:
+        return 0.0
+    # split ranges are recorded in epoch milliseconds.
+    return float(end_ts - start_ts) / 3600000.0
+
+
+def throughput_gate_context(report: Dict[str, Any]) -> Dict[str, Any]:
+    protocol_split = report.get("protocol_split", {}) if isinstance(report.get("protocol_split"), dict) else {}
+    split_name = str(
+        report.get(
+            "split_name",
+            protocol_split.get("split_name", protocol_split.get("name", protocol_split.get("split", "unknown"))),
+        )
+    ).strip() or "unknown"
+    core_hours = parse_time_range_hours(protocol_split, "evaluation_range_effective")
+    if core_hours <= 0.0:
+        core_hours = parse_time_range_hours(protocol_split, "evaluation_range_used")
+    if core_hours <= 0.0:
+        core_hours = parse_time_range_hours(protocol_split, "split_range_used")
+    market_count = max(1, i64(report.get("dataset_count", 0), 0))
+    return {
+        "split_name": split_name,
+        "core_length_hours": float(core_hours),
+        "markets_count": int(market_count),
+    }
+
+
+def lookup_throughput_limit(
+    rows: Any,
+    *,
+    split_name: str,
+    core_length_hours: float,
+    markets_count: int,
+    default_limit: float,
+    limit_key: str = "limit",
+) -> float:
+    if not isinstance(rows, list):
+        return float(default_limit)
+    best_score = -1
+    best_limits: List[float] = []
+    split_token = str(split_name).strip().lower()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row_split = str(row.get("split_name", row.get("split", "ANY"))).strip().lower()
+        if row_split not in ("", "any", "*") and row_split != split_token:
+            continue
+        core_min = f64(row.get("core_length_hours_min", row.get("core_hours_min", -1.0)), -1.0)
+        core_max = f64(row.get("core_length_hours_max", row.get("core_hours_max", -1.0)), -1.0)
+        mk_min = i64(row.get("markets_count_min", row.get("market_count_min", -1)), -1)
+        mk_max = i64(row.get("markets_count_max", row.get("market_count_max", -1)), -1)
+        if core_min >= 0.0 and float(core_length_hours) < float(core_min):
+            continue
+        if core_max >= 0.0 and float(core_length_hours) > float(core_max):
+            continue
+        if mk_min >= 0 and int(markets_count) < int(mk_min):
+            continue
+        if mk_max >= 0 and int(markets_count) > int(mk_max):
+            continue
+        limit_value = f64(row.get(limit_key, default_limit), default_limit)
+        score = 0
+        if row_split not in ("", "any", "*"):
+            score += 1
+        if core_min >= 0.0:
+            score += 1
+        if core_max >= 0.0:
+            score += 1
+        if mk_min >= 0:
+            score += 1
+        if mk_max >= 0:
+            score += 1
+        if score > best_score:
+            best_score = score
+            best_limits = [float(limit_value)]
+        elif score == best_score:
+            best_limits.append(float(limit_value))
+    if not best_limits:
+        return float(default_limit)
+    return float(min(best_limits))
+
+
+def extract_throughput_history(
+    report: Dict[str, Any],
+    *,
+    prefer_core_direct: bool,
+    fallback_on_core_zero: bool,
+) -> Dict[str, Any]:
+    payload = pick_eval_payload(report, prefer_core_direct)
+    source = "core_window_direct" if payload is not report else "report"
+    if (
+        fallback_on_core_zero
+        and payload is not report
+        and phase3_funnel(payload).get("candidate_total", 0) <= 0
+    ):
+        payload = report
+        source = "report_fallback_core_zero"
+    samples: List[float] = []
+    agg = payload.get("aggregates", {}) if isinstance(payload.get("aggregates"), dict) else {}
+    avg_total_trades = f64(agg.get("avg_total_trades", 0.0), float("nan"))
+    if math.isfinite(avg_total_trades):
+        samples.append(max(0.0, float(avg_total_trades)))
+    per_dataset = ng(payload, ["adaptive_validation", "per_dataset"], [])
+    if isinstance(per_dataset, list):
+        for row in per_dataset:
+            if not isinstance(row, dict):
+                continue
+            trades = f64(row.get("total_trades", 0.0), float("nan"))
+            if math.isfinite(trades):
+                samples.append(max(0.0, float(trades)))
+    return {
+        "samples": samples,
+        "sample_size_total": int(len(samples)),
+        "source": source,
+        "observed_avg_trades": max(0.0, f64(agg.get("avg_total_trades", 0.0), 0.0)),
+    }
+
+
+def apply_dynamic_throughput_gate(
+    *,
+    report: Dict[str, Any],
+    evaluation: Dict[str, Any],
+    legacy_min_avg_trades: float,
+    throughput_policy: Dict[str, Any],
+    history_reports: List[Dict[str, Any]],
+    history_report_paths: List[str],
+) -> Dict[str, Any]:
+    observed = max(0.0, f64(ng(evaluation, ["kpis", "throughput_avg_trades"], 0.0), 0.0))
+    if not isinstance(throughput_policy, dict) or not bool(throughput_policy.get("enabled", False)):
+        return {
+            "enabled": False,
+            "throughput_observed": float(observed),
+            "lookup_limit": float(legacy_min_avg_trades),
+            "dist_limit": float(legacy_min_avg_trades),
+            "final_limit": float(legacy_min_avg_trades),
+            "combine_mode": "legacy_absolute",
+            "throughput_ok": bool(observed >= float(legacy_min_avg_trades)),
+            "throughput_hold": False,
+            "low_conf_action": "none",
+            "low_conf": False,
+            "sample_size": 0,
+            "min_samples_required": 0,
+            "history_sources": [],
+        }
+
+    prefer_core_direct = bool(throughput_policy.get("history_use_core_window_direct", True))
+    fallback_on_core_zero = bool(
+        throughput_policy.get("fallback_to_split_report_on_core_zero", True)
+    )
+    ctx = throughput_gate_context(report)
+    split_name = str(ctx.get("split_name", "unknown"))
+    core_length_hours = f64(ctx.get("core_length_hours", 0.0), 0.0)
+    markets_count = max(1, i64(ctx.get("markets_count", 1), 1))
+
+    default_lookup = max(
+        0.0,
+        f64(throughput_policy.get("lookup_default_limit", legacy_min_avg_trades), legacy_min_avg_trades),
+    )
+    lookup_limit = lookup_throughput_limit(
+        throughput_policy.get("lookup_limits", []),
+        split_name=split_name,
+        core_length_hours=core_length_hours,
+        markets_count=markets_count,
+        default_limit=default_lookup,
+        limit_key="limit",
+    )
+
+    dist_quantile_p = clamp(f64(throughput_policy.get("dist_quantile_p", 0.2), 0.2), 0.0, 1.0)
+    dist_min_samples = max(1, i64(throughput_policy.get("dist_min_samples", 2), 2))
+    combine_mode = str(throughput_policy.get("combine_mode", "min")).strip().lower() or "min"
+
+    history_rows: List[Dict[str, Any]] = []
+    dist_samples: List[float] = []
+    sample_sizes_history: List[float] = []
+    for idx, hist_report in enumerate(history_reports):
+        if not isinstance(hist_report, dict):
+            continue
+        hist_row = extract_throughput_history(
+            hist_report,
+            prefer_core_direct=prefer_core_direct,
+            fallback_on_core_zero=fallback_on_core_zero,
+        )
+        hist_path = history_report_paths[idx] if idx < len(history_report_paths) else ""
+        history_rows.append(
+            {
+                "path": str(hist_path),
+                "source": str(hist_row.get("source", "")),
+                "sample_size_total": int(hist_row.get("sample_size_total", 0)),
+                "observed_avg_trades": round(f64(hist_row.get("observed_avg_trades", 0.0), 0.0), 6),
+            }
+        )
+        for x in hist_row.get("samples", []):
+            vx = f64(x, float("nan"))
+            if math.isfinite(vx):
+                dist_samples.append(max(0.0, float(vx)))
+        sample_sizes_history.append(float(max(0, i64(hist_row.get("sample_size_total", 0), 0))))
+
+    sample_size = len(dist_samples)
+    dist_available = sample_size >= dist_min_samples
+    dist_limit = quantile(dist_samples, dist_quantile_p) if dist_available else float(lookup_limit)
+
+    uncertainty = throughput_policy.get("uncertainty_component", {})
+    if not isinstance(uncertainty, dict):
+        uncertainty = {}
+    uncertainty_enabled = bool(uncertainty.get("enabled", True))
+    min_samples_lookup_default = max(
+        1.0,
+        f64(uncertainty.get("min_samples_lookup_default", 8.0), 8.0),
+    )
+    min_samples_lookup = lookup_throughput_limit(
+        uncertainty.get("min_samples_lookup", []),
+        split_name=split_name,
+        core_length_hours=core_length_hours,
+        markets_count=markets_count,
+        default_limit=min_samples_lookup_default,
+        limit_key="limit",
+    )
+    min_samples_dist_q = clamp(
+        f64(uncertainty.get("min_samples_dist_quantile_p", 0.2), 0.2),
+        0.0,
+        1.0,
+    )
+    clean_sample_sizes = [x for x in sample_sizes_history if math.isfinite(x) and x > 0.0]
+    min_samples_dist = (
+        quantile(clean_sample_sizes, min_samples_dist_q)
+        if clean_sample_sizes
+        else float(min_samples_lookup_default)
+    )
+    min_samples_required = int(math.ceil(max(float(min_samples_lookup), float(min_samples_dist))))
+    low_conf = bool(uncertainty_enabled and sample_size < min_samples_required)
+
+    dist_weight_when_low_conf = clamp(
+        f64(uncertainty.get("dist_weight_when_low_conf", 0.0), 0.0),
+        0.0,
+        1.0,
+    )
+    effective_dist_limit = float(dist_limit)
+    if low_conf:
+        effective_dist_limit = float(lookup_limit) + (
+            (float(dist_limit) - float(lookup_limit)) * float(dist_weight_when_low_conf)
+        )
+    final_limit = combine_limits(float(lookup_limit), float(effective_dist_limit), combine_mode)
+
+    low_conf_action = str(uncertainty.get("low_conf_action", "promotion_hold")).strip().lower() or "promotion_hold"
+    if low_conf_action in ("hold", "promotion_hold"):
+        low_conf_action = "promotion_hold"
+    elif low_conf_action in ("fail", "strict_fail"):
+        low_conf_action = "fail"
+    else:
+        low_conf_action = "none"
+
+    throughput_hold = bool(low_conf and observed < final_limit and low_conf_action == "promotion_hold")
+    throughput_ok = bool((observed >= final_limit) or throughput_hold)
+
+    levels = evaluation.get("levels", {})
+    if not isinstance(levels, dict):
+        levels = {}
+    p4 = levels.get("p4", {})
+    if not isinstance(p4, dict):
+        p4 = {}
+    checks = p4.get("checks", {})
+    if not isinstance(checks, dict):
+        checks = {}
+    checks["throughput_ok"] = bool(throughput_ok)
+    checks["throughput_hold"] = bool(throughput_hold)
+    p4["checks"] = checks
+    p3_pass = bool(ng(levels, ["p3", "pass"], False))
+    p4["pass"] = bool(p3_pass and throughput_ok)
+    levels["p4"] = p4
+    evaluation["levels"] = levels
+    evaluation["overall_pass"] = bool(p4.get("pass", False))
+
+    gate_payload = {
+        "enabled": True,
+        "mode": "dynamic_limit",
+        "throughput_observed": round(float(observed), 6),
+        "lookup_limit": round(float(lookup_limit), 6),
+        "dist_limit": round(float(dist_limit), 6),
+        "final_limit": round(float(final_limit), 6),
+        "combine_mode": combine_mode,
+        "throughput_ok": bool(throughput_ok),
+        "throughput_hold": bool(throughput_hold),
+        "low_conf": bool(low_conf),
+        "low_conf_action": low_conf_action,
+        "sample_size": int(sample_size),
+        "min_samples_required": int(min_samples_required),
+        "dist_quantile_p": float(dist_quantile_p),
+        "dist_available": bool(dist_available),
+        "history_sources": history_rows,
+        "context": {
+            "split_name": split_name,
+            "core_length_hours": round(float(core_length_hours), 6),
+            "markets_count": int(markets_count),
+        },
+        "uncertainty_component": {
+            "enabled": bool(uncertainty_enabled),
+            "min_samples_lookup_component": round(float(min_samples_lookup), 6),
+            "min_samples_dist_component": round(float(min_samples_dist), 6),
+            "min_samples_dist_quantile_p": float(min_samples_dist_q),
+            "dist_weight_when_low_conf": float(dist_weight_when_low_conf),
+        },
+    }
+    evaluation["throughput_gate"] = gate_payload
+    return gate_payload
+
+
+def evaluate_strict_parity_gate(
+    *,
+    report: Dict[str, Any],
+    args: argparse.Namespace,
+    bundle_payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    policy = ng(bundle_payload, ["phase3", "operations_dynamic_gate", "strict_parity_gate"], {})
+    if not isinstance(policy, dict):
+        policy = {}
+    policy_enabled = bool(policy.get("enabled", False))
+    mode = str(policy.get("mode", "block")).strip().lower() or "block"
+    if mode not in ("block", "warning_only", "warning_hold", "hold_on_low_conf"):
+        mode = "block"
+
+    check_name = str(policy.get("check_name", "cli_strict_parity_pass_flag")).strip() or "cli_strict_parity_pass_flag"
+    expected_value = bool(policy.get("expected_value", True))
+    observed_value = bool(args.strict_parity_pass)
+    mismatch = bool(observed_value != expected_value)
+
+    sample_metric = str(policy.get("sample_metric", "avg_total_trades")).strip().lower() or "avg_total_trades"
+    if sample_metric == "candidate_total_core_effective":
+        sample_observed = max(
+            0.0,
+            f64(ng(report, ["protocol_split", "candidate_total_core_effective"], 0.0), 0.0),
+        )
+    else:
+        sample_metric = "avg_total_trades"
+        sample_observed = max(0.0, f64(ng(report, ["aggregates", "avg_total_trades"], 0.0), 0.0))
+    min_samples_required = max(0, i64(policy.get("min_samples_required", 0), 0))
+    low_conf = bool(min_samples_required > 0 and sample_observed < float(min_samples_required))
+
+    if not policy_enabled:
+        strict_ok = bool(observed_value)
+        strict_hold = False
+        strict_warn = False
+        effective_mode = "legacy_block"
+    else:
+        effective_mode = mode
+        strict_ok = True
+        strict_hold = False
+        strict_warn = False
+        if mode == "block":
+            strict_ok = not mismatch
+        elif mode == "warning_only":
+            strict_ok = True
+            strict_warn = bool(mismatch)
+        elif mode == "warning_hold":
+            strict_ok = True
+            strict_warn = bool(mismatch)
+            strict_hold = bool(mismatch)
+        elif mode == "hold_on_low_conf":
+            if mismatch and low_conf:
+                strict_ok = True
+                strict_warn = True
+                strict_hold = True
+            else:
+                strict_ok = not mismatch
+                strict_warn = False
+                strict_hold = False
+
+    strict_fail = bool((not strict_ok) and (not strict_hold))
+    diagnosis_recent_n = max(1, i64(policy.get("diagnosis_recent_windows", 5), 5))
+    return {
+        "enabled": bool(policy_enabled),
+        "mode": effective_mode,
+        "strict_parity_check_name": check_name,
+        "expected_value": bool(expected_value),
+        "observed_value": bool(observed_value),
+        "mismatch_count": 1 if mismatch else 0,
+        "mismatch_rate": 1.0 if mismatch else 0.0,
+        "mismatch_items_top3": [
+            {
+                "name": check_name,
+                "expected": bool(expected_value),
+                "observed": bool(observed_value),
+                "mismatch": bool(mismatch),
+            }
+        ],
+        "fail_threshold": {
+            "type": "boolean",
+            "expected": bool(expected_value),
+            "mode": effective_mode,
+        },
+        "sample_metric": sample_metric,
+        "sample_observed": round(float(sample_observed), 6),
+        "min_samples_required": int(min_samples_required),
+        "low_conf": bool(low_conf),
+        "strict_parity_ok": bool(strict_ok),
+        "strict_parity_warning": bool(strict_warn),
+        "strict_parity_hold": bool(strict_hold),
+        "strict_parity_fail": bool(strict_fail),
+        "diagnosis_recent_n": int(diagnosis_recent_n),
+    }
+
+
+def eval_lex(
+    report: Dict[str, Any],
+    args: argparse.Namespace,
+    *,
+    strict_parity_eval: Dict[str, Any] = None,
+) -> Dict[str, Any]:
     ks = kpis(report)
+    strict_parity_ok = bool(args.strict_parity_pass)
+    if isinstance(strict_parity_eval, dict) and "strict_parity_ok" in strict_parity_eval:
+        strict_parity_ok = bool(strict_parity_eval.get("strict_parity_ok", strict_parity_ok))
     l1 = {
         "drawdown_ok": f64(ks["risk_drawdown_pct"]) <= float(args.max_drawdown_pct),
         "tail_ok": f64(ks["risk_tail_loss_concentration"]) <= float(args.max_tail_concentration),
@@ -960,7 +1376,7 @@ def eval_lex(report: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any]
     l2 = {
         "adaptive_verdict_not_fail": str(ng(report, ["adaptive_validation", "verdict", "verdict"], "fail")).strip().lower() != "fail",
         "avg_fee_ok": f64(ks["risk_avg_fee_krw"]) <= float(args.max_avg_fee_krw),
-        "strict_parity_ok": bool(args.strict_parity_pass),
+        "strict_parity_ok": bool(strict_parity_ok),
     }
     agg = report.get("aggregates", {}) if isinstance(report.get("aggregates"), dict) else {}
     l3 = {
@@ -1113,14 +1529,17 @@ def promotion_fail_rows(
             compare_mode=">=",
             contribution_score=max(0.0, min_expectancy - value_expectancy),
         )
-    if not bool(checks_p4.get("throughput_ok", True)):
+    throughput_gate_ctx = evaluation.get("throughput_gate", {}) if isinstance(evaluation.get("throughput_gate"), dict) else {}
+    throughput_threshold = f64(throughput_gate_ctx.get("final_limit", min_avg_trades), min_avg_trades)
+    throughput_hold = bool(throughput_gate_ctx.get("throughput_hold", False))
+    if not bool(checks_p4.get("throughput_ok", True)) and not throughput_hold:
         push_row(
             reason_key="throughput_fail",
             group="p4_throughput",
             value=round(value_throughput, 6),
-            threshold=round(min_avg_trades, 6),
+            threshold=round(throughput_threshold, 6),
             compare_mode=">=",
-            contribution_score=max(0.0, min_avg_trades - value_throughput),
+            contribution_score=max(0.0, throughput_threshold - value_throughput),
         )
 
     rows.sort(key=lambda item: (-f64(item.get("contribution_score", 0.0), 0.0), str(item.get("reason_key", ""))))
@@ -1283,11 +1702,54 @@ def cmd_promotion(args: argparse.Namespace) -> int:
     if not isinstance(state, dict):
         state = {}
     ps = state.get("promotion_gate", {}) if isinstance(state.get("promotion_gate"), dict) else {}
-    ev = eval_lex(rep, args)
+    bundle_payload: Dict[str, Any] = {}
+    if str(args.bundle_json).strip():
+        bundle_payload = load_json_required(args.bundle_json, "bundle")
+    strict_parity_eval = evaluate_strict_parity_gate(
+        report=rep,
+        args=args,
+        bundle_payload=bundle_payload,
+    )
+    ev = eval_lex(rep, args, strict_parity_eval=strict_parity_eval)
+
+    throughput_debug: Dict[str, Any] = {
+        "enabled": False,
+        "mode": "legacy_absolute",
+        "throughput_observed": round(
+            f64(ng(ev, ["kpis", "throughput_avg_trades"], 0.0), 0.0),
+            6,
+        ),
+        "legacy_threshold": round(float(args.min_avg_trades), 6),
+    }
+    history_reports: List[Dict[str, Any]] = []
+    history_paths: List[str] = []
+    if str(args.bundle_json).strip():
+        throughput_policy = ng(bundle_payload, ["phase3", "operations_dynamic_gate", "throughput_gate"], {})
+        if isinstance(throughput_policy, dict) and bool(throughput_policy.get("enabled", False)):
+            for path_value in args.history_report_jsons:
+                path_text = str(path_value).strip()
+                if not path_text:
+                    continue
+                rpath = resolve_repo_path(path_text)
+                payload = load_json_or_none(rpath)
+                if not isinstance(payload, dict):
+                    raise RuntimeError(f"history report load failed: {path_text}")
+                history_reports.append(payload)
+                history_paths.append(str(rpath))
+            throughput_debug = apply_dynamic_throughput_gate(
+                report=rep,
+                evaluation=ev,
+                legacy_min_avg_trades=float(args.min_avg_trades),
+                throughput_policy=throughput_policy,
+                history_reports=history_reports,
+                history_report_paths=history_paths,
+            )
+
     prev_reason_scores = ps.get("last_failed_reason_scores", {}) if isinstance(ps.get("last_failed_reason_scores"), dict) else {}
     fail_rows = promotion_fail_rows(rep, ev, args, prev_reason_scores)
     top_fail_rows = fail_rows[:3]
     passed = bool(ev.get("overall_pass", False))
+    strict_parity_hold = bool(strict_parity_eval.get("strict_parity_hold", False))
     stages = ["paper", "live10", "live30", "live100"]
     cur = str(args.current_stage).strip().lower()
     if cur not in stages:
@@ -1302,6 +1764,11 @@ def cmd_promotion(args: argparse.Namespace) -> int:
         rollback = True
         nxt = "paper"
         action = "rollback_to_conservative_bundle"
+    elif strict_parity_hold:
+        rollback = False
+        nxt = cur
+        action = "hold_for_strict_parity"
+        c = 0
     elif c >= req:
         idx = stages.index(cur)
         if idx < len(stages) - 1:
@@ -1310,6 +1777,19 @@ def cmd_promotion(args: argparse.Namespace) -> int:
             c = 0
         else:
             action = "hold_live100"
+    strict_history = ps.get("strict_parity_fail_history", [])
+    if not isinstance(strict_history, list):
+        strict_history = []
+    strict_history.append(bool(strict_parity_eval.get("strict_parity_fail", False)))
+    strict_history = strict_history[-50:]
+    recent_n = max(1, i64(strict_parity_eval.get("diagnosis_recent_n", 5), 5))
+    recent_window = strict_history[-recent_n:]
+    recent_fail_count = int(sum(1 for x in recent_window if bool(x)))
+    always_fail_recent_n = bool(len(recent_window) == recent_n and recent_fail_count == recent_n)
+    strict_parity_eval["recent_n"] = int(recent_n)
+    strict_parity_eval["recent_fail_count"] = int(recent_fail_count)
+    strict_parity_eval["always_fail_recent_n"] = bool(always_fail_recent_n)
+
     ps.update({
         "last_updated_at": now_iso(),
         "current_stage": cur,
@@ -1324,9 +1804,29 @@ def cmd_promotion(args: argparse.Namespace) -> int:
             for row in fail_rows
             if str(row.get("reason_key", "")).strip()
         },
+        "strict_parity_fail_history": strict_history,
     })
     state["promotion_gate"] = ps
     dump_json(spath, state)
+    if str(args.strict_parity_diagnosis_json).strip():
+        diagnosis_payload = dict(strict_parity_eval)
+        diagnosis_payload.update(
+            {
+                "generated_at": now_iso(),
+                "paper_report_json": str(resolve_repo_path(args.paper_report_json)),
+                "bundle_json": str(resolve_repo_path(args.bundle_json)) if str(args.bundle_json).strip() else "",
+                "history_report_jsons": history_paths,
+            }
+        )
+        dump_json(resolve_repo_path(args.strict_parity_diagnosis_json), diagnosis_payload)
+    if str(args.throughput_dynamic_debug_json).strip():
+        debug_payload = dict(throughput_debug)
+        debug_payload["generated_at"] = now_iso()
+        debug_payload["paper_report_json"] = str(resolve_repo_path(args.paper_report_json))
+        if str(args.bundle_json).strip():
+            debug_payload["bundle_json"] = str(resolve_repo_path(args.bundle_json))
+        debug_payload["history_report_jsons"] = history_paths
+        dump_json(resolve_repo_path(args.throughput_dynamic_debug_json), debug_payload)
     dump_json(
         resolve_repo_path(args.output_json),
         {
@@ -1339,6 +1839,8 @@ def cmd_promotion(args: argparse.Namespace) -> int:
             "consecutive_ok": c,
             "evaluation": ev,
             "top_failed_reasons": top_fail_rows,
+            "strict_parity_gate": strict_parity_eval,
+            "throughput_dynamic_gate": throughput_debug,
             "state_path": str(spath),
         },
     )
@@ -2691,6 +3193,10 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--min-profit-factor", type=float, default=1.0)
     g.add_argument("--min-expectancy-krw", type=float, default=0.0)
     g.add_argument("--min-avg-trades", type=float, default=8.0)
+    g.add_argument("--bundle-json", default="")
+    g.add_argument("--history-report-jsons", nargs="*", default=[])
+    g.add_argument("--throughput-dynamic-debug-json", default="")
+    g.add_argument("--strict-parity-diagnosis-json", default="")
 
     d = s.add_parser("bundle_diff")
     d.add_argument("--base-bundle-json", required=True)

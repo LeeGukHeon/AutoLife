@@ -405,6 +405,16 @@ std::vector<Signal> StrategyManager::filterSignalsWithDiagnostics(
         input.min_history_profit_factor = gate.min_profit_factor;
 
         const foundation::FilterDecision decision = foundation::evaluateFilter(input);
+        const bool reject_expected_edge_negative =
+            std::isfinite(signal.expected_value) && signal.expected_value < 0.0;
+
+        if (decision.pass && reject_expected_edge_negative) {
+            recordPhase3DiagnosticsV2(rejection_bucket, signal, false);
+            incrementCounter(rejection_bucket, "reject_expected_edge_negative_count", 1);
+            incrementRejectionReason(rejection_bucket, "reject_expected_edge_negative");
+            continue;
+        }
+
         if (decision.pass) {
             filtered.push_back(signal);
             recordPhase3DiagnosticsV2(rejection_bucket, signal, true);

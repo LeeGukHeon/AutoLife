@@ -93,6 +93,7 @@ public:
             int no_signal_generated = 0;
             int filtered_out_by_manager = 0;
             int filtered_out_by_policy = 0;
+            int reject_expected_edge_negative_count = 0;
             int no_best_signal = 0;
             int blocked_pattern_gate = 0;
             int blocked_rr_rebalance = 0;

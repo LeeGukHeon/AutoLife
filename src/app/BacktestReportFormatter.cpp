@@ -47,6 +47,7 @@ void printEntryFunnelSummary(const EntryFunnel& f, std::ostream& out) {
         << ", no_signal=" << f.no_signal_generated
         << ", manager_drop=" << f.filtered_out_by_manager
         << ", policy_drop=" << f.filtered_out_by_policy
+        << ", ev_negative_drop=" << f.reject_expected_edge_negative_count
         << ", no_best=" << f.no_best_signal
         << ", pattern_drop=" << f.blocked_pattern_gate
         << ", rr_drop=" << f.blocked_rr_rebalance

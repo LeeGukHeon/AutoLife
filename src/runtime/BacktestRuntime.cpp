@@ -199,9 +199,7 @@ bool passesRegimeGate(analytics::MarketRegime regime, const engine::EngineConfig
 
 using autolife::common::signal_policy::normalizeStrategyToken;
 using autolife::common::signal_policy::isStrategyEnabledByConfig;
-using autolife::common::signal_policy::computeEffectiveRoundTripCostPct;
 using autolife::common::signal_policy::rebalanceSignalRiskReward;
-using autolife::common::signal_policy::computeCalibratedExpectedEdgePct;
 using autolife::common::execution_guard::computeRealtimeEntryVetoThresholds;
 using autolife::common::execution_guard::computeDynamicSlippageThresholds;
 using autolife::common::execution_guard::computeMarketHostilityScore;
@@ -459,6 +457,76 @@ void appendPhase4CandidateArtifact(
     std::ofstream out(path, std::ios::binary | std::ios::app);
     if (!out.is_open()) {
         LOG_WARN("Phase4 candidate artifact open failed: {}", path.string());
+        return;
+    }
+    out << line.dump() << "\n";
+}
+
+std::filesystem::path entryStageFunnelArtifactPath() {
+    return autolife::utils::PathUtils::resolveRelativePath("logs/entry_stage_funnel_backtest.jsonl");
+}
+
+void resetEntryStageFunnelArtifact() {
+    const auto path = entryStageFunnelArtifactPath();
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+}
+
+void appendEntryStageFunnelAudit(
+    long long timestamp_ms,
+    const std::string& market,
+    int candidates_total,
+    int candidates_after_frontier,
+    int candidates_after_manager,
+    int candidates_after_portfolio,
+    int orders_submitted,
+    int orders_filled,
+    const std::map<std::string, int>& reject_reason_counts,
+    double ev_at_manager_pass,
+    double ev_at_order_submit_check,
+    int ev_mismatch_count
+) {
+    nlohmann::json line;
+    line["ts"] = normalizeTimestampMs(timestamp_ms);
+    line["source"] = "backtest";
+    line["market"] = market;
+    line["stages"] = {
+        {"candidates_total", std::max(0, candidates_total)},
+        {"candidates_after_frontier", std::max(0, candidates_after_frontier)},
+        {"candidates_after_manager", std::max(0, candidates_after_manager)},
+        {"candidates_after_portfolio", std::max(0, candidates_after_portfolio)},
+        {"orders_submitted", std::max(0, orders_submitted)},
+        {"orders_filled", std::max(0, orders_filled)}
+    };
+    nlohmann::json ev_consistency;
+    ev_consistency["source"] = "signal.expected_value_ssot";
+    if (std::isfinite(ev_at_manager_pass)) {
+        ev_consistency["ev_at_manager_pass"] = ev_at_manager_pass;
+    } else {
+        ev_consistency["ev_at_manager_pass"] = nullptr;
+    }
+    if (std::isfinite(ev_at_order_submit_check)) {
+        ev_consistency["ev_at_order_submit_check"] = ev_at_order_submit_check;
+    } else {
+        ev_consistency["ev_at_order_submit_check"] = nullptr;
+    }
+    ev_consistency["ev_mismatch_count"] = std::max(0, ev_mismatch_count);
+    line["ev_consistency"] = std::move(ev_consistency);
+
+    nlohmann::json reason_payload = nlohmann::json::object();
+    for (const auto& kv : reject_reason_counts) {
+        if (kv.first.empty() || kv.second <= 0) {
+            continue;
+        }
+        reason_payload[kv.first] = kv.second;
+    }
+    line["reject_reason_counts"] = std::move(reason_payload);
+
+    const auto path = entryStageFunnelArtifactPath();
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream out(path, std::ios::binary | std::ios::app);
+    if (!out.is_open()) {
+        LOG_WARN("Entry stage funnel artifact open failed: {}", path.string());
         return;
     }
     out << line.dump() << "\n";
@@ -1811,6 +1879,7 @@ void BacktestEngine::init(const Config& config) {
     engine_config_ = config.getEngineConfig();
     resetExecutionUpdateArtifact();
     resetPolicyDecisionArtifact();
+    resetEntryStageFunnelArtifact();
     resetPhase4CandidateArtifact();
     balance_krw_ = config.getInitialCapital();
     balance_asset_ = 0.0;
@@ -2639,8 +2708,21 @@ void BacktestEngine::processCandle(const Candle& candle) {
     if (!position) {
         entry_funnel_.entry_rounds++;
         bool entry_executed = false;
+        int stage_candidates_total = 0;
+        int stage_candidates_after_frontier = 0;
+        int stage_candidates_after_manager = 0;
+        int stage_candidates_after_portfolio = 0;
+        int stage_orders_submitted = 0;
+        int stage_orders_filled = 0;
+        double stage_ev_at_manager_pass = std::numeric_limits<double>::quiet_NaN();
+        double stage_ev_at_order_submit_check = std::numeric_limits<double>::quiet_NaN();
+        int stage_ev_mismatch_count = 0;
+        std::map<std::string, int> stage_reject_reason_counts;
         auto markEntryReject = [&](const char* reason) {
             entry_rejection_reason_counts_[reason]++;
+            if (reason != nullptr && reason[0] != '\0') {
+                stage_reject_reason_counts[reason]++;
+            }
         };
         auto mergeEntryRejectCounts = [&](const std::map<std::string, int>& counts) {
             for (const auto& kv : counts) {
@@ -2738,6 +2820,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 strategy_generated_counts_[signal.strategy_name]++;
             }
         }
+        stage_candidates_total = std::max(0, static_cast<int>(signals.size()));
         
         const auto& manager_policy = probabilistic_snapshot.phase3_manager_filter_policy;
         const auto manager_defaults =
@@ -2813,6 +2896,35 @@ void BacktestEngine::processCandle(const Candle& candle) {
             regime.regime,
             &manager_filter_diag
         );
+        const int reject_expected_edge_negative_count = std::max(
+            0,
+            static_cast<int>(
+                manager_filter_diag.rejection_reason_counts.count("reject_expected_edge_negative_count")
+                    ? manager_filter_diag.rejection_reason_counts.at(
+                          "reject_expected_edge_negative_count")
+                    : 0
+            )
+        );
+        const int reject_frontier_fail_count = std::max(
+            0,
+            static_cast<int>(
+                manager_filter_diag.rejection_reason_counts.count("reject_frontier_fail")
+                    ? manager_filter_diag.rejection_reason_counts.at("reject_frontier_fail")
+                    : 0
+            )
+        );
+        stage_candidates_after_frontier = std::max(
+            0,
+            manager_filter_diag.input_count - reject_frontier_fail_count
+        );
+        stage_candidates_after_manager = std::max(
+            0,
+            static_cast<int>(filtered_signals.size())
+        );
+        if (reject_expected_edge_negative_count > 0) {
+            entry_funnel_.reject_expected_edge_negative_count +=
+                reject_expected_edge_negative_count;
+        }
         std::vector<strategy::Signal> ranked_filtered;
         ranked_filtered.reserve(filtered_signals.size());
         for (auto& signal : filtered_signals) {
@@ -3548,6 +3660,10 @@ void BacktestEngine::processCandle(const Candle& candle) {
             }
         }
 
+        stage_candidates_after_portfolio = std::max(
+            0,
+            static_cast<int>(candidate_signals.size())
+        );
         strategy::Signal best_signal;
         if (!candidate_signals.empty()) {
             best_signal = candidate_signals.front();
@@ -3585,6 +3701,9 @@ void BacktestEngine::processCandle(const Candle& candle) {
             }
             if (!best_signal.strategy_name.empty()) {
                 strategy_selected_best_counts_[best_signal.strategy_name]++;
+            }
+            if (std::isfinite(best_signal.expected_value)) {
+                stage_ev_at_manager_pass = best_signal.expected_value;
             }
         }
 
@@ -3795,6 +3914,26 @@ void BacktestEngine::processCandle(const Candle& candle) {
                             quantity > 0.0 && available_cash >= (quantity * fill_price) + fee;
 
                         if (order_sizing_ok) {
+                            // A10-3 SSoT: order stage must reuse manager-pass EV without
+                            // recalculation so negative-edge blocking is applied at one stage.
+                            const double tracked_expected_edge = std::isfinite(best_signal.expected_value)
+                                ? best_signal.expected_value
+                                : 0.0;
+                            stage_ev_at_order_submit_check = tracked_expected_edge;
+                            if (std::isfinite(stage_ev_at_manager_pass) &&
+                                std::fabs(stage_ev_at_manager_pass - stage_ev_at_order_submit_check) > 1.0e-12) {
+                                stage_ev_mismatch_count += 1;
+                                LOG_WARN(
+                                    "{} EV SSoT mismatch detected: manager_pass={:+.8f} order_submit={:+.8f}",
+                                    market_name_,
+                                    stage_ev_at_manager_pass,
+                                    stage_ev_at_order_submit_check
+                                );
+                            }
+
+                            const double reward_pct =
+                                (best_signal.take_profit_2 - best_signal.entry_price) /
+                                std::max(1e-9, best_signal.entry_price);
                             if (engine_config_.backtest_shadow_policy_only) {
                                 // Shadow evidence mode: keep decision stream deterministic
                                 // without mutating position state from entry execution.
@@ -3806,7 +3945,9 @@ void BacktestEngine::processCandle(const Candle& candle) {
                                 order.volume = quantity;
                                 order.strategy_name = best_signal.strategy_name;
 
+                                stage_orders_submitted += 1;
                                 executeOrder(order, fill_price);
+                                stage_orders_filled += 1;
 
                                 // Register with Risk Manager
                                 risk_manager_->enterPosition(
@@ -3824,16 +3965,8 @@ void BacktestEngine::processCandle(const Candle& candle) {
                                     // Backtest holding-time logic must be candle-clock based.
                                     entered_position->entry_time = toMsTimestamp(candle.timestamp);
                                 }
-                                const double reward_pct = (best_signal.take_profit_2 - best_signal.entry_price) / std::max(1e-9, best_signal.entry_price);
                                 const double risk_pct = (best_signal.entry_price - best_signal.stop_loss) / std::max(1e-9, best_signal.entry_price);
                                 const double rr = (risk_pct > 1e-9) ? (reward_pct / risk_pct) : 0.0;
-                                const double round_trip_cost = computeEffectiveRoundTripCostPct(best_signal, engine_config_);
-                                const double net_edge = reward_pct - round_trip_cost;
-                                const double calibrated_edge = computeCalibratedExpectedEdgePct(best_signal, engine_config_);
-                                const double tracked_expected_edge =
-                                    (std::isfinite(calibrated_edge))
-                                        ? calibrated_edge
-                                        : ((best_signal.expected_value != 0.0) ? best_signal.expected_value : net_edge);
                                 risk_manager_->setPositionSignalInfo(
                                     market_name_,
                                     best_signal.signal_filter,
@@ -3880,8 +4013,21 @@ void BacktestEngine::processCandle(const Candle& candle) {
         }
         }
 
-    }
-    else {
+        appendEntryStageFunnelAudit(
+            candle.timestamp,
+            market_name_,
+            stage_candidates_total,
+            stage_candidates_after_frontier,
+            stage_candidates_after_manager,
+            stage_candidates_after_portfolio,
+            stage_orders_submitted,
+            stage_orders_filled,
+            stage_reject_reason_counts,
+            stage_ev_at_manager_pass,
+            stage_ev_at_order_submit_check,
+            stage_ev_mismatch_count
+        );
+    } else {
         if (!was_open_position_prev_candle_) {
             entry_funnel_.skipped_due_to_open_position++;
             entry_rejection_reason_counts_["skipped_due_to_open_position"]++;

@@ -12,7 +12,7 @@ import re
 import subprocess
 import sys
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from _script_common import verification_lock
 
@@ -61,6 +61,323 @@ def extract_upbit_market_from_dataset_name(dataset_name: str) -> str:
     if "_" not in token:
         return ""
     return token.replace("_", "-")
+
+
+def normalize_timestamp_ms(ts_value: int) -> int:
+    # Keep parity with BacktestRuntime::normalizeTimestampMs.
+    if int(ts_value) > 0 and int(ts_value) < 1000000000000:
+        return int(ts_value) * 1000
+    return int(ts_value)
+
+
+def parse_timestamp_cell(cell_value: str) -> Optional[int]:
+    token = str(cell_value or "").strip().strip('"')
+    if not token:
+        return None
+    try:
+        if any(ch in token for ch in (".", "e", "E")):
+            return int(float(token))
+        return int(token)
+    except Exception:
+        return None
+
+
+def canonical_split_name(split_name: str) -> str:
+    token = str(split_name or "").strip().lower()
+    alias = {
+        "dev": "development",
+        "development": "development",
+        "val": "validation",
+        "validation": "validation",
+        "qua": "quarantine",
+        "quarantine": "quarantine",
+        "all": "all_purged",
+        "all_purged": "all_purged",
+    }
+    return alias.get(token, token)
+
+
+def resolve_manifest_split_time_range(
+    split_manifest_payload: Dict[str, Any],
+    split_name: str,
+    execution_prewarm_hours: float = 168.0,
+) -> Dict[str, Any]:
+    token = canonical_split_name(split_name)
+    time_bounds = (
+        split_manifest_payload.get("time_bounds", {})
+        if isinstance(split_manifest_payload, dict)
+        else {}
+    )
+    if not isinstance(time_bounds, dict):
+        time_bounds = {}
+
+    def _iv(key: str) -> int:
+        try:
+            return int(time_bounds.get(key, 0))
+        except Exception:
+            return 0
+
+    eval_start = 0
+    eval_end = 0
+    eval_mode = ""
+    cumulative_start = 0
+    cumulative_end = 0
+    execution_start = 0
+    execution_end = 0
+    execution_mode = ""
+    source_keys: List[str] = []
+    prewarm_ms = max(0, int(round(float(max(0.0, execution_prewarm_hours)) * 3600.0 * 1000.0)))
+
+    if token in ("development", "validation", "quarantine"):
+        intersection_start = _iv("intersection_start_ts")
+        core_start_key = f"{token}_core_start_ts"
+        core_end_key = f"{token}_core_end_ts"
+        core_start = _iv(core_start_key)
+        core_end = _iv(core_end_key)
+        if token == "development":
+            cumulative_end = _iv("development_end_ts")
+            cumulative_end_key = "development_end_ts"
+        elif token == "validation":
+            cumulative_end = _iv("validation_end_ts")
+            cumulative_end_key = "validation_end_ts"
+        else:
+            cumulative_end = _iv("intersection_end_ts")
+            cumulative_end_key = "intersection_end_ts"
+        cumulative_start = intersection_start
+        if core_start > 0 and core_end > 0 and core_end >= core_start:
+            eval_start = core_start
+            eval_end = core_end
+            eval_mode = "core"
+            source_keys = [core_start_key, core_end_key, "intersection_start_ts", cumulative_end_key]
+            execution_start = max(cumulative_start, eval_start - prewarm_ms) if cumulative_start > 0 else max(0, eval_start - prewarm_ms)
+            execution_end = eval_end
+            execution_mode = "prewarm_plus_core"
+        else:
+            if cumulative_start > 0 and cumulative_end > 0 and cumulative_end >= cumulative_start:
+                eval_start = cumulative_start
+                eval_end = cumulative_end
+                eval_mode = "prefix_cumulative"
+                source_keys = ["intersection_start_ts", cumulative_end_key]
+                execution_start = eval_start
+                execution_end = eval_end
+                execution_mode = "prefix_cumulative"
+    elif token == "all_purged":
+        start = _iv("intersection_start_ts")
+        end = _iv("intersection_end_ts")
+        if start > 0 and end > 0 and end >= start:
+            eval_start = start
+            eval_end = end
+            eval_mode = "all_purged"
+            cumulative_start = start
+            cumulative_end = end
+            execution_start = start
+            execution_end = end
+            execution_mode = "all_purged"
+            source_keys = ["intersection_start_ts", "intersection_end_ts"]
+
+    if eval_start > 0 and eval_end > 0 and eval_end >= eval_start and execution_start > 0 and execution_end > 0 and execution_end >= execution_start:
+        return {
+            "resolved": True,
+            "split_name": token,
+            "evaluation_start_ts": int(eval_start),
+            "evaluation_end_ts": int(eval_end),
+            "evaluation_mode": str(eval_mode),
+            "execution_start_ts": int(execution_start),
+            "execution_end_ts": int(execution_end),
+            "execution_mode": str(execution_mode),
+            "cumulative_start_ts": int(cumulative_start),
+            "cumulative_end_ts": int(cumulative_end),
+            "execution_prewarm_hours": float(max(0.0, execution_prewarm_hours)),
+            "source_keys": source_keys,
+        }
+
+    return {
+        "resolved": False,
+        "split_name": token,
+        "evaluation_start_ts": 0,
+        "evaluation_end_ts": 0,
+        "evaluation_mode": "unresolved",
+        "execution_start_ts": 0,
+        "execution_end_ts": 0,
+        "execution_mode": "unresolved",
+        "cumulative_start_ts": 0,
+        "cumulative_end_ts": 0,
+        "execution_prewarm_hours": float(max(0.0, execution_prewarm_hours)),
+        "source_keys": source_keys,
+        "reason": "manifest_time_bounds_missing_for_split",
+    }
+
+
+def collect_market_family_csvs(primary_1m_dataset: pathlib.Path) -> List[pathlib.Path]:
+    dataset = primary_1m_dataset.resolve()
+    if not is_upbit_primary_1m_dataset(dataset):
+        return [dataset]
+    parent = dataset.parent
+    prefix = dataset.stem.split("_1m_", 1)[0].lower() + "_"
+    family: List[pathlib.Path] = []
+    for candidate in sorted(parent.glob("*.csv"), key=lambda p: p.name.lower()):
+        if candidate.stem.lower().startswith(prefix):
+            family.append(candidate.resolve())
+    if not family:
+        family = [dataset]
+    return family
+
+
+def filter_csv_by_time_range(
+    source_csv: pathlib.Path,
+    output_csv: pathlib.Path,
+    start_ts_ms: int,
+    end_ts_ms: int,
+    evaluation_start_ts_ms: Optional[int] = None,
+    evaluation_end_ts_ms: Optional[int] = None,
+) -> Dict[str, Any]:
+    rows_before = 0
+    rows_after = 0
+    rows_in_evaluation = 0
+    skipped_non_numeric = 0
+    header_written = False
+
+    eval_enabled = (
+        evaluation_start_ts_ms is not None
+        and evaluation_end_ts_ms is not None
+        and int(evaluation_end_ts_ms) >= int(evaluation_start_ts_ms)
+    )
+
+    ensure_parent(output_csv)
+    with source_csv.open("r", encoding="utf-8", errors="ignore", newline="") as src_fp:
+        with output_csv.open("w", encoding="utf-8", newline="\n") as out_fp:
+            for raw_line in src_fp:
+                line = str(raw_line).rstrip("\r\n")
+                if not line.strip():
+                    continue
+                first_cell = line.split(",", 1)[0]
+                ts_raw = parse_timestamp_cell(first_cell)
+                if ts_raw is None:
+                    skipped_non_numeric += 1
+                    if not header_written:
+                        out_fp.write(line + "\n")
+                        header_written = True
+                    continue
+                rows_before += 1
+                ts_ms = normalize_timestamp_ms(ts_raw)
+                if int(start_ts_ms) <= int(ts_ms) <= int(end_ts_ms):
+                    out_fp.write(line + "\n")
+                    rows_after += 1
+                    if eval_enabled and int(evaluation_start_ts_ms) <= int(ts_ms) <= int(evaluation_end_ts_ms):
+                        rows_in_evaluation += 1
+
+    return {
+        "source_csv": str(source_csv),
+        "filtered_csv": str(output_csv),
+        "rows_before_filter": int(rows_before),
+        "rows_after_filter": int(rows_after),
+        "rows_in_evaluation_range": int(rows_in_evaluation),
+        "rows_removed_by_filter": max(0, int(rows_before) - int(rows_after)),
+        "rows_skipped_non_numeric": int(skipped_non_numeric),
+        "header_written": bool(header_written),
+    }
+
+
+def apply_manifest_split_filter_to_dataset_paths(
+    dataset_paths: List[pathlib.Path],
+    split_manifest_payload: Dict[str, Any],
+    split_name: str,
+    logs_dir: pathlib.Path,
+    execution_prewarm_hours: float = 168.0,
+) -> Dict[str, Any]:
+    range_spec = resolve_manifest_split_time_range(
+        split_manifest_payload=split_manifest_payload,
+        split_name=split_name,
+        execution_prewarm_hours=float(max(0.0, execution_prewarm_hours)),
+    )
+    if not bool(range_spec.get("resolved", False)):
+        reason = str(range_spec.get("reason", "split_range_unresolved")).strip() or "split_range_unresolved"
+        raise RuntimeError(
+            f"Split manifest is provided but split range could not be resolved: split={split_name} reason={reason}"
+        )
+
+    execution_start_ts = int(range_spec.get("execution_start_ts", 0))
+    execution_end_ts = int(range_spec.get("execution_end_ts", 0))
+    evaluation_start_ts = int(range_spec.get("evaluation_start_ts", 0))
+    evaluation_end_ts = int(range_spec.get("evaluation_end_ts", 0))
+    cumulative_start_ts = int(range_spec.get("cumulative_start_ts", 0))
+    cumulative_end_ts = int(range_spec.get("cumulative_end_ts", 0))
+    split_token = str(range_spec.get("split_name", "")).strip().lower() or "unknown"
+    nonce = uuid.uuid4().hex[:10]
+    temp_root = (
+        logs_dir
+        / "_split_filtered_inputs"
+        / f"{split_token}_{execution_start_ts}_{execution_end_ts}_{nonce}"
+    ).resolve()
+    temp_root.mkdir(parents=True, exist_ok=True)
+
+    filtered_primary_dataset_paths: List[pathlib.Path] = []
+    per_primary: List[Dict[str, Any]] = []
+    rows_before_total = 0
+    rows_after_total = 0
+    rows_in_evaluation_total = 0
+    rows_before_primary_1m = 0
+    rows_after_primary_1m = 0
+    rows_in_evaluation_primary_1m = 0
+
+    for primary in dataset_paths:
+        family_files = collect_market_family_csvs(primary)
+        file_rows: List[Dict[str, Any]] = []
+        for source_csv in family_files:
+            filtered_csv = (temp_root / source_csv.name).resolve()
+            stats = filter_csv_by_time_range(
+                source_csv=source_csv,
+                output_csv=filtered_csv,
+                start_ts_ms=execution_start_ts,
+                end_ts_ms=execution_end_ts,
+                evaluation_start_ts_ms=evaluation_start_ts,
+                evaluation_end_ts_ms=evaluation_end_ts,
+            )
+            file_rows.append(stats)
+            rows_before_total += int(stats.get("rows_before_filter", 0))
+            rows_after_total += int(stats.get("rows_after_filter", 0))
+            rows_in_evaluation_total += int(stats.get("rows_in_evaluation_range", 0))
+            if "_1m_" in source_csv.stem.lower():
+                rows_before_primary_1m += int(stats.get("rows_before_filter", 0))
+                rows_after_primary_1m += int(stats.get("rows_after_filter", 0))
+                rows_in_evaluation_primary_1m += int(stats.get("rows_in_evaluation_range", 0))
+
+        filtered_primary = (temp_root / primary.name).resolve()
+        if not filtered_primary.exists():
+            raise FileNotFoundError(f"Filtered primary dataset missing: {filtered_primary}")
+        filtered_primary_dataset_paths.append(filtered_primary)
+        per_primary.append(
+            {
+                "primary_dataset": str(primary),
+                "filtered_primary_dataset": str(filtered_primary),
+                "family_file_count": int(len(family_files)),
+                "files": file_rows,
+            }
+        )
+
+    return {
+        "split_applied": True,
+        "split_name": split_token,
+        "execution_range_used": [int(execution_start_ts), int(execution_end_ts)],
+        "evaluation_range_used": [int(evaluation_start_ts), int(evaluation_end_ts)],
+        "cumulative_range_used": [int(cumulative_start_ts), int(cumulative_end_ts)],
+        "split_range_used": [int(evaluation_start_ts), int(evaluation_end_ts)],
+        "split_range_mode": str(range_spec.get("evaluation_mode", "")),
+        "execution_range_mode": str(range_spec.get("execution_mode", "")),
+        "execution_prewarm_hours": float(range_spec.get("execution_prewarm_hours", 0.0)),
+        "split_range_source_keys": list(range_spec.get("source_keys", [])),
+        "rows_before_filter": int(rows_before_total),
+        "rows_after_filter": int(rows_after_total),
+        "rows_in_core": int(rows_in_evaluation_total),
+        "rows_before_filter_primary_1m": int(rows_before_primary_1m),
+        "rows_after_filter_primary_1m": int(rows_after_primary_1m),
+        "rows_in_core_primary_1m": int(rows_in_evaluation_primary_1m),
+        "trades_before_filter": None,
+        "trades_after_filter": None,
+        "filtered_input_root_dir": str(temp_root),
+        "per_primary_dataset": per_primary,
+        "filtered_dataset_paths": [str(x) for x in filtered_primary_dataset_paths],
+    }
 
 
 def extract_phase4_market_cluster_map(bundle_payload: Dict[str, Any]) -> Dict[str, str]:
@@ -572,6 +889,10 @@ def run_backtest(
     dataset_path: pathlib.Path,
     require_higher_tf_companions: bool,
     disable_adaptive_state_io: bool,
+    evaluation_start_ts: Optional[int] = None,
+    evaluation_end_ts: Optional[int] = None,
+    cumulative_start_ts: Optional[int] = None,
+    cumulative_end_ts: Optional[int] = None,
 ) -> Dict[str, Any]:
     cmd = [str(exe_path), "--backtest", str(dataset_path), "--json"]
     if require_higher_tf_companions and is_upbit_primary_1m_dataset(dataset_path):
@@ -593,6 +914,36 @@ def run_backtest(
     parsed = parse_backtest_json(proc)
     parsed["phase3_pass_ev_samples"] = load_policy_decision_ev_samples(exe_path.parent)
     parsed["policy_decision_volatility_samples"] = load_policy_decision_volatility_samples(exe_path.parent)
+    parsed["split_eval_stats"] = load_policy_decision_range_stats(
+        exe_dir=exe_path.parent,
+        start_ts=evaluation_start_ts,
+        end_ts=evaluation_end_ts,
+    )
+    parsed["split_cumulative_stats"] = load_policy_decision_range_stats(
+        exe_dir=exe_path.parent,
+        start_ts=cumulative_start_ts,
+        end_ts=cumulative_end_ts,
+    )
+    parsed["split_trade_eval_stats"] = load_execution_trade_range_stats(
+        exe_dir=exe_path.parent,
+        start_ts=evaluation_start_ts,
+        end_ts=evaluation_end_ts,
+    )
+    parsed["split_trade_cumulative_stats"] = load_execution_trade_range_stats(
+        exe_dir=exe_path.parent,
+        start_ts=cumulative_start_ts,
+        end_ts=cumulative_end_ts,
+    )
+    parsed["split_stage_funnel_eval_stats"] = load_entry_stage_funnel_range_stats(
+        exe_dir=exe_path.parent,
+        start_ts=evaluation_start_ts,
+        end_ts=evaluation_end_ts,
+    )
+    parsed["split_stage_funnel_cumulative_stats"] = load_entry_stage_funnel_range_stats(
+        exe_dir=exe_path.parent,
+        start_ts=cumulative_start_ts,
+        end_ts=cumulative_end_ts,
+    )
     return parsed
 
 
@@ -726,6 +1077,338 @@ def load_policy_decision_volatility_samples(
     return deduped
 
 
+def load_policy_decision_range_stats(
+    exe_dir: pathlib.Path,
+    start_ts: Optional[int],
+    end_ts: Optional[int],
+) -> Dict[str, Any]:
+    start = int(start_ts) if start_ts is not None else 0
+    end = int(end_ts) if end_ts is not None else 0
+    enabled = bool(start > 0 and end > 0 and end >= start)
+    artifact_path = (exe_dir / "logs" / "policy_decisions_backtest.jsonl").resolve()
+    out = {
+        "enabled": enabled,
+        "start_ts": int(start),
+        "end_ts": int(end),
+        "path": str(artifact_path),
+        "line_count_total": 0,
+        "line_count_in_range": 0,
+        "decision_count_total": 0,
+        "decision_count_in_range": 0,
+        "selected_decision_count_in_range": 0,
+        "ts_min_total": None,
+        "ts_max_total": None,
+        "ts_min_in_range": None,
+        "ts_max_in_range": None,
+    }
+    if not artifact_path.exists():
+        out["reason"] = "policy_decisions_log_missing"
+        return out
+    try:
+        with artifact_path.open("r", encoding="utf-8", errors="ignore") as fp:
+            for raw_line in fp:
+                line = str(raw_line).strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                ts_value = max(0, to_int(payload.get("ts", 0)))
+                decisions = payload.get("decisions", [])
+                if not isinstance(decisions, list):
+                    decisions = []
+                out["line_count_total"] = int(out["line_count_total"]) + 1
+                out["decision_count_total"] = int(out["decision_count_total"]) + int(len(decisions))
+                if ts_value > 0:
+                    if out["ts_min_total"] is None or ts_value < int(out["ts_min_total"]):
+                        out["ts_min_total"] = int(ts_value)
+                    if out["ts_max_total"] is None or ts_value > int(out["ts_max_total"]):
+                        out["ts_max_total"] = int(ts_value)
+                in_range = bool(enabled and ts_value > 0 and start <= ts_value <= end)
+                if in_range:
+                    out["line_count_in_range"] = int(out["line_count_in_range"]) + 1
+                    out["decision_count_in_range"] = int(out["decision_count_in_range"]) + int(len(decisions))
+                    out["selected_decision_count_in_range"] = int(out["selected_decision_count_in_range"]) + int(
+                        sum(1 for row in decisions if isinstance(row, dict) and bool(row.get("selected", False)))
+                    )
+                    if out["ts_min_in_range"] is None or ts_value < int(out["ts_min_in_range"]):
+                        out["ts_min_in_range"] = int(ts_value)
+                    if out["ts_max_in_range"] is None or ts_value > int(out["ts_max_in_range"]):
+                        out["ts_max_in_range"] = int(ts_value)
+    except Exception:
+        out["reason"] = "policy_decisions_log_parse_failed"
+        return out
+    return out
+
+
+def load_execution_trade_range_stats(
+    exe_dir: pathlib.Path,
+    start_ts: Optional[int],
+    end_ts: Optional[int],
+) -> Dict[str, Any]:
+    start = int(start_ts) if start_ts is not None else 0
+    end = int(end_ts) if end_ts is not None else 0
+    enabled = bool(start > 0 and end > 0 and end >= start)
+    artifact_path = (exe_dir / "logs" / "execution_updates_backtest.jsonl").resolve()
+    out = {
+        "enabled": enabled,
+        "start_ts": int(start),
+        "end_ts": int(end),
+        "path": str(artifact_path),
+        "events_total": 0,
+        "events_in_range": 0,
+        "buy_submitted_total": 0,
+        "buy_submitted_in_range": 0,
+        "buy_filled_total": 0,
+        "buy_filled_in_range": 0,
+        "sell_submitted_total": 0,
+        "sell_submitted_in_range": 0,
+        "sell_filled_total": 0,
+        "sell_filled_in_range": 0,
+        "terminal_sell_fills_total": 0,
+        "terminal_sell_fills_in_range": 0,
+        "ts_min_total": None,
+        "ts_max_total": None,
+        "ts_min_in_range": None,
+        "ts_max_in_range": None,
+    }
+    if not artifact_path.exists():
+        out["reason"] = "execution_updates_log_missing"
+        return out
+    try:
+        with artifact_path.open("r", encoding="utf-8", errors="ignore") as fp:
+            for raw_line in fp:
+                line = str(raw_line).strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                ts_value = max(0, to_int(payload.get("ts_ms", payload.get("ts", 0))))
+                event = str(payload.get("event", "")).strip().lower()
+                side = str(payload.get("side", "")).strip().upper()
+                terminal = bool(payload.get("terminal", False))
+                is_terminal_sell_fill = bool(event == "filled" and side == "SELL" and terminal)
+                is_buy_submitted = bool(event == "submitted" and side == "BUY")
+                is_buy_filled = bool(event == "filled" and side == "BUY")
+                is_sell_submitted = bool(event == "submitted" and side == "SELL")
+                is_sell_filled = bool(event == "filled" and side == "SELL")
+                out["events_total"] = int(out["events_total"]) + 1
+                if is_buy_submitted:
+                    out["buy_submitted_total"] = int(out["buy_submitted_total"]) + 1
+                if is_buy_filled:
+                    out["buy_filled_total"] = int(out["buy_filled_total"]) + 1
+                if is_sell_submitted:
+                    out["sell_submitted_total"] = int(out["sell_submitted_total"]) + 1
+                if is_sell_filled:
+                    out["sell_filled_total"] = int(out["sell_filled_total"]) + 1
+                if is_terminal_sell_fill:
+                    out["terminal_sell_fills_total"] = int(out["terminal_sell_fills_total"]) + 1
+                if ts_value > 0:
+                    if out["ts_min_total"] is None or ts_value < int(out["ts_min_total"]):
+                        out["ts_min_total"] = int(ts_value)
+                    if out["ts_max_total"] is None or ts_value > int(out["ts_max_total"]):
+                        out["ts_max_total"] = int(ts_value)
+                in_range = bool(enabled and ts_value > 0 and start <= ts_value <= end)
+                if in_range:
+                    out["events_in_range"] = int(out["events_in_range"]) + 1
+                    if is_buy_submitted:
+                        out["buy_submitted_in_range"] = int(out["buy_submitted_in_range"]) + 1
+                    if is_buy_filled:
+                        out["buy_filled_in_range"] = int(out["buy_filled_in_range"]) + 1
+                    if is_sell_submitted:
+                        out["sell_submitted_in_range"] = int(out["sell_submitted_in_range"]) + 1
+                    if is_sell_filled:
+                        out["sell_filled_in_range"] = int(out["sell_filled_in_range"]) + 1
+                    if is_terminal_sell_fill:
+                        out["terminal_sell_fills_in_range"] = int(out["terminal_sell_fills_in_range"]) + 1
+                    if out["ts_min_in_range"] is None or ts_value < int(out["ts_min_in_range"]):
+                        out["ts_min_in_range"] = int(ts_value)
+                    if out["ts_max_in_range"] is None or ts_value > int(out["ts_max_in_range"]):
+                        out["ts_max_in_range"] = int(ts_value)
+    except Exception:
+        out["reason"] = "execution_updates_log_parse_failed"
+        return out
+    return out
+
+
+def load_entry_stage_funnel_range_stats(
+    exe_dir: pathlib.Path,
+    start_ts: Optional[int],
+    end_ts: Optional[int],
+) -> Dict[str, Any]:
+    start = int(start_ts) if start_ts is not None else 0
+    end = int(end_ts) if end_ts is not None else 0
+    enabled = bool(start > 0 and end > 0 and end >= start)
+    artifact_path = (exe_dir / "logs" / "entry_stage_funnel_backtest.jsonl").resolve()
+    out: Dict[str, Any] = {
+        "enabled": enabled,
+        "start_ts": int(start),
+        "end_ts": int(end),
+        "path": str(artifact_path),
+        "entry_rounds_total": 0,
+        "entry_rounds_in_range": 0,
+        "candidates_total_in_range": 0,
+        "candidates_after_frontier_in_range": 0,
+        "candidates_after_manager_in_range": 0,
+        "candidates_after_portfolio_in_range": 0,
+        "orders_submitted_in_range": 0,
+        "orders_filled_in_range": 0,
+        "ev_samples_in_range": 0,
+        "ev_at_manager_pass_sum_in_range": 0.0,
+        "ev_at_order_submit_check_sum_in_range": 0.0,
+        "ev_at_manager_pass_avg_in_range": 0.0,
+        "ev_at_order_submit_check_avg_in_range": 0.0,
+        "ev_mismatch_count_in_range": 0,
+        "order_block_rounds_in_range": 0,
+        "order_block_reason_counts_in_range": {},
+        "top_order_block_reasons_in_range": [],
+        "ts_min_total": None,
+        "ts_max_total": None,
+        "ts_min_in_range": None,
+        "ts_max_in_range": None,
+    }
+    if not artifact_path.exists():
+        out["reason"] = "entry_stage_funnel_log_missing"
+        return out
+
+    def _is_order_block_reason(reason: str) -> bool:
+        reason_key = str(reason).strip().lower()
+        return bool(
+            reason_key.startswith("blocked_")
+            or reason_key in {"reject_expected_edge_negative_count", "reject_expected_edge_negative"}
+        )
+
+    block_reason_counts: Dict[str, int] = {}
+    try:
+        with artifact_path.open("r", encoding="utf-8", errors="ignore") as fp:
+            for raw_line in fp:
+                line = str(raw_line).strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                ts_value = max(0, to_int(payload.get("ts", 0)))
+                stages = payload.get("stages", {})
+                if not isinstance(stages, dict):
+                    stages = {}
+                out["entry_rounds_total"] = int(out["entry_rounds_total"]) + 1
+                if ts_value > 0:
+                    if out["ts_min_total"] is None or ts_value < int(out["ts_min_total"]):
+                        out["ts_min_total"] = int(ts_value)
+                    if out["ts_max_total"] is None or ts_value > int(out["ts_max_total"]):
+                        out["ts_max_total"] = int(ts_value)
+                in_range = bool(enabled and ts_value > 0 and start <= ts_value <= end)
+                if not in_range:
+                    continue
+                out["entry_rounds_in_range"] = int(out["entry_rounds_in_range"]) + 1
+                out["candidates_total_in_range"] = int(out["candidates_total_in_range"]) + max(
+                    0, to_int(stages.get("candidates_total", 0))
+                )
+                out["candidates_after_frontier_in_range"] = int(
+                    out["candidates_after_frontier_in_range"]
+                ) + max(0, to_int(stages.get("candidates_after_frontier", 0)))
+                out["candidates_after_manager_in_range"] = int(
+                    out["candidates_after_manager_in_range"]
+                ) + max(0, to_int(stages.get("candidates_after_manager", 0)))
+                out["candidates_after_portfolio_in_range"] = int(
+                    out["candidates_after_portfolio_in_range"]
+                ) + max(0, to_int(stages.get("candidates_after_portfolio", 0)))
+                orders_submitted = max(0, to_int(stages.get("orders_submitted", 0)))
+                orders_filled = max(0, to_int(stages.get("orders_filled", 0)))
+                out["orders_submitted_in_range"] = int(out["orders_submitted_in_range"]) + int(
+                    orders_submitted
+                )
+                out["orders_filled_in_range"] = int(out["orders_filled_in_range"]) + int(
+                    orders_filled
+                )
+                if out["ts_min_in_range"] is None or ts_value < int(out["ts_min_in_range"]):
+                    out["ts_min_in_range"] = int(ts_value)
+                if out["ts_max_in_range"] is None or ts_value > int(out["ts_max_in_range"]):
+                    out["ts_max_in_range"] = int(ts_value)
+
+                ev_consistency = payload.get("ev_consistency", {})
+                if isinstance(ev_consistency, dict):
+                    raw_ev_manager = ev_consistency.get("ev_at_manager_pass", None)
+                    raw_ev_order = ev_consistency.get("ev_at_order_submit_check", None)
+                    try:
+                        ev_manager = float(raw_ev_manager) if raw_ev_manager is not None else math.nan
+                    except Exception:
+                        ev_manager = math.nan
+                    try:
+                        ev_order = float(raw_ev_order) if raw_ev_order is not None else math.nan
+                    except Exception:
+                        ev_order = math.nan
+                    if not math.isfinite(ev_manager):
+                        ev_manager = math.nan
+                    if not math.isfinite(ev_order):
+                        ev_order = math.nan
+                    if math.isfinite(ev_manager) and math.isfinite(ev_order):
+                        out["ev_samples_in_range"] = int(out["ev_samples_in_range"]) + 1
+                        out["ev_at_manager_pass_sum_in_range"] = float(
+                            out["ev_at_manager_pass_sum_in_range"]
+                        ) + float(ev_manager)
+                        out["ev_at_order_submit_check_sum_in_range"] = float(
+                            out["ev_at_order_submit_check_sum_in_range"]
+                        ) + float(ev_order)
+                    out["ev_mismatch_count_in_range"] = int(
+                        out["ev_mismatch_count_in_range"]
+                    ) + max(0, to_int(ev_consistency.get("ev_mismatch_count", 0)))
+
+                stage_after_portfolio = max(
+                    0, to_int(stages.get("candidates_after_portfolio", 0))
+                )
+                if stage_after_portfolio > 0 and orders_submitted <= 0:
+                    out["order_block_rounds_in_range"] = int(out["order_block_rounds_in_range"]) + 1
+                    reason_counts = payload.get("reject_reason_counts", {})
+                    if isinstance(reason_counts, dict):
+                        for reason, value in reason_counts.items():
+                            reason_key = str(reason).strip()
+                            if not reason_key or not _is_order_block_reason(reason_key):
+                                continue
+                            block_reason_counts[reason_key] = block_reason_counts.get(
+                                reason_key, 0
+                            ) + max(0, to_int(value))
+    except Exception:
+        out["reason"] = "entry_stage_funnel_log_parse_failed"
+        return out
+
+    out["order_block_reason_counts_in_range"] = {
+        str(k): int(v) for k, v in block_reason_counts.items() if int(v) > 0
+    }
+    out["top_order_block_reasons_in_range"] = sorted(
+        [
+            {"reason": str(k), "count": int(v)}
+            for k, v in block_reason_counts.items()
+            if int(v) > 0
+        ],
+        key=lambda item: (-int(item["count"]), str(item["reason"])),
+    )[:3]
+    ev_samples = max(0, to_int(out.get("ev_samples_in_range", 0)))
+    if ev_samples > 0:
+        out["ev_at_manager_pass_avg_in_range"] = (
+            float(out.get("ev_at_manager_pass_sum_in_range", 0.0)) / float(ev_samples)
+        )
+        out["ev_at_order_submit_check_avg_in_range"] = (
+            float(out.get("ev_at_order_submit_check_sum_in_range", 0.0))
+            / float(ev_samples)
+        )
+    else:
+        out["ev_at_manager_pass_avg_in_range"] = 0.0
+        out["ev_at_order_submit_check_avg_in_range"] = 0.0
+    return out
+
+
 def resolve_vol_bucket_pct_policy(raw_policy: Dict[str, Any]) -> Dict[str, Any]:
     window_size = max(5, to_int(raw_policy.get("window_size", 240)))
     min_points_raw = to_int(raw_policy.get("min_points", 0))
@@ -834,6 +1517,173 @@ def classify_percentile_vol_bucket(volatility: float, p_low: float, p_high: floa
     if value <= high:
         return VOL_BUCKET_MID
     return VOL_BUCKET_HIGH
+
+
+def normalize_ts_range(ts_range: Any) -> Optional[List[int]]:
+    if not isinstance(ts_range, list) or len(ts_range) != 2:
+        return None
+    start_ts = max(0, to_int(ts_range[0]))
+    end_ts = max(0, to_int(ts_range[1]))
+    if start_ts <= 0 or end_ts <= 0 or end_ts < start_ts:
+        return None
+    return [int(start_ts), int(end_ts)]
+
+
+def filter_rows_by_ts_range(
+    rows: Any,
+    ts_range: Any,
+) -> List[Dict[str, Any]]:
+    if not isinstance(rows, list):
+        return []
+    normalized = normalize_ts_range(ts_range)
+    if not normalized:
+        return [dict(x) for x in rows if isinstance(x, dict)]
+    start_ts, end_ts = int(normalized[0]), int(normalized[1])
+    out: List[Dict[str, Any]] = []
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        ts_value = max(0, to_int(raw.get("ts", 0)))
+        if ts_value <= 0:
+            continue
+        if start_ts <= ts_value <= end_ts:
+            out.append(dict(raw))
+    return out
+
+
+def count_valid_quantile_points(rolling_samples: Any) -> int:
+    if not isinstance(rolling_samples, list):
+        return 0
+    count = 0
+    for raw in rolling_samples:
+        if not isinstance(raw, dict):
+            continue
+        p33 = raw.get("p33", None)
+        p67 = raw.get("p67", None)
+        if (
+            p33 is not None
+            and p67 is not None
+            and math.isfinite(to_float(p33))
+            and math.isfinite(to_float(p67))
+        ):
+            count += 1
+    return int(count)
+
+
+def load_candle_series_volatility_samples(
+    dataset_path: Any,
+    *,
+    execution_range_used: Any = None,
+    atr_period: int = 14,
+    sample_cap: int = 240000,
+) -> List[Dict[str, Any]]:
+    if not isinstance(dataset_path, pathlib.Path):
+        return []
+    path_obj = dataset_path.resolve()
+    if not path_obj.exists() or not path_obj.is_file():
+        return []
+    atr_window = max(2, int(atr_period))
+    cap = max(0, int(sample_cap))
+    market = extract_upbit_market_from_dataset_name(path_obj.name)
+    if not market:
+        market = str(path_obj.stem).strip().upper() or "UNKNOWN"
+    normalized_range = normalize_ts_range(execution_range_used)
+    range_start = int(normalized_range[0]) if normalized_range else 0
+    range_end = int(normalized_range[1]) if normalized_range else 0
+
+    candle_rows: List[Dict[str, Any]] = []
+    try:
+        with path_obj.open("r", encoding="utf-8", errors="ignore", newline="") as fp:
+            reader = csv.DictReader(fp)
+            if reader.fieldnames is None:
+                return []
+            for raw in reader:
+                if not isinstance(raw, dict):
+                    continue
+                ts_cell = (
+                    raw.get("timestamp")
+                    or raw.get("ts")
+                    or raw.get("time")
+                    or raw.get("datetime")
+                    or ""
+                )
+                ts_raw = parse_timestamp_cell(str(ts_cell))
+                if ts_raw is None:
+                    continue
+                ts_value = normalize_timestamp_ms(int(ts_raw))
+                if normalized_range and not (range_start <= ts_value <= range_end):
+                    continue
+                high = to_float(raw.get("high", float("nan")))
+                low = to_float(raw.get("low", float("nan")))
+                close = to_float(raw.get("close", float("nan")))
+                if (
+                    not math.isfinite(high)
+                    or not math.isfinite(low)
+                    or not math.isfinite(close)
+                    or close <= 0.0
+                ):
+                    continue
+                candle_rows.append(
+                    {
+                        "ts": int(ts_value),
+                        "high": float(high),
+                        "low": float(low),
+                        "close": float(close),
+                    }
+                )
+    except Exception:
+        return []
+
+    if not candle_rows:
+        return []
+    candle_rows.sort(key=lambda item: int(item.get("ts", 0)))
+    tr_window: deque = deque()
+    tr_sum = 0.0
+    prev_close: Optional[float] = None
+    output: List[Dict[str, Any]] = []
+    for row in candle_rows:
+        high = float(row.get("high", 0.0))
+        low = float(row.get("low", 0.0))
+        close = float(row.get("close", 0.0))
+        tr = high - low
+        if prev_close is not None and math.isfinite(prev_close):
+            tr = max(tr, abs(high - prev_close), abs(low - prev_close))
+        tr = max(0.0, float(tr))
+        tr_window.append(tr)
+        tr_sum += tr
+        if len(tr_window) > atr_window:
+            tr_sum -= float(tr_window.popleft())
+        window_count = len(tr_window)
+        if window_count <= 0:
+            prev_close = close
+            continue
+        atr = float(tr_sum) / float(window_count)
+        atr_pct = (atr / close) * 100.0 if close > 0.0 else float("nan")
+        if math.isfinite(atr_pct):
+            output.append(
+                {
+                    "ts": int(row.get("ts", 0)),
+                    "market": market,
+                    "regime": "UNKNOWN",
+                    "volatility": round(float(atr_pct), 10),
+                }
+            )
+        prev_close = close
+
+    if not output:
+        return []
+    deduped: List[Dict[str, Any]] = []
+    last_ts = -1
+    for item in output:
+        ts_value = int(item.get("ts", 0))
+        if deduped and ts_value == last_ts:
+            deduped[-1] = item
+        else:
+            deduped.append(item)
+        last_ts = ts_value
+    if cap > 0 and len(deduped) > cap:
+        return deduped[:cap]
+    return deduped
 
 
 def build_rolling_percentile_vol_bucket_samples(
@@ -949,8 +1799,8 @@ def build_vol_bucket_pct_distribution_summary(
         if market:
             slot = market_counts.setdefault(market, make_bucket_counts())
             slot[bucket] = slot.get(bucket, 0) + 1
-            p33 = raw.get("p33", None)
-            p67 = raw.get("p67", None)
+            p33 = raw.get("p33", raw.get("vol_bucket_pct_ref_p33", None))
+            p67 = raw.get("p67", raw.get("vol_bucket_pct_ref_p67", None))
             if p33 is not None and math.isfinite(to_float(p33)):
                 market_p33_values.setdefault(market, []).append(float(p33))
                 all_p33_values.append(float(p33))
@@ -1025,6 +1875,34 @@ def build_trade_rows_for_vol_bucket_diagnostics(
         regime = str(raw.get("regime", "")).strip() or "UNKNOWN"
         volatility = to_float(raw.get("volatility", float("nan")))
         fixed_bucket = classify_fixed_vol_bucket(volatility, fixed_low_cut, fixed_high_cut)
+        entry_price = to_float(raw.get("entry_price", float("nan")))
+        quantity = to_float(raw.get("quantity", float("nan")))
+        fee_paid_krw = to_float(raw.get("fee_paid_krw", float("nan")))
+        expected_edge_pct = to_float(raw.get("expected_value", float("nan")))
+        probabilistic_h5_calibrated = to_float(raw.get("probabilistic_h5_calibrated", float("nan")))
+        probabilistic_h5_margin = to_float(raw.get("probabilistic_h5_margin", float("nan")))
+        liquidity_score = to_float(raw.get("liquidity_score", float("nan")))
+        reward_risk_ratio = to_float(raw.get("reward_risk_ratio", float("nan")))
+        signal_filter = to_float(raw.get("signal_filter", float("nan")))
+        signal_strength = to_float(raw.get("signal_strength", float("nan")))
+        holding_minutes = to_float(raw.get("holding_minutes", float("nan")))
+        notional_krw = float("nan")
+        if math.isfinite(entry_price) and math.isfinite(quantity):
+            notional_krw = abs(float(entry_price) * float(quantity))
+        realized_cost_bps_proxy = float("nan")
+        if (
+            math.isfinite(fee_paid_krw)
+            and math.isfinite(notional_krw)
+            and float(notional_krw) > 0.0
+        ):
+            realized_cost_bps_proxy = (float(fee_paid_krw) / float(notional_krw)) * 10000.0
+        expected_edge_bps = (
+            float(expected_edge_pct) * 10000.0
+            if math.isfinite(expected_edge_pct)
+            else float("nan")
+        )
+        profit_loss_krw = to_float(raw.get("profit_loss_krw", 0.0))
+        profit_loss_pct = to_float(raw.get("profit_loss_pct", 0.0))
         rows.append(
             {
                 "market": market,
@@ -1033,13 +1911,88 @@ def build_trade_rows_for_vol_bucket_diagnostics(
                 "exit_time": int(exit_time),
                 "regime": regime,
                 "volatility": float(volatility) if math.isfinite(volatility) else float("nan"),
-                "profit_loss_krw": round(to_float(raw.get("profit_loss_krw", 0.0)), 8),
-                "profit_loss_pct": round(to_float(raw.get("profit_loss_pct", 0.0)), 10),
+                "profit_loss_krw": round(float(profit_loss_krw), 8),
+                "profit_loss_pct": round(float(profit_loss_pct), 10),
+                "notional_krw": (
+                    round(float(notional_krw), 8) if math.isfinite(notional_krw) else None
+                ),
+                "fee_paid_krw": round(float(fee_paid_krw), 8) if math.isfinite(fee_paid_krw) else None,
+                "realized_cost_bps_proxy": (
+                    round(float(realized_cost_bps_proxy), 8)
+                    if math.isfinite(realized_cost_bps_proxy)
+                    else None
+                ),
+                "estimated_cost_bps": None,
+                "expected_edge_after_cost_pct": (
+                    round(float(expected_edge_pct), 10)
+                    if math.isfinite(expected_edge_pct)
+                    else None
+                ),
+                "expected_edge_after_cost_bps": (
+                    round(float(expected_edge_bps), 6)
+                    if math.isfinite(expected_edge_bps)
+                    else None
+                ),
+                "expected_value": (
+                    round(float(expected_edge_pct), 10)
+                    if math.isfinite(expected_edge_pct)
+                    else None
+                ),
+                "probabilistic_h5_calibrated": (
+                    round(float(probabilistic_h5_calibrated), 10)
+                    if math.isfinite(probabilistic_h5_calibrated)
+                    else None
+                ),
+                "probabilistic_h5_margin": (
+                    round(float(probabilistic_h5_margin), 10)
+                    if math.isfinite(probabilistic_h5_margin)
+                    else None
+                ),
+                "required_margin": None,
+                "margin_slack": (
+                    round(float(probabilistic_h5_margin), 10)
+                    if math.isfinite(probabilistic_h5_margin)
+                    else None
+                ),
+                "required_ev": 0.0,
+                "ev_slack": (
+                    round(float(expected_edge_pct), 10)
+                    if math.isfinite(expected_edge_pct)
+                    else None
+                ),
+                "liquidity_score": (
+                    round(float(liquidity_score), 8)
+                    if math.isfinite(liquidity_score)
+                    else None
+                ),
+                "reward_risk_ratio": (
+                    round(float(reward_risk_ratio), 8)
+                    if math.isfinite(reward_risk_ratio)
+                    else None
+                ),
+                "signal_filter": (
+                    round(float(signal_filter), 8)
+                    if math.isfinite(signal_filter)
+                    else None
+                ),
+                "signal_strength": (
+                    round(float(signal_strength), 8)
+                    if math.isfinite(signal_strength)
+                    else None
+                ),
+                "holding_minutes": (
+                    round(float(holding_minutes), 8)
+                    if math.isfinite(holding_minutes)
+                    else None
+                ),
                 "vol_bucket_fixed": fixed_bucket,
                 "vol_bucket_pct": VOL_BUCKET_NONE,
                 "vol_bucket_pct_ref_ts": 0,
                 "vol_bucket_pct_ref_p33": None,
                 "vol_bucket_pct_ref_p67": None,
+                "strategy_name": str(raw.get("strategy_name", "")).strip(),
+                "entry_archetype": str(raw.get("entry_archetype", "")).strip(),
+                "exit_reason": str(raw.get("exit_reason", "")).strip(),
             }
         )
     rows.sort(
@@ -1048,6 +2001,51 @@ def build_trade_rows_for_vol_bucket_diagnostics(
             int(item.get("ts", 0)),
             str(item.get("regime", "")),
             float(item.get("profit_loss_krw", 0.0)),
+        )
+    )
+    return rows
+
+
+def build_decision_rows_for_vol_bucket_diagnostics(
+    volatility_samples: Any,
+    *,
+    fixed_low_cut: float,
+    fixed_high_cut: float,
+) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    if not isinstance(volatility_samples, list):
+        return rows
+    for raw in volatility_samples:
+        if not isinstance(raw, dict):
+            continue
+        market = str(raw.get("market", "")).strip().upper()
+        if not market:
+            continue
+        ts_value = max(0, to_int(raw.get("ts", 0)))
+        if ts_value <= 0:
+            continue
+        regime = str(raw.get("regime", "")).strip() or "UNKNOWN"
+        volatility = to_float(raw.get("volatility", float("nan")))
+        fixed_bucket = classify_fixed_vol_bucket(volatility, fixed_low_cut, fixed_high_cut)
+        rows.append(
+            {
+                "market": market,
+                "ts": int(ts_value),
+                "regime": regime,
+                "volatility": float(volatility) if math.isfinite(volatility) else float("nan"),
+                "vol_bucket_fixed": fixed_bucket,
+                "vol_bucket_pct": VOL_BUCKET_NONE,
+                "vol_bucket_pct_ref_ts": 0,
+                "vol_bucket_pct_ref_p33": None,
+                "vol_bucket_pct_ref_p67": None,
+                "event_source": "policy_decision",
+            }
+        )
+    rows.sort(
+        key=lambda item: (
+            str(item.get("market", "")),
+            int(item.get("ts", 0)),
+            str(item.get("regime", "")),
         )
     )
     return rows
@@ -1135,6 +2133,522 @@ def attach_percentile_bucket_to_trade_rows(
         )
     )
     return out
+
+
+def build_quantile_exec_coverage_debug(
+    *,
+    execution_rolling_samples: Any,
+    evaluation_rows_mapped: Any,
+    execution_range_used: Any,
+    evaluation_range_used: Any,
+    policy: Optional[Dict[str, Any]] = None,
+    fallback_used_source: str = "policy_decisions",
+) -> Dict[str, Any]:
+    resolved_policy = resolve_vol_bucket_pct_policy(policy if isinstance(policy, dict) else {})
+    window_size = int(resolved_policy.get("window_size", 240))
+    min_points = int(resolved_policy.get("min_points", max(1, int(math.ceil(float(window_size) * 0.7))))
+    )
+    rolling_rows = execution_rolling_samples if isinstance(execution_rolling_samples, list) else []
+    eval_rows = evaluation_rows_mapped if isinstance(evaluation_rows_mapped, list) else []
+
+    by_market_exec: Dict[str, Dict[str, int]] = {}
+    exec_total = 0
+    exec_valid = 0
+    for raw in rolling_rows:
+        if not isinstance(raw, dict):
+            continue
+        market = str(raw.get("market", "")).strip().upper() or "UNKNOWN"
+        slot = by_market_exec.setdefault(
+            market,
+            {
+                "exec_points_total": 0,
+                "exec_points_valid_for_quantile": 0,
+            },
+        )
+        slot["exec_points_total"] += 1
+        exec_total += 1
+        p33 = raw.get("p33", None)
+        p67 = raw.get("p67", None)
+        valid = bool(
+            p33 is not None
+            and p67 is not None
+            and math.isfinite(to_float(p33))
+            and math.isfinite(to_float(p67))
+        )
+        if valid:
+            slot["exec_points_valid_for_quantile"] += 1
+            exec_valid += 1
+
+    by_market_eval: Dict[str, Dict[str, int]] = {}
+    eval_total = 0
+    eval_bucketed = 0
+    eval_mapped = 0
+    mapping_miss_samples: List[Dict[str, Any]] = []
+    mapped_bucket_samples: List[Dict[str, Any]] = []
+    for raw in eval_rows:
+        if not isinstance(raw, dict):
+            continue
+        market = str(raw.get("market", "")).strip().upper() or "UNKNOWN"
+        slot = by_market_eval.setdefault(
+            market,
+            {
+                "evaluation_events_total": 0,
+                "evaluation_events_mapped": 0,
+                "evaluation_events_bucketed": 0,
+                "evaluation_events_none": 0,
+            },
+        )
+        slot["evaluation_events_total"] += 1
+        eval_total += 1
+        ref_ts = max(0, to_int(raw.get("vol_bucket_pct_ref_ts", 0)))
+        if ref_ts > 0:
+            slot["evaluation_events_mapped"] += 1
+            eval_mapped += 1
+            if len(mapped_bucket_samples) < 10:
+                eval_vol = to_float(raw.get("volatility", float("nan")))
+                mapped_bucket_samples.append(
+                    {
+                        "market": market,
+                        "eval_ts": max(0, to_int(raw.get("ts", 0))),
+                        "mapped_ts": int(ref_ts),
+                        "atr_pct": round(float(eval_vol), 10) if math.isfinite(eval_vol) else None,
+                        "bucket": str(raw.get("vol_bucket_pct", VOL_BUCKET_NONE)).strip().upper()
+                        or VOL_BUCKET_NONE,
+                    }
+                )
+        else:
+            if len(mapping_miss_samples) < 10:
+                miss_vol = to_float(raw.get("volatility", float("nan")))
+                mapping_miss_samples.append(
+                    {
+                        "market": market,
+                        "ts": max(0, to_int(raw.get("ts", 0))),
+                        "volatility": round(float(miss_vol), 10) if math.isfinite(miss_vol) else None,
+                    }
+                )
+        bucket = str(raw.get("vol_bucket_pct", VOL_BUCKET_NONE)).strip().upper() or VOL_BUCKET_NONE
+        if bucket not in VOL_BUCKET_ORDER:
+            bucket = VOL_BUCKET_NONE
+        if bucket == VOL_BUCKET_NONE:
+            slot["evaluation_events_none"] += 1
+        else:
+            slot["evaluation_events_bucketed"] += 1
+            eval_bucketed += 1
+
+    market_rows: List[Dict[str, Any]] = []
+    markets_below_min_points: List[str] = []
+    for market in sorted(set(by_market_exec.keys()) | set(by_market_eval.keys())):
+        exec_slot = by_market_exec.get(
+            market,
+            {
+                "exec_points_total": 0,
+                "exec_points_valid_for_quantile": 0,
+            },
+        )
+        eval_slot = by_market_eval.get(
+            market,
+            {
+                "evaluation_events_total": 0,
+                "evaluation_events_mapped": 0,
+                "evaluation_events_bucketed": 0,
+                "evaluation_events_none": 0,
+            },
+        )
+        eval_total_market = max(1, to_int(eval_slot.get("evaluation_events_total", 0)))
+        market_rows.append(
+            {
+                "market": market,
+                "exec_points_total": int(exec_slot.get("exec_points_total", 0)),
+                "exec_points_valid_for_quantile": int(exec_slot.get("exec_points_valid_for_quantile", 0)),
+                "evaluation_events_total": int(eval_slot.get("evaluation_events_total", 0)),
+                "evaluation_events_mapped": int(eval_slot.get("evaluation_events_mapped", 0)),
+                "evaluation_events_bucketed": int(eval_slot.get("evaluation_events_bucketed", 0)),
+                "evaluation_events_none": int(eval_slot.get("evaluation_events_none", 0)),
+                "evaluation_bucket_coverage": round(
+                    float(to_int(eval_slot.get("evaluation_events_bucketed", 0)))
+                    / float(eval_total_market),
+                    6,
+                ),
+            }
+        )
+        if int(exec_slot.get("exec_points_total", 0)) < int(min_points):
+            markets_below_min_points.append(str(market))
+
+    normalized_execution_range = normalize_ts_range(execution_range_used)
+    normalized_evaluation_range = normalize_ts_range(evaluation_range_used)
+    eval_total_safe = max(1, int(eval_total))
+    return {
+        "policy": {
+            "window_size": int(window_size),
+            "min_points": int(min_points),
+            "lower_q": round(to_float(resolved_policy.get("lower_q", 0.33)), 4),
+            "upper_q": round(to_float(resolved_policy.get("upper_q", 0.67)), 4),
+        },
+        "fallback_used_source": str(fallback_used_source or "policy_decisions"),
+        "execution_range_used": normalized_execution_range or [],
+        "evaluation_range_used": normalized_evaluation_range or [],
+        "exec_points_total": int(exec_total),
+        "exec_points_valid_for_quantile": int(exec_valid),
+        "exec_points_valid_ratio": round(float(exec_valid) / float(max(1, exec_total)), 6),
+        "evaluation_events_total": int(eval_total),
+        "evaluation_events_mapped": int(eval_mapped),
+        "evaluation_events_bucketed": int(eval_bucketed),
+        "coverage": round(float(eval_bucketed) / float(eval_total_safe), 6),
+        "none_ratio": round(float(max(0, eval_total - eval_bucketed)) / float(eval_total_safe), 6),
+        "mapping_miss_count": int(max(0, eval_total - eval_mapped)),
+        "mapping_miss_samples": mapping_miss_samples,
+        "mapped_bucket_samples": mapped_bucket_samples,
+        "markets_below_min_points": markets_below_min_points,
+        "insufficient_exec_points_for_quantile": bool(exec_valid <= 0),
+        "by_market": market_rows,
+    }
+
+
+def summarize_numeric_values(values: List[float]) -> Dict[str, Any]:
+    clean = [float(v) for v in values if math.isfinite(to_float(v))]
+    clean.sort()
+    if not clean:
+        return {
+            "count": 0,
+            "mean": None,
+            "median": None,
+            "p10": None,
+            "p25": None,
+            "p75": None,
+            "p90": None,
+            "min": None,
+            "max": None,
+        }
+    mean_value = float(sum(clean)) / float(len(clean))
+    return {
+        "count": int(len(clean)),
+        "mean": round(float(mean_value), 10),
+        "median": round(quantile_from_sorted_values(clean, 0.50), 10),
+        "p10": round(quantile_from_sorted_values(clean, 0.10), 10),
+        "p25": round(quantile_from_sorted_values(clean, 0.25), 10),
+        "p75": round(quantile_from_sorted_values(clean, 0.75), 10),
+        "p90": round(quantile_from_sorted_values(clean, 0.90), 10),
+        "min": round(float(clean[0]), 10),
+        "max": round(float(clean[-1]), 10),
+    }
+
+
+def build_cell_root_cause_report(
+    dataset_profiles: Any,
+    *,
+    split_name: str,
+    top_n_cells: int = 3,
+) -> Dict[str, Any]:
+    if not isinstance(dataset_profiles, list):
+        dataset_profiles = []
+    trade_rows: List[Dict[str, Any]] = []
+    for profile in dataset_profiles:
+        if not isinstance(profile, dict):
+            continue
+        dataset = str(profile.get("dataset", "")).strip()
+        rows = profile.get("trade_rows", [])
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            market = str(row.get("market", "")).strip().upper()
+            regime = str(row.get("regime", "")).strip() or "UNKNOWN"
+            bucket = str(row.get("vol_bucket_pct", VOL_BUCKET_NONE)).strip().upper() or VOL_BUCKET_NONE
+            if not market or bucket not in (VOL_BUCKET_LOW, VOL_BUCKET_MID, VOL_BUCKET_HIGH):
+                continue
+            pnl = to_float(row.get("profit_loss_krw", float("nan")))
+            if not math.isfinite(pnl):
+                continue
+            trade_rows.append(
+                {
+                    "dataset": dataset,
+                    **row,
+                    "market": market,
+                    "regime": regime,
+                    "vol_bucket_pct": bucket,
+                }
+            )
+
+    if not trade_rows:
+        return {
+            "enabled": False,
+            "split_name": str(split_name).strip(),
+            "reason": "no_trade_rows_with_percentile_bucket",
+            "target_cells": [],
+        }
+
+    liquidity_values = [
+        to_float(x.get("liquidity_score", float("nan")))
+        for x in trade_rows
+        if math.isfinite(to_float(x.get("liquidity_score", float("nan"))))
+    ]
+    liquidity_values.sort()
+    liq_q33 = quantile_from_sorted_values(liquidity_values, 0.33) if liquidity_values else None
+    liq_q67 = quantile_from_sorted_values(liquidity_values, 0.67) if liquidity_values else None
+
+    def _liq_bucket(score_value: Any) -> str:
+        score = to_float(score_value)
+        if not math.isfinite(score):
+            return "unknown"
+        if liq_q33 is None or liq_q67 is None:
+            return "unknown"
+        if score <= float(min(liq_q33, liq_q67)):
+            return "low_liquidity"
+        if score <= float(max(liq_q33, liq_q67)):
+            return "mid_liquidity"
+        return "high_liquidity"
+
+    ev_slack_all = [
+        to_float(x.get("ev_slack", float("nan")))
+        for x in trade_rows
+        if math.isfinite(to_float(x.get("ev_slack", float("nan"))))
+    ]
+    ev_slack_all.sort()
+    ev_slack_p25 = quantile_from_sorted_values(ev_slack_all, 0.25) if ev_slack_all else None
+    margin_slack_all = [
+        to_float(x.get("margin_slack", float("nan")))
+        for x in trade_rows
+        if math.isfinite(to_float(x.get("margin_slack", float("nan"))))
+    ]
+    margin_slack_all.sort()
+    margin_slack_p25 = (
+        quantile_from_sorted_values(margin_slack_all, 0.25) if margin_slack_all else None
+    )
+
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for row in trade_rows:
+        key = "|".join(
+            [
+                str(row.get("market", "")).strip().upper(),
+                str(row.get("regime", "")).strip().upper(),
+                str(row.get("vol_bucket_pct", "")).strip().upper(),
+            ]
+        )
+        grouped.setdefault(key, []).append(row)
+
+    cell_rows: List[Dict[str, Any]] = []
+    for key, rows in grouped.items():
+        if not rows:
+            continue
+        first = rows[0]
+        market = str(first.get("market", "")).strip().upper()
+        regime = str(first.get("regime", "")).strip() or "UNKNOWN"
+        vol_bucket_pct = str(first.get("vol_bucket_pct", VOL_BUCKET_NONE)).strip().upper() or VOL_BUCKET_NONE
+        pnl_values = [to_float(x.get("profit_loss_krw", 0.0)) for x in rows]
+        pnl_sum = float(sum(pnl_values))
+        avg_pnl = float(pnl_sum / float(max(1, len(pnl_values))))
+        expected_edge_pct_values = [
+            to_float(x.get("expected_edge_after_cost_pct", float("nan")))
+            for x in rows
+            if x.get("expected_edge_after_cost_pct", None) is not None
+            and math.isfinite(to_float(x.get("expected_edge_after_cost_pct", float("nan"))))
+        ]
+        expected_edge_bps_values = [
+            to_float(x.get("expected_edge_after_cost_bps", float("nan")))
+            for x in rows
+            if x.get("expected_edge_after_cost_bps", None) is not None
+            and math.isfinite(to_float(x.get("expected_edge_after_cost_bps", float("nan"))))
+        ]
+        realized_cost_bps_values = [
+            to_float(x.get("realized_cost_bps_proxy", float("nan")))
+            for x in rows
+            if x.get("realized_cost_bps_proxy", None) is not None
+            and math.isfinite(to_float(x.get("realized_cost_bps_proxy", float("nan"))))
+        ]
+        p_calibrated_values = [
+            to_float(x.get("probabilistic_h5_calibrated", float("nan")))
+            for x in rows
+            if x.get("probabilistic_h5_calibrated", None) is not None
+            and math.isfinite(to_float(x.get("probabilistic_h5_calibrated", float("nan"))))
+        ]
+        margin_values = [
+            to_float(x.get("probabilistic_h5_margin", float("nan")))
+            for x in rows
+            if x.get("probabilistic_h5_margin", None) is not None
+            and math.isfinite(to_float(x.get("probabilistic_h5_margin", float("nan"))))
+        ]
+        ev_slack_values = [
+            to_float(x.get("ev_slack", float("nan")))
+            for x in rows
+            if x.get("ev_slack", None) is not None
+            and math.isfinite(to_float(x.get("ev_slack", float("nan"))))
+        ]
+        margin_slack_values = [
+            to_float(x.get("margin_slack", float("nan")))
+            for x in rows
+            if x.get("margin_slack", None) is not None
+            and math.isfinite(to_float(x.get("margin_slack", float("nan"))))
+        ]
+        realized_edge_pct_values = [
+            to_float(x.get("profit_loss_pct", float("nan")))
+            for x in rows
+            if math.isfinite(to_float(x.get("profit_loss_pct", float("nan"))))
+        ]
+
+        execution_bucket_counts = {
+            "low_liquidity": 0,
+            "mid_liquidity": 0,
+            "high_liquidity": 0,
+            "unknown": 0,
+        }
+        for row in rows:
+            bucket = _liq_bucket(row.get("liquidity_score", None))
+            execution_bucket_counts[bucket] = execution_bucket_counts.get(bucket, 0) + 1
+
+        expected_edge_pct_summary = summarize_numeric_values(expected_edge_pct_values)
+        ev_slack_summary = summarize_numeric_values(ev_slack_values)
+        margin_slack_summary = summarize_numeric_values(margin_slack_values)
+        realized_edge_pct_summary = summarize_numeric_values(realized_edge_pct_values)
+
+        mean_expected_pct = expected_edge_pct_summary.get("mean", None)
+        mean_realized_pct = realized_edge_pct_summary.get("mean", None)
+        median_ev_slack = ev_slack_summary.get("median", None)
+        median_margin_slack = margin_slack_summary.get("median", None)
+        root_cause = "mixed_or_unclassified"
+        root_rationale = (
+            "No single dominant mismatch pattern detected from expected-edge/margin/cost proxies."
+        )
+        if (
+            mean_expected_pct is not None
+            and math.isfinite(to_float(mean_expected_pct))
+            and float(mean_expected_pct) <= 0.0
+        ):
+            root_cause = "expected_edge_negative_but_entered"
+            root_rationale = (
+                "Expected edge after cost is non-positive on average while entries were executed."
+            )
+        elif (
+            mean_expected_pct is not None
+            and mean_realized_pct is not None
+            and math.isfinite(to_float(mean_expected_pct))
+            and math.isfinite(to_float(mean_realized_pct))
+            and float(mean_expected_pct) > 0.0
+            and float(mean_realized_pct) < 0.0
+        ):
+            root_cause = "execution_cost_or_market_mismatch"
+            root_rationale = (
+                "Expected edge after cost is positive, but realized edge is negative; "
+                "execution/cost or regime slippage mismatch is likely."
+            )
+        elif (
+            ev_slack_p25 is not None
+            and median_ev_slack is not None
+            and math.isfinite(to_float(ev_slack_p25))
+            and math.isfinite(to_float(median_ev_slack))
+            and float(median_ev_slack) <= float(ev_slack_p25)
+        ):
+            root_cause = "low_ev_slack_entry_quality_issue"
+            root_rationale = (
+                "Entry EV slack sits near the lower quartile of observed trades, suggesting low-quality acceptance."
+            )
+        elif (
+            margin_slack_p25 is not None
+            and median_margin_slack is not None
+            and math.isfinite(to_float(margin_slack_p25))
+            and math.isfinite(to_float(median_margin_slack))
+            and float(median_margin_slack) <= float(margin_slack_p25)
+        ):
+            root_cause = "low_margin_slack_entry_quality_issue"
+            root_rationale = (
+                "Probability margin slack sits near the lower quartile, indicating thin-confidence entries."
+            )
+
+        cell_rows.append(
+            {
+                "cell_key": key,
+                "market": market,
+                "regime": regime,
+                "vol_bucket_pct": (
+                    "vol_low_pct"
+                    if vol_bucket_pct == VOL_BUCKET_LOW
+                    else (
+                        "vol_mid_pct"
+                        if vol_bucket_pct == VOL_BUCKET_MID
+                        else ("vol_high_pct" if vol_bucket_pct == VOL_BUCKET_HIGH else "none")
+                    )
+                ),
+                "trades_count": int(len(rows)),
+                "avg_pnl_krw": round(float(avg_pnl), 8),
+                "pnl_sum_krw": round(float(pnl_sum), 8),
+                "metrics": {
+                    "estimated_cost_bps": {
+                        "available": False,
+                        "summary": summarize_numeric_values([]),
+                        "note": "estimated_cost_bps_not_emitted_by_runtime_trade_samples",
+                    },
+                    "realized_cost_bps_proxy": {
+                        "available": bool(realized_cost_bps_values),
+                        "summary": summarize_numeric_values(realized_cost_bps_values),
+                    },
+                    "expected_edge_after_cost_pct": summarize_numeric_values(expected_edge_pct_values),
+                    "expected_edge_after_cost_bps": summarize_numeric_values(expected_edge_bps_values),
+                    "p_calibrated_summary": summarize_numeric_values(p_calibrated_values),
+                    "margin_summary": summarize_numeric_values(margin_values),
+                    "required_ev_summary": {
+                        "available": True,
+                        "baseline": 0.0,
+                    },
+                    "required_margin_summary": {
+                        "available": False,
+                        "baseline": None,
+                        "note": "required_margin_not_emitted_by_runtime_trade_samples",
+                    },
+                    "ev_slack_summary": ev_slack_summary,
+                    "margin_slack_summary": margin_slack_summary,
+                    "execution_bucket_distribution": execution_bucket_counts,
+                    "realized_edge_pct_summary": realized_edge_pct_summary,
+                    "post_entry_realized_edge_nmin": {
+                        "available": False,
+                        "note": "n_minute_realized_edge_not_emitted_in_trade_history_samples",
+                    },
+                },
+                "root_cause_top1": {
+                    "label": root_cause,
+                    "rationale": root_rationale,
+                },
+            }
+        )
+
+    cell_rows.sort(
+        key=lambda item: (
+            to_float(item.get("pnl_sum_krw", 0.0)),
+            -to_int(item.get("trades_count", 0)),
+            str(item.get("market", "")),
+            str(item.get("regime", "")),
+            str(item.get("vol_bucket_pct", "")),
+        )
+    )
+    negative_cells = [x for x in cell_rows if to_float(x.get("pnl_sum_krw", 0.0)) < 0.0]
+    target_base = negative_cells if negative_cells else cell_rows
+    top_count = max(1, int(top_n_cells))
+    target_cells = target_base[:top_count]
+    for idx, row in enumerate(target_cells, start=1):
+        row["rank"] = int(idx)
+
+    return {
+        "enabled": True,
+        "split_name": str(split_name).strip(),
+        "source": "trade_rows_with_percentile_bucket",
+        "target_selection": {
+            "mode": "lowest_total_pnl_cells",
+            "top_n_cells": int(top_count),
+            "candidate_cells_total": int(len(cell_rows)),
+            "negative_cells_total": int(len(negative_cells)),
+        },
+        "global_context": {
+            "trade_count_total": int(len(trade_rows)),
+            "liquidity_score_quantiles": summarize_numeric_values(liquidity_values),
+            "liquidity_q33": round(float(liq_q33), 10) if liq_q33 is not None else None,
+            "liquidity_q67": round(float(liq_q67), 10) if liq_q67 is not None else None,
+            "ev_slack_p25": round(float(ev_slack_p25), 10) if ev_slack_p25 is not None else None,
+            "margin_slack_p25": (
+                round(float(margin_slack_p25), 10) if margin_slack_p25 is not None else None
+            ),
+        },
+        "target_cells": target_cells,
+        "all_cells_sorted_by_pnl": cell_rows[: max(12, top_count * 4)],
+    }
 
 
 def summarize_trade_pnl_by_regime_and_bucket(
@@ -1453,19 +2967,61 @@ def build_vol_bucket_pct_dataset_profile(
     dataset_name: str,
     backtest_result: Dict[str, Any],
     policy: Dict[str, Any],
+    *,
+    dataset_path: Optional[pathlib.Path] = None,
+    execution_range_used: Any = None,
+    evaluation_range_used: Any = None,
 ) -> Dict[str, Any]:
     resolved_policy = resolve_vol_bucket_pct_policy(policy if isinstance(policy, dict) else {})
-    rolling_samples = build_rolling_percentile_vol_bucket_samples(
+    decision_execution_samples = filter_rows_by_ts_range(
         backtest_result.get("policy_decision_volatility_samples", []),
+        execution_range_used,
+    )
+    quantile_source = "policy_decisions"
+    execution_samples = decision_execution_samples
+    rolling_samples = build_rolling_percentile_vol_bucket_samples(
+        execution_samples,
         resolved_policy,
     )
-    trade_rows = build_trade_rows_for_vol_bucket_diagnostics(
+    valid_quantile_points = count_valid_quantile_points(rolling_samples)
+    if valid_quantile_points <= 0:
+        candle_execution_samples = load_candle_series_volatility_samples(
+            dataset_path,
+            execution_range_used=execution_range_used,
+            atr_period=14,
+            sample_cap=240000,
+        )
+        candle_rolling_samples = build_rolling_percentile_vol_bucket_samples(
+            candle_execution_samples,
+            resolved_policy,
+        )
+        candle_valid_quantile_points = count_valid_quantile_points(candle_rolling_samples)
+        if candle_valid_quantile_points > 0:
+            execution_samples = candle_execution_samples
+            rolling_samples = candle_rolling_samples
+            valid_quantile_points = candle_valid_quantile_points
+            quantile_source = "candle_series"
+    evaluation_samples = filter_rows_by_ts_range(
+        decision_execution_samples,
+        evaluation_range_used,
+    )
+    evaluation_decision_rows = build_decision_rows_for_vol_bucket_diagnostics(
+        evaluation_samples,
+        fixed_low_cut=float(resolved_policy.get("fixed_low_cut", 1.8)),
+        fixed_high_cut=float(resolved_policy.get("fixed_high_cut", 3.5)),
+    )
+    evaluation_decision_rows = attach_percentile_bucket_to_trade_rows(
+        evaluation_decision_rows,
+        rolling_samples,
+    )
+    trade_rows_raw = build_trade_rows_for_vol_bucket_diagnostics(
         backtest_result.get("trade_history_samples", []),
         fixed_low_cut=float(resolved_policy.get("fixed_low_cut", 1.8)),
         fixed_high_cut=float(resolved_policy.get("fixed_high_cut", 3.5)),
     )
+    trade_rows = filter_rows_by_ts_range(trade_rows_raw, evaluation_range_used)
     trade_rows = attach_percentile_bucket_to_trade_rows(trade_rows, rolling_samples)
-    distribution = build_vol_bucket_pct_distribution_summary(rolling_samples)
+    distribution = build_vol_bucket_pct_distribution_summary(evaluation_decision_rows)
     pnl_fixed = summarize_trade_pnl_by_regime_and_bucket(
         trade_rows,
         bucket_field="vol_bucket_fixed",
@@ -1477,16 +3033,32 @@ def build_vol_bucket_pct_dataset_profile(
         include_none=False,
     )
     top_loss_cells = build_top_loss_cells_by_market(pnl_pct, top_n=3)
+    quantile_exec_coverage_debug = build_quantile_exec_coverage_debug(
+        execution_rolling_samples=rolling_samples,
+        evaluation_rows_mapped=evaluation_decision_rows,
+        execution_range_used=execution_range_used,
+        evaluation_range_used=evaluation_range_used,
+        policy=resolved_policy,
+        fallback_used_source=quantile_source,
+    )
     return {
         "dataset": str(dataset_name),
-        "enabled": bool(rolling_samples or trade_rows),
+        "enabled": bool(rolling_samples or evaluation_decision_rows or trade_rows),
         "policy": resolved_policy,
+        "quantile_source": quantile_source,
+        "policy_decision_exec_points_total": int(len(decision_execution_samples)),
+        "quantile_exec_points_total": int(len(execution_samples)),
+        "quantile_valid_points_total": int(valid_quantile_points),
+        "execution_range_used": normalize_ts_range(execution_range_used) or [],
+        "evaluation_range_used": normalize_ts_range(evaluation_range_used) or [],
         "distribution": distribution,
         "pnl_fixed": pnl_fixed,
         "pnl_pct": pnl_pct,
         "top_loss_cells_regime_vol_pct": top_loss_cells,
         "rolling_samples": rolling_samples,
+        "distribution_rows": evaluation_decision_rows,
         "trade_rows": trade_rows,
+        "quantile_exec_coverage_debug": quantile_exec_coverage_debug,
     }
 
 
@@ -1501,11 +3073,12 @@ def build_quarantine_vol_bucket_pct_artifacts(
         x for x in dataset_profiles if isinstance(x, dict)
     ]
     profile_names = [str(x.get("dataset", "")).strip() for x in valid_profiles]
-    combined_rolling_samples: List[Dict[str, Any]] = []
+    combined_distribution_rows: List[Dict[str, Any]] = []
     combined_trade_rows: List[Dict[str, Any]] = []
     per_dataset_distribution: List[Dict[str, Any]] = []
     per_dataset_fixed: List[Dict[str, Any]] = []
     per_dataset_pct: List[Dict[str, Any]] = []
+    quantile_exec_coverage_per_dataset: List[Dict[str, Any]] = []
 
     for profile in valid_profiles:
         dataset = str(profile.get("dataset", "")).strip()
@@ -1518,20 +3091,28 @@ def build_quarantine_vol_bucket_pct_artifacts(
             per_dataset_fixed.append({"dataset": dataset, **pnl_fixed})
         if isinstance(pnl_pct, dict):
             per_dataset_pct.append({"dataset": dataset, **pnl_pct})
-        rolling_samples = profile.get("rolling_samples", [])
-        if isinstance(rolling_samples, list):
-            for row in rolling_samples:
+        distribution_rows = profile.get("distribution_rows", [])
+        if isinstance(distribution_rows, list):
+            for row in distribution_rows:
                 if not isinstance(row, dict):
                     continue
-                combined_rolling_samples.append({"dataset": dataset, **row})
+                combined_distribution_rows.append({"dataset": dataset, **row})
         trade_rows = profile.get("trade_rows", [])
         if isinstance(trade_rows, list):
             for row in trade_rows:
                 if not isinstance(row, dict):
                     continue
                 combined_trade_rows.append({"dataset": dataset, **row})
+        quantile_debug = profile.get("quantile_exec_coverage_debug", {})
+        if isinstance(quantile_debug, dict):
+            quantile_exec_coverage_per_dataset.append(
+                {
+                    "dataset": dataset,
+                    **quantile_debug,
+                }
+            )
 
-    aggregate_distribution = build_vol_bucket_pct_distribution_summary(combined_rolling_samples)
+    aggregate_distribution = build_vol_bucket_pct_distribution_summary(combined_distribution_rows)
     aggregate_fixed_raw = summarize_trade_pnl_by_regime_and_bucket(
         combined_trade_rows,
         bucket_field="vol_bucket_fixed",
@@ -1613,6 +3194,115 @@ def build_quarantine_vol_bucket_pct_artifacts(
         "top_loss_cells_by_market": top_loss_pct.get("markets", []),
         "overall_top_loss_cells": top_loss_pct.get("overall_top_loss_cells", []),
     }
+
+    quantile_exec_coverage_by_market: Dict[str, Dict[str, int]] = {}
+    quantile_source_counts: Dict[str, int] = {}
+    total_exec_points = 0
+    total_exec_valid = 0
+    total_eval_events = 0
+    total_eval_mapped = 0
+    total_eval_bucketed = 0
+    total_mapping_miss = 0
+    mapping_miss_samples: List[Dict[str, Any]] = []
+    for row in quantile_exec_coverage_per_dataset:
+        if not isinstance(row, dict):
+            continue
+        total_exec_points += max(0, to_int(row.get("exec_points_total", 0)))
+        total_exec_valid += max(0, to_int(row.get("exec_points_valid_for_quantile", 0)))
+        total_eval_events += max(0, to_int(row.get("evaluation_events_total", 0)))
+        total_eval_mapped += max(0, to_int(row.get("evaluation_events_mapped", 0)))
+        total_eval_bucketed += max(0, to_int(row.get("evaluation_events_bucketed", 0)))
+        total_mapping_miss += max(0, to_int(row.get("mapping_miss_count", 0)))
+        source_token = str(row.get("fallback_used_source", "")).strip() or "unknown"
+        quantile_source_counts[source_token] = quantile_source_counts.get(source_token, 0) + 1
+        miss_rows = row.get("mapping_miss_samples", [])
+        if isinstance(miss_rows, list):
+            for miss in miss_rows:
+                if len(mapping_miss_samples) >= 10:
+                    break
+                if isinstance(miss, dict):
+                    mapping_miss_samples.append({"dataset": row.get("dataset", ""), **miss})
+        market_rows = row.get("by_market", [])
+        if isinstance(market_rows, list):
+            for market_row in market_rows:
+                if not isinstance(market_row, dict):
+                    continue
+                market = str(market_row.get("market", "")).strip().upper() or "UNKNOWN"
+                slot = quantile_exec_coverage_by_market.setdefault(
+                    market,
+                    {
+                        "exec_points_total": 0,
+                        "exec_points_valid_for_quantile": 0,
+                        "evaluation_events_total": 0,
+                        "evaluation_events_mapped": 0,
+                        "evaluation_events_bucketed": 0,
+                        "evaluation_events_none": 0,
+                    },
+                )
+                slot["exec_points_total"] += max(0, to_int(market_row.get("exec_points_total", 0)))
+                slot["exec_points_valid_for_quantile"] += max(
+                    0, to_int(market_row.get("exec_points_valid_for_quantile", 0))
+                )
+                slot["evaluation_events_total"] += max(0, to_int(market_row.get("evaluation_events_total", 0)))
+                slot["evaluation_events_mapped"] += max(0, to_int(market_row.get("evaluation_events_mapped", 0)))
+                slot["evaluation_events_bucketed"] += max(
+                    0, to_int(market_row.get("evaluation_events_bucketed", 0))
+                )
+                slot["evaluation_events_none"] += max(0, to_int(market_row.get("evaluation_events_none", 0)))
+
+    quantile_exec_coverage_market_rows: List[Dict[str, Any]] = []
+    for market in sorted(quantile_exec_coverage_by_market.keys()):
+        slot = quantile_exec_coverage_by_market.get(market, {})
+        eval_market_total = max(1, to_int(slot.get("evaluation_events_total", 0)))
+        quantile_exec_coverage_market_rows.append(
+            {
+                "market": market,
+                "exec_points_total": int(slot.get("exec_points_total", 0)),
+                "exec_points_valid_for_quantile": int(slot.get("exec_points_valid_for_quantile", 0)),
+                "evaluation_events_total": int(slot.get("evaluation_events_total", 0)),
+                "evaluation_events_mapped": int(slot.get("evaluation_events_mapped", 0)),
+                "evaluation_events_bucketed": int(slot.get("evaluation_events_bucketed", 0)),
+                "evaluation_events_none": int(slot.get("evaluation_events_none", 0)),
+                "evaluation_bucket_coverage": round(
+                    float(to_int(slot.get("evaluation_events_bucketed", 0))) / float(eval_market_total),
+                    6,
+                ),
+            }
+        )
+    quantile_exec_coverage_payload = {
+        "split_name": str(split_name).strip(),
+        "dataset_count": len(valid_profiles),
+        "datasets": profile_names,
+        "overall": {
+            "exec_points_total": int(total_exec_points),
+            "exec_points_valid_for_quantile": int(total_exec_valid),
+            "exec_points_valid_ratio": round(
+                float(total_exec_valid) / float(max(1, total_exec_points)),
+                6,
+            ),
+            "evaluation_events_total": int(total_eval_events),
+            "evaluation_events_mapped": int(total_eval_mapped),
+            "evaluation_events_bucketed": int(total_eval_bucketed),
+            "coverage": round(
+                float(total_eval_bucketed) / float(max(1, total_eval_events)),
+                6,
+            ),
+            "none_ratio": round(
+                float(max(0, total_eval_events - total_eval_bucketed)) / float(max(1, total_eval_events)),
+                6,
+            ),
+            "mapping_miss_count": int(total_mapping_miss),
+            "mapping_miss_samples": mapping_miss_samples,
+            "fallback_used_source": (
+                next(iter(quantile_source_counts.keys()))
+                if len(quantile_source_counts) == 1
+                else "mixed"
+            ),
+            "fallback_used_source_counts": quantile_source_counts,
+        },
+        "by_market": quantile_exec_coverage_market_rows,
+        "per_dataset": quantile_exec_coverage_per_dataset,
+    }
     summary = {
         "enabled": bool(valid_profiles),
         "dataset_count": len(valid_profiles),
@@ -1633,6 +3323,7 @@ def build_quarantine_vol_bucket_pct_artifacts(
         "pnl_fixed_payload": fixed_payload,
         "pnl_pct_payload": pct_payload,
         "top_loss_payload": top_loss_payload,
+        "quantile_exec_coverage_payload": quantile_exec_coverage_payload,
         "summary": summary,
     }
 
@@ -2573,6 +4264,9 @@ def build_phase3_diagnostics_v2(reason_counts: Dict[str, int]) -> Dict[str, Any]
         "reject_margin_insufficient": max(0, to_int(reason_counts.get("reject_margin_insufficient", 0))),
         "reject_strength_fail": max(0, to_int(reason_counts.get("reject_strength_fail", 0))),
         "reject_expected_value_fail": max(0, to_int(reason_counts.get("reject_expected_value_fail", 0))),
+        "reject_expected_edge_negative_count": max(
+            0, to_int(reason_counts.get("reject_expected_edge_negative_count", 0))
+        ),
         "reject_frontier_fail": max(0, to_int(reason_counts.get("reject_frontier_fail", 0))),
         "reject_ev_confidence_low": max(0, to_int(reason_counts.get("reject_ev_confidence_low", 0))),
         "reject_cost_tail_fail": max(0, to_int(reason_counts.get("reject_cost_tail_fail", 0))),
@@ -2613,6 +4307,9 @@ def build_phase3_diagnostics_v2(reason_counts: Dict[str, int]) -> Dict[str, Any]
             "reject_margin_insufficient": int(counters["reject_margin_insufficient"]),
             "reject_strength_fail": int(counters["reject_strength_fail"]),
             "reject_expected_value_fail": int(counters["reject_expected_value_fail"]),
+            "reject_expected_edge_negative_count": int(
+                counters["reject_expected_edge_negative_count"]
+            ),
             "reject_frontier_fail": int(counters["reject_frontier_fail"]),
             "reject_ev_confidence_low": int(counters["reject_ev_confidence_low"]),
             "reject_cost_tail_fail": int(counters["reject_cost_tail_fail"]),
@@ -2711,6 +4408,429 @@ def build_phase3_pass_ev_distribution(
         "selected_quantiles_pct": selected_quantiles_pct,
         "samples_bps": [round(float(x), 6) for x in sampled_bps],
         "samples": sampled_rows,
+    }
+
+
+def build_edge_sign_distribution(
+    dataset_diagnostics: List[Dict[str, Any]],
+    split_filter_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    eval_range = (
+        split_filter_context.get("evaluation_range_effective", [])
+        if isinstance(split_filter_context, dict)
+        else []
+    )
+    range_start = (
+        int(eval_range[0])
+        if isinstance(eval_range, list) and len(eval_range) == 2
+        else 0
+    )
+    range_end = (
+        int(eval_range[1])
+        if isinstance(eval_range, list) and len(eval_range) == 2
+        else 0
+    )
+    range_enabled = bool(range_start > 0 and range_end > 0 and range_end >= range_start)
+
+    all_values_bps: List[float] = []
+    count_edge_neg = 0
+    count_edge_pos = 0
+    count_edge_zero = 0
+    selected_count = 0
+    per_dataset_rows: List[Dict[str, Any]] = []
+
+    for item in dataset_diagnostics:
+        if not isinstance(item, dict):
+            continue
+        dataset_name = str(item.get("dataset", "")).strip()
+        samples = (
+            item.get("phase3_pass_ev_distribution", {}).get("samples", [])
+            if isinstance(item.get("phase3_pass_ev_distribution", {}), dict)
+            else []
+        )
+        if not isinstance(samples, list):
+            samples = []
+
+        dataset_values_bps: List[float] = []
+        dataset_neg = 0
+        dataset_pos = 0
+        dataset_zero = 0
+        dataset_selected = 0
+        for row in samples:
+            if not isinstance(row, dict):
+                continue
+            ts_value = max(0, to_int(row.get("ts", 0)))
+            if range_enabled and not (range_start <= ts_value <= range_end):
+                continue
+            bps = to_float(row.get("expected_edge_after_cost_bps", float("nan")))
+            if not math.isfinite(bps):
+                continue
+            value = float(bps)
+            dataset_values_bps.append(value)
+            all_values_bps.append(value)
+            if value < 0.0:
+                dataset_neg += 1
+            elif value > 0.0:
+                dataset_pos += 1
+            else:
+                dataset_zero += 1
+            if bool(row.get("selected", False)):
+                dataset_selected += 1
+
+        dataset_total = len(dataset_values_bps)
+        per_dataset_rows.append(
+            {
+                "dataset": dataset_name,
+                "count_total": int(dataset_total),
+                "count_edge_neg": int(dataset_neg),
+                "count_edge_pos": int(dataset_pos),
+                "count_edge_zero": int(dataset_zero),
+                "selected_count": int(dataset_selected),
+                "p10_bps": round(quantile(dataset_values_bps, 0.10), 6)
+                if dataset_values_bps
+                else None,
+                "p50_bps": round(quantile(dataset_values_bps, 0.50), 6)
+                if dataset_values_bps
+                else None,
+                "p90_bps": round(quantile(dataset_values_bps, 0.90), 6)
+                if dataset_values_bps
+                else None,
+            }
+        )
+        count_edge_neg += dataset_neg
+        count_edge_pos += dataset_pos
+        count_edge_zero += dataset_zero
+        selected_count += dataset_selected
+
+    count_total = len(all_values_bps)
+    payload = {
+        "enabled": bool(count_total > 0),
+        "split_name": (
+            str(split_filter_context.get("split_name", "")).strip()
+            if isinstance(split_filter_context, dict)
+            else ""
+        ),
+        "range_mode": (
+            "evaluation_range_effective" if range_enabled else "full_sample"
+        ),
+        "evaluation_range_effective": [int(range_start), int(range_end)]
+        if range_enabled
+        else [],
+        "count_total": int(count_total),
+        "count_edge_neg": int(count_edge_neg),
+        "count_edge_pos": int(count_edge_pos),
+        "count_edge_zero": int(count_edge_zero),
+        "selected_count": int(selected_count),
+        "edge_pos_ratio": round(float(count_edge_pos) / float(max(1, count_total)), 6),
+        "edge_neg_ratio": round(float(count_edge_neg) / float(max(1, count_total)), 6),
+        "edge_zero_ratio": round(float(count_edge_zero) / float(max(1, count_total)), 6),
+        "p10_bps": round(quantile(all_values_bps, 0.10), 6) if all_values_bps else None,
+        "p50_bps": round(quantile(all_values_bps, 0.50), 6) if all_values_bps else None,
+        "p90_bps": round(quantile(all_values_bps, 0.90), 6) if all_values_bps else None,
+        "by_dataset": per_dataset_rows,
+    }
+    return payload
+
+
+def build_edge_pos_but_no_trade_breakdown(
+    edge_sign_distribution: Dict[str, Any],
+    aggregate_diagnostics: Dict[str, Any],
+    split_filter_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    phase3 = (
+        aggregate_diagnostics.get("phase3_diagnostics_v2", {})
+        if isinstance(aggregate_diagnostics, dict)
+        else {}
+    )
+    phase3_funnel = (
+        phase3.get("funnel_breakdown", {})
+        if isinstance(phase3, dict)
+        else {}
+    )
+    phase4 = (
+        aggregate_diagnostics.get("phase4_portfolio_diagnostics", {})
+        if isinstance(aggregate_diagnostics, dict)
+        else {}
+    )
+    phase4_selection = (
+        phase4.get("selection_breakdown", {})
+        if isinstance(phase4, dict)
+        else {}
+    )
+
+    count_edge_pos = max(0, to_int(edge_sign_distribution.get("count_edge_pos", 0)))
+    total_trades_core = (
+        max(0, to_int(split_filter_context.get("total_trades_core_effective", 0)))
+        if isinstance(split_filter_context, dict)
+        else 0
+    )
+    edge_pos_but_no_trade = max(0, count_edge_pos - total_trades_core)
+
+    source_breakdown = {
+        "filtered_by_manager_strength": max(
+            0, to_int(phase3_funnel.get("reject_strength_fail", 0))
+        ),
+        "filtered_by_frontier": max(
+            0, to_int(phase3_funnel.get("reject_frontier_fail", 0))
+        ),
+        "filtered_by_budget_phase4": max(
+            0,
+            to_int(phase4_selection.get("rejected_by_budget", 0))
+            + to_int(phase4_selection.get("rejected_by_cluster_cap", 0))
+            + to_int(phase4_selection.get("rejected_by_correlation_penalty", 0))
+            + to_int(phase4_selection.get("rejected_by_drawdown_governor", 0)),
+        ),
+        "execution_cap": max(
+            0, to_int(phase4_selection.get("rejected_by_execution_cap", 0))
+        ),
+    }
+    source_total = max(0, sum(source_breakdown.values()))
+
+    estimated_breakdown = {
+        "filtered_by_manager_strength": 0,
+        "filtered_by_frontier": 0,
+        "filtered_by_budget_phase4": 0,
+        "execution_cap": 0,
+        "other": int(edge_pos_but_no_trade),
+    }
+    if edge_pos_but_no_trade > 0 and source_total > 0:
+        running = 0
+        ordered_keys = [
+            "filtered_by_manager_strength",
+            "filtered_by_frontier",
+            "filtered_by_budget_phase4",
+            "execution_cap",
+        ]
+        for key in ordered_keys:
+            estimate = int(
+                round(
+                    float(edge_pos_but_no_trade)
+                    * float(source_breakdown.get(key, 0))
+                    / float(max(1, source_total))
+                )
+            )
+            estimate = max(0, estimate)
+            estimated_breakdown[key] = estimate
+            running += estimate
+        estimated_breakdown["other"] = max(0, edge_pos_but_no_trade - running)
+
+    recommended_case = "A10-1a" if count_edge_pos <= 0 else "A10-1b"
+    recommended_axis = (
+        "ev_cost_model_scale_single_step_adjust"
+        if recommended_case == "A10-1a"
+        else "required_ev_offset_or_base_min_strength_single_step_relax_with_negative_ev_block_kept"
+    )
+
+    return {
+        "enabled": bool(edge_sign_distribution.get("enabled", False)),
+        "split_name": str(
+            split_filter_context.get("split_name", "")
+            if isinstance(split_filter_context, dict)
+            else ""
+        ).strip(),
+        "count_edge_pos": int(count_edge_pos),
+        "total_trades_core_effective": int(total_trades_core),
+        "edge_pos_but_no_trade": int(edge_pos_but_no_trade),
+        "source_breakdown_raw": source_breakdown,
+        "source_breakdown_raw_total": int(source_total),
+        "estimated_breakdown": estimated_breakdown,
+        "recommended_case": recommended_case,
+        "recommended_single_axis": recommended_axis,
+        "methodology_note": (
+            "stage counters are global across candidates; edge_pos-specific "
+            "breakdown is estimated by proportional allocation"
+        ),
+    }
+
+
+def build_a10_2_stage_funnel_report(
+    aggregate_diagnostics: Dict[str, Any],
+    split_filter_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    ctx = split_filter_context if isinstance(split_filter_context, dict) else {}
+    phase4 = (
+        aggregate_diagnostics.get("phase4_portfolio_diagnostics", {})
+        if isinstance(aggregate_diagnostics, dict)
+        else {}
+    )
+    phase4_selection = (
+        phase4.get("selection_breakdown", {})
+        if isinstance(phase4, dict)
+        else {}
+    )
+    phase3 = (
+        aggregate_diagnostics.get("phase3_diagnostics_v2", {})
+        if isinstance(aggregate_diagnostics, dict)
+        else {}
+    )
+    phase3_funnel = (
+        phase3.get("funnel_breakdown", {})
+        if isinstance(phase3, dict)
+        else {}
+    )
+
+    s0 = max(
+        0,
+        to_int(
+            ctx.get(
+                "stage_candidates_total_core_effective",
+                ctx.get("candidate_total_core_effective", 0),
+            )
+        ),
+    )
+    s1 = max(
+        0,
+        to_int(
+            ctx.get(
+                "stage_candidates_after_frontier_core_effective",
+                ctx.get("candidate_total_core_effective", 0),
+            )
+        ),
+    )
+    s2 = max(
+        0,
+        to_int(
+            ctx.get(
+                "stage_candidates_after_manager_core_effective",
+                ctx.get("candidate_total_core_effective", 0),
+            )
+        ),
+    )
+    s3 = max(
+        0,
+        to_int(
+            ctx.get(
+                "stage_candidates_after_portfolio_core_effective",
+                ctx.get("pass_total_core_effective", 0),
+            )
+        ),
+    )
+    s4 = max(0, to_int(ctx.get("orders_submitted_core_effective", 0)))
+    s5 = max(0, to_int(ctx.get("orders_filled_core_effective", 0)))
+    ev_samples_core = max(0, to_int(ctx.get("ev_samples_core_effective", 0)))
+    ev_manager_sum_core = to_float(ctx.get("ev_at_manager_pass_sum_core_effective", 0.0))
+    ev_order_sum_core = to_float(
+        ctx.get("ev_at_order_submit_check_sum_core_effective", 0.0)
+    )
+    ev_mismatch_count_core = max(
+        0,
+        to_int(ctx.get("ev_mismatch_count_core_effective", 0)),
+    )
+
+    order_block_reason_counts = ctx.get("stage_order_block_reason_counts_core_effective", {})
+    if not isinstance(order_block_reason_counts, dict):
+        order_block_reason_counts = {}
+    order_block_reason_rows = sorted(
+        [
+            {"reason": str(k), "count": int(max(0, to_int(v)))}
+            for k, v in order_block_reason_counts.items()
+            if int(max(0, to_int(v))) > 0
+        ],
+        key=lambda item: (-int(item["count"]), str(item["reason"])),
+    )
+
+    phase4_candidates_exec = max(
+        0, to_int(phase4_selection.get("candidates_total", 0))
+    )
+    phase4_scale = (
+        float(s2) / float(max(1, phase4_candidates_exec))
+        if phase4_candidates_exec > 0
+        else 0.0
+    )
+    rejected_by_budget_core_est = int(
+        round(float(max(0, to_int(phase4_selection.get("rejected_by_budget", 0)))) * phase4_scale)
+    )
+    rejected_by_cluster_cap_core_est = int(
+        round(
+            float(max(0, to_int(phase4_selection.get("rejected_by_cluster_cap", 0))))
+            * phase4_scale
+        )
+    )
+    rejected_by_exec_cap_core_est = int(
+        round(
+            float(max(0, to_int(phase4_selection.get("rejected_by_execution_cap", 0))))
+            * phase4_scale
+        )
+    )
+
+    reject_expected_edge_negative_count_core_actual = max(
+        0,
+        to_int(order_block_reason_counts.get("reject_expected_edge_negative_count", 0))
+        + to_int(order_block_reason_counts.get("reject_expected_edge_negative", 0)),
+    )
+    reject_expected_edge_negative_count_core_est = (
+        int(reject_expected_edge_negative_count_core_actual)
+        if reject_expected_edge_negative_count_core_actual > 0
+        else int(
+            round(
+                float(
+                    max(
+                        0,
+                        to_int(phase3_funnel.get("reject_expected_edge_negative_count", 0)),
+                    )
+                )
+                * (
+                    float(max(0, to_int(ctx.get("candidate_total_core_effective", 0))))
+                    / float(max(1, to_int(ctx.get("candidate_total_execution", 1))))
+                )
+            )
+        )
+    )
+
+    return {
+        "enabled": True,
+        "split_name": str(ctx.get("split_name", "")).strip(),
+        "evaluation_range_effective": ctx.get("evaluation_range_effective", []),
+        "funnel_summary_core": {
+            "S0_candidates_total_core": int(s0),
+            "S1_candidates_after_frontier_core": int(s1),
+            "S2_candidates_after_manager_core": int(s2),
+            "S3_candidates_after_portfolio_core": int(s3),
+            "S4_orders_submitted_core": int(s4),
+            "S5_orders_filled_core": int(s5),
+        },
+        "stage_counters_core": {
+            "reject_expected_edge_negative_count_core_est": int(
+                max(0, reject_expected_edge_negative_count_core_est)
+            ),
+            "rejected_by_budget_core_est": int(max(0, rejected_by_budget_core_est)),
+            "rejected_by_cluster_cap_core_est": int(
+                max(0, rejected_by_cluster_cap_core_est)
+            ),
+            "rejected_by_exec_cap_core_est": int(max(0, rejected_by_exec_cap_core_est)),
+            "ev_samples_core": int(ev_samples_core),
+            "ev_at_manager_pass_core_avg": round(
+                (ev_manager_sum_core / float(ev_samples_core)) if ev_samples_core > 0 else 0.0,
+                8,
+            ),
+            "ev_at_order_submit_check_core_avg": round(
+                (ev_order_sum_core / float(ev_samples_core)) if ev_samples_core > 0 else 0.0,
+                8,
+            ),
+            "ev_mismatch_count_core": int(ev_mismatch_count_core),
+        },
+        "top_order_block_reason_core": order_block_reason_rows[:3],
+        "order_block_reason_counts_core": {
+            str(item["reason"]): int(item["count"]) for item in order_block_reason_rows
+        },
+        "a10_3_case_hint": (
+            "case1_order_submission_block"
+            if s3 > 0 and s4 <= 0
+            else (
+                "case2_fill_block"
+                if s4 > 0 and s5 <= 0
+                else (
+                    "case3_portfolio_or_budget_block"
+                    if s2 <= 0 or s3 <= 0
+                    else ("case4_frontier_block" if s1 <= 0 else "case0_observe")
+                )
+            )
+        ),
+        "methodology_note": (
+            "S0~S5 are aggregated from core-effective stage telemetry; "
+            "per-reason phase4 and reject_expected_edge_negative counters are estimated "
+            "by execution-to-core scaling."
+        ),
     }
 
 
@@ -3883,6 +6003,7 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         "reject_margin_insufficient",
         "reject_strength_fail",
         "reject_expected_value_fail",
+        "reject_expected_edge_negative_count",
         "reject_frontier_fail",
         "reject_ev_confidence_low",
         "reject_cost_tail_fail",
@@ -4443,6 +6564,9 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
             "reject_strength_fail": int(aggregate_phase3_counters.get("reject_strength_fail", 0)),
             "reject_expected_value_fail": int(
                 aggregate_phase3_counters.get("reject_expected_value_fail", 0)
+            ),
+            "reject_expected_edge_negative_count": int(
+                aggregate_phase3_counters.get("reject_expected_edge_negative_count", 0)
             ),
             "reject_frontier_fail": int(aggregate_phase3_counters.get("reject_frontier_fail", 0)),
             "reject_ev_confidence_low": int(
@@ -5693,6 +7817,28 @@ def main(argv=None) -> int:
         help="Optional operator note attached to split protocol evidence.",
     )
     parser.add_argument(
+        "--split-execution-prewarm-hours",
+        type=float,
+        default=168.0,
+        help=(
+            "When split manifest is used with core ranges, extend execution input "
+            "backwards by this many hours (prewarm) while keeping evaluation on core."
+        ),
+    )
+    parser.add_argument(
+        "--disable-split-core-zero-fallback-cumulative",
+        action="store_true",
+        help=(
+            "Disable automatic evaluation fallback to cumulative range when core evaluation "
+            "has zero proxy coverage (candidate/trade/entry rounds all zero)."
+        ),
+    )
+    parser.add_argument(
+        "--core-zero-diagnosis-json",
+        default=r".\build\Release\logs\core_zero_diagnosis.json",
+        help="Output JSON path for split core-zero diagnosis and fallback decision.",
+    )
+    parser.add_argument(
         "--disable-core-window-direct-eval",
         action="store_true",
         help=(
@@ -5756,6 +7902,40 @@ def main(argv=None) -> int:
         default=r".\build\Release\logs\top_loss_cells_regime_vol_pct.json",
         help="Output JSON path for top-loss market x regime x percentile-vol-bucket cells.",
     )
+    parser.add_argument(
+        "--a8-quantile-exec-coverage-debug-json",
+        default=r".\build\Release\logs\a8_0_quantile_exec_coverage_debug.json",
+        help=(
+            "Output JSON path for A8-0 execution-quantile/evaluation-coverage debug "
+            "(exec points, valid quantile points, mapping coverage, none ratio)."
+        ),
+    )
+    parser.add_argument(
+        "--cell-root-cause-report-json",
+        default=r".\build\Release\logs\cell_root_cause_report_quarantine.json",
+        help="Output JSON path for A9-0 cell root cause report (regime x vol_bucket_pct x market).",
+    )
+    parser.add_argument(
+        "--cell-root-cause-top-n",
+        type=int,
+        default=3,
+        help="Top-N worst-loss cells to include in cell root cause report.",
+    )
+    parser.add_argument(
+        "--edge-sign-distribution-json",
+        default=r".\build\Release\logs\edge_sign_distribution_quarantine.json",
+        help="Output JSON path for A10-0 expected-edge sign distribution diagnostics.",
+    )
+    parser.add_argument(
+        "--edge-pos-no-trade-breakdown-json",
+        default=r".\build\Release\logs\edge_pos_but_no_trade_breakdown.json",
+        help="Output JSON path for A10-0 edge_pos-but-no-trade stage breakdown.",
+    )
+    parser.add_argument(
+        "--a10-2-stage-funnel-json",
+        default=r".\build\Release\logs\a10_2_stage_funnel_quarantine.json",
+        help="Output JSON path for A10-2 core-effective stage funnel diagnostics.",
+    )
     args = parser.parse_args(argv)
 
     exe_path = resolve_path(args.exe_path, "Executable")
@@ -5782,6 +7962,36 @@ def main(argv=None) -> int:
     top_loss_cells_regime_vol_pct_json = resolve_path(
         args.top_loss_cells_regime_vol_pct_json,
         "Top loss cells regime vol pct json",
+        must_exist=False,
+    )
+    a8_quantile_exec_coverage_debug_json = resolve_path(
+        args.a8_quantile_exec_coverage_debug_json,
+        "A8 quantile exec coverage debug json",
+        must_exist=False,
+    )
+    cell_root_cause_report_json = resolve_path(
+        args.cell_root_cause_report_json,
+        "Cell root cause report json",
+        must_exist=False,
+    )
+    edge_sign_distribution_json = resolve_path(
+        args.edge_sign_distribution_json,
+        "Edge sign distribution json",
+        must_exist=False,
+    )
+    edge_pos_no_trade_breakdown_json = resolve_path(
+        args.edge_pos_no_trade_breakdown_json,
+        "Edge pos but no trade breakdown json",
+        must_exist=False,
+    )
+    a10_2_stage_funnel_json = resolve_path(
+        args.a10_2_stage_funnel_json,
+        "A10-2 stage funnel json",
+        must_exist=False,
+    )
+    core_zero_diagnosis_json = resolve_path(
+        args.core_zero_diagnosis_json,
+        "Core zero diagnosis json",
         must_exist=False,
     )
     baseline_report_path = resolve_path(
@@ -5888,6 +8098,46 @@ def main(argv=None) -> int:
         }
     )
 
+    rows: List[Dict[str, Any]] = []
+    dataset_diagnostics: List[Dict[str, Any]] = []
+    adaptive_dataset_profiles: List[Dict[str, Any]] = []
+    vol_bucket_pct_dataset_profiles: List[Dict[str, Any]] = []
+    split_eval_profiles: List[Dict[str, Any]] = []
+    phase4_off_on_comparison: Dict[str, Any] = {}
+    core_window_direct_report: Dict[str, Any] = {}
+    split_manifest_payload: Dict[str, Any] = {}
+    split_filter_context: Dict[str, Any] = {
+        "split_applied": False,
+        "reason": "manifest_not_provided",
+        "split_name": canonical_split_name(args.split_name),
+    }
+    split_manifest_path_value = str(args.split_manifest_json).strip()
+    if split_manifest_path_value:
+        split_manifest_path = resolve_path(split_manifest_path_value, "Split manifest", must_exist=True)
+        loaded_manifest = load_report_json(split_manifest_path)
+        if isinstance(loaded_manifest, dict):
+            split_manifest_payload = loaded_manifest
+        if not str(args.split_name).strip():
+            raise RuntimeError(
+                "--split-manifest-json is set but --split-name is empty; "
+                "split_name must be one of development/validation/quarantine/all_purged."
+            )
+        split_filter_context = apply_manifest_split_filter_to_dataset_paths(
+            dataset_paths=dataset_paths,
+            split_manifest_payload=split_manifest_payload,
+            split_name=str(args.split_name),
+            logs_dir=(exe_path.parent / "logs").resolve(),
+            execution_prewarm_hours=float(max(0.0, args.split_execution_prewarm_hours)),
+        )
+        filtered_paths = split_filter_context.get("filtered_dataset_paths", [])
+        if isinstance(filtered_paths, list) and filtered_paths:
+            dataset_paths = [pathlib.Path(x).resolve() for x in filtered_paths]
+    elif bool(args.split_time_based):
+        raise RuntimeError(
+            "--split-time-based is set without --split-manifest-json. "
+            "Time split mode requires an explicit manifest."
+        )
+
     if bool(args.require_higher_tf_companions):
         for dataset_path in dataset_paths:
             if not is_upbit_primary_1m_dataset(dataset_path):
@@ -5896,25 +8146,11 @@ def main(argv=None) -> int:
                     "only upbit_*_1m_*.csv datasets are allowed: "
                     f"{dataset_path.name}"
                 )
-            if not has_higher_tf_companions(data_dir, dataset_path):
+            if not has_higher_tf_companions(dataset_path.parent, dataset_path):
                 raise RuntimeError(
                     "Missing companion timeframe csv (5m/15m/60m/240m) for dataset: "
-                    f"{dataset_path.name}"
+                    f"{dataset_path.name} (checked_dir={dataset_path.parent})"
                 )
-
-    rows: List[Dict[str, Any]] = []
-    dataset_diagnostics: List[Dict[str, Any]] = []
-    adaptive_dataset_profiles: List[Dict[str, Any]] = []
-    vol_bucket_pct_dataset_profiles: List[Dict[str, Any]] = []
-    phase4_off_on_comparison: Dict[str, Any] = {}
-    core_window_direct_report: Dict[str, Any] = {}
-    split_manifest_payload: Dict[str, Any] = {}
-    split_manifest_path_value = str(args.split_manifest_json).strip()
-    if split_manifest_path_value:
-        split_manifest_path = resolve_path(split_manifest_path_value, "Split manifest", must_exist=True)
-        loaded_manifest = load_report_json(split_manifest_path)
-        if isinstance(loaded_manifest, dict):
-            split_manifest_payload = loaded_manifest
 
     with verification_lock(
         lock_path,
@@ -5922,13 +8158,272 @@ def main(argv=None) -> int:
         stale_sec=int(args.verification_lock_stale_sec),
     ):
         for dataset_path in dataset_paths:
+            execution_range = split_filter_context.get("execution_range_used", [])
+            eval_range = split_filter_context.get("evaluation_range_used", [])
+            cumulative_range = split_filter_context.get("cumulative_range_used", [])
+            eval_start_ts = int(eval_range[0]) if isinstance(eval_range, list) and len(eval_range) == 2 else None
+            eval_end_ts = int(eval_range[1]) if isinstance(eval_range, list) and len(eval_range) == 2 else None
+            cumulative_start_ts = (
+                int(cumulative_range[0]) if isinstance(cumulative_range, list) and len(cumulative_range) == 2 else None
+            )
+            cumulative_end_ts = (
+                int(cumulative_range[1]) if isinstance(cumulative_range, list) and len(cumulative_range) == 2 else None
+            )
             result = run_backtest(
                 exe_path=exe_path,
                 dataset_path=dataset_path,
                 require_higher_tf_companions=bool(args.require_higher_tf_companions),
                 disable_adaptive_state_io=not bool(args.enable_adaptive_state_io),
+                evaluation_start_ts=eval_start_ts,
+                evaluation_end_ts=eval_end_ts,
+                cumulative_start_ts=cumulative_start_ts,
+                cumulative_end_ts=cumulative_end_ts,
             )
             rows.append(build_verification_row(dataset_path.name, result))
+            split_eval_stats = result.get("split_eval_stats", {})
+            split_trade_eval_stats = result.get("split_trade_eval_stats", {})
+            split_cumulative_stats = result.get("split_cumulative_stats", {})
+            split_trade_cumulative_stats = result.get("split_trade_cumulative_stats", {})
+            split_stage_eval_stats = result.get("split_stage_funnel_eval_stats", {})
+            split_stage_cumulative_stats = result.get("split_stage_funnel_cumulative_stats", {})
+            entry_funnel = result.get("entry_funnel", {})
+            split_eval_profiles.append(
+                {
+                    "dataset": str(dataset_path.name),
+                    "entry_rounds_execution": max(
+                        0,
+                        to_int(entry_funnel.get("entry_rounds", 0))
+                        if isinstance(entry_funnel, dict)
+                        else 0,
+                    ),
+                    "entry_rounds_core_proxy": max(
+                        0,
+                        to_int(split_eval_stats.get("line_count_in_range", 0))
+                        if isinstance(split_eval_stats, dict)
+                        else 0,
+                    ),
+                    "candidate_total_execution": max(
+                        0,
+                        to_int(result.get("phase3_diagnostics_v2", {}).get("funnel_breakdown", {}).get("candidate_total", 0))
+                        if isinstance(result.get("phase3_diagnostics_v2", {}), dict)
+                        else 0,
+                    ),
+                    "candidate_total_core_proxy": max(
+                        0,
+                        to_int(split_eval_stats.get("decision_count_in_range", 0))
+                        if isinstance(split_eval_stats, dict)
+                        else 0,
+                    ),
+                    "pass_total_core_proxy": max(
+                        0,
+                        to_int(split_eval_stats.get("selected_decision_count_in_range", 0))
+                        if isinstance(split_eval_stats, dict)
+                        else 0,
+                    ),
+                    "total_trades_core_proxy": max(
+                        0,
+                        to_int(split_trade_eval_stats.get("terminal_sell_fills_in_range", 0))
+                        if isinstance(split_trade_eval_stats, dict)
+                        else 0,
+                    ),
+                    "orders_submitted_core_proxy": max(
+                        0,
+                        to_int(split_stage_eval_stats.get("orders_submitted_in_range", 0))
+                        if isinstance(split_stage_eval_stats, dict)
+                        else max(
+                            0,
+                            to_int(split_trade_eval_stats.get("buy_submitted_in_range", 0))
+                            if isinstance(split_trade_eval_stats, dict)
+                            else 0,
+                        ),
+                    ),
+                    "orders_filled_core_proxy": max(
+                        0,
+                        to_int(split_stage_eval_stats.get("orders_filled_in_range", 0))
+                        if isinstance(split_stage_eval_stats, dict)
+                        else max(
+                            0,
+                            to_int(split_trade_eval_stats.get("buy_filled_in_range", 0))
+                            if isinstance(split_trade_eval_stats, dict)
+                            else 0,
+                        ),
+                    ),
+                    "stage_candidates_total_core_proxy": max(
+                        0,
+                        to_int(split_stage_eval_stats.get("candidates_total_in_range", 0))
+                        if isinstance(split_stage_eval_stats, dict)
+                        else 0,
+                    ),
+                    "stage_candidates_after_frontier_core_proxy": max(
+                        0,
+                        to_int(split_stage_eval_stats.get("candidates_after_frontier_in_range", 0))
+                        if isinstance(split_stage_eval_stats, dict)
+                        else 0,
+                    ),
+                    "stage_candidates_after_manager_core_proxy": max(
+                        0,
+                        to_int(split_stage_eval_stats.get("candidates_after_manager_in_range", 0))
+                        if isinstance(split_stage_eval_stats, dict)
+                        else 0,
+                    ),
+                    "stage_candidates_after_portfolio_core_proxy": max(
+                        0,
+                        to_int(split_stage_eval_stats.get("candidates_after_portfolio_in_range", 0))
+                        if isinstance(split_stage_eval_stats, dict)
+                        else 0,
+                    ),
+                    "stage_order_block_reason_counts_core_proxy": (
+                        split_stage_eval_stats.get("order_block_reason_counts_in_range", {})
+                        if isinstance(split_stage_eval_stats, dict)
+                        else {}
+                    ),
+                    "ev_samples_core_proxy": max(
+                        0,
+                        to_int(split_stage_eval_stats.get("ev_samples_in_range", 0))
+                        if isinstance(split_stage_eval_stats, dict)
+                        else 0,
+                    ),
+                    "ev_at_manager_pass_sum_core_proxy": (
+                        to_float(split_stage_eval_stats.get("ev_at_manager_pass_sum_in_range", 0.0))
+                        if isinstance(split_stage_eval_stats, dict)
+                        else 0.0
+                    ),
+                    "ev_at_order_submit_check_sum_core_proxy": (
+                        to_float(
+                            split_stage_eval_stats.get(
+                                "ev_at_order_submit_check_sum_in_range", 0.0
+                            )
+                        )
+                        if isinstance(split_stage_eval_stats, dict)
+                        else 0.0
+                    ),
+                    "ev_mismatch_count_core_proxy": max(
+                        0,
+                        to_int(split_stage_eval_stats.get("ev_mismatch_count_in_range", 0))
+                        if isinstance(split_stage_eval_stats, dict)
+                        else 0,
+                    ),
+                    "candidate_total_cumulative_proxy": max(
+                        0,
+                        to_int(split_cumulative_stats.get("decision_count_in_range", 0))
+                        if isinstance(split_cumulative_stats, dict)
+                        else 0,
+                    ),
+                    "pass_total_cumulative_proxy": max(
+                        0,
+                        to_int(split_cumulative_stats.get("selected_decision_count_in_range", 0))
+                        if isinstance(split_cumulative_stats, dict)
+                        else 0,
+                    ),
+                    "total_trades_cumulative_proxy": max(
+                        0,
+                        to_int(split_trade_cumulative_stats.get("terminal_sell_fills_in_range", 0))
+                        if isinstance(split_trade_cumulative_stats, dict)
+                        else 0,
+                    ),
+                    "orders_submitted_cumulative_proxy": max(
+                        0,
+                        to_int(split_stage_cumulative_stats.get("orders_submitted_in_range", 0))
+                        if isinstance(split_stage_cumulative_stats, dict)
+                        else max(
+                            0,
+                            to_int(split_trade_cumulative_stats.get("buy_submitted_in_range", 0))
+                            if isinstance(split_trade_cumulative_stats, dict)
+                            else 0,
+                        ),
+                    ),
+                    "orders_filled_cumulative_proxy": max(
+                        0,
+                        to_int(split_stage_cumulative_stats.get("orders_filled_in_range", 0))
+                        if isinstance(split_stage_cumulative_stats, dict)
+                        else max(
+                            0,
+                            to_int(split_trade_cumulative_stats.get("buy_filled_in_range", 0))
+                            if isinstance(split_trade_cumulative_stats, dict)
+                            else 0,
+                        ),
+                    ),
+                    "stage_candidates_total_cumulative_proxy": max(
+                        0,
+                        to_int(split_stage_cumulative_stats.get("candidates_total_in_range", 0))
+                        if isinstance(split_stage_cumulative_stats, dict)
+                        else 0,
+                    ),
+                    "stage_candidates_after_frontier_cumulative_proxy": max(
+                        0,
+                        to_int(split_stage_cumulative_stats.get("candidates_after_frontier_in_range", 0))
+                        if isinstance(split_stage_cumulative_stats, dict)
+                        else 0,
+                    ),
+                    "stage_candidates_after_manager_cumulative_proxy": max(
+                        0,
+                        to_int(split_stage_cumulative_stats.get("candidates_after_manager_in_range", 0))
+                        if isinstance(split_stage_cumulative_stats, dict)
+                        else 0,
+                    ),
+                    "stage_candidates_after_portfolio_cumulative_proxy": max(
+                        0,
+                        to_int(split_stage_cumulative_stats.get("candidates_after_portfolio_in_range", 0))
+                        if isinstance(split_stage_cumulative_stats, dict)
+                        else 0,
+                    ),
+                    "stage_order_block_reason_counts_cumulative_proxy": (
+                        split_stage_cumulative_stats.get(
+                            "order_block_reason_counts_in_range", {}
+                        )
+                        if isinstance(split_stage_cumulative_stats, dict)
+                        else {}
+                    ),
+                    "ev_samples_cumulative_proxy": max(
+                        0,
+                        to_int(split_stage_cumulative_stats.get("ev_samples_in_range", 0))
+                        if isinstance(split_stage_cumulative_stats, dict)
+                        else 0,
+                    ),
+                    "ev_at_manager_pass_sum_cumulative_proxy": (
+                        to_float(
+                            split_stage_cumulative_stats.get(
+                                "ev_at_manager_pass_sum_in_range", 0.0
+                            )
+                        )
+                        if isinstance(split_stage_cumulative_stats, dict)
+                        else 0.0
+                    ),
+                    "ev_at_order_submit_check_sum_cumulative_proxy": (
+                        to_float(
+                            split_stage_cumulative_stats.get(
+                                "ev_at_order_submit_check_sum_in_range", 0.0
+                            )
+                        )
+                        if isinstance(split_stage_cumulative_stats, dict)
+                        else 0.0
+                    ),
+                    "ev_mismatch_count_cumulative_proxy": max(
+                        0,
+                        to_int(split_stage_cumulative_stats.get("ev_mismatch_count_in_range", 0))
+                        if isinstance(split_stage_cumulative_stats, dict)
+                        else 0,
+                    ),
+                    "split_eval_stats": split_eval_stats if isinstance(split_eval_stats, dict) else {},
+                    "split_trade_eval_stats": (
+                        split_trade_eval_stats if isinstance(split_trade_eval_stats, dict) else {}
+                    ),
+                    "split_stage_funnel_eval_stats": (
+                        split_stage_eval_stats if isinstance(split_stage_eval_stats, dict) else {}
+                    ),
+                    "split_cumulative_stats": (
+                        split_cumulative_stats if isinstance(split_cumulative_stats, dict) else {}
+                    ),
+                    "split_trade_cumulative_stats": (
+                        split_trade_cumulative_stats if isinstance(split_trade_cumulative_stats, dict) else {}
+                    ),
+                    "split_stage_funnel_cumulative_stats": (
+                        split_stage_cumulative_stats
+                        if isinstance(split_stage_cumulative_stats, dict)
+                        else {}
+                    ),
+                }
+            )
             dataset_diagnostics.append(
                 build_dataset_diagnostics(
                     dataset_name=dataset_path.name,
@@ -5948,6 +8443,9 @@ def main(argv=None) -> int:
                     dataset_name=dataset_path.name,
                     backtest_result=result,
                     policy=vol_bucket_pct_policy,
+                    dataset_path=dataset_path,
+                    execution_range_used=execution_range,
+                    evaluation_range_used=eval_range,
                 )
             )
         if bool(args.phase4_off_on_compare):
@@ -6017,6 +8515,412 @@ def main(argv=None) -> int:
     total_profit_sum_krw = round(to_float(summary.get("total_profit_sum_krw", 0.0)), 4)
     profitable_ratio = round(to_float(summary.get("profitable_ratio", 0.0)), 4)
     avg_fee_krw = round(to_float(summary.get("avg_fee_krw", 0.0)), 4)
+    split_trades_after_filter = int(
+        sum(max(0, to_int(item.get("total_trades", 0))) for item in rows if isinstance(item, dict))
+    )
+    if isinstance(split_filter_context, dict):
+        split_filter_context["trades_after_filter"] = int(split_trades_after_filter)
+        split_filter_context["entry_rounds_execution"] = int(
+            sum(
+                max(0, to_int(item.get("entry_rounds_execution", 0)))
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["entry_rounds_core_proxy"] = int(
+            sum(
+                max(0, to_int(item.get("entry_rounds_core_proxy", 0)))
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["candidate_total_execution"] = int(
+            sum(
+                max(0, to_int(item.get("candidate_total_execution", 0)))
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["candidate_total_core_proxy"] = int(
+            sum(
+                max(0, to_int(item.get("candidate_total_core_proxy", 0)))
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["pass_total_core_proxy"] = int(
+            sum(
+                max(0, to_int(item.get("pass_total_core_proxy", 0)))
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["total_trades_core_proxy"] = int(
+            sum(
+                max(0, to_int(item.get("total_trades_core_proxy", 0)))
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["candidate_total_cumulative_proxy"] = int(
+            sum(
+                max(0, to_int(item.get("candidate_total_cumulative_proxy", 0)))
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["pass_total_cumulative_proxy"] = int(
+            sum(
+                max(0, to_int(item.get("pass_total_cumulative_proxy", 0)))
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["total_trades_cumulative_proxy"] = int(
+            sum(
+                max(0, to_int(item.get("total_trades_cumulative_proxy", 0)))
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["orders_submitted_core_proxy"] = int(
+            sum(
+                max(0, to_int(item.get("orders_submitted_core_proxy", 0)))
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["orders_filled_core_proxy"] = int(
+            sum(
+                max(0, to_int(item.get("orders_filled_core_proxy", 0)))
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["orders_submitted_cumulative_proxy"] = int(
+            sum(
+                max(0, to_int(item.get("orders_submitted_cumulative_proxy", 0)))
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["orders_filled_cumulative_proxy"] = int(
+            sum(
+                max(0, to_int(item.get("orders_filled_cumulative_proxy", 0)))
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["stage_candidates_total_core_proxy"] = int(
+            sum(
+                max(0, to_int(item.get("stage_candidates_total_core_proxy", 0)))
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["stage_candidates_after_frontier_core_proxy"] = int(
+            sum(
+                max(
+                    0,
+                    to_int(item.get("stage_candidates_after_frontier_core_proxy", 0)),
+                )
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["stage_candidates_after_manager_core_proxy"] = int(
+            sum(
+                max(
+                    0,
+                    to_int(item.get("stage_candidates_after_manager_core_proxy", 0)),
+                )
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["stage_candidates_after_portfolio_core_proxy"] = int(
+            sum(
+                max(
+                    0,
+                    to_int(item.get("stage_candidates_after_portfolio_core_proxy", 0)),
+                )
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["stage_candidates_total_cumulative_proxy"] = int(
+            sum(
+                max(0, to_int(item.get("stage_candidates_total_cumulative_proxy", 0)))
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["stage_candidates_after_frontier_cumulative_proxy"] = int(
+            sum(
+                max(
+                    0,
+                    to_int(item.get("stage_candidates_after_frontier_cumulative_proxy", 0)),
+                )
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["stage_candidates_after_manager_cumulative_proxy"] = int(
+            sum(
+                max(
+                    0,
+                    to_int(item.get("stage_candidates_after_manager_cumulative_proxy", 0)),
+                )
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["stage_candidates_after_portfolio_cumulative_proxy"] = int(
+            sum(
+                max(
+                    0,
+                    to_int(item.get("stage_candidates_after_portfolio_cumulative_proxy", 0)),
+                )
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        stage_order_block_reason_counts_core_proxy: Dict[str, int] = {}
+        stage_order_block_reason_counts_cumulative_proxy: Dict[str, int] = {}
+        for item in split_eval_profiles:
+            if not isinstance(item, dict):
+                continue
+            core_reasons = item.get("stage_order_block_reason_counts_core_proxy", {})
+            if isinstance(core_reasons, dict):
+                for k, v in core_reasons.items():
+                    rk = str(k).strip()
+                    if not rk:
+                        continue
+                    stage_order_block_reason_counts_core_proxy[rk] = (
+                        stage_order_block_reason_counts_core_proxy.get(rk, 0)
+                        + max(0, to_int(v))
+                    )
+            cumulative_reasons = item.get(
+                "stage_order_block_reason_counts_cumulative_proxy", {}
+            )
+            if isinstance(cumulative_reasons, dict):
+                for k, v in cumulative_reasons.items():
+                    rk = str(k).strip()
+                    if not rk:
+                        continue
+                    stage_order_block_reason_counts_cumulative_proxy[rk] = (
+                        stage_order_block_reason_counts_cumulative_proxy.get(rk, 0)
+                        + max(0, to_int(v))
+                    )
+        split_filter_context["stage_order_block_reason_counts_core_proxy"] = {
+            str(k): int(v)
+            for k, v in stage_order_block_reason_counts_core_proxy.items()
+            if int(v) > 0
+        }
+        split_filter_context["stage_order_block_reason_counts_cumulative_proxy"] = {
+            str(k): int(v)
+            for k, v in stage_order_block_reason_counts_cumulative_proxy.items()
+            if int(v) > 0
+        }
+        split_filter_context["ev_samples_core_proxy"] = int(
+            sum(
+                max(0, to_int(item.get("ev_samples_core_proxy", 0)))
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["ev_at_manager_pass_sum_core_proxy"] = float(
+            sum(
+                to_float(item.get("ev_at_manager_pass_sum_core_proxy", 0.0))
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["ev_at_order_submit_check_sum_core_proxy"] = float(
+            sum(
+                to_float(item.get("ev_at_order_submit_check_sum_core_proxy", 0.0))
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["ev_mismatch_count_core_proxy"] = int(
+            sum(
+                max(0, to_int(item.get("ev_mismatch_count_core_proxy", 0)))
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["ev_samples_cumulative_proxy"] = int(
+            sum(
+                max(0, to_int(item.get("ev_samples_cumulative_proxy", 0)))
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["ev_at_manager_pass_sum_cumulative_proxy"] = float(
+            sum(
+                to_float(item.get("ev_at_manager_pass_sum_cumulative_proxy", 0.0))
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["ev_at_order_submit_check_sum_cumulative_proxy"] = float(
+            sum(
+                to_float(
+                    item.get("ev_at_order_submit_check_sum_cumulative_proxy", 0.0)
+                )
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["ev_mismatch_count_cumulative_proxy"] = int(
+            sum(
+                max(0, to_int(item.get("ev_mismatch_count_cumulative_proxy", 0)))
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        core_zero = (
+            int(split_filter_context.get("entry_rounds_core_proxy", 0)) <= 0
+            and int(split_filter_context.get("candidate_total_core_proxy", 0)) <= 0
+            and int(split_filter_context.get("total_trades_core_proxy", 0)) <= 0
+        )
+        fallback_enabled = not bool(args.disable_split_core_zero_fallback_cumulative)
+        fallback_applied = bool(
+            bool(split_filter_context.get("split_applied", False))
+            and core_zero
+            and fallback_enabled
+            and (
+                int(split_filter_context.get("candidate_total_cumulative_proxy", 0)) > 0
+                or int(split_filter_context.get("total_trades_cumulative_proxy", 0)) > 0
+                or int(split_filter_context.get("entry_rounds_execution", 0)) > 0
+            )
+        )
+        split_filter_context["core_zero_detected"] = bool(core_zero)
+        split_filter_context["core_zero_fallback_enabled"] = bool(fallback_enabled)
+        split_filter_context["core_zero_fallback_applied"] = bool(fallback_applied)
+        if fallback_applied:
+            split_filter_context["evaluation_range_effective"] = split_filter_context.get(
+                "cumulative_range_used",
+                split_filter_context.get("evaluation_range_used", []),
+            )
+            split_filter_context["entry_rounds_core_effective"] = int(
+                split_filter_context.get("entry_rounds_execution", 0)
+            )
+            split_filter_context["candidate_total_core_effective"] = int(
+                split_filter_context.get("candidate_total_cumulative_proxy", 0)
+            )
+            split_filter_context["pass_total_core_effective"] = int(
+                split_filter_context.get("pass_total_cumulative_proxy", 0)
+            )
+            split_filter_context["total_trades_core_effective"] = int(
+                split_filter_context.get("total_trades_cumulative_proxy", 0)
+            )
+            split_filter_context["orders_submitted_core_effective"] = int(
+                split_filter_context.get("orders_submitted_cumulative_proxy", 0)
+            )
+            split_filter_context["orders_filled_core_effective"] = int(
+                split_filter_context.get("orders_filled_cumulative_proxy", 0)
+            )
+            split_filter_context["stage_candidates_total_core_effective"] = int(
+                split_filter_context.get("stage_candidates_total_cumulative_proxy", 0)
+            )
+            split_filter_context["stage_candidates_after_frontier_core_effective"] = int(
+                split_filter_context.get(
+                    "stage_candidates_after_frontier_cumulative_proxy", 0
+                )
+            )
+            split_filter_context["stage_candidates_after_manager_core_effective"] = int(
+                split_filter_context.get(
+                    "stage_candidates_after_manager_cumulative_proxy", 0
+                )
+            )
+            split_filter_context["stage_candidates_after_portfolio_core_effective"] = int(
+                split_filter_context.get(
+                    "stage_candidates_after_portfolio_cumulative_proxy", 0
+                )
+            )
+            split_filter_context["stage_order_block_reason_counts_core_effective"] = (
+                split_filter_context.get(
+                    "stage_order_block_reason_counts_cumulative_proxy", {}
+                )
+                if isinstance(
+                    split_filter_context.get(
+                        "stage_order_block_reason_counts_cumulative_proxy", {}
+                    ),
+                    dict,
+                )
+                else {}
+            )
+            split_filter_context["ev_samples_core_effective"] = int(
+                split_filter_context.get("ev_samples_cumulative_proxy", 0)
+            )
+            split_filter_context["ev_at_manager_pass_sum_core_effective"] = float(
+                split_filter_context.get("ev_at_manager_pass_sum_cumulative_proxy", 0.0)
+            )
+            split_filter_context["ev_at_order_submit_check_sum_core_effective"] = float(
+                split_filter_context.get(
+                    "ev_at_order_submit_check_sum_cumulative_proxy", 0.0
+                )
+            )
+            split_filter_context["ev_mismatch_count_core_effective"] = int(
+                split_filter_context.get("ev_mismatch_count_cumulative_proxy", 0)
+            )
+        else:
+            split_filter_context["evaluation_range_effective"] = split_filter_context.get(
+                "evaluation_range_used",
+                [],
+            )
+            split_filter_context["entry_rounds_core_effective"] = int(
+                split_filter_context.get("entry_rounds_core_proxy", 0)
+            )
+            split_filter_context["candidate_total_core_effective"] = int(
+                split_filter_context.get("candidate_total_core_proxy", 0)
+            )
+            split_filter_context["pass_total_core_effective"] = int(
+                split_filter_context.get("pass_total_core_proxy", 0)
+            )
+            split_filter_context["total_trades_core_effective"] = int(
+                split_filter_context.get("total_trades_core_proxy", 0)
+            )
+            split_filter_context["orders_submitted_core_effective"] = int(
+                split_filter_context.get("orders_submitted_core_proxy", 0)
+            )
+            split_filter_context["orders_filled_core_effective"] = int(
+                split_filter_context.get("orders_filled_core_proxy", 0)
+            )
+            split_filter_context["stage_candidates_total_core_effective"] = int(
+                split_filter_context.get("stage_candidates_total_core_proxy", 0)
+            )
+            split_filter_context["stage_candidates_after_frontier_core_effective"] = int(
+                split_filter_context.get("stage_candidates_after_frontier_core_proxy", 0)
+            )
+            split_filter_context["stage_candidates_after_manager_core_effective"] = int(
+                split_filter_context.get("stage_candidates_after_manager_core_proxy", 0)
+            )
+            split_filter_context["stage_candidates_after_portfolio_core_effective"] = int(
+                split_filter_context.get("stage_candidates_after_portfolio_core_proxy", 0)
+            )
+            split_filter_context["stage_order_block_reason_counts_core_effective"] = (
+                split_filter_context.get("stage_order_block_reason_counts_core_proxy", {})
+                if isinstance(
+                    split_filter_context.get("stage_order_block_reason_counts_core_proxy", {}),
+                    dict,
+                )
+                else {}
+            )
+            split_filter_context["ev_samples_core_effective"] = int(
+                split_filter_context.get("ev_samples_core_proxy", 0)
+            )
+            split_filter_context["ev_at_manager_pass_sum_core_effective"] = float(
+                split_filter_context.get("ev_at_manager_pass_sum_core_proxy", 0.0)
+            )
+            split_filter_context["ev_at_order_submit_check_sum_core_effective"] = float(
+                split_filter_context.get("ev_at_order_submit_check_sum_core_proxy", 0.0)
+            )
+            split_filter_context["ev_mismatch_count_core_effective"] = int(
+                split_filter_context.get("ev_mismatch_count_core_proxy", 0)
+            )
 
     gate = {
         "gate_profit_factor_pass": avg_profit_factor >= float(args.min_profit_factor),
@@ -6028,6 +8932,14 @@ def main(argv=None) -> int:
     }
     threshold_gate_pass = all(bool(x) for x in gate.values())
     aggregate_diagnostics = aggregate_dataset_diagnostics(dataset_diagnostics)
+    if isinstance(split_filter_context, dict):
+        split_filter_context["candidate_total_execution"] = int(
+            nested_get(
+                aggregate_diagnostics,
+                ["phase3_diagnostics_v2", "funnel_breakdown", "candidate_total"],
+                split_filter_context.get("candidate_total_execution", 0),
+            )
+        )
     failure_attribution = build_failure_attribution(
         gate=gate,
         avg_total_trades=avg_total_trades,
@@ -6100,6 +9012,170 @@ def main(argv=None) -> int:
             ensure_ascii=False,
             indent=4,
         )
+    ensure_parent(a8_quantile_exec_coverage_debug_json)
+    with a8_quantile_exec_coverage_debug_json.open("w", encoding="utf-8", newline="\n") as fp:
+        json.dump(
+            vol_bucket_pct_artifacts.get("quantile_exec_coverage_payload", {}),
+            fp,
+            ensure_ascii=False,
+            indent=4,
+        )
+    cell_root_cause_report = build_cell_root_cause_report(
+        vol_bucket_pct_dataset_profiles,
+        split_name=str(args.split_name).strip(),
+        top_n_cells=max(1, int(args.cell_root_cause_top_n)),
+    )
+    ensure_parent(cell_root_cause_report_json)
+    with cell_root_cause_report_json.open("w", encoding="utf-8", newline="\n") as fp:
+        json.dump(
+            cell_root_cause_report,
+            fp,
+            ensure_ascii=False,
+            indent=4,
+        )
+    edge_sign_distribution = build_edge_sign_distribution(
+        dataset_diagnostics=dataset_diagnostics,
+        split_filter_context=split_filter_context,
+    )
+    ensure_parent(edge_sign_distribution_json)
+    with edge_sign_distribution_json.open("w", encoding="utf-8", newline="\n") as fp:
+        json.dump(
+            edge_sign_distribution,
+            fp,
+            ensure_ascii=False,
+            indent=4,
+        )
+    edge_pos_no_trade_breakdown = build_edge_pos_but_no_trade_breakdown(
+        edge_sign_distribution=edge_sign_distribution,
+        aggregate_diagnostics=aggregate_diagnostics,
+        split_filter_context=split_filter_context,
+    )
+    ensure_parent(edge_pos_no_trade_breakdown_json)
+    with edge_pos_no_trade_breakdown_json.open("w", encoding="utf-8", newline="\n") as fp:
+        json.dump(
+            edge_pos_no_trade_breakdown,
+            fp,
+            ensure_ascii=False,
+            indent=4,
+        )
+    a10_2_stage_funnel_report = build_a10_2_stage_funnel_report(
+        aggregate_diagnostics=aggregate_diagnostics,
+        split_filter_context=split_filter_context,
+    )
+    ensure_parent(a10_2_stage_funnel_json)
+    with a10_2_stage_funnel_json.open("w", encoding="utf-8", newline="\n") as fp:
+        json.dump(
+            a10_2_stage_funnel_report,
+            fp,
+            ensure_ascii=False,
+            indent=4,
+        )
+
+    core_zero_diagnosis_payload = {
+        "generated_at": __import__("datetime").datetime.now().astimezone().isoformat(),
+        "split_name": str(args.split_name).strip(),
+        "split_applied": bool(split_filter_context.get("split_applied", False))
+        if isinstance(split_filter_context, dict)
+        else False,
+        "execution_range_used": (
+            split_filter_context.get("execution_range_used", [])
+            if isinstance(split_filter_context, dict)
+            else []
+        ),
+        "evaluation_range_used": (
+            split_filter_context.get("evaluation_range_used", [])
+            if isinstance(split_filter_context, dict)
+            else []
+        ),
+        "evaluation_range_effective": (
+            split_filter_context.get("evaluation_range_effective", [])
+            if isinstance(split_filter_context, dict)
+            else []
+        ),
+        "rows_after_filter": int(
+            split_filter_context.get("rows_after_filter", 0)
+            if isinstance(split_filter_context, dict)
+            else 0
+        ),
+        "rows_in_core": int(
+            split_filter_context.get("rows_in_core", 0)
+            if isinstance(split_filter_context, dict)
+            else 0
+        ),
+        "entry_rounds_execution": int(
+            split_filter_context.get("entry_rounds_execution", 0)
+            if isinstance(split_filter_context, dict)
+            else 0
+        ),
+        "entry_rounds_core_proxy": int(
+            split_filter_context.get("entry_rounds_core_proxy", 0)
+            if isinstance(split_filter_context, dict)
+            else 0
+        ),
+        "entry_rounds_core_effective": int(
+            split_filter_context.get("entry_rounds_core_effective", 0)
+            if isinstance(split_filter_context, dict)
+            else 0
+        ),
+        "candidate_total_execution": int(
+            split_filter_context.get("candidate_total_execution", 0)
+            if isinstance(split_filter_context, dict)
+            else 0
+        ),
+        "candidate_total_core_proxy": int(
+            split_filter_context.get("candidate_total_core_proxy", 0)
+            if isinstance(split_filter_context, dict)
+            else 0
+        ),
+        "candidate_total_core_effective": int(
+            split_filter_context.get("candidate_total_core_effective", 0)
+            if isinstance(split_filter_context, dict)
+            else 0
+        ),
+        "total_trades_core_proxy": int(
+            split_filter_context.get("total_trades_core_proxy", 0)
+            if isinstance(split_filter_context, dict)
+            else 0
+        ),
+        "total_trades_core_effective": int(
+            split_filter_context.get("total_trades_core_effective", 0)
+            if isinstance(split_filter_context, dict)
+            else 0
+        ),
+        "core_zero_detected": bool(
+            split_filter_context.get("core_zero_detected", False)
+            if isinstance(split_filter_context, dict)
+            else False
+        ),
+        "core_zero_fallback_enabled": bool(
+            split_filter_context.get("core_zero_fallback_enabled", False)
+            if isinstance(split_filter_context, dict)
+            else False
+        ),
+        "core_zero_fallback_applied": bool(
+            split_filter_context.get("core_zero_fallback_applied", False)
+            if isinstance(split_filter_context, dict)
+            else False
+        ),
+        "reason_hints": [],
+    }
+    reason_hints = core_zero_diagnosis_payload.get("reason_hints", [])
+    if int(core_zero_diagnosis_payload.get("rows_after_filter", 0)) <= 0:
+        reason_hints.append("execution_range_rows_zero")
+    if int(core_zero_diagnosis_payload.get("rows_in_core", 0)) <= 0:
+        reason_hints.append("evaluation_core_rows_zero")
+    if int(core_zero_diagnosis_payload.get("entry_rounds_execution", 0)) <= 0:
+        reason_hints.append("entry_loop_not_started_execution")
+    if int(core_zero_diagnosis_payload.get("entry_rounds_core_proxy", 0)) <= 0:
+        reason_hints.append("entry_loop_not_observed_in_core_proxy")
+    if int(core_zero_diagnosis_payload.get("candidate_total_core_proxy", 0)) <= 0:
+        reason_hints.append("candidate_zero_in_core_proxy")
+    if int(core_zero_diagnosis_payload.get("total_trades_core_proxy", 0)) <= 0:
+        reason_hints.append("trade_zero_in_core_proxy")
+    core_zero_diagnosis_payload["per_dataset"] = split_eval_profiles
+    ensure_parent(core_zero_diagnosis_json)
+    with core_zero_diagnosis_json.open("w", encoding="utf-8", newline="\n") as fp:
+        json.dump(core_zero_diagnosis_payload, fp, ensure_ascii=False, indent=4)
 
     report = {
         "mode": "verification_adaptive",
@@ -6171,7 +9247,17 @@ def main(argv=None) -> int:
             "per_dataset": dataset_diagnostics,
             "failure_attribution": failure_attribution,
             "vol_bucket_pct_summary": vol_bucket_pct_artifacts.get("summary", {}),
+            "a8_quantile_exec_coverage_debug": vol_bucket_pct_artifacts.get(
+                "quantile_exec_coverage_payload",
+                {},
+            ),
+            "cell_root_cause_report": cell_root_cause_report,
+            "edge_sign_distribution": edge_sign_distribution,
+            "edge_pos_but_no_trade_breakdown": edge_pos_no_trade_breakdown,
+            "a10_2_stage_funnel": a10_2_stage_funnel_report,
         },
+        "split_filter": split_filter_context,
+        "split_eval_profiles": split_eval_profiles,
         "artifacts": {
             "output_csv": str(output_csv),
             "output_json": str(output_json),
@@ -6181,14 +9267,30 @@ def main(argv=None) -> int:
             "runtime_bundle_path": str(bundle_meta.get("bundle_path", "")) if bundle_meta else "",
             "runtime_bundle_version": str(bundle_meta.get("bundle_version", "")) if bundle_meta else "",
             "split_manifest_json": split_manifest_path_value,
+            "split_filtered_input_root_dir": str(
+                split_filter_context.get("filtered_input_root_dir", "")
+                if isinstance(split_filter_context, dict)
+                else ""
+            ),
             "quarantine_vol_bucket_pct_distribution_json": str(vol_bucket_pct_distribution_json),
             "quarantine_pnl_by_regime_x_vol_fixed_json": str(pnl_by_regime_x_vol_fixed_json),
             "quarantine_pnl_by_regime_x_vol_pct_json": str(pnl_by_regime_x_vol_pct_json),
             "top_loss_cells_regime_vol_pct_json": str(top_loss_cells_regime_vol_pct_json),
+            "a8_quantile_exec_coverage_debug_json": str(a8_quantile_exec_coverage_debug_json),
+            "cell_root_cause_report_json": str(cell_root_cause_report_json),
+            "edge_sign_distribution_json": str(edge_sign_distribution_json),
+            "edge_pos_but_no_trade_breakdown_json": str(edge_pos_no_trade_breakdown_json),
+            "a10_2_stage_funnel_json": str(a10_2_stage_funnel_json),
+            "core_zero_diagnosis_json": str(core_zero_diagnosis_json),
         },
     }
     split_protocol: Dict[str, Any] = {
         "time_split_applied": bool(args.split_time_based or split_manifest_payload),
+        "split_applied": bool(
+            split_filter_context.get("split_applied", False)
+            if isinstance(split_filter_context, dict)
+            else False
+        ),
         "split_name": str(args.split_name).strip(),
         "purge_gap_applied": bool(int(args.split_purge_gap_minutes) >= 0),
         "purge_gap_minutes": max(-1, int(args.split_purge_gap_minutes)),
@@ -6205,6 +9307,96 @@ def main(argv=None) -> int:
             if isinstance(proto, dict):
                 split_protocol["purge_gap_minutes"] = int(proto.get("purge_gap_minutes", -1))
                 split_protocol["purge_gap_applied"] = bool(int(split_protocol.get("purge_gap_minutes", -1)) >= 0)
+    if isinstance(split_filter_context, dict):
+        if split_filter_context.get("split_range_used"):
+            split_protocol["split_range_used"] = split_filter_context.get("split_range_used")
+        if split_filter_context.get("execution_range_used"):
+            split_protocol["execution_range_used"] = split_filter_context.get("execution_range_used")
+        if split_filter_context.get("evaluation_range_used"):
+            split_protocol["evaluation_range_used"] = split_filter_context.get("evaluation_range_used")
+        if split_filter_context.get("evaluation_range_effective"):
+            split_protocol["evaluation_range_effective"] = split_filter_context.get("evaluation_range_effective")
+        if split_filter_context.get("cumulative_range_used"):
+            split_protocol["cumulative_range_used"] = split_filter_context.get("cumulative_range_used")
+        if split_filter_context.get("split_range_mode"):
+            split_protocol["split_range_mode"] = split_filter_context.get("split_range_mode")
+        if split_filter_context.get("execution_range_mode"):
+            split_protocol["execution_range_mode"] = split_filter_context.get("execution_range_mode")
+        if split_filter_context.get("execution_prewarm_hours") is not None:
+            split_protocol["execution_prewarm_hours"] = float(
+                split_filter_context.get("execution_prewarm_hours", 0.0)
+            )
+        split_protocol["rows_before_filter"] = int(split_filter_context.get("rows_before_filter", 0))
+        split_protocol["rows_after_filter"] = int(split_filter_context.get("rows_after_filter", 0))
+        split_protocol["rows_in_core"] = int(split_filter_context.get("rows_in_core", 0))
+        split_protocol["rows_before_filter_primary_1m"] = int(
+            split_filter_context.get("rows_before_filter_primary_1m", 0)
+        )
+        split_protocol["rows_after_filter_primary_1m"] = int(
+            split_filter_context.get("rows_after_filter_primary_1m", 0)
+        )
+        split_protocol["rows_in_core_primary_1m"] = int(
+            split_filter_context.get("rows_in_core_primary_1m", 0)
+        )
+        split_protocol["trades_before_filter"] = split_filter_context.get("trades_before_filter", None)
+        split_protocol["trades_after_filter"] = split_filter_context.get("trades_after_filter", None)
+        split_protocol["entry_rounds_execution"] = int(split_filter_context.get("entry_rounds_execution", 0))
+        split_protocol["entry_rounds_core_proxy"] = int(split_filter_context.get("entry_rounds_core_proxy", 0))
+        split_protocol["entry_rounds_core_effective"] = int(
+            split_filter_context.get("entry_rounds_core_effective", 0)
+        )
+        split_protocol["candidate_total_execution"] = int(
+            split_filter_context.get("candidate_total_execution", 0)
+        )
+        split_protocol["candidate_total_core_proxy"] = int(
+            split_filter_context.get("candidate_total_core_proxy", 0)
+        )
+        split_protocol["candidate_total_core_effective"] = int(
+            split_filter_context.get("candidate_total_core_effective", 0)
+        )
+        split_protocol["pass_total_core_effective"] = int(
+            split_filter_context.get("pass_total_core_effective", 0)
+        )
+        split_protocol["total_trades_core_effective"] = int(
+            split_filter_context.get("total_trades_core_effective", 0)
+        )
+        split_protocol["orders_submitted_core_effective"] = int(
+            split_filter_context.get("orders_submitted_core_effective", 0)
+        )
+        split_protocol["orders_filled_core_effective"] = int(
+            split_filter_context.get("orders_filled_core_effective", 0)
+        )
+        split_protocol["stage_candidates_total_core_effective"] = int(
+            split_filter_context.get("stage_candidates_total_core_effective", 0)
+        )
+        split_protocol["stage_candidates_after_frontier_core_effective"] = int(
+            split_filter_context.get("stage_candidates_after_frontier_core_effective", 0)
+        )
+        split_protocol["stage_candidates_after_manager_core_effective"] = int(
+            split_filter_context.get("stage_candidates_after_manager_core_effective", 0)
+        )
+        split_protocol["stage_candidates_after_portfolio_core_effective"] = int(
+            split_filter_context.get("stage_candidates_after_portfolio_core_effective", 0)
+        )
+        split_protocol["stage_order_block_reason_counts_core_effective"] = (
+            split_filter_context.get("stage_order_block_reason_counts_core_effective", {})
+            if isinstance(
+                split_filter_context.get("stage_order_block_reason_counts_core_effective", {}),
+                dict,
+            )
+            else {}
+        )
+        split_protocol["core_zero_detected"] = bool(
+            split_filter_context.get("core_zero_detected", False)
+        )
+        split_protocol["core_zero_fallback_applied"] = bool(
+            split_filter_context.get("core_zero_fallback_applied", False)
+        )
+        split_protocol["filtered_input_root_dir"] = str(
+            split_filter_context.get("filtered_input_root_dir", "")
+        )
+        if split_filter_context.get("reason"):
+            split_protocol["split_apply_reason"] = str(split_filter_context.get("reason"))
     if core_window_direct_report:
         split_protocol["core_window_direct_available"] = bool(
             core_window_direct_report.get("available", False)
@@ -6304,6 +9496,49 @@ def main(argv=None) -> int:
             f"none_ratio={vol_bucket_summary.get('none_ratio', 0.0)} "
             f"ranging_low_loss_pct={vol_bucket_summary.get('ranging_vol_low_loss_contribution_pct', 0.0)}"
         )
+    print(
+        "[Verification] edge_sign "
+        f"count_total={edge_sign_distribution.get('count_total', 0)} "
+        f"edge_neg={edge_sign_distribution.get('count_edge_neg', 0)} "
+        f"edge_pos={edge_sign_distribution.get('count_edge_pos', 0)} "
+        f"p50_bps={edge_sign_distribution.get('p50_bps', None)} "
+        f"edge_pos_but_no_trade={edge_pos_no_trade_breakdown.get('edge_pos_but_no_trade', 0)} "
+        f"recommended_case={edge_pos_no_trade_breakdown.get('recommended_case', '')}"
+    )
+    a10_funnel_core = (
+        a10_2_stage_funnel_report.get("funnel_summary_core", {})
+        if isinstance(a10_2_stage_funnel_report, dict)
+        else {}
+    )
+    a10_order_block_top = (
+        a10_2_stage_funnel_report.get("top_order_block_reason_core", [])
+        if isinstance(a10_2_stage_funnel_report, dict)
+        else []
+    )
+    a10_stage_counters = (
+        a10_2_stage_funnel_report.get("stage_counters_core", {})
+        if isinstance(a10_2_stage_funnel_report, dict)
+        else {}
+    )
+    top_reason = ""
+    if isinstance(a10_order_block_top, list) and a10_order_block_top:
+        first = a10_order_block_top[0]
+        if isinstance(first, dict):
+            top_reason = str(first.get("reason", "")).strip()
+    print(
+        "[Verification] a10_2_stage_funnel "
+        f"S0={a10_funnel_core.get('S0_candidates_total_core', 0)} "
+        f"S1={a10_funnel_core.get('S1_candidates_after_frontier_core', 0)} "
+        f"S2={a10_funnel_core.get('S2_candidates_after_manager_core', 0)} "
+        f"S3={a10_funnel_core.get('S3_candidates_after_portfolio_core', 0)} "
+        f"S4={a10_funnel_core.get('S4_orders_submitted_core', 0)} "
+        f"S5={a10_funnel_core.get('S5_orders_filled_core', 0)} "
+        f"ev_mgr_avg={a10_stage_counters.get('ev_at_manager_pass_core_avg', 0.0)} "
+        f"ev_order_avg={a10_stage_counters.get('ev_at_order_submit_check_core_avg', 0.0)} "
+        f"ev_mismatch={a10_stage_counters.get('ev_mismatch_count_core', 0)} "
+        f"top_order_block={top_reason or 'none'} "
+        f"case_hint={a10_2_stage_funnel_report.get('a10_3_case_hint', '')}"
+    )
     if bool(args.phase4_off_on_compare):
         phase4_compare = report.get("phase4_off_on_comparison", {})
         if isinstance(phase4_compare, dict) and bool(phase4_compare.get("available", False)):
@@ -6333,6 +9568,22 @@ def main(argv=None) -> int:
             f"name={protocol_split.get('split_name', '') or 'unspecified'} "
             f"purge_gap_minutes={protocol_split.get('purge_gap_minutes', -1)} "
             f"manifest={protocol_split.get('manifest_path', '')}"
+        )
+        print(
+            "[Verification] split_filter "
+            f"applied={protocol_split.get('split_applied', False)} "
+            f"execution_range={protocol_split.get('execution_range_used', [])} "
+            f"evaluation_range={protocol_split.get('evaluation_range_used', [])} "
+            f"evaluation_effective={protocol_split.get('evaluation_range_effective', [])} "
+            f"rows_before={protocol_split.get('rows_before_filter', 0)} "
+            f"rows_after={protocol_split.get('rows_after_filter', 0)} "
+            f"rows_in_core={protocol_split.get('rows_in_core', 0)} "
+            f"entry_rounds_exec={protocol_split.get('entry_rounds_execution', 0)} "
+            f"entry_rounds_core={protocol_split.get('entry_rounds_core_effective', 0)} "
+            f"candidate_core={protocol_split.get('candidate_total_core_effective', 0)} "
+            f"trades_core={protocol_split.get('total_trades_core_effective', 0)} "
+            f"core_fallback={protocol_split.get('core_zero_fallback_applied', False)} "
+            f"trades_after={protocol_split.get('trades_after_filter', None)}"
         )
     core_window_direct = report.get("core_window_direct", {})
     if isinstance(core_window_direct, dict):

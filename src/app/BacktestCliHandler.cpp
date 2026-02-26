@@ -270,6 +270,8 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
         {"no_signal_generated", result.entry_funnel.no_signal_generated},
         {"filtered_out_by_manager", result.entry_funnel.filtered_out_by_manager},
         {"filtered_out_by_policy", result.entry_funnel.filtered_out_by_policy},
+        {"reject_expected_edge_negative_count",
+         result.entry_funnel.reject_expected_edge_negative_count},
         {"no_best_signal", result.entry_funnel.no_best_signal},
         {"blocked_pattern_gate", result.entry_funnel.blocked_pattern_gate},
         {"blocked_rr_rebalance", result.entry_funnel.blocked_rr_rebalance},
