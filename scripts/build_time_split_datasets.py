@@ -77,6 +77,7 @@ def split_rows_by_time(
 
     out = {
         "dev": [],
+        "dev_core": [],
         "val": [],
         "quarantine": [],
         "all_purged": [],
@@ -88,6 +89,7 @@ def split_rows_by_time(
             "outside_intersection_rows": 0,
             "purge_removed_rows": 0,
             "dev_rows": 0,
+            "dev_core_rows": 0,
             "val_rows": 0,
             "quarantine_rows": 0,
             "val_core_rows": 0,
@@ -122,7 +124,9 @@ def split_rows_by_time(
 
         if ts <= dev_cut:
             out["dev"].append(row)
+            out["dev_core"].append(row)
             out["counts"]["dev_rows"] += 1
+            out["counts"]["dev_core_rows"] += 1
 
         is_val_core = (val_left <= ts <= val_right)
         is_val_warmup = (
@@ -247,8 +251,11 @@ def main(argv: List[str] = None) -> int:
 
     out_dirs = {
         "dev": output_root / "development",
+        "dev_core": output_root / "development_core",
         "val": output_root / "validation",
+        "val_core": output_root / "validation_core",
         "quarantine": output_root / "quarantine",
+        "quarantine_core": output_root / "quarantine_core",
         "all_purged": output_root / "all_purged",
     }
     for d in out_dirs.values():
@@ -260,6 +267,7 @@ def main(argv: List[str] = None) -> int:
         "outside_intersection_rows": 0,
         "purge_removed_rows": 0,
         "dev_rows": 0,
+        "dev_core_rows": 0,
         "val_rows": 0,
         "quarantine_rows": 0,
         "val_core_rows": 0,
@@ -282,8 +290,15 @@ def main(argv: List[str] = None) -> int:
             warmup_prepend_ms=warmup_prepend_ms,
         )
         write_csv_rows(out_dirs["dev"] / file_path.name, fieldnames, result["dev"])
+        write_csv_rows(out_dirs["dev_core"] / file_path.name, fieldnames, result["dev_core"])
         write_csv_rows(out_dirs["val"] / file_path.name, fieldnames, result["val"])
+        write_csv_rows(out_dirs["val_core"] / file_path.name, fieldnames, result["val_core"])
         write_csv_rows(out_dirs["quarantine"] / file_path.name, fieldnames, result["quarantine"])
+        write_csv_rows(
+            out_dirs["quarantine_core"] / file_path.name,
+            fieldnames,
+            result["quarantine_core"],
+        )
         write_csv_rows(out_dirs["all_purged"] / file_path.name, fieldnames, result["all_purged"])
 
         counts = result["counts"]
@@ -317,8 +332,11 @@ def main(argv: List[str] = None) -> int:
             "source_data_dir": str(source_dir),
             "output_root_dir": str(output_root),
             "development_dir": str(out_dirs["dev"]),
+            "development_core_dir": str(out_dirs["dev_core"]),
             "validation_dir": str(out_dirs["val"]),
+            "validation_core_dir": str(out_dirs["val_core"]),
             "quarantine_dir": str(out_dirs["quarantine"]),
+            "quarantine_core_dir": str(out_dirs["quarantine_core"]),
             "all_purged_dir": str(out_dirs["all_purged"]),
         },
         "time_bounds": {

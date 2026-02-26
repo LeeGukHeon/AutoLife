@@ -160,6 +160,17 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
             {"rejected_by_cluster_cap", row.rejected_by_cluster_cap}
         });
     }
+    nlohmann::json correlation_penalty_score_rows = nlohmann::json::array();
+    for (const auto& row : result.phase4_portfolio_diagnostics.correlation_penalty_score_samples) {
+        correlation_penalty_score_rows.push_back({
+            {"market", row.market},
+            {"cluster", row.cluster},
+            {"score_before_penalty", row.score_before_penalty},
+            {"penalty", row.penalty},
+            {"score_after_penalty", row.score_after_penalty},
+            {"rejected_by_penalty", row.rejected_by_penalty}
+        });
+    }
     j["phase4_portfolio_diagnostics"] = {
         {"enabled", result.phase4_portfolio_diagnostics.enabled},
         {"phase4_portfolio_allocator_enabled",
@@ -217,11 +228,14 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
          result.phase4_portfolio_diagnostics.correlation_penalty_applied_count},
         {"correlation_penalty_avg",
          result.phase4_portfolio_diagnostics.correlation_penalty_avg},
+        {"correlation_penalty_max",
+         result.phase4_portfolio_diagnostics.correlation_penalty_max},
         {"correlation_cluster_exposure_current",
          result.phase4_portfolio_diagnostics.correlation_cluster_exposure_current},
         {"correlation_cluster_cap_values",
          result.phase4_portfolio_diagnostics.correlation_cluster_cap_values},
-        {"correlation_near_cap_candidates", correlation_near_cap_rows}
+        {"correlation_near_cap_candidates", correlation_near_cap_rows},
+        {"correlation_penalty_score_samples", correlation_penalty_score_rows}
     };
     j["strategyless_exit_diagnostics"] = {
         {"position_checks", result.strategyless_position_checks},

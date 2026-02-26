@@ -301,6 +301,129 @@
       "max_step_per_update": 0.05,
       "min_update_interval_sec": 3600
     },
+    "operations_dynamic_gate": {
+      "enabled": true,
+      "prefer_core_window_direct": true,
+      "fallback_to_split_report_on_core_zero": true,
+      "limit_combine_mode": "min",
+      "hostile_regime_labels": [
+        "TRENDING_DOWN",
+        "VOLATILE",
+        "HOSTILE"
+      ],
+      "required_metric_keys": [
+        "tail_concentration",
+        "tail_exceed_rate"
+      ],
+      "metrics": {
+        "tail_concentration": {
+          "enabled": true,
+          "source": "tail_concentration",
+          "lookup_limit_default": 0.95,
+          "lookup_limits": [
+            {
+              "regime": "ANY",
+              "volatility_bucket": "ANY",
+              "liquidity_bucket": "ANY",
+              "limit": 0.95
+            },
+            {
+              "regime": "RANGING",
+              "volatility_bucket": "vol_low",
+              "liquidity_bucket": "liq_high",
+              "limit": 0.9
+            }
+          ],
+          "dist_quantile_p": 0.8,
+          "dist_min_samples": 2,
+          "combine_mode": "min",
+          "risk_scale": 0.2,
+          "risk_score_min": 0.0,
+          "risk_score_max": 1.0,
+          "coupling_k": 0.00045,
+          "coupling_absorb_enabled": true,
+          "coupling_absorb_max_excess": 0.04
+        },
+        "tail_exceed_rate": {
+          "enabled": true,
+          "source": "tail_exceed_rate_proxy",
+          "lookup_limit_default": 0.35,
+          "lookup_limits": [
+            {
+              "regime": "ANY",
+              "volatility_bucket": "ANY",
+              "liquidity_bucket": "ANY",
+              "limit": 0.35
+            },
+            {
+              "regime": "RANGING",
+              "volatility_bucket": "vol_low",
+              "liquidity_bucket": "liq_high",
+              "limit": 0.32
+            }
+          ],
+          "dist_quantile_p": 0.85,
+          "dist_min_samples": 2,
+          "combine_mode": "min",
+          "risk_scale": 0.2,
+          "risk_score_min": 0.0,
+          "risk_score_max": 1.0,
+          "coupling_k": 0.00025,
+          "coupling_absorb_enabled": true,
+          "coupling_absorb_max_excess": 0.05
+        }
+      },
+      "pass_rate_band": {
+        "validation": {
+          "lower_base": 0.004,
+          "upper_base": 0.25,
+          "lower_candidate_log10_scale": 0.003,
+          "upper_candidate_log10_scale": 0.0,
+          "lower_market_log10_scale": 0.0,
+          "upper_market_log10_scale": 0.0,
+          "lower_hostile_share_scale": -0.002,
+          "upper_hostile_share_scale": 0.0,
+          "regime_additions": {
+            "RANGING": 0.0,
+            "TRENDING_UP": 0.002,
+            "TRENDING_DOWN": -0.001
+          },
+          "lower_min": 0.001,
+          "lower_max": 0.08,
+          "upper_min": 0.08,
+          "upper_max": 0.35,
+          "dist_min_samples": 2,
+          "lower_dist_quantile_p": 0.35,
+          "upper_dist_quantile_p": 0.9,
+          "lower_combine_mode": "max",
+          "upper_combine_mode": "min"
+        },
+        "quarantine": {
+          "lower_base": 0.004,
+          "upper_base": 0.14,
+          "lower_candidate_log10_scale": 0.004,
+          "upper_candidate_log10_scale": 0.0,
+          "lower_market_log10_scale": 0.0,
+          "upper_market_log10_scale": 0.0,
+          "lower_hostile_share_scale": -0.002,
+          "upper_hostile_share_scale": 0.01,
+          "regime_additions": {
+            "RANGING": 0.0,
+            "TRENDING_UP": 0.001,
+            "TRENDING_DOWN": -0.001
+          },
+          "lower_min": 0.001,
+          "lower_max": 0.08,
+          "upper_min": 0.05,
+          "upper_max": 0.2,
+          "dist_min_samples": 2,
+          "lower_dist_quantile_p": 0.35,
+          "upper_dist_quantile_p": 0.9,
+          "lower_combine_mode": "max",
+          "upper_combine_mode": "min"
+        }
+      }
+    },
     "primary_minimums": {
       "enabled": true,
       "min_h5_calibrated": 0.48,
@@ -602,6 +725,42 @@
     },
     "portfolio_diagnostics": {
       "enabled": false
+    },
+    "operations_dynamic_gate": {
+      "enabled": true,
+      "prefer_core_window_direct": true,
+      "fallback_to_split_report_on_core_zero": true,
+      "hostile_regime_labels": [
+        "TRENDING_DOWN",
+        "VOLATILE",
+        "HOSTILE"
+      ],
+      "max_cluster_share_delta_for_effective_corr": 0.0,
+      "tail_concentration_tolerance": 0.02,
+      "selection_rate_band": {
+        "lower_base": 0.45,
+        "upper_base": 0.92,
+        "lower_candidate_log10_scale": 0.03,
+        "upper_candidate_log10_scale": 0.0,
+        "lower_market_log10_scale": 0.0,
+        "upper_market_log10_scale": 0.0,
+        "lower_hostile_share_scale": -0.04,
+        "upper_hostile_share_scale": 0.02,
+        "regime_additions": {
+          "RANGING": 0.0,
+          "TRENDING_UP": 0.03,
+          "TRENDING_DOWN": -0.03
+        },
+        "lower_min": 0.2,
+        "lower_max": 0.85,
+        "upper_min": 0.55,
+        "upper_max": 0.98,
+        "dist_min_samples": 2,
+        "lower_dist_quantile_p": 0.2,
+        "upper_dist_quantile_p": 0.8,
+        "lower_combine_mode": "max",
+        "upper_combine_mode": "min"
+      }
     }
   },
   "pipeline_version": "v2",

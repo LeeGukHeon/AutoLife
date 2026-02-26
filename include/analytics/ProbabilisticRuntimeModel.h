@@ -437,6 +437,10 @@ public:
             double default_cluster_cap = 1.0;
             std::unordered_map<std::string, std::string> market_cluster_map;
             std::unordered_map<std::string, double> cluster_caps;
+            // Optional soft-constraint penalty applied before cluster-cap hard filter.
+            double penalty_weight = 0.0;
+            double penalty_utilization_trigger = 0.85;
+            double penalty_reject_threshold = 1.0e9;
         };
         struct ExecutionAwareSizingPolicy {
             bool enabled = false;

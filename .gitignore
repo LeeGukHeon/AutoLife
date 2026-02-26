@@ -91,3 +91,13 @@ build/*/logs/*.json
 build/*/logs/*.jsonl
 build/*/state/*.json
 build/*/state/*.jsonl
+
+# ===== Test Result JSON Artifacts (Explicit Paths) =====
+/build/Release/logs/phase34_dynamic_gate_*.json
+/build/Release/logs/phase4_exposure_summary_*.json
+/build/Release/logs/verification_report_*.json
+
+# ===== Generated Model Bundle Variants =====
+/config/model/probabilistic_runtime_bundle_v2_*.json
+!/config/model/probabilistic_runtime_bundle_v2.json
+/build/Release/config/model/probabilistic_runtime_bundle_v2_*.json

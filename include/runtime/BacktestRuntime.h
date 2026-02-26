@@ -155,6 +155,14 @@ public:
             double headroom_before = 0.0;
             bool rejected_by_cluster_cap = false;
         };
+        struct Phase4CorrelationPenaltyScoreSample {
+            std::string market;
+            std::string cluster;
+            double score_before_penalty = 0.0;
+            double penalty = 0.0;
+            double score_after_penalty = 0.0;
+            bool rejected_by_penalty = false;
+        };
         struct Phase4PortfolioDiagnostics {
             bool enabled = false;
             bool phase4_portfolio_allocator_enabled = false;
@@ -191,9 +199,11 @@ public:
             int correlation_cluster_near_cap_count = 0;
             int correlation_penalty_applied_count = 0;
             double correlation_penalty_avg = 0.0;
+            double correlation_penalty_max = 0.0;
             std::map<std::string, double> correlation_cluster_exposure_current;
             std::map<std::string, double> correlation_cluster_cap_values;
             std::vector<Phase4CorrelationNearCapSample> correlation_near_cap_candidates;
+            std::vector<Phase4CorrelationPenaltyScoreSample> correlation_penalty_score_samples;
         };
         struct Phase4CandidateSnapshotSample {
             std::string market;

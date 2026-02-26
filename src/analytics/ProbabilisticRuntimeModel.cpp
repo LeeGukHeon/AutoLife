@@ -2929,6 +2929,27 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         0.0,
         10.0
     );
+    phase4_policy_.correlation_control.penalty_weight = parseCostParam(
+        phase4_correlation_control_node,
+        "penalty_weight",
+        0.0,
+        0.0,
+        100.0
+    );
+    phase4_policy_.correlation_control.penalty_utilization_trigger = parseCostParam(
+        phase4_correlation_control_node,
+        "penalty_utilization_trigger",
+        0.85,
+        0.0,
+        1.0
+    );
+    phase4_policy_.correlation_control.penalty_reject_threshold = parseCostParam(
+        phase4_correlation_control_node,
+        "penalty_reject_threshold",
+        1.0e9,
+        0.0,
+        1.0e9
+    );
     phase4_policy_.correlation_control.market_cluster_map.clear();
     const auto cluster_map_node = phase4_correlation_control_node.value(
         "market_cluster_map",

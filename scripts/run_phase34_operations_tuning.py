@@ -231,6 +231,9 @@ def phase4_corr_applied_telemetry(payload: Dict[str, Any]) -> Dict[str, Any]:
     near_cap_rows = node.get("near_cap_candidates", [])
     if not isinstance(near_cap_rows, list):
         near_cap_rows = []
+    score_rows = node.get("penalty_score_samples", [])
+    if not isinstance(score_rows, list):
+        score_rows = []
     stage = str(node.get("constraint_apply_stage", "")).strip()
     stage_norm = stage.lower()
     if "score" in stage_norm:
@@ -249,8 +252,10 @@ def phase4_corr_applied_telemetry(payload: Dict[str, Any]) -> Dict[str, Any]:
         "cluster_cap_near_cap_count": max(0, i64(node.get("cluster_cap_near_cap_count", 0), 0)),
         "corr_penalty_applied_count": max(0, i64(node.get("corr_penalty_applied_count", 0), 0)),
         "corr_penalty_avg": round(f64(node.get("corr_penalty_avg", 0.0), 0.0), 8),
+        "corr_penalty_max": round(f64(node.get("corr_penalty_max", 0.0), 0.0), 8),
         "cluster_exposure_current": cluster_rows,
         "near_cap_candidates": near_cap_rows[:8],
+        "penalty_score_samples": score_rows[:8],
         "binding_detected": bool(node.get("binding_detected", False)),
     }
 
@@ -582,6 +587,7 @@ def compute_dynamic_band(
     history_values: List[float],
     default_lower_combine: str,
     default_upper_combine: str,
+    fallback_mode: bool = False,
 ) -> Dict[str, Any]:
     cand_log = safe_log10(float(max(1, int(candidate_total))))
     mkt_log = safe_log10(float(max(1, int(market_count))))
@@ -636,6 +642,91 @@ def compute_dynamic_band(
     upper_combine = str(band_policy.get("upper_combine_mode", default_upper_combine)).strip().lower() or str(default_upper_combine).strip().lower()
     lower_final = combine_limits(float(lower_lookup), float(lower_dist), lower_combine)
     upper_final = combine_limits(float(upper_lookup), float(upper_dist), upper_combine)
+
+    uncertainty_policy = band_policy.get("uncertainty_component", {})
+    if not isinstance(uncertainty_policy, dict):
+        uncertainty_policy = {}
+    uncertainty_enabled = bool(uncertainty_policy.get("enabled", True))
+    uncertainty_fallback_only = bool(uncertainty_policy.get("fallback_only", True))
+    uncertainty_active = bool(uncertainty_enabled and (fallback_mode or not uncertainty_fallback_only))
+
+    hist_count = len(clean_history)
+    hist_median = quantile(clean_history, 0.5) if hist_count > 0 else 0.0
+    hist_q25 = quantile(clean_history, 0.25) if hist_count > 0 else hist_median
+    hist_q75 = quantile(clean_history, 0.75) if hist_count > 0 else hist_median
+    hist_iqr = max(0.0, float(hist_q75) - float(hist_q25))
+
+    lower_uncertainty_method = str(
+        uncertainty_policy.get("lower_method", "median_iqr")
+    ).strip().lower() or "median_iqr"
+    upper_uncertainty_method = str(
+        uncertainty_policy.get("upper_method", "median_iqr")
+    ).strip().lower() or "median_iqr"
+    lower_uncertainty_iqr_k = max(
+        0.0,
+        f64(uncertainty_policy.get("lower_iqr_k", 0.5), 0.5),
+    )
+    upper_uncertainty_iqr_k = max(
+        0.0,
+        f64(uncertainty_policy.get("upper_iqr_k", 1.0), 1.0),
+    )
+    lower_uncertainty_quantile = clamp(
+        f64(uncertainty_policy.get("lower_quantile_p", 0.1), 0.1),
+        0.0,
+        1.0,
+    )
+    upper_uncertainty_quantile = clamp(
+        f64(uncertainty_policy.get("upper_quantile_p", 0.9), 0.9),
+        0.0,
+        1.0,
+    )
+
+    lower_uncertainty = float(lower_lookup)
+    upper_uncertainty = float(upper_lookup)
+    if hist_count > 0:
+        if lower_uncertainty_method == "quantile":
+            lower_uncertainty = quantile(clean_history, lower_uncertainty_quantile)
+        else:
+            lower_uncertainty = float(hist_median) - (lower_uncertainty_iqr_k * float(hist_iqr))
+        if upper_uncertainty_method == "quantile":
+            upper_uncertainty = quantile(clean_history, upper_uncertainty_quantile)
+        else:
+            upper_uncertainty = float(hist_median) + (upper_uncertainty_iqr_k * float(hist_iqr))
+    lower_uncertainty = clamp(
+        lower_uncertainty,
+        f64(band_policy.get("lower_min", 0.0), 0.0),
+        f64(band_policy.get("lower_max", 1.0), 1.0),
+    )
+    upper_uncertainty = clamp(
+        upper_uncertainty,
+        f64(band_policy.get("upper_min", 0.0), 0.0),
+        f64(band_policy.get("upper_max", 1.0), 1.0),
+    )
+
+    lower_uncertainty_combine_mode = str(
+        uncertainty_policy.get("lower_combine_mode", lower_combine)
+    ).strip().lower() or lower_combine
+    upper_uncertainty_combine_mode = str(
+        uncertainty_policy.get("upper_combine_mode", upper_combine)
+    ).strip().lower() or upper_combine
+    fallback_upper_override_applied = False
+    if uncertainty_active:
+        lower_final = combine_limits(
+            float(lower_final),
+            float(lower_uncertainty),
+            lower_uncertainty_combine_mode,
+        )
+        if fallback_mode:
+            # In core-zero fallback mode, avoid over-narrow upper band by using
+            # the most permissive component among lookup/dist/uncertainty floor.
+            upper_final = max(float(upper_lookup), float(upper_dist), float(upper_uncertainty))
+            fallback_upper_override_applied = True
+        else:
+            upper_final = combine_limits(
+                float(upper_final),
+                float(upper_uncertainty),
+                upper_uncertainty_combine_mode,
+            )
     lower_final = clamp(
         lower_final,
         f64(band_policy.get("lower_min", 0.0), 0.0),
@@ -657,6 +748,38 @@ def compute_dynamic_band(
         "upper_dist_available": bool(upper_dist_available),
         "lower_combine_mode": lower_combine,
         "upper_combine_mode": upper_combine,
+        "lower_uncertainty": float(lower_uncertainty),
+        "upper_uncertainty": float(upper_uncertainty),
+        "lower_uncertainty_method": lower_uncertainty_method,
+        "upper_uncertainty_method": upper_uncertainty_method,
+        "lower_uncertainty_iqr_k": float(lower_uncertainty_iqr_k),
+        "upper_uncertainty_iqr_k": float(upper_uncertainty_iqr_k),
+        "lower_uncertainty_quantile_p": float(lower_uncertainty_quantile),
+        "upper_uncertainty_quantile_p": float(upper_uncertainty_quantile),
+        "lower_uncertainty_combine_mode": lower_uncertainty_combine_mode,
+        "upper_uncertainty_combine_mode": upper_uncertainty_combine_mode,
+        "uncertainty_history_count": int(hist_count),
+        "uncertainty_history_median": float(hist_median),
+        "uncertainty_history_q25": float(hist_q25),
+        "uncertainty_history_q75": float(hist_q75),
+        "uncertainty_history_iqr": float(hist_iqr),
+        "fallback_mode": bool(fallback_mode),
+        "uncertainty_component_active": bool(uncertainty_active),
+        "fallback_upper_override_applied": bool(fallback_upper_override_applied),
+        "band_components": {
+            "lower": {
+                "lookup": float(lower_lookup),
+                "dist": float(lower_dist),
+                "uncertainty": float(lower_uncertainty),
+                "final": float(lower_final),
+            },
+            "upper": {
+                "lookup": float(upper_lookup),
+                "dist": float(upper_dist),
+                "uncertainty": float(upper_uncertainty),
+                "final": float(upper_final),
+            },
+        },
         "lower_final": float(lower_final),
         "upper_final": float(upper_final),
     }
@@ -1117,6 +1240,8 @@ def cmd_dynamic_phase3_gate(args: argparse.Namespace) -> int:
     qua_band_policy = pass_band_policy.get("quarantine", {})
     if not isinstance(qua_band_policy, dict):
         qua_band_policy = {}
+    val_fallback_mode = "fallback_core_zero" in str(source_tags.get("validation", "")).lower()
+    qua_fallback_mode = "fallback_core_zero" in str(source_tags.get("quarantine", "")).lower()
     val_band = compute_dynamic_band(
         band_policy=val_band_policy,
         candidate_total=val_funnel["candidate_total"],
@@ -1126,6 +1251,7 @@ def cmd_dynamic_phase3_gate(args: argparse.Namespace) -> int:
         history_values=[dev_pass_rate, val_pass_rate],
         default_lower_combine="max",
         default_upper_combine="min",
+        fallback_mode=val_fallback_mode,
     )
     qua_band = compute_dynamic_band(
         band_policy=qua_band_policy,
@@ -1136,6 +1262,7 @@ def cmd_dynamic_phase3_gate(args: argparse.Namespace) -> int:
         history_values=[dev_pass_rate, val_pass_rate],
         default_lower_combine="max",
         default_upper_combine="min",
+        fallback_mode=qua_fallback_mode,
     )
     val_pass = val_pass_rate >= float(val_band["lower_final"])
     qua_pass = (qua_pass_rate >= float(qua_band["lower_final"])) and (
@@ -1532,6 +1659,10 @@ def cmd_dynamic_phase4_gate(args: argparse.Namespace) -> int:
         0,
         i64(corr_corr_tel.get("corr_penalty_applied_count", 0), 0),
     )
+    corr_penalty_max = max(
+        0.0,
+        f64(corr_corr_tel.get("corr_penalty_max", 0.0), 0.0),
+    )
     corr_effect_zero_reasons: List[str] = []
     if not str(corr_corr_tel.get("constraint_apply_stage", "")).strip():
         corr_effect_zero_reasons.append("corr_constraint_apply_stage_missing")
@@ -1543,6 +1674,8 @@ def cmd_dynamic_phase4_gate(args: argparse.Namespace) -> int:
         corr_effect_zero_reasons.append("corr_constraint_applied_but_not_binding")
     if corr_penalty_applied_count <= 0:
         corr_effect_zero_reasons.append("correlation_penalty_not_triggered_or_unimplemented")
+    elif corr_binding_reject_count <= 0:
+        corr_effect_zero_reasons.append("correlation_penalty_triggered_but_strength_insufficient")
     corr_effect_zero = (abs(corr_strength_delta) <= 1.0e-12) and (corr_binding_reject_count <= 0)
 
     qua_tail_metric = f64(
@@ -1606,11 +1739,13 @@ def cmd_dynamic_phase4_gate(args: argparse.Namespace) -> int:
             "reason_codes": corr_effect_zero_reasons,
             "cluster_cap_checks_total": int(corr_checks_total),
             "corr_penalty_applied_count": int(corr_penalty_applied_count),
+            "corr_penalty_max": round(corr_penalty_max, 8),
             "constraint_apply_stage": str(corr_corr_tel.get("constraint_apply_stage", "")),
             "constraint_apply_stage_bucket": str(
                 corr_corr_tel.get("constraint_apply_stage_bucket", "unknown")
             ),
             "constraint_unit": str(corr_corr_tel.get("constraint_unit", "")),
+            "penalty_score_samples": corr_corr_tel.get("penalty_score_samples", []),
             "near_cap_candidates": corr_corr_tel.get("near_cap_candidates", []),
             "cluster_exposure_current": corr_corr_tel.get("cluster_exposure_current", []),
         },

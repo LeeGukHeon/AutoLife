@@ -284,6 +284,7 @@ struct ProbabilisticRuntimeSnapshot {
 
 constexpr size_t kPhase4CandidateSnapshotSampleLimit = 1200;
 constexpr size_t kPhase4CorrelationNearCapSampleLimit = 48;
+constexpr size_t kPhase4CorrelationPenaltyScoreSampleLimit = 96;
 
 double correlationNearCapDistance(
     const BacktestEngine::Result::Phase4CorrelationNearCapSample& sample
@@ -315,6 +316,37 @@ void upsertCorrelationNearCapSample(
         return;
     }
     *worst_it = std::move(sample);
+}
+
+double correlationPenaltyAbsMagnitude(
+    const BacktestEngine::Result::Phase4CorrelationPenaltyScoreSample& sample
+) {
+    return std::fabs(sample.penalty);
+}
+
+void upsertCorrelationPenaltyScoreSample(
+    BacktestEngine::Result::Phase4PortfolioDiagnostics& diagnostics,
+    BacktestEngine::Result::Phase4CorrelationPenaltyScoreSample sample
+) {
+    auto& rows = diagnostics.correlation_penalty_score_samples;
+    if (rows.size() < kPhase4CorrelationPenaltyScoreSampleLimit) {
+        rows.push_back(std::move(sample));
+        return;
+    }
+    const auto weakest_it = std::min_element(
+        rows.begin(),
+        rows.end(),
+        [](const auto& lhs, const auto& rhs) {
+            return correlationPenaltyAbsMagnitude(lhs) < correlationPenaltyAbsMagnitude(rhs);
+        }
+    );
+    if (weakest_it == rows.end()) {
+        return;
+    }
+    if (correlationPenaltyAbsMagnitude(sample) <= correlationPenaltyAbsMagnitude(*weakest_it)) {
+        return;
+    }
+    *weakest_it = std::move(sample);
 }
 
 std::filesystem::path phase4CandidateArtifactPath() {
@@ -3026,9 +3058,108 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 const double exposure = std::clamp(pos.invested_amount / total_capital, 0.0, 10.0);
                 existing_cluster_exposure[cluster_id] += exposure;
             }
+
+            const auto& corr_policy = probabilistic_snapshot.phase4_correlation_control_policy;
+            const double penalty_weight = std::max(0.0, corr_policy.penalty_weight);
+            const double penalty_trigger = std::clamp(
+                corr_policy.penalty_utilization_trigger,
+                0.0,
+                1.0
+            );
+            const double penalty_reject_threshold = std::max(0.0, corr_policy.penalty_reject_threshold);
+            const bool penalty_reject_enabled =
+                std::isfinite(penalty_reject_threshold) && penalty_reject_threshold < 1.0e8;
+
+            int penalty_applied_count_this_round = 0;
+            int penalty_rejected_count_this_round = 0;
+            double penalty_sum_this_round = 0.0;
+            double penalty_max_this_round = 0.0;
+            std::vector<Result::Phase4CorrelationPenaltyScoreSample> penalty_samples_this_round;
+
+            std::map<std::string, double> penalty_exposure_cursor = existing_cluster_exposure;
+            std::vector<strategy::Signal> corr_penalty_filtered_candidates;
+            corr_penalty_filtered_candidates.reserve(candidate_signals.size());
+            for (const auto& signal : candidate_signals) {
+                const std::string cluster_id = autolife::common::phase4::clusterIdForMarket(
+                    signal.market,
+                    corr_policy
+                );
+                const double cluster_cap = autolife::common::phase4::clusterCapForId(
+                    cluster_id,
+                    corr_policy
+                );
+                const double current_exposure = penalty_exposure_cursor.count(cluster_id) > 0
+                    ? penalty_exposure_cursor.at(cluster_id)
+                    : 0.0;
+                const double position_size = std::clamp(signal.position_size, 0.0, 1.0);
+                const double projected_exposure = current_exposure + position_size;
+                const double utilization_after = (cluster_cap > 1.0e-9)
+                    ? (projected_exposure / cluster_cap)
+                    : 0.0;
+
+                double penalty = 0.0;
+                if (penalty_weight > 1.0e-12 && cluster_cap > 1.0e-9) {
+                    const double pressure = std::clamp(
+                        (utilization_after - penalty_trigger) /
+                            std::max(1.0e-9, 1.0 - penalty_trigger),
+                        0.0,
+                        1.0
+                    );
+                    penalty = std::max(0.0, penalty_weight * pressure);
+                }
+
+                const double score_before = autolife::common::phase4::allocatorScore(
+                    signal,
+                    probabilistic_snapshot.phase4_portfolio_allocator_policy
+                );
+                const double score_after = score_before - penalty;
+                const bool penalty_applied = penalty > 1.0e-12;
+                const bool rejected_by_penalty =
+                    penalty_applied && penalty_reject_enabled && score_after < penalty_reject_threshold;
+
+                if (penalty_applied) {
+                    penalty_applied_count_this_round += 1;
+                    penalty_sum_this_round += penalty;
+                    penalty_max_this_round = std::max(penalty_max_this_round, penalty);
+
+                    Result::Phase4CorrelationPenaltyScoreSample sample;
+                    sample.market = signal.market;
+                    sample.cluster = cluster_id.empty() ? "unclustered" : cluster_id;
+                    sample.score_before_penalty = score_before;
+                    sample.penalty = penalty;
+                    sample.score_after_penalty = score_after;
+                    sample.rejected_by_penalty = rejected_by_penalty;
+                    penalty_samples_this_round.push_back(std::move(sample));
+                }
+
+                if (rejected_by_penalty) {
+                    penalty_rejected_count_this_round += 1;
+                    continue;
+                }
+                corr_penalty_filtered_candidates.push_back(signal);
+                penalty_exposure_cursor[cluster_id] = projected_exposure;
+            }
+            if (static_cast<int>(corr_penalty_filtered_candidates.size()) < static_cast<int>(candidate_signals.size())) {
+                candidate_signals = std::move(corr_penalty_filtered_candidates);
+                phase4_selected_count = std::min(
+                    phase4_selected_count,
+                    static_cast<int>(candidate_signals.size())
+                );
+                if (probabilistic_snapshot.phase4_portfolio_diagnostics_enabled &&
+                    penalty_rejected_count_this_round > 0) {
+                    phase4_portfolio_diagnostics_.rejected_by_correlation_penalty +=
+                        penalty_rejected_count_this_round;
+                }
+                if (candidate_signals.empty()) {
+                    markEntryReject("filtered_out_by_phase4_correlation_penalty");
+                }
+            } else {
+                candidate_signals = std::move(corr_penalty_filtered_candidates);
+            }
+
             const auto cluster_result = autolife::common::phase4::applyClusterCapFilter(
                 candidate_signals,
-                probabilistic_snapshot.phase4_correlation_control_policy,
+                corr_policy,
                 existing_cluster_exposure
             );
             if (probabilistic_snapshot.phase4_portfolio_diagnostics_enabled) {
@@ -3038,7 +3169,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     "position_size_notional_fraction_of_total_capital";
                 phase4_portfolio_diagnostics_.correlation_cluster_eval_count +=
                     static_cast<int>(cluster_result.telemetry_rows.size());
-                for (const auto& pair : cluster_result.exposure_by_cluster_before) {
+                for (const auto& pair : cluster_result.exposure_by_cluster_after) {
                     const std::string cluster = pair.first.empty() ? "unclustered" : pair.first;
                     phase4_portfolio_diagnostics_
                         .correlation_cluster_exposure_current[cluster] = std::max(
@@ -3093,8 +3224,28 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     upsertCorrelationNearCapSample(phase4_portfolio_diagnostics_, std::move(sample));
                     phase4_portfolio_diagnostics_.correlation_cluster_near_cap_count += 1;
                 }
-                // Correlation penalty path is not yet wired; telemetry keeps explicit zero values.
-                phase4_portfolio_diagnostics_.correlation_penalty_applied_count += 0;
+
+                if (penalty_applied_count_this_round > 0) {
+                    const int prev_count =
+                        std::max(0, phase4_portfolio_diagnostics_.correlation_penalty_applied_count);
+                    const double prev_sum =
+                        phase4_portfolio_diagnostics_.correlation_penalty_avg * static_cast<double>(prev_count);
+                    const int next_count = prev_count + penalty_applied_count_this_round;
+                    const double next_sum = prev_sum + penalty_sum_this_round;
+                    phase4_portfolio_diagnostics_.correlation_penalty_applied_count = next_count;
+                    phase4_portfolio_diagnostics_.correlation_penalty_avg =
+                        (next_count > 0) ? (next_sum / static_cast<double>(next_count)) : 0.0;
+                    phase4_portfolio_diagnostics_.correlation_penalty_max = std::max(
+                        phase4_portfolio_diagnostics_.correlation_penalty_max,
+                        penalty_max_this_round
+                    );
+                    for (auto& sample : penalty_samples_this_round) {
+                        upsertCorrelationPenaltyScoreSample(
+                            phase4_portfolio_diagnostics_,
+                            std::move(sample)
+                        );
+                    }
+                }
             }
             if (cluster_result.selected_indices.size() < candidate_signals.size()) {
                 const int rejected_count = static_cast<int>(candidate_signals.size() -

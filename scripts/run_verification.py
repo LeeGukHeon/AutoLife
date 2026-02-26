@@ -1216,6 +1216,10 @@ def build_phase4_portfolio_diagnostics(
         to_float(raw.get("correlation_penalty_avg", 0.0)),
         8,
     )
+    correlation_penalty_max = round(
+        to_float(raw.get("correlation_penalty_max", 0.0)),
+        8,
+    )
 
     def _parse_cluster_float_map(node: Any) -> Dict[str, float]:
         out: Dict[str, float] = {}
@@ -1295,6 +1299,30 @@ def build_phase4_portfolio_diagnostics(
     )
     correlation_near_cap_candidates = correlation_near_cap_candidates[:12]
 
+    correlation_penalty_score_samples: List[Dict[str, Any]] = []
+    raw_penalty_samples = raw.get("correlation_penalty_score_samples", [])
+    if isinstance(raw_penalty_samples, list):
+        for row in raw_penalty_samples:
+            if not isinstance(row, dict):
+                continue
+            correlation_penalty_score_samples.append(
+                {
+                    "market": str(row.get("market", "")).strip(),
+                    "cluster": str(row.get("cluster", "")).strip(),
+                    "score_before_penalty": round(
+                        to_float(row.get("score_before_penalty", 0.0)),
+                        8,
+                    ),
+                    "penalty": round(to_float(row.get("penalty", 0.0)), 8),
+                    "score_after_penalty": round(
+                        to_float(row.get("score_after_penalty", 0.0)),
+                        8,
+                    ),
+                    "rejected_by_penalty": bool(row.get("rejected_by_penalty", False)),
+                }
+            )
+    correlation_penalty_score_samples = correlation_penalty_score_samples[:12]
+
     correlation_applied_telemetry = {
         "constraint_apply_stage": correlation_stage,
         "constraint_unit": correlation_unit,
@@ -1302,6 +1330,8 @@ def build_phase4_portfolio_diagnostics(
         "cluster_cap_near_cap_count": int(correlation_cluster_near_cap_count),
         "corr_penalty_applied_count": int(correlation_penalty_applied_count),
         "corr_penalty_avg": float(correlation_penalty_avg),
+        "corr_penalty_max": float(correlation_penalty_max),
+        "penalty_score_samples": correlation_penalty_score_samples,
         "cluster_exposure_current": cluster_exposure_rows,
         "near_cap_candidates": correlation_near_cap_candidates,
         "binding_detected": bool(
@@ -2057,9 +2087,11 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
     aggregate_phase4_corr_near_cap_count = 0
     aggregate_phase4_corr_penalty_applied_count = 0
     aggregate_phase4_corr_penalty_weighted_sum = 0.0
+    aggregate_phase4_corr_penalty_max = 0.0
     aggregate_phase4_corr_cluster_exposure_max: Dict[str, float] = {}
     aggregate_phase4_corr_cluster_cap_max: Dict[str, float] = {}
     aggregate_phase4_corr_near_cap_rows: List[Dict[str, Any]] = []
+    aggregate_phase4_corr_penalty_score_rows: List[Dict[str, Any]] = []
 
     for item in dataset_diagnostics:
         groups = item.get("bottleneck_groups", {})
@@ -2149,10 +2181,15 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
                     to_int(corr_telemetry.get("corr_penalty_applied_count", 0)),
                 )
                 penalty_avg = to_float(corr_telemetry.get("corr_penalty_avg", 0.0))
+                penalty_max = max(0.0, to_float(corr_telemetry.get("corr_penalty_max", 0.0)))
                 aggregate_phase4_corr_checks_total += checks_total
                 aggregate_phase4_corr_near_cap_count += near_cap_count
                 aggregate_phase4_corr_penalty_applied_count += penalty_count
                 aggregate_phase4_corr_penalty_weighted_sum += penalty_avg * float(penalty_count)
+                aggregate_phase4_corr_penalty_max = max(
+                    aggregate_phase4_corr_penalty_max,
+                    penalty_max,
+                )
 
                 cluster_exposure_rows = corr_telemetry.get("cluster_exposure_current", [])
                 if isinstance(cluster_exposure_rows, list):
@@ -2208,6 +2245,30 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
                                 "headroom_ratio": round(headroom_ratio, 6),
                                 "rejected_by_cluster_cap": bool(
                                     row.get("rejected_by_cluster_cap", False)
+                                ),
+                            }
+                        )
+                penalty_score_rows = corr_telemetry.get("penalty_score_samples", [])
+                if isinstance(penalty_score_rows, list):
+                    for row in penalty_score_rows:
+                        if not isinstance(row, dict):
+                            continue
+                        aggregate_phase4_corr_penalty_score_rows.append(
+                            {
+                                "dataset": str(item.get("dataset", "")).strip(),
+                                "market": str(row.get("market", "")).strip(),
+                                "cluster": str(row.get("cluster", "")).strip() or "unclustered",
+                                "score_before_penalty": round(
+                                    to_float(row.get("score_before_penalty", 0.0)),
+                                    8,
+                                ),
+                                "penalty": round(to_float(row.get("penalty", 0.0)), 8),
+                                "score_after_penalty": round(
+                                    to_float(row.get("score_after_penalty", 0.0)),
+                                    8,
+                                ),
+                                "rejected_by_penalty": bool(
+                                    row.get("rejected_by_penalty", False)
                                 ),
                             }
                         )
@@ -2592,6 +2653,14 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         )
     )
     aggregate_phase4_corr_near_cap_rows = aggregate_phase4_corr_near_cap_rows[:16]
+    aggregate_phase4_corr_penalty_score_rows.sort(
+        key=lambda item: (
+            -abs(to_float(item.get("penalty", 0.0))),
+            str(item.get("market", "")),
+            str(item.get("dataset", "")),
+        )
+    )
+    aggregate_phase4_corr_penalty_score_rows = aggregate_phase4_corr_penalty_score_rows[:16]
     aggregate_corr_applied_telemetry = {
         "constraint_apply_stage": aggregate_corr_stage,
         "constraint_apply_stage_votes": aggregate_phase4_corr_stage_votes,
@@ -2601,6 +2670,8 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         "cluster_cap_near_cap_count": int(aggregate_phase4_corr_near_cap_count),
         "corr_penalty_applied_count": int(aggregate_phase4_corr_penalty_applied_count),
         "corr_penalty_avg": round(float(aggregate_corr_penalty_avg), 8),
+        "corr_penalty_max": round(float(aggregate_phase4_corr_penalty_max), 8),
+        "penalty_score_samples": aggregate_phase4_corr_penalty_score_rows,
         "cluster_exposure_current": aggregate_corr_cluster_rows,
         "near_cap_candidates": aggregate_phase4_corr_near_cap_rows,
         "binding_detected": bool(
