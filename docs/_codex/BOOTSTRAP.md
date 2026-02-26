@@ -7,9 +7,11 @@ Last updated: 2026-02-25
 3. Read `docs/_codex/CURRENT_STATE.md`.
 4. If ticket is CH-01 Phase 4, read:
    - `docs/_codex/CH01_PHASE4_CONTEXT.md`
+   - `docs/phase34_operations_tuning_and_validation.md`
 5. If ticket touches parity/gates, read:
    - `docs/_codex/PARITY_BOUNDARY.md`
    - `docs/_codex/PHASE2_CLOSURE_2026-02-25.md`
+   - `docs/BACKTEST_REPRODUCTION_CHECKLIST.md`
 6. Check `docs/_codex/PR_CHECKLIST.md` before finalizing.
 
 ## Immediate commands

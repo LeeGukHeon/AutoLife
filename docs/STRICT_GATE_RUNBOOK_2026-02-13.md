@@ -268,3 +268,5 @@ python scripts/apply_trading_preset.py -Preset safe
 - `refresh_*` mode auto-fetch mapping is supported only for dataset naming pattern:
   - `upbit_<QUOTE>_<BASE>_<UNIT>m_<CANDLES>.csv`
 - `legacy_gate` profile is retired; use `adaptive` profile only.
+- For Phase 3/4 tuning and promotion decisions, apply:
+  - `docs/BACKTEST_REPRODUCTION_CHECKLIST.md`
