@@ -54,6 +54,25 @@ def extract_upbit_market_from_dataset_name(dataset_name: str) -> str:
     return token.replace("_", "-")
 
 
+def extract_phase4_market_cluster_map(bundle_payload: Dict[str, Any]) -> Dict[str, str]:
+    phase4 = bundle_payload.get("phase4", {})
+    if not isinstance(phase4, dict):
+        return {}
+    correlation = phase4.get("correlation_control", {})
+    if not isinstance(correlation, dict):
+        return {}
+    raw_map = correlation.get("market_cluster_map", {})
+    if not isinstance(raw_map, dict):
+        return {}
+    out: Dict[str, str] = {}
+    for key, value in raw_map.items():
+        market = str(key).strip().upper()
+        cluster = str(value).strip()
+        if market and cluster:
+            out[market] = cluster
+    return out
+
+
 def load_supported_markets_from_runtime_bundle(bundle_path: pathlib.Path) -> Dict[str, Any]:
     with bundle_path.open("r", encoding="utf-8") as fp:
         payload = json.load(fp)
@@ -99,6 +118,7 @@ def load_supported_markets_from_runtime_bundle(bundle_path: pathlib.Path) -> Dic
         "supported_markets": sorted(list(supported_markets)),
         "global_fallback_enabled": bool(global_fallback_enabled),
         "export_mode": str(payload.get("export_mode", "")).strip(),
+        "phase4_market_cluster_map": extract_phase4_market_cluster_map(payload),
     }
 
 
@@ -340,6 +360,7 @@ def build_phase4_off_on_comparison(
 
             mode_rows: List[Dict[str, Any]] = []
             mode_phase4_diags: List[Dict[str, Any]] = []
+            mode_cluster_map = extract_phase4_market_cluster_map(mode_bundle_payload)
             for dataset_path in dataset_paths:
                 result = run_backtest(
                     exe_path=exe_path,
@@ -348,7 +369,12 @@ def build_phase4_off_on_comparison(
                     disable_adaptive_state_io=bool(disable_adaptive_state_io),
                 )
                 mode_rows.append(build_verification_row(dataset_path.name, result))
-                mode_phase4_diags.append(build_phase4_portfolio_diagnostics(result))
+                mode_phase4_diags.append(
+                    build_phase4_portfolio_diagnostics(
+                        result,
+                        phase4_market_cluster_map=mode_cluster_map,
+                    )
+                )
 
             mode_reports[mode_name] = {
                 "aggregates": summarize_verification_rows(mode_rows),
@@ -514,6 +540,118 @@ def run_backtest(
         env=env,
     )
     return parse_backtest_json(proc)
+
+
+def resolve_core_dataset_paths(
+    split_manifest_payload: Dict[str, Any],
+    split_name: str,
+    dataset_paths: List[pathlib.Path],
+) -> Dict[str, Any]:
+    split_token = str(split_name or "").strip().lower()
+    if split_token not in ("development", "validation", "quarantine"):
+        return {
+            "available": False,
+            "reason": "split_name_not_supported_for_core_direct",
+            "core_dir": "",
+            "dataset_paths": [],
+            "missing_datasets": [],
+        }
+    paths = split_manifest_payload.get("paths", {}) if isinstance(split_manifest_payload, dict) else {}
+    if not isinstance(paths, dict):
+        paths = {}
+    core_dir_key = f"{split_token}_core_dir"
+    core_dir_value = str(paths.get(core_dir_key, "")).strip()
+    if not core_dir_value:
+        return {
+            "available": False,
+            "reason": f"manifest_missing_{core_dir_key}",
+            "core_dir": "",
+            "dataset_paths": [],
+            "missing_datasets": [],
+        }
+    core_dir = pathlib.Path(core_dir_value)
+    if not core_dir.is_absolute():
+        core_dir = (pathlib.Path.cwd() / core_dir).resolve()
+    if not core_dir.exists() or not core_dir.is_dir():
+        return {
+            "available": False,
+            "reason": "core_dir_missing_or_invalid",
+            "core_dir": str(core_dir),
+            "dataset_paths": [],
+            "missing_datasets": [],
+        }
+    resolved: List[pathlib.Path] = []
+    missing: List[str] = []
+    for source_dataset in dataset_paths:
+        candidate = (core_dir / source_dataset.name).resolve()
+        if candidate.exists() and candidate.is_file():
+            resolved.append(candidate)
+        else:
+            missing.append(source_dataset.name)
+    if missing:
+        return {
+            "available": False,
+            "reason": "core_dataset_missing",
+            "core_dir": str(core_dir),
+            "dataset_paths": [str(x) for x in resolved],
+            "missing_datasets": missing,
+        }
+    return {
+        "available": bool(resolved),
+        "reason": "" if resolved else "core_dataset_empty",
+        "core_dir": str(core_dir),
+        "dataset_paths": resolved,
+        "missing_datasets": [],
+    }
+
+
+def run_core_window_direct_report(
+    exe_path: pathlib.Path,
+    dataset_paths: List[pathlib.Path],
+    require_higher_tf_companions: bool,
+    disable_adaptive_state_io: bool,
+    phase4_market_cluster_map: Dict[str, str],
+) -> Dict[str, Any]:
+    rows: List[Dict[str, Any]] = []
+    dataset_diagnostics: List[Dict[str, Any]] = []
+    adaptive_dataset_profiles: List[Dict[str, Any]] = []
+    for dataset_path in dataset_paths:
+        result = run_backtest(
+            exe_path=exe_path,
+            dataset_path=dataset_path,
+            require_higher_tf_companions=bool(require_higher_tf_companions),
+            disable_adaptive_state_io=bool(disable_adaptive_state_io),
+        )
+        rows.append(build_verification_row(dataset_path.name, result))
+        dataset_diagnostics.append(
+            build_dataset_diagnostics(
+                dataset_name=dataset_path.name,
+                backtest_result=result,
+                phase4_market_cluster_map=phase4_market_cluster_map,
+            )
+        )
+        adaptive_dataset_profiles.append(
+            build_adaptive_dataset_profile(dataset_name=dataset_path.name, backtest_result=result)
+        )
+    summary = summarize_verification_rows(rows)
+    aggregate_diagnostics = aggregate_dataset_diagnostics(dataset_diagnostics)
+    adaptive_aggregates = aggregate_adaptive_validation(adaptive_dataset_profiles)
+    return {
+        "available": True,
+        "source": "core_dataset_direct",
+        "dataset_count": len(rows),
+        "datasets": [x["dataset"] for x in rows],
+        "aggregates": summary,
+        "rows": rows,
+        "diagnostics": {
+            "aggregate": aggregate_diagnostics,
+            "per_dataset": dataset_diagnostics,
+        },
+        "adaptive_validation": {
+            "aggregates": adaptive_aggregates,
+            "per_dataset": adaptive_dataset_profiles,
+        },
+    }
 
 
 def safe_avg(values: List[float]) -> float:
@@ -913,7 +1051,72 @@ def build_phase3_diagnostics_v2(reason_counts: Dict[str, int]) -> Dict[str, Any]
     }
 
 
-def build_phase4_portfolio_diagnostics(backtest_result: Dict[str, Any]) -> Dict[str, Any]:
+def build_phase4_exposure_summary_from_samples(
+    backtest_result: Dict[str, Any],
+    phase4_market_cluster_map: Dict[str, str],
+) -> Dict[str, Any]:
+    samples = backtest_result.get("phase4_candidate_snapshot_samples", [])
+    if not isinstance(samples, list) or not samples:
+        return {
+            "source": "none",
+            "selected_total": 0,
+            "total_selected_notional_exposure": 0.0,
+            "max_cluster_share": 0.0,
+            "exposure_by_cluster": [],
+        }
+
+    market_cluster_map: Dict[str, str] = {}
+    if isinstance(phase4_market_cluster_map, dict):
+        for key, value in phase4_market_cluster_map.items():
+            market = str(key).strip().upper()
+            cluster = str(value).strip()
+            if market and cluster:
+                market_cluster_map[market] = cluster
+
+    selected_total = 0
+    selected_by_cluster: Dict[str, int] = {}
+    exposure_by_cluster: Dict[str, float] = {}
+    for item in samples:
+        if not isinstance(item, dict):
+            continue
+        if not bool(item.get("selected", False)):
+            continue
+        selected_total += 1
+        market = str(item.get("market", item.get("market_id", ""))).strip().upper()
+        cluster = market_cluster_map.get(market, "unclustered")
+        selected_by_cluster[cluster] = selected_by_cluster.get(cluster, 0) + 1
+        # Snapshot samples do not emit notional size yet; selected-count unit is used as proxy.
+        exposure_by_cluster[cluster] = exposure_by_cluster.get(cluster, 0.0) + 1.0
+
+    total_exposure = sum(max(0.0, float(v)) for v in exposure_by_cluster.values())
+    rows: List[Dict[str, Any]] = []
+    max_cluster_share = 0.0
+    for cluster in sorted(exposure_by_cluster.keys()):
+        exposure = max(0.0, float(exposure_by_cluster.get(cluster, 0.0)))
+        share = (exposure / total_exposure) if total_exposure > 0.0 else 0.0
+        max_cluster_share = max(max_cluster_share, share)
+        rows.append(
+            {
+                "cluster": str(cluster),
+                "selected_count": int(selected_by_cluster.get(cluster, 0)),
+                "notional_exposure_sum": round(exposure, 8),
+                "share": round(share, 6),
+            }
+        )
+
+    return {
+        "source": "selected_count_unit_proxy",
+        "selected_total": int(selected_total),
+        "total_selected_notional_exposure": round(total_exposure, 8),
+        "max_cluster_share": round(max_cluster_share, 6),
+        "exposure_by_cluster": rows,
+    }
+
+
+def build_phase4_portfolio_diagnostics(
+    backtest_result: Dict[str, Any],
+    phase4_market_cluster_map: Dict[str, str],
+) -> Dict[str, Any]:
     raw = backtest_result.get("phase4_portfolio_diagnostics", {})
     if not isinstance(raw, dict):
         raw = {}
@@ -995,6 +1198,121 @@ def build_phase4_portfolio_diagnostics(backtest_result: Dict[str, Any]) -> Dict[
         ),
         "min_position_size": round(to_float(raw.get("execution_min_position_size", 0.0)), 8),
     }
+    correlation_stage = str(raw.get("correlation_constraint_apply_stage", "")).strip()
+    correlation_unit = str(raw.get("correlation_constraint_unit", "")).strip()
+    correlation_cluster_eval_count = max(
+        0,
+        to_int(raw.get("correlation_cluster_eval_count", 0)),
+    )
+    correlation_cluster_near_cap_count = max(
+        0,
+        to_int(raw.get("correlation_cluster_near_cap_count", 0)),
+    )
+    correlation_penalty_applied_count = max(
+        0,
+        to_int(raw.get("correlation_penalty_applied_count", 0)),
+    )
+    correlation_penalty_avg = round(
+        to_float(raw.get("correlation_penalty_avg", 0.0)),
+        8,
+    )
+
+    def _parse_cluster_float_map(node: Any) -> Dict[str, float]:
+        out: Dict[str, float] = {}
+        if not isinstance(node, dict):
+            return out
+        for key, value in node.items():
+            cluster = str(key).strip()
+            if not cluster:
+                continue
+            out[cluster] = max(0.0, to_float(value))
+        return out
+
+    cluster_exposure_current = _parse_cluster_float_map(
+        raw.get("correlation_cluster_exposure_current", {})
+    )
+    cluster_cap_values = _parse_cluster_float_map(
+        raw.get("correlation_cluster_cap_values", {})
+    )
+    cluster_keys = sorted(set(cluster_exposure_current.keys()) | set(cluster_cap_values.keys()))
+    cluster_exposure_rows: List[Dict[str, Any]] = []
+    for cluster in cluster_keys:
+        exposure_current = max(0.0, to_float(cluster_exposure_current.get(cluster, 0.0)))
+        cap_value = max(0.0, to_float(cluster_cap_values.get(cluster, 0.0)))
+        headroom = cap_value - exposure_current
+        utilization = (exposure_current / cap_value) if cap_value > 1.0e-9 else 0.0
+        cluster_exposure_rows.append(
+            {
+                "cluster": str(cluster),
+                "exposure_current": round(exposure_current, 8),
+                "cluster_cap_value": round(cap_value, 8),
+                "headroom": round(headroom, 8),
+                "utilization": round(utilization, 6),
+            }
+        )
+
+    correlation_near_cap_candidates: List[Dict[str, Any]] = []
+    raw_near_cap = raw.get("correlation_near_cap_candidates", [])
+    if isinstance(raw_near_cap, list):
+        for row in raw_near_cap:
+            if not isinstance(row, dict):
+                continue
+            cluster_cap_value = max(0.0, to_float(row.get("cluster_cap_value", 0.0)))
+            projected_exposure = max(0.0, to_float(row.get("projected_exposure", 0.0)))
+            exposure_current = max(0.0, to_float(row.get("exposure_current", 0.0)))
+            candidate_position_size = max(
+                0.0,
+                to_float(row.get("candidate_position_size", 0.0)),
+            )
+            headroom_before = (
+                to_float(row.get("headroom_before", cluster_cap_value - exposure_current))
+            )
+            if cluster_cap_value > 1.0e-9:
+                headroom_ratio = headroom_before / cluster_cap_value
+            else:
+                headroom_ratio = 0.0
+            correlation_near_cap_candidates.append(
+                {
+                    "market": str(row.get("market", "")).strip(),
+                    "cluster": str(row.get("cluster", row.get("cluster_id", ""))).strip(),
+                    "exposure_current": round(exposure_current, 8),
+                    "cluster_cap_value": round(cluster_cap_value, 8),
+                    "candidate_position_size": round(candidate_position_size, 8),
+                    "projected_exposure": round(projected_exposure, 8),
+                    "headroom_before": round(headroom_before, 8),
+                    "headroom_ratio": round(headroom_ratio, 6),
+                    "rejected_by_cluster_cap": bool(
+                        row.get("rejected_by_cluster_cap", False)
+                    ),
+                }
+            )
+    correlation_near_cap_candidates.sort(
+        key=lambda item: (
+            abs(to_float(item.get("headroom_ratio", 0.0))),
+            abs(to_float(item.get("headroom_before", 0.0))),
+            str(item.get("market", "")),
+        )
+    )
+    correlation_near_cap_candidates = correlation_near_cap_candidates[:12]
+
+    correlation_applied_telemetry = {
+        "constraint_apply_stage": correlation_stage,
+        "constraint_unit": correlation_unit,
+        "cluster_cap_checks_total": int(correlation_cluster_eval_count),
+        "cluster_cap_near_cap_count": int(correlation_cluster_near_cap_count),
+        "corr_penalty_applied_count": int(correlation_penalty_applied_count),
+        "corr_penalty_avg": float(correlation_penalty_avg),
+        "cluster_exposure_current": cluster_exposure_rows,
+        "near_cap_candidates": correlation_near_cap_candidates,
+        "binding_detected": bool(
+            counters["rejected_by_cluster_cap"] > 0 or correlation_penalty_applied_count > 0
+        ),
+    }
+
+    exposure_summary = build_phase4_exposure_summary_from_samples(
+        backtest_result=backtest_result,
+        phase4_market_cluster_map=phase4_market_cluster_map,
+    )
 
     return {
         "enabled": bool(enabled or counters["candidates_total"] > 0 or counters["selected_total"] > 0),
@@ -1004,6 +1322,14 @@ def build_phase4_portfolio_diagnostics(backtest_result: Dict[str, Any]) -> Dict[
         "drawdown_policy": drawdown_policy,
         "correlation_policy": correlation_policy,
         "execution_policy": execution_policy,
+        "exposure_source": str(exposure_summary.get("source", "none")),
+        "max_cluster_share": round(to_float(exposure_summary.get("max_cluster_share", 0.0)), 6),
+        "total_selected_notional_exposure": round(
+            to_float(exposure_summary.get("total_selected_notional_exposure", 0.0)),
+            8,
+        ),
+        "exposure_by_cluster": exposure_summary.get("exposure_by_cluster", []),
+        "correlation_applied_telemetry": correlation_applied_telemetry,
         "counters": counters,
         "selection_breakdown": {
             "candidates_total": int(counters["candidates_total"]),
@@ -1386,7 +1712,11 @@ def build_top_loss_trade_samples(trade_history_samples: Any, limit: int = 8) -> 
     return rows[: max(0, int(limit))]
 
 
-def build_dataset_diagnostics(dataset_name: str, backtest_result: Dict[str, Any]) -> Dict[str, Any]:
+def build_dataset_diagnostics(
+    dataset_name: str,
+    backtest_result: Dict[str, Any],
+    phase4_market_cluster_map: Dict[str, str],
+) -> Dict[str, Any]:
     entry_funnel = backtest_result.get("entry_funnel", {})
     if not isinstance(entry_funnel, dict):
         entry_funnel = {}
@@ -1501,7 +1831,10 @@ def build_dataset_diagnostics(dataset_name: str, backtest_result: Dict[str, Any]
 
     reason_counts = normalized_reason_counts(backtest_result.get("entry_rejection_reason_counts", {}))
     phase3_diag = build_phase3_diagnostics_v2(reason_counts)
-    phase4_diag = build_phase4_portfolio_diagnostics(backtest_result)
+    phase4_diag = build_phase4_portfolio_diagnostics(
+        backtest_result,
+        phase4_market_cluster_map=phase4_market_cluster_map,
+    )
     no_signal_pattern_counts = normalized_reason_counts(backtest_result.get("no_signal_pattern_counts", {}))
     edge_gap_bucket_counts = normalized_reason_counts(
         backtest_result.get("entry_quality_edge_gap_buckets", {})
@@ -1716,6 +2049,17 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         "phase4_execution_aware_sizing_enabled": False,
         "phase4_portfolio_diagnostics_enabled": False,
     }
+    aggregate_phase4_selected_by_cluster: Dict[str, int] = {}
+    aggregate_phase4_exposure_by_cluster: Dict[str, float] = {}
+    aggregate_phase4_corr_stage_votes: Dict[str, int] = {}
+    aggregate_phase4_corr_unit_votes: Dict[str, int] = {}
+    aggregate_phase4_corr_checks_total = 0
+    aggregate_phase4_corr_near_cap_count = 0
+    aggregate_phase4_corr_penalty_applied_count = 0
+    aggregate_phase4_corr_penalty_weighted_sum = 0.0
+    aggregate_phase4_corr_cluster_exposure_max: Dict[str, float] = {}
+    aggregate_phase4_corr_cluster_cap_max: Dict[str, float] = {}
+    aggregate_phase4_corr_near_cap_rows: List[Dict[str, Any]] = []
 
     for item in dataset_diagnostics:
         groups = item.get("bottleneck_groups", {})
@@ -1766,6 +2110,107 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
                     aggregate_phase4_flags[key] = bool(
                         aggregate_phase4_flags[key] or bool(flags.get(key, False))
                     )
+            exposure_rows = phase4_diag.get("exposure_by_cluster", [])
+            if isinstance(exposure_rows, list):
+                for row in exposure_rows:
+                    if not isinstance(row, dict):
+                        continue
+                    cluster = str(row.get("cluster", "")).strip() or "unclustered"
+                    aggregate_phase4_selected_by_cluster[cluster] = (
+                        aggregate_phase4_selected_by_cluster.get(cluster, 0)
+                        + max(0, to_int(row.get("selected_count", 0)))
+                    )
+                    aggregate_phase4_exposure_by_cluster[cluster] = (
+                        aggregate_phase4_exposure_by_cluster.get(cluster, 0.0)
+                        + max(0.0, to_float(row.get("notional_exposure_sum", 0.0)))
+                    )
+            corr_telemetry = phase4_diag.get("correlation_applied_telemetry", {})
+            if isinstance(corr_telemetry, dict):
+                stage = str(corr_telemetry.get("constraint_apply_stage", "")).strip()
+                if stage:
+                    aggregate_phase4_corr_stage_votes[stage] = (
+                        aggregate_phase4_corr_stage_votes.get(stage, 0) + 1
+                    )
+                unit = str(corr_telemetry.get("constraint_unit", "")).strip()
+                if unit:
+                    aggregate_phase4_corr_unit_votes[unit] = (
+                        aggregate_phase4_corr_unit_votes.get(unit, 0) + 1
+                    )
+                checks_total = max(
+                    0,
+                    to_int(corr_telemetry.get("cluster_cap_checks_total", 0)),
+                )
+                near_cap_count = max(
+                    0,
+                    to_int(corr_telemetry.get("cluster_cap_near_cap_count", 0)),
+                )
+                penalty_count = max(
+                    0,
+                    to_int(corr_telemetry.get("corr_penalty_applied_count", 0)),
+                )
+                penalty_avg = to_float(corr_telemetry.get("corr_penalty_avg", 0.0))
+                aggregate_phase4_corr_checks_total += checks_total
+                aggregate_phase4_corr_near_cap_count += near_cap_count
+                aggregate_phase4_corr_penalty_applied_count += penalty_count
+                aggregate_phase4_corr_penalty_weighted_sum += penalty_avg * float(penalty_count)
+
+                cluster_exposure_rows = corr_telemetry.get("cluster_exposure_current", [])
+                if isinstance(cluster_exposure_rows, list):
+                    for row in cluster_exposure_rows:
+                        if not isinstance(row, dict):
+                            continue
+                        cluster = str(row.get("cluster", "")).strip() or "unclustered"
+                        exposure_current = max(0.0, to_float(row.get("exposure_current", 0.0)))
+                        cluster_cap_value = max(0.0, to_float(row.get("cluster_cap_value", 0.0)))
+                        aggregate_phase4_corr_cluster_exposure_max[cluster] = max(
+                            aggregate_phase4_corr_cluster_exposure_max.get(cluster, 0.0),
+                            exposure_current,
+                        )
+                        aggregate_phase4_corr_cluster_cap_max[cluster] = max(
+                            aggregate_phase4_corr_cluster_cap_max.get(cluster, 0.0),
+                            cluster_cap_value,
+                        )
+
+                near_cap_rows = corr_telemetry.get("near_cap_candidates", [])
+                if isinstance(near_cap_rows, list):
+                    for row in near_cap_rows:
+                        if not isinstance(row, dict):
+                            continue
+                        market = str(row.get("market", "")).strip()
+                        cluster = str(row.get("cluster", "")).strip() or "unclustered"
+                        cluster_cap_value = max(
+                            0.0,
+                            to_float(row.get("cluster_cap_value", 0.0)),
+                        )
+                        headroom_before = to_float(row.get("headroom_before", 0.0))
+                        headroom_ratio = to_float(row.get("headroom_ratio", 0.0))
+                        if cluster_cap_value > 1.0e-9 and headroom_ratio == 0.0:
+                            headroom_ratio = headroom_before / cluster_cap_value
+                        aggregate_phase4_corr_near_cap_rows.append(
+                            {
+                                "dataset": str(item.get("dataset", "")).strip(),
+                                "market": market,
+                                "cluster": cluster,
+                                "exposure_current": round(
+                                    max(0.0, to_float(row.get("exposure_current", 0.0))),
+                                    8,
+                                ),
+                                "cluster_cap_value": round(cluster_cap_value, 8),
+                                "candidate_position_size": round(
+                                    max(0.0, to_float(row.get("candidate_position_size", 0.0))),
+                                    8,
+                                ),
+                                "projected_exposure": round(
+                                    max(0.0, to_float(row.get("projected_exposure", 0.0))),
+                                    8,
+                                ),
+                                "headroom_before": round(headroom_before, 8),
+                                "headroom_ratio": round(headroom_ratio, 6),
+                                "rejected_by_cluster_cap": bool(
+                                    row.get("rejected_by_cluster_cap", False)
+                                ),
+                            }
+                        )
 
         no_signal_patterns = item.get("no_signal_pattern_counts", {})
         if isinstance(no_signal_patterns, dict):
@@ -2073,12 +2518,108 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         / float(max(1, aggregate_phase4_counters.get("candidates_total", 0))),
         6,
     )
+    aggregate_phase4_total_exposure = sum(
+        max(0.0, to_float(v)) for v in aggregate_phase4_exposure_by_cluster.values()
+    )
+    aggregate_phase4_cluster_rows: List[Dict[str, Any]] = []
+    aggregate_phase4_max_cluster_share = 0.0
+    for cluster in sorted(aggregate_phase4_exposure_by_cluster.keys()):
+        exposure = max(0.0, to_float(aggregate_phase4_exposure_by_cluster.get(cluster, 0.0)))
+        share = (
+            (exposure / aggregate_phase4_total_exposure)
+            if aggregate_phase4_total_exposure > 0.0
+            else 0.0
+        )
+        aggregate_phase4_max_cluster_share = max(aggregate_phase4_max_cluster_share, share)
+        aggregate_phase4_cluster_rows.append(
+            {
+                "cluster": str(cluster),
+                "selected_count": int(aggregate_phase4_selected_by_cluster.get(cluster, 0)),
+                "notional_exposure_sum": round(exposure, 8),
+                "share": round(share, 6),
+            }
+        )
+
+    aggregate_corr_stage = ""
+    if aggregate_phase4_corr_stage_votes:
+        aggregate_corr_stage = sorted(
+            aggregate_phase4_corr_stage_votes.items(),
+            key=lambda item: (-int(item[1]), str(item[0])),
+        )[0][0]
+    aggregate_corr_unit = ""
+    if aggregate_phase4_corr_unit_votes:
+        aggregate_corr_unit = sorted(
+            aggregate_phase4_corr_unit_votes.items(),
+            key=lambda item: (-int(item[1]), str(item[0])),
+        )[0][0]
+    aggregate_corr_penalty_avg = (
+        aggregate_phase4_corr_penalty_weighted_sum
+        / float(aggregate_phase4_corr_penalty_applied_count)
+        if aggregate_phase4_corr_penalty_applied_count > 0
+        else 0.0
+    )
+    aggregate_corr_cluster_rows: List[Dict[str, Any]] = []
+    for cluster in sorted(
+        set(aggregate_phase4_corr_cluster_exposure_max.keys())
+        | set(aggregate_phase4_corr_cluster_cap_max.keys())
+    ):
+        exposure_current = max(
+            0.0,
+            to_float(aggregate_phase4_corr_cluster_exposure_max.get(cluster, 0.0)),
+        )
+        cluster_cap_value = max(
+            0.0,
+            to_float(aggregate_phase4_corr_cluster_cap_max.get(cluster, 0.0)),
+        )
+        headroom = cluster_cap_value - exposure_current
+        utilization = (
+            (exposure_current / cluster_cap_value) if cluster_cap_value > 1.0e-9 else 0.0
+        )
+        aggregate_corr_cluster_rows.append(
+            {
+                "cluster": str(cluster),
+                "exposure_current": round(exposure_current, 8),
+                "cluster_cap_value": round(cluster_cap_value, 8),
+                "headroom": round(headroom, 8),
+                "utilization": round(utilization, 6),
+            }
+        )
+    aggregate_phase4_corr_near_cap_rows.sort(
+        key=lambda item: (
+            abs(to_float(item.get("headroom_ratio", 0.0))),
+            abs(to_float(item.get("headroom_before", 0.0))),
+            str(item.get("market", "")),
+        )
+    )
+    aggregate_phase4_corr_near_cap_rows = aggregate_phase4_corr_near_cap_rows[:16]
+    aggregate_corr_applied_telemetry = {
+        "constraint_apply_stage": aggregate_corr_stage,
+        "constraint_apply_stage_votes": aggregate_phase4_corr_stage_votes,
+        "constraint_unit": aggregate_corr_unit,
+        "constraint_unit_votes": aggregate_phase4_corr_unit_votes,
+        "cluster_cap_checks_total": int(aggregate_phase4_corr_checks_total),
+        "cluster_cap_near_cap_count": int(aggregate_phase4_corr_near_cap_count),
+        "corr_penalty_applied_count": int(aggregate_phase4_corr_penalty_applied_count),
+        "corr_penalty_avg": round(float(aggregate_corr_penalty_avg), 8),
+        "cluster_exposure_current": aggregate_corr_cluster_rows,
+        "near_cap_candidates": aggregate_phase4_corr_near_cap_rows,
+        "binding_detected": bool(
+            aggregate_phase4_counters.get("rejected_by_cluster_cap", 0) > 0
+            or aggregate_phase4_corr_penalty_applied_count > 0
+        ),
+    }
+
     aggregate_phase4_diag = {
         "enabled": bool(
             aggregate_phase4_counters.get("candidates_total", 0) > 0
             or aggregate_phase4_counters.get("selected_total", 0) > 0
         ),
         "flags": aggregate_phase4_flags,
+        "exposure_source": "selected_count_unit_proxy",
+        "max_cluster_share": round(aggregate_phase4_max_cluster_share, 6),
+        "total_selected_notional_exposure": round(aggregate_phase4_total_exposure, 8),
+        "exposure_by_cluster": aggregate_phase4_cluster_rows,
+        "correlation_applied_telemetry": aggregate_corr_applied_telemetry,
         "counters": {
             **{key: int(value) for key, value in aggregate_phase4_counters.items()},
             "selection_rate": float(phase4_selection_rate),
@@ -2446,6 +2987,10 @@ def aggregate_adaptive_validation(dataset_profiles: List[Dict[str, Any]]) -> Dic
             "loss_tail_aggregate": {
                 "negative_profit_abs_krw": 0.0,
                 "avg_top3_loss_concentration": 0.0,
+                "tail_metric_sample_size": 0,
+                "tail_metric_effective_trades_count": 0.0,
+                "tail_metric_ess": 0.0,
+                "tail_metric_weighting": "entries_executed",
                 "top_loss_regimes": [],
                 "top_loss_archetypes": [],
                 "top_loss_cells": [],
@@ -2485,6 +3030,7 @@ def aggregate_adaptive_validation(dataset_profiles: List[Dict[str, Any]]) -> Dic
     score_downtrend_share_penalties: List[float] = []
     score_low_trade_penalties: List[float] = []
     top3_concentrations: List[float] = []
+    tail_metric_weights: List[float] = []
     aggregate_negative_profit_abs = 0.0
     aggregate_regime_loss_abs: Dict[str, float] = {}
     aggregate_archetype_loss_abs: Dict[str, float] = {}
@@ -2523,7 +3069,11 @@ def aggregate_adaptive_validation(dataset_profiles: List[Dict[str, Any]]) -> Dic
         tail = profile.get("loss_tail_decomposition", {})
         if isinstance(tail, dict):
             aggregate_negative_profit_abs += max(0.0, to_float(tail.get("negative_profit_abs_krw", 0.0)))
-            top3_concentrations.append(max(0.0, to_float(tail.get("top3_loss_concentration", 0.0))))
+            top3_concentration = max(0.0, to_float(tail.get("top3_loss_concentration", 0.0)))
+            top3_concentrations.append(top3_concentration)
+            tail_weight = max(0.0, to_float(profile.get("entries_executed", 0.0)))
+            if tail_weight > 0.0:
+                tail_metric_weights.append(tail_weight)
             regime_map = tail.get("loss_by_regime_abs_krw", {})
             if isinstance(regime_map, dict):
                 for k, v in regime_map.items():
@@ -2589,6 +3139,16 @@ def aggregate_adaptive_validation(dataset_profiles: List[Dict[str, Any]]) -> Dic
         loss_abs = max(0.0, to_float(item.get("loss_abs_krw", 0.0)))
         item["loss_share"] = round((loss_abs / aggregate_negative_profit_abs), 4) if aggregate_negative_profit_abs > 0.0 else 0.0
 
+    tail_metric_sample_size = len(top3_concentrations)
+    tail_metric_effective_trades_count = sum(tail_metric_weights)
+    tail_metric_ess = 0.0
+    if tail_metric_weights:
+        weight_sq_sum = sum((w * w) for w in tail_metric_weights)
+        if weight_sq_sum > 0.0:
+            tail_metric_ess = (tail_metric_effective_trades_count ** 2) / weight_sq_sum
+    if tail_metric_ess <= 0.0:
+        tail_metric_ess = float(tail_metric_sample_size)
+
     return {
         "dataset_count": len(dataset_profiles),
         "avg_risk_adjusted_score": round(safe_avg(scores), 4),
@@ -2626,6 +3186,13 @@ def aggregate_adaptive_validation(dataset_profiles: List[Dict[str, Any]]) -> Dic
         "loss_tail_aggregate": {
             "negative_profit_abs_krw": round(aggregate_negative_profit_abs, 4),
             "avg_top3_loss_concentration": round(safe_avg(top3_concentrations), 4),
+            "tail_metric_sample_size": int(tail_metric_sample_size),
+            "tail_metric_effective_trades_count": round(
+                float(tail_metric_effective_trades_count),
+                4,
+            ),
+            "tail_metric_ess": round(float(tail_metric_ess), 4),
+            "tail_metric_weighting": "entries_executed",
             "top_loss_regimes": _top_loss_rows(aggregate_regime_loss_abs, "regime", limit=6)
             if aggregate_regime_loss_abs else [],
             "top_loss_archetypes": _top_loss_rows(aggregate_archetype_loss_abs, "entry_archetype", limit=6)
@@ -2925,6 +3492,14 @@ def main(argv=None) -> int:
         default="",
         help="Optional operator note attached to split protocol evidence.",
     )
+    parser.add_argument(
+        "--disable-core-window-direct-eval",
+        action="store_true",
+        help=(
+            "Disable core-window direct evaluation even when split manifest provides "
+            "development_core/validation_core/quarantine_core datasets."
+        ),
+    )
     args = parser.parse_args(argv)
 
     exe_path = resolve_path(args.exe_path, "Executable")
@@ -2980,6 +3555,7 @@ def main(argv=None) -> int:
     bundle_path = resolve_probabilistic_bundle_path(exe_path, config_payload)
 
     bundle_meta: Dict[str, Any] = {}
+    phase4_market_cluster_map: Dict[str, str] = {}
     if not bool(args.skip_probabilistic_coverage_check):
         if str(bundle_path).strip() not in ("", ".", ".."):
             if not bundle_path.exists():
@@ -2988,6 +3564,13 @@ def main(argv=None) -> int:
                     f"{bundle_path}"
                 )
             bundle_meta = load_supported_markets_from_runtime_bundle(bundle_path)
+            loaded_cluster_map = bundle_meta.get("phase4_market_cluster_map", {})
+            if isinstance(loaded_cluster_map, dict):
+                phase4_market_cluster_map = {
+                    str(k).strip().upper(): str(v).strip()
+                    for k, v in loaded_cluster_map.items()
+                    if str(k).strip() and str(v).strip()
+                }
             supported_markets = {
                 str(x).strip().upper()
                 for x in bundle_meta.get("supported_markets", [])
@@ -3028,6 +3611,7 @@ def main(argv=None) -> int:
     dataset_diagnostics: List[Dict[str, Any]] = []
     adaptive_dataset_profiles: List[Dict[str, Any]] = []
     phase4_off_on_comparison: Dict[str, Any] = {}
+    core_window_direct_report: Dict[str, Any] = {}
     split_manifest_payload: Dict[str, Any] = {}
     split_manifest_path_value = str(args.split_manifest_json).strip()
     if split_manifest_path_value:
@@ -3050,7 +3634,11 @@ def main(argv=None) -> int:
             )
             rows.append(build_verification_row(dataset_path.name, result))
             dataset_diagnostics.append(
-                build_dataset_diagnostics(dataset_name=dataset_path.name, backtest_result=result)
+                build_dataset_diagnostics(
+                    dataset_name=dataset_path.name,
+                    backtest_result=result,
+                    phase4_market_cluster_map=phase4_market_cluster_map,
+                )
             )
             adaptive_dataset_profiles.append(
                 build_adaptive_dataset_profile(dataset_name=dataset_path.name, backtest_result=result)
@@ -3065,6 +3653,34 @@ def main(argv=None) -> int:
                 config_payload=config_payload,
                 bundle_path=bundle_path,
             )
+        if split_manifest_payload and not bool(args.disable_core_window_direct_eval):
+            split_name_for_core = str(args.split_name).strip().lower()
+            core_paths_info = resolve_core_dataset_paths(
+                split_manifest_payload=split_manifest_payload,
+                split_name=split_name_for_core,
+                dataset_paths=dataset_paths,
+            )
+            if bool(core_paths_info.get("available", False)):
+                core_window_direct_report = run_core_window_direct_report(
+                    exe_path=exe_path,
+                    dataset_paths=list(core_paths_info.get("dataset_paths", [])),
+                    require_higher_tf_companions=bool(args.require_higher_tf_companions),
+                    disable_adaptive_state_io=not bool(args.enable_adaptive_state_io),
+                    phase4_market_cluster_map=phase4_market_cluster_map,
+                )
+                core_window_direct_report["split_name"] = split_name_for_core
+                core_window_direct_report["core_dir"] = str(core_paths_info.get("core_dir", ""))
+            else:
+                core_window_direct_report = {
+                    "available": False,
+                    "source": "core_dataset_direct",
+                    "split_name": split_name_for_core,
+                    "core_dir": str(core_paths_info.get("core_dir", "")),
+                    "reason": str(core_paths_info.get("reason", "core_direct_not_available")),
+                    "missing_datasets": list(core_paths_info.get("missing_datasets", [])),
+                    "dataset_count": 0,
+                    "datasets": [],
+                }
 
     ensure_parent(output_csv)
     with output_csv.open("w", encoding="utf-8", newline="\n") as fp:
@@ -3211,7 +3827,16 @@ def main(argv=None) -> int:
             if isinstance(proto, dict):
                 split_protocol["purge_gap_minutes"] = int(proto.get("purge_gap_minutes", -1))
                 split_protocol["purge_gap_applied"] = bool(int(split_protocol.get("purge_gap_minutes", -1)) >= 0)
+    if core_window_direct_report:
+        split_protocol["core_window_direct_available"] = bool(
+            core_window_direct_report.get("available", False)
+        )
+        split_protocol["core_window_direct_reason"] = str(
+            core_window_direct_report.get("reason", "")
+        ).strip()
     report["protocol_split"] = split_protocol
+    if core_window_direct_report:
+        report["core_window_direct"] = core_window_direct_report
 
     if bool(args.phase4_off_on_compare):
         report["phase4_off_on_comparison"] = phase4_off_on_comparison
@@ -3323,6 +3948,24 @@ def main(argv=None) -> int:
             f"purge_gap_minutes={protocol_split.get('purge_gap_minutes', -1)} "
             f"manifest={protocol_split.get('manifest_path', '')}"
         )
+    core_window_direct = report.get("core_window_direct", {})
+    if isinstance(core_window_direct, dict):
+        if bool(core_window_direct.get("available", False)):
+            core_agg = core_window_direct.get("aggregates", {})
+            if not isinstance(core_agg, dict):
+                core_agg = {}
+            print(
+                "[Verification] core_window_direct "
+                f"split={core_window_direct.get('split_name', '')} "
+                f"dataset_count={core_window_direct.get('dataset_count', 0)} "
+                f"avg_pf={core_agg.get('avg_profit_factor', 0.0)} "
+                f"avg_exp={core_agg.get('avg_expectancy_krw', 0.0)}"
+            )
+        elif str(core_window_direct.get("reason", "")).strip():
+            print(
+                "[Verification] core_window_direct=unavailable "
+                f"reason={core_window_direct.get('reason', '')}"
+            )
     print(f"[Verification] report_json={output_json}")
     return 0 if bool(overall_gate_pass) else 2
 

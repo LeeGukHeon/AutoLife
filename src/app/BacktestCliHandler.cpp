@@ -147,6 +147,19 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
             {"0.75_0.80", result.post_entry_risk_telemetry.adaptive_partial_ratio_histogram[4]}
         }}
     };
+    nlohmann::json correlation_near_cap_rows = nlohmann::json::array();
+    for (const auto& row : result.phase4_portfolio_diagnostics.correlation_near_cap_candidates) {
+        correlation_near_cap_rows.push_back({
+            {"market", row.market},
+            {"cluster", row.cluster},
+            {"exposure_current", row.exposure_current},
+            {"cluster_cap_value", row.cluster_cap_value},
+            {"candidate_position_size", row.candidate_position_size},
+            {"projected_exposure", row.projected_exposure},
+            {"headroom_before", row.headroom_before},
+            {"rejected_by_cluster_cap", row.rejected_by_cluster_cap}
+        });
+    }
     j["phase4_portfolio_diagnostics"] = {
         {"enabled", result.phase4_portfolio_diagnostics.enabled},
         {"phase4_portfolio_allocator_enabled",
@@ -191,7 +204,24 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
          result.phase4_portfolio_diagnostics.rejected_by_drawdown_governor},
         {"candidate_snapshot_total", result.phase4_portfolio_diagnostics.candidate_snapshot_total},
         {"candidate_snapshot_sampled", result.phase4_portfolio_diagnostics.candidate_snapshot_sampled},
-        {"selection_rate", result.phase4_portfolio_diagnostics.selection_rate}
+        {"selection_rate", result.phase4_portfolio_diagnostics.selection_rate},
+        {"correlation_constraint_apply_stage",
+         result.phase4_portfolio_diagnostics.correlation_constraint_apply_stage},
+        {"correlation_constraint_unit",
+         result.phase4_portfolio_diagnostics.correlation_constraint_unit},
+        {"correlation_cluster_eval_count",
+         result.phase4_portfolio_diagnostics.correlation_cluster_eval_count},
+        {"correlation_cluster_near_cap_count",
+         result.phase4_portfolio_diagnostics.correlation_cluster_near_cap_count},
+        {"correlation_penalty_applied_count",
+         result.phase4_portfolio_diagnostics.correlation_penalty_applied_count},
+        {"correlation_penalty_avg",
+         result.phase4_portfolio_diagnostics.correlation_penalty_avg},
+        {"correlation_cluster_exposure_current",
+         result.phase4_portfolio_diagnostics.correlation_cluster_exposure_current},
+        {"correlation_cluster_cap_values",
+         result.phase4_portfolio_diagnostics.correlation_cluster_cap_values},
+        {"correlation_near_cap_candidates", correlation_near_cap_rows}
     };
     j["strategyless_exit_diagnostics"] = {
         {"position_checks", result.strategyless_position_checks},

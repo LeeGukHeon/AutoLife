@@ -277,3 +277,122 @@ Hard gate:
   - `build/Release/logs/r31_candidate_summary.json`
   - `build/Release/logs/r41b_phase4_caps_summary.json`
   - `build/Release/logs/phase4_on_off_comparison_r41b_cap_high.json`
+
+## 17. Execution Log (2026-02-26, R3.2/R4.2 rerun with dynamic gates)
+- Scope:
+  - Revalidated R2.1 split protocol usage (`time_split_manifest_r21_prefix.json`) with fixed purge gap.
+  - Re-ran R3.2 (`K=4`) with dynamic tail gate + dynamic pass band.
+  - Re-ran R4.2 (`K=2 + off comparator`) with dynamic selection band and cluster exposure summary.
+- R2.1 fixed evidence:
+  - `time_split_applied=true`, `purge_gap_applied=true`, `purge_gap_minutes=240`.
+  - `dev_core_rows=52936`, `val_core_rows=14304`, `quarantine_core_rows=16284`.
+  - `leak_proximity_rows_remaining=0`.
+- R3.2 result:
+  - Promotion candidates: `0`.
+  - Common blocker: `tail_concentration_limit_exceeded`.
+  - Dynamic gate payload source:
+    - development: `core_window_direct`
+    - validation/quarantine: `report_fallback_core_zero` (core direct candidate_total=0 fallback).
+  - Candidate summaries:
+    - neutral: val `0.000943`, qua `0.001986`
+    - mid1: val `0.067813`, qua `0.100860`
+    - mid2: val `0.081662`, qua `0.119549`
+    - step4: val `0.031844`, qua `0.058267`
+- R4.2 result:
+  - quarantine selection rate:
+    - off: `0.000000` (0/0)
+    - cap_high: `0.681592` (137/201)
+    - cap_high+corr_on: `0.681592` (137/201)
+  - Dynamic phase4 gate verdict: `pass=true` with `phase4_dynamic_gate_pass`.
+  - Dynamic band:
+    - lower `0.5166327421`
+    - upper `0.7045454545`
+  - Cluster exposure summary (selected-count unit proxy):
+    - `krw_cluster_a`: 47 (34.31%)
+    - `krw_cluster_b`: 90 (65.69%)
+  - Corr delta:
+    - `max_cluster_share_delta_corr_minus_cap_high=0.0` (no measurable change in this round).
+- Implementation note:
+  - `core_window_direct` remains primary, but dynamic evaluation uses `report_fallback_core_zero` when core counters are zero.
+  - `run_verification.py` now emits aggregate `phase4_portfolio_diagnostics.exposure_by_cluster` and `max_cluster_share` for R4 reporting.
+
+## 18. Execution Log (2026-02-26, R3.3/R4.3 tail-first round)
+- Scope:
+  - R3.3: keep pass-rate knobs fixed, change only one tail option.
+  - R4.3: keep `cap_high` baseline and apply one-step correlation strength-up only.
+- R3.3 setup:
+  - Base: `probabilistic_runtime_bundle_v2_r33_base_mid2.json`
+  - Tail-Guard+1Step: `probabilistic_runtime_bundle_v2_r33_tail_guard_step1.json`
+  - Single change: `phase3.cost_model.mode: hybrid_mode -> tail_mode`
+  - Knobs unchanged: `required_ev_offset=-0.0005`, `k_margin_scale=1.12`, `ev_blend_scale=1.0`
+- R3.3 result:
+  - Dynamic gate pass: Base `false`, Tail-Guard+1Step `false`.
+  - Both remained on same blockers:
+    - `tail_concentration_limit_exceeded`
+    - `pass_rate_qua_core_above_dynamic_upper`
+  - Val/Qua pass-rate (both identical):
+    - validation `0.081662`
+    - quarantine `0.119549`
+  - Tail metric (both identical):
+    - `tail_concentration=1.0`, `dynamic_limit=0.7333`, status=`fail`
+  - Conclusion:
+    - Option-1 single-step change did not move runtime behavior in this round.
+- R4.3 setup:
+  - Base: `probabilistic_runtime_bundle_v2_r43_cap_high_base.json`
+  - Corr step-up: `probabilistic_runtime_bundle_v2_r43_cap_high_corr_step_up.json`
+  - Single axis change:
+    - `phase4.correlation_control.enabled=true`
+    - `cluster_caps` one-step down (`0.75 -> 0.65`)
+- R4.3 result:
+  - Quarantine selection rate (both identical): `0.681592` (`137/201`)
+  - Reject breakdown (both identical):
+    - `rejected_by_budget=64`
+    - `rejected_by_cluster_cap=0`
+    - `rejected_by_correlation_penalty=0`
+  - Exposure by cluster (both identical):
+    - `krw_cluster_a`: 47 (34.31%)
+    - `krw_cluster_b`: 90 (65.69%)
+  - Dynamic phase4 gate verdict: `pass=true`
+  - Corr effect delta: `max_cluster_share_delta_corr_minus_cap_high=0.0`
+- Core direct side note:
+  - `validation_core` direct backtests still produce `total_trades=0` on sampled symbols (e.g., XRP/BTC).
+  - Fallback path (`report_fallback_core_zero`) remains required for Val/Qua dynamic evaluation.
+- Artifacts:
+  - `build/Release/logs/phase34_dynamic_gate_r33_base_mid2.json`
+  - `build/Release/logs/phase34_dynamic_gate_r33_tail_guard_step1.json`
+  - `build/Release/logs/verification_report_r43_cap_high_base_quarantine.json`
+  - `build/Release/logs/verification_report_r43_cap_high_corr_step_up_quarantine.json`
+  - `build/Release/logs/phase4_exposure_summary_r43_cap_high_base.json`
+  - `build/Release/logs/phase4_exposure_summary_r43_cap_high_corr_step_up.json`
+  - `build/Release/logs/phase34_dynamic_gate_r43.json`
+  - `build/Release/logs/phase34_round_r33_r43_report.json`
+
+## 19. Execution Plan (2026-02-26, R3.4/R4.4 zero-loop escape)
+- Scope:
+  - R3.4: keep pass-rate knobs fixed and add ESS-aware soft-fail to dynamic tail gate.
+  - R3.4: compare `base_mid2` vs `exec_cap_step1` (`K<=2`).
+  - R4.4: compare `cap_high_base` vs `cap_high_corr_stronger` (`K<=2`) and expose corr/cluster applied telemetry.
+- New candidate bundles:
+  - `config/model/probabilistic_runtime_bundle_v2_r34_base_mid2.json`
+  - `config/model/probabilistic_runtime_bundle_v2_r34_exec_cap_step1.json`
+  - `config/model/probabilistic_runtime_bundle_v2_r44_cap_high_base.json`
+  - `config/model/probabilistic_runtime_bundle_v2_r44_cap_high_corr_stronger.json`
+- R3.4 dynamic gate command (repeat per candidate):
+  - `python scripts/run_phase34_operations_tuning.py dynamic_phase3_gate --candidate-name r34_base_mid2 --bundle-json config/model/probabilistic_runtime_bundle_v2_r34_base_mid2.json --development-report-json <dev_report> --validation-report-json <val_report> --quarantine-report-json <qua_report> --output-json build/Release/logs/phase34_dynamic_gate_r34_base_mid2.json`
+  - `python scripts/run_phase34_operations_tuning.py dynamic_phase3_gate --candidate-name r34_exec_cap_step1 --bundle-json config/model/probabilistic_runtime_bundle_v2_r34_exec_cap_step1.json --development-report-json <dev_report> --validation-report-json <val_report> --quarantine-report-json <qua_report> --output-json build/Release/logs/phase34_dynamic_gate_r34_exec_cap_step1.json`
+- R4.4 dynamic gate command:
+  - `python scripts/run_phase34_operations_tuning.py dynamic_phase4_gate --bundle-json config/model/probabilistic_runtime_bundle_v2_r44_cap_high_corr_stronger.json --off-report-json <off_report> --cap-high-report-json <cap_high_report> --cap-high-corr-on-report-json <corr_report> --off-exposure-json <off_exposure_json> --cap-high-exposure-json <cap_exposure_json> --cap-high-corr-on-exposure-json <corr_exposure_json> --output-json build/Release/logs/phase34_dynamic_gate_r44.json`
+- Mandatory R3.4 outputs now emitted:
+  - `dynamic_tail_gate.metrics[*].metric_sample_size`
+  - `dynamic_tail_gate.metrics[*].metric_ess`
+  - `dynamic_tail_gate.metrics[*].metric_ess_limit`
+  - `dynamic_tail_gate.metrics[*].hard_fail|soft_fail|promotion_hold`
+  - `dynamic_tail_gate.metrics[*].delta_required_ev` and `delta_required_ev_soft_extra`
+  - `phase3_pass_rate.reject_breakdown_delta_qua_minus_val`
+- Mandatory R4.4 outputs now emitted:
+  - `profiles.*.corr_cluster_applied_telemetry.constraint_apply_stage(_bucket)`
+  - `profiles.*.corr_cluster_applied_telemetry.constraint_unit`
+  - `profiles.*.corr_cluster_applied_telemetry.cluster_exposure_current`
+  - `profiles.*.corr_cluster_applied_telemetry.corr_penalty_applied_count|corr_penalty_avg`
+  - `profiles.*.corr_cluster_applied_telemetry.near_cap_candidates`
+  - `corr_effect_zero_diagnosis`

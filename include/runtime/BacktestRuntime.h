@@ -145,6 +145,16 @@ public:
             double adaptive_partial_ratio_sum = 0.0;
             std::array<int, 5> adaptive_partial_ratio_histogram{{0, 0, 0, 0, 0}};
         };
+        struct Phase4CorrelationNearCapSample {
+            std::string market;
+            std::string cluster;
+            double exposure_current = 0.0;
+            double cluster_cap_value = 0.0;
+            double candidate_position_size = 0.0;
+            double projected_exposure = 0.0;
+            double headroom_before = 0.0;
+            bool rejected_by_cluster_cap = false;
+        };
         struct Phase4PortfolioDiagnostics {
             bool enabled = false;
             bool phase4_portfolio_allocator_enabled = false;
@@ -175,6 +185,15 @@ public:
             int candidate_snapshot_total = 0;
             int candidate_snapshot_sampled = 0;
             double selection_rate = 0.0;
+            std::string correlation_constraint_apply_stage;
+            std::string correlation_constraint_unit;
+            int correlation_cluster_eval_count = 0;
+            int correlation_cluster_near_cap_count = 0;
+            int correlation_penalty_applied_count = 0;
+            double correlation_penalty_avg = 0.0;
+            std::map<std::string, double> correlation_cluster_exposure_current;
+            std::map<std::string, double> correlation_cluster_cap_values;
+            std::vector<Phase4CorrelationNearCapSample> correlation_near_cap_candidates;
         };
         struct Phase4CandidateSnapshotSample {
             std::string market;

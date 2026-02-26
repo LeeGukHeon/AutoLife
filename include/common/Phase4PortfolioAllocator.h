@@ -10,6 +10,7 @@
 #include <numeric>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace autolife {
@@ -33,7 +34,19 @@ struct RiskBudgetFilterResult {
 struct ClusterFilterResult {
     std::vector<std::size_t> selected_indices;
     int rejected_by_cluster_cap = 0;
+    std::map<std::string, double> exposure_by_cluster_before;
     std::map<std::string, double> exposure_by_cluster_after;
+    std::map<std::string, double> cluster_cap_by_cluster;
+    struct TelemetryRow {
+        std::string market;
+        std::string cluster_id;
+        double exposure_current = 0.0;
+        double cluster_cap_value = 0.0;
+        double candidate_position_size = 0.0;
+        double projected_exposure = 0.0;
+        bool rejected_by_cluster_cap = false;
+    };
+    std::vector<TelemetryRow> telemetry_rows;
 };
 
 struct ExecutionAwareFilterResult {
@@ -271,6 +284,7 @@ inline ClusterFilterResult applyClusterCapFilter(
     const std::map<std::string, double>& existing_exposure_by_cluster
 ) {
     ClusterFilterResult out;
+    out.exposure_by_cluster_before = existing_exposure_by_cluster;
     out.exposure_by_cluster_after = existing_exposure_by_cluster;
     if (ordered_candidates.empty()) {
         return out;
@@ -283,12 +297,24 @@ inline ClusterFilterResult applyClusterCapFilter(
         const double used = out.exposure_by_cluster_after.count(cluster_id) > 0
             ? out.exposure_by_cluster_after.at(cluster_id)
             : 0.0;
-        if (used + pos_size > cluster_cap + 1e-12) {
+        const double projected = used + pos_size;
+        const bool rejected = projected > cluster_cap + 1e-12;
+        out.cluster_cap_by_cluster[cluster_id] = cluster_cap;
+        ClusterFilterResult::TelemetryRow telemetry;
+        telemetry.market = signal.market;
+        telemetry.cluster_id = cluster_id;
+        telemetry.exposure_current = used;
+        telemetry.cluster_cap_value = cluster_cap;
+        telemetry.candidate_position_size = pos_size;
+        telemetry.projected_exposure = projected;
+        telemetry.rejected_by_cluster_cap = rejected;
+        out.telemetry_rows.push_back(std::move(telemetry));
+        if (rejected) {
             out.rejected_by_cluster_cap++;
             continue;
         }
         out.selected_indices.push_back(i);
-        out.exposure_by_cluster_after[cluster_id] = used + pos_size;
+        out.exposure_by_cluster_after[cluster_id] = projected;
     }
     return out;
 }
