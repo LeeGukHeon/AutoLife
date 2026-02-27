@@ -1001,6 +1001,7 @@ def main(argv=None) -> int:
         "prefer_default_model": bool(prefer_default_model),
         "default_model": default_model if default_model is not None else None,
         "markets": markets_out,
+        "edge_semantics": "net",
         "cost_model": summary.get("cost_model", {}),
         "phase3": phase3_bundle,
         "phase4": phase4_bundle,

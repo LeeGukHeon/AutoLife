@@ -471,6 +471,18 @@ def load_supported_markets_from_runtime_bundle(bundle_path: pathlib.Path) -> Dic
     global_fallback_enabled = bool(payload.get("global_fallback_enabled", False))
     if isinstance(default_model, dict) and default_model:
         global_fallback_enabled = True
+    edge_semantics = str(payload.get("edge_semantics", "net")).strip().lower()
+    if edge_semantics not in ("net", "gross"):
+        edge_semantics = "net"
+    root_cost_model = payload.get("cost_model", {})
+    if not isinstance(root_cost_model, dict):
+        root_cost_model = {}
+    phase3 = payload.get("phase3", {})
+    if not isinstance(phase3, dict):
+        phase3 = {}
+    phase3_cost_model = phase3.get("cost_model", {})
+    if not isinstance(phase3_cost_model, dict):
+        phase3_cost_model = {}
     return {
         "bundle_path": str(bundle_path),
         "bundle_version": bundle_version,
@@ -478,6 +490,9 @@ def load_supported_markets_from_runtime_bundle(bundle_path: pathlib.Path) -> Dic
         "supported_markets": sorted(list(supported_markets)),
         "global_fallback_enabled": bool(global_fallback_enabled),
         "export_mode": str(payload.get("export_mode", "")).strip(),
+        "edge_semantics": edge_semantics,
+        "root_cost_model_enabled_configured": bool(root_cost_model.get("enabled", False)),
+        "phase3_cost_model_enabled_configured": bool(phase3_cost_model.get("enabled", False)),
         "phase4_market_cluster_map": extract_phase4_market_cluster_map(payload),
         "risk_adjusted_score_policy": extract_risk_adjusted_score_policy(payload),
         "risk_adjusted_score_guard_policy": extract_risk_adjusted_score_guard_policy(payload),
@@ -980,6 +995,22 @@ def load_policy_decision_ev_samples(exe_dir: pathlib.Path) -> List[Dict[str, Any
                     if not math.isfinite(expected_pct):
                         continue
                     expected_bps = expected_pct * 10000.0
+                    expected_edge_calibrated_bps = to_float(
+                        row.get("expected_edge_calibrated_bps", expected_bps)
+                    )
+                    if not math.isfinite(expected_edge_calibrated_bps):
+                        expected_edge_calibrated_bps = expected_bps
+                    expected_edge_used_for_gate_bps = to_float(
+                        row.get("expected_edge_used_for_gate_bps", expected_bps)
+                    )
+                    if not math.isfinite(expected_edge_used_for_gate_bps):
+                        expected_edge_used_for_gate_bps = expected_bps
+                    cost_bps_estimate_used = to_float(row.get("cost_bps_estimate_used", 0.0))
+                    if not math.isfinite(cost_bps_estimate_used):
+                        cost_bps_estimate_used = 0.0
+                    edge_semantics = str(row.get("edge_semantics", "net")).strip().lower()
+                    if edge_semantics not in ("net", "gross"):
+                        edge_semantics = "unknown"
                     samples.append(
                         {
                             "ts": int(ts_value),
@@ -989,6 +1020,32 @@ def load_policy_decision_ev_samples(exe_dir: pathlib.Path) -> List[Dict[str, Any
                             "reason": str(row.get("reason", "")).strip(),
                             "expected_edge_after_cost_pct": round(float(expected_pct), 10),
                             "expected_edge_after_cost_bps": round(float(expected_bps), 6),
+                            "expected_edge_calibrated_bps": round(float(expected_edge_calibrated_bps), 6),
+                            "expected_edge_used_for_gate_bps": round(float(expected_edge_used_for_gate_bps), 6),
+                            "cost_bps_estimate_used": round(float(cost_bps_estimate_used), 6),
+                            "edge_semantics": edge_semantics,
+                            "root_cost_model_enabled_configured": bool(
+                                row.get("root_cost_model_enabled_configured", False)
+                            ),
+                            "phase3_cost_model_enabled_configured": bool(
+                                row.get("phase3_cost_model_enabled_configured", False)
+                            ),
+                            "root_cost_model_enabled_effective": bool(
+                                row.get("root_cost_model_enabled_effective", False)
+                            ),
+                            "phase3_cost_model_enabled_effective": bool(
+                                row.get("phase3_cost_model_enabled_effective", False)
+                            ),
+                            "edge_semantics_guard_violation": bool(
+                                row.get("edge_semantics_guard_violation", False)
+                            ),
+                            "edge_semantics_guard_forced_off": bool(
+                                row.get("edge_semantics_guard_forced_off", False)
+                            ),
+                            "edge_semantics_guard_action": str(
+                                row.get("edge_semantics_guard_action", "none")
+                            ).strip()
+                            or "none",
                         }
                     )
     except Exception:
@@ -4440,6 +4497,41 @@ def build_phase3_pass_ev_distribution(
                     "reason": str(row.get("reason", "")).strip(),
                     "expected_edge_after_cost_bps": round(float(expected_bps), 6),
                     "expected_edge_after_cost_pct": round(float(expected_pct), 10),
+                    "expected_edge_calibrated_bps": round(
+                        to_float(row.get("expected_edge_calibrated_bps", expected_bps)),
+                        6,
+                    ),
+                    "expected_edge_used_for_gate_bps": round(
+                        to_float(row.get("expected_edge_used_for_gate_bps", expected_bps)),
+                        6,
+                    ),
+                    "cost_bps_estimate_used": round(
+                        to_float(row.get("cost_bps_estimate_used", 0.0)),
+                        6,
+                    ),
+                    "edge_semantics": str(row.get("edge_semantics", "unknown")).strip().lower() or "unknown",
+                    "root_cost_model_enabled_configured": bool(
+                        row.get("root_cost_model_enabled_configured", False)
+                    ),
+                    "phase3_cost_model_enabled_configured": bool(
+                        row.get("phase3_cost_model_enabled_configured", False)
+                    ),
+                    "root_cost_model_enabled_effective": bool(
+                        row.get("root_cost_model_enabled_effective", False)
+                    ),
+                    "phase3_cost_model_enabled_effective": bool(
+                        row.get("phase3_cost_model_enabled_effective", False)
+                    ),
+                    "edge_semantics_guard_violation": bool(
+                        row.get("edge_semantics_guard_violation", False)
+                    ),
+                    "edge_semantics_guard_forced_off": bool(
+                        row.get("edge_semantics_guard_forced_off", False)
+                    ),
+                    "edge_semantics_guard_action": str(
+                        row.get("edge_semantics_guard_action", "none")
+                    ).strip()
+                    or "none",
                 }
             )
     total_count = len(rows)
@@ -4502,6 +4594,316 @@ def build_phase3_pass_ev_distribution(
         "selected_quantiles_pct": selected_quantiles_pct,
         "samples_bps": [round(float(x), 6) for x in sampled_bps],
         "samples": sampled_rows,
+    }
+
+
+def collect_phase3_pass_ev_samples(dataset_diagnostics: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for item in dataset_diagnostics:
+        if not isinstance(item, dict):
+            continue
+        dataset_name = str(item.get("dataset", "")).strip()
+        phase3_dist = item.get("phase3_pass_ev_distribution", {})
+        if not isinstance(phase3_dist, dict):
+            continue
+        samples = phase3_dist.get("samples", [])
+        if not isinstance(samples, list):
+            continue
+        for sample in samples:
+            if not isinstance(sample, dict):
+                continue
+            row = dict(sample)
+            row["dataset"] = dataset_name
+            rows.append(row)
+    rows.sort(
+        key=lambda item: (
+            int(item.get("ts", 0)),
+            str(item.get("market", "")),
+            str(item.get("strategy", "")),
+            -int(bool(item.get("selected", False))),
+        )
+    )
+    return rows
+
+
+def build_runtime_cost_semantics_debug(
+    dataset_diagnostics: List[Dict[str, Any]],
+    *,
+    sample_cap: int = 50,
+) -> Dict[str, Any]:
+    rows = collect_phase3_pass_ev_samples(dataset_diagnostics)
+    edge_semantics_counts: Dict[str, int] = {"net": 0, "gross": 0, "unknown": 0}
+    guard_action_counts: Dict[str, int] = {}
+    cost_values: List[float] = []
+    root_cfg_true = 0
+    phase3_cfg_true = 0
+    root_eff_true = 0
+    phase3_eff_true = 0
+    guard_violation_count = 0
+    guard_forced_off_count = 0
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        edge_semantics = str(row.get("edge_semantics", "unknown")).strip().lower()
+        if edge_semantics not in ("net", "gross"):
+            edge_semantics = "unknown"
+        edge_semantics_counts[edge_semantics] = int(edge_semantics_counts.get(edge_semantics, 0)) + 1
+        if bool(row.get("root_cost_model_enabled_configured", False)):
+            root_cfg_true += 1
+        if bool(row.get("phase3_cost_model_enabled_configured", False)):
+            phase3_cfg_true += 1
+        if bool(row.get("root_cost_model_enabled_effective", False)):
+            root_eff_true += 1
+        if bool(row.get("phase3_cost_model_enabled_effective", False)):
+            phase3_eff_true += 1
+        if bool(row.get("edge_semantics_guard_violation", False)):
+            guard_violation_count += 1
+        if bool(row.get("edge_semantics_guard_forced_off", False)):
+            guard_forced_off_count += 1
+        guard_action = str(row.get("edge_semantics_guard_action", "none")).strip().lower() or "none"
+        guard_action_counts[guard_action] = int(guard_action_counts.get(guard_action, 0)) + 1
+        cost_bps = to_float(row.get("cost_bps_estimate_used", 0.0))
+        if math.isfinite(cost_bps):
+            cost_values.append(float(cost_bps))
+
+    cap = max(1, int(sample_cap))
+    sample_rows: List[Dict[str, Any]] = []
+    for row in rows[:cap]:
+        if not isinstance(row, dict):
+            continue
+        sample_rows.append(
+            {
+                "dataset": str(row.get("dataset", "")).strip(),
+                "ts": max(0, to_int(row.get("ts", 0))),
+                "market": str(row.get("market", "")).strip(),
+                "strategy": str(row.get("strategy", "")).strip(),
+                "selected": bool(row.get("selected", False)),
+                "reason": str(row.get("reason", "")).strip(),
+                "expected_edge_calibrated_bps": round(
+                    to_float(row.get("expected_edge_calibrated_bps", 0.0)),
+                    6,
+                ),
+                "expected_edge_used_for_gate_bps": round(
+                    to_float(row.get("expected_edge_used_for_gate_bps", 0.0)),
+                    6,
+                ),
+                "cost_bps_estimate_used": round(
+                    to_float(row.get("cost_bps_estimate_used", 0.0)),
+                    6,
+                ),
+                "edge_semantics": str(row.get("edge_semantics", "unknown")).strip().lower() or "unknown",
+                "root_cost_model_enabled_configured": bool(
+                    row.get("root_cost_model_enabled_configured", False)
+                ),
+                "phase3_cost_model_enabled_configured": bool(
+                    row.get("phase3_cost_model_enabled_configured", False)
+                ),
+                "root_cost_model_enabled_effective": bool(
+                    row.get("root_cost_model_enabled_effective", False)
+                ),
+                "phase3_cost_model_enabled_effective": bool(
+                    row.get("phase3_cost_model_enabled_effective", False)
+                ),
+                "edge_semantics_guard_violation": bool(
+                    row.get("edge_semantics_guard_violation", False)
+                ),
+                "edge_semantics_guard_forced_off": bool(
+                    row.get("edge_semantics_guard_forced_off", False)
+                ),
+                "edge_semantics_guard_action": str(
+                    row.get("edge_semantics_guard_action", "none")
+                ).strip()
+                or "none",
+            }
+        )
+
+    dominant_semantics = "unknown"
+    if rows:
+        dominant_semantics = max(
+            edge_semantics_counts.items(),
+            key=lambda item: (int(item[1]), item[0]),
+        )[0]
+    mean_cost_bps = safe_avg(cost_values)
+    max_cost_bps = max(cost_values) if cost_values else 0.0
+    min_cost_bps = min(cost_values) if cost_values else 0.0
+    p50_cost_bps = quantile(cost_values, 0.50) if cost_values else 0.0
+    p90_cost_bps = quantile(cost_values, 0.90) if cost_values else 0.0
+
+    return {
+        "generated_at": __import__("datetime").datetime.now().astimezone().isoformat(),
+        "enabled": bool(len(rows) > 0),
+        "source": "policy_decisions_backtest_jsonl",
+        "sample_cap": int(cap),
+        "sample_size_total": int(len(rows)),
+        "sample_size_used": int(len(sample_rows)),
+        "sample_truncated": bool(len(rows) > len(sample_rows)),
+        "dominant_edge_semantics": dominant_semantics,
+        "edge_semantics_counts": edge_semantics_counts,
+        "runtime_cost_flags_summary": {
+            "root_cost_model_enabled_configured_true_count": int(root_cfg_true),
+            "phase3_cost_model_enabled_configured_true_count": int(phase3_cfg_true),
+            "root_cost_model_enabled_effective_true_count": int(root_eff_true),
+            "phase3_cost_model_enabled_effective_true_count": int(phase3_eff_true),
+            "edge_semantics_guard_violation_count": int(guard_violation_count),
+            "edge_semantics_guard_forced_off_count": int(guard_forced_off_count),
+            "edge_semantics_guard_action_counts": guard_action_counts,
+        },
+        "cost_bps_estimate_summary": {
+            "sample_count": int(len(cost_values)),
+            "mean_bps": round(float(mean_cost_bps), 6),
+            "max_bps": round(float(max_cost_bps), 6),
+            "min_bps": round(float(min_cost_bps), 6),
+            "p50_bps": round(float(p50_cost_bps), 6),
+            "p90_bps": round(float(p90_cost_bps), 6),
+        },
+        "samples": sample_rows,
+    }
+
+
+def build_semantics_lock_report(
+    bundle_meta: Dict[str, Any],
+    runtime_cost_semantics_debug: Dict[str, Any],
+) -> Dict[str, Any]:
+    bundle_edge_semantics = str(bundle_meta.get("edge_semantics", "unknown")).strip().lower()
+    if bundle_edge_semantics not in ("net", "gross"):
+        bundle_edge_semantics = "unknown"
+    bundle_root_cfg = bool(bundle_meta.get("root_cost_model_enabled_configured", False))
+    bundle_phase3_cfg = bool(bundle_meta.get("phase3_cost_model_enabled_configured", False))
+    runtime_flags = (
+        runtime_cost_semantics_debug.get("runtime_cost_flags_summary", {})
+        if isinstance(runtime_cost_semantics_debug, dict)
+        else {}
+    )
+    if not isinstance(runtime_flags, dict):
+        runtime_flags = {}
+    cost_summary = (
+        runtime_cost_semantics_debug.get("cost_bps_estimate_summary", {})
+        if isinstance(runtime_cost_semantics_debug, dict)
+        else {}
+    )
+    if not isinstance(cost_summary, dict):
+        cost_summary = {}
+    semantics_counts = (
+        runtime_cost_semantics_debug.get("edge_semantics_counts", {})
+        if isinstance(runtime_cost_semantics_debug, dict)
+        else {}
+    )
+    if not isinstance(semantics_counts, dict):
+        semantics_counts = {}
+    sample_count = max(0, to_int(runtime_cost_semantics_debug.get("sample_size_total", 0)))
+    dominant_runtime_semantics = str(
+        runtime_cost_semantics_debug.get("dominant_edge_semantics", "unknown")
+    ).strip().lower() or "unknown"
+    root_effective_true_count = max(
+        0,
+        to_int(runtime_flags.get("root_cost_model_enabled_effective_true_count", 0)),
+    )
+    phase3_effective_true_count = max(
+        0,
+        to_int(runtime_flags.get("phase3_cost_model_enabled_effective_true_count", 0)),
+    )
+    root_cfg_true_count = max(
+        0,
+        to_int(runtime_flags.get("root_cost_model_enabled_configured_true_count", 0)),
+    )
+    phase3_cfg_true_count = max(
+        0,
+        to_int(runtime_flags.get("phase3_cost_model_enabled_configured_true_count", 0)),
+    )
+    guard_violation_count = max(
+        0,
+        to_int(runtime_flags.get("edge_semantics_guard_violation_count", 0)),
+    )
+    guard_forced_off_count = max(
+        0,
+        to_int(runtime_flags.get("edge_semantics_guard_forced_off_count", 0)),
+    )
+    mean_cost_bps = to_float(cost_summary.get("mean_bps", 0.0))
+    max_cost_bps = to_float(cost_summary.get("max_bps", 0.0))
+    if not math.isfinite(mean_cost_bps):
+        mean_cost_bps = 0.0
+    if not math.isfinite(max_cost_bps):
+        max_cost_bps = 0.0
+
+    violations: List[str] = []
+    warnings: List[str] = []
+    target_semantics = bundle_edge_semantics
+    if target_semantics == "unknown":
+        target_semantics = dominant_runtime_semantics
+    if target_semantics != "net":
+        violations.append("edge_semantics_not_net")
+    if sample_count <= 0:
+        violations.append("runtime_semantics_samples_missing")
+
+    gross_count = max(0, to_int(semantics_counts.get("gross", 0)))
+    unknown_count = max(0, to_int(semantics_counts.get("unknown", 0)))
+    if gross_count > 0:
+        violations.append("runtime_contains_gross_semantics")
+    if unknown_count > 0:
+        warnings.append("runtime_contains_unknown_semantics")
+
+    if root_effective_true_count > 0 or phase3_effective_true_count > 0:
+        violations.append("runtime_cost_model_effective_on_under_net")
+
+    cost_tolerance_bps = 1e-6
+    if target_semantics == "net" and max_cost_bps > cost_tolerance_bps:
+        violations.append("runtime_cost_bps_non_zero_under_net")
+
+    if target_semantics == "net" and (bundle_root_cfg or bundle_phase3_cfg):
+        warnings.append("bundle_cost_model_configured_true_under_net")
+    if target_semantics == "net" and (root_cfg_true_count > 0 or phase3_cfg_true_count > 0):
+        warnings.append("runtime_cost_model_configured_true_under_net")
+    if guard_violation_count > 0:
+        warnings.append("runtime_guard_violation_detected")
+    if guard_forced_off_count > 0:
+        warnings.append("runtime_guard_forced_off_applied")
+
+    status = "OK" if not violations else "VIOLATION"
+    messages: List[str] = []
+    if status == "OK":
+        messages.append("NET semantics lock verified: runtime effective cost path is OFF and cost_bps is near zero.")
+    else:
+        messages.append("Semantics lock violation detected. Review violations and runtime evidence.")
+
+    return {
+        "generated_at": __import__("datetime").datetime.now().astimezone().isoformat(),
+        "edge_semantics": target_semantics or "unknown",
+        "status": status,
+        "messages": messages,
+        "bundle": {
+            "bundle_path": str(bundle_meta.get("bundle_path", "")),
+            "bundle_version": str(bundle_meta.get("bundle_version", "")),
+            "edge_semantics": bundle_edge_semantics,
+            "root_cost_model_enabled_configured": bool(bundle_root_cfg),
+            "phase3_cost_model_enabled_configured": bool(bundle_phase3_cfg),
+        },
+        "runtime": {
+            "sample_count": int(sample_count),
+            "dominant_edge_semantics": dominant_runtime_semantics,
+            "edge_semantics_counts": semantics_counts,
+            "root_cost_model_enabled_configured_true_count": int(root_cfg_true_count),
+            "phase3_cost_model_enabled_configured_true_count": int(phase3_cfg_true_count),
+            "root_cost_model_enabled_effective_true_count": int(root_effective_true_count),
+            "phase3_cost_model_enabled_effective_true_count": int(phase3_effective_true_count),
+            "edge_semantics_guard_violation_count": int(guard_violation_count),
+            "edge_semantics_guard_forced_off_count": int(guard_forced_off_count),
+            "edge_semantics_guard_action_counts": (
+                runtime_flags.get("edge_semantics_guard_action_counts", {})
+                if isinstance(runtime_flags.get("edge_semantics_guard_action_counts", {}), dict)
+                else {}
+            ),
+        },
+        "cost_bps_estimate_summary": {
+            "sample_count": int(max(0, to_int(cost_summary.get("sample_count", 0)))),
+            "mean_bps": round(float(mean_cost_bps), 6),
+            "max_bps": round(float(max_cost_bps), 6),
+            "min_bps": round(float(to_float(cost_summary.get("min_bps", 0.0))), 6),
+            "p50_bps": round(float(to_float(cost_summary.get("p50_bps", 0.0))), 6),
+            "p90_bps": round(float(to_float(cost_summary.get("p90_bps", 0.0))), 6),
+        },
+        "violations": violations,
+        "warnings": warnings,
     }
 
 
@@ -8234,6 +8636,19 @@ def main(argv=None) -> int:
             "(total_trades_core_effective vs orders_filled_core_effective)."
         ),
     )
+    parser.add_argument(
+        "--runtime-cost-semantics-debug-json",
+        default=r".\build\Release\logs\runtime_cost_semantics_debug.json",
+        help=(
+            "Output JSON path for runtime cost/semantics debug evidence "
+            "(edge_semantics, runtime cost flags, cost_bps summary, sampled rows)."
+        ),
+    )
+    parser.add_argument(
+        "--semantics-lock-report-json",
+        default=r".\build\Release\logs\semantics_lock_report.json",
+        help="Output JSON path for B1/B2-1 semantics lock report.",
+    )
     args = parser.parse_args(argv)
 
     exe_path = resolve_path(args.exe_path, "Executable")
@@ -8295,6 +8710,16 @@ def main(argv=None) -> int:
     a20_consistency_check_json = resolve_path(
         args.a20_consistency_check_json,
         "A20 consistency check json",
+        must_exist=False,
+    )
+    runtime_cost_semantics_debug_json = resolve_path(
+        args.runtime_cost_semantics_debug_json,
+        "Runtime cost semantics debug json",
+        must_exist=False,
+    )
+    semantics_lock_report_json = resolve_path(
+        args.semantics_lock_report_json,
+        "Semantics lock report json",
         must_exist=False,
     )
     core_zero_diagnosis_json = resolve_path(
@@ -9451,6 +9876,30 @@ def main(argv=None) -> int:
             ensure_ascii=False,
             indent=4,
         )
+    runtime_cost_semantics_debug = build_runtime_cost_semantics_debug(
+        dataset_diagnostics=dataset_diagnostics,
+        sample_cap=50,
+    )
+    semantics_lock_report = build_semantics_lock_report(
+        bundle_meta=bundle_meta if isinstance(bundle_meta, dict) else {},
+        runtime_cost_semantics_debug=runtime_cost_semantics_debug,
+    )
+    ensure_parent(runtime_cost_semantics_debug_json)
+    with runtime_cost_semantics_debug_json.open("w", encoding="utf-8", newline="\n") as fp:
+        json.dump(
+            runtime_cost_semantics_debug,
+            fp,
+            ensure_ascii=False,
+            indent=4,
+        )
+    ensure_parent(semantics_lock_report_json)
+    with semantics_lock_report_json.open("w", encoding="utf-8", newline="\n") as fp:
+        json.dump(
+            semantics_lock_report,
+            fp,
+            ensure_ascii=False,
+            indent=4,
+        )
 
     a20_total_trades_core_effective = int(
         split_filter_context.get("total_trades_core_effective", 0)
@@ -9720,6 +10169,8 @@ def main(argv=None) -> int:
             "a10_2_stage_funnel": a10_2_stage_funnel_report,
             "frontier_fail_breakdown": frontier_fail_breakdown,
             "a20_consistency_check": a20_consistency_check_payload,
+            "runtime_cost_semantics_debug": runtime_cost_semantics_debug,
+            "semantics_lock_report": semantics_lock_report,
         },
         "split_filter": split_filter_context,
         "split_eval_profiles": split_eval_profiles,
@@ -9748,6 +10199,8 @@ def main(argv=None) -> int:
             "a10_2_stage_funnel_json": str(a10_2_stage_funnel_json),
             "frontier_fail_breakdown_json": str(frontier_fail_breakdown_json),
             "a20_consistency_check_json": str(a20_consistency_check_json),
+            "runtime_cost_semantics_debug_json": str(runtime_cost_semantics_debug_json),
+            "semantics_lock_report_json": str(semantics_lock_report_json),
             "core_zero_diagnosis_json": str(core_zero_diagnosis_json),
         },
     }
@@ -9974,6 +10427,31 @@ def main(argv=None) -> int:
         f"p50_bps={edge_sign_distribution.get('p50_bps', None)} "
         f"edge_pos_but_no_trade={edge_pos_no_trade_breakdown.get('edge_pos_but_no_trade', 0)} "
         f"recommended_case={edge_pos_no_trade_breakdown.get('recommended_case', '')}"
+    )
+    semantics_runtime = (
+        semantics_lock_report.get("runtime", {})
+        if isinstance(semantics_lock_report, dict)
+        else {}
+    )
+    if not isinstance(semantics_runtime, dict):
+        semantics_runtime = {}
+    semantics_cost = (
+        semantics_lock_report.get("cost_bps_estimate_summary", {})
+        if isinstance(semantics_lock_report, dict)
+        else {}
+    )
+    if not isinstance(semantics_cost, dict):
+        semantics_cost = {}
+    print(
+        "[Verification] semantics_lock "
+        f"status={semantics_lock_report.get('status', 'VIOLATION')} "
+        f"edge_semantics={semantics_lock_report.get('edge_semantics', 'unknown')} "
+        f"root_cost_cfg_true={semantics_runtime.get('root_cost_model_enabled_configured_true_count', 0)} "
+        f"phase3_cost_cfg_true={semantics_runtime.get('phase3_cost_model_enabled_configured_true_count', 0)} "
+        f"root_cost_eff_true={semantics_runtime.get('root_cost_model_enabled_effective_true_count', 0)} "
+        f"phase3_cost_eff_true={semantics_runtime.get('phase3_cost_model_enabled_effective_true_count', 0)} "
+        f"cost_bps_mean={semantics_cost.get('mean_bps', 0.0)} "
+        f"cost_bps_max={semantics_cost.get('max_bps', 0.0)}"
     )
     a10_funnel_core = (
         a10_2_stage_funnel_report.get("funnel_summary_core", {})

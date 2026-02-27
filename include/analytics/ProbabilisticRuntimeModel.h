@@ -29,6 +29,14 @@ struct ProbabilisticInference {
     double cost_bps_estimate = 0.0;
     double expected_edge_bps = 0.0;
     double expected_edge_pct = 0.0;
+    std::string edge_semantics = "net";
+    bool root_cost_model_enabled_configured = false;
+    bool phase3_cost_model_enabled_configured = false;
+    bool root_cost_model_enabled_effective = false;
+    bool phase3_cost_model_enabled_effective = false;
+    bool edge_semantics_guard_violation = false;
+    bool edge_semantics_guard_forced_off = false;
+    std::string edge_semantics_guard_action = "none";
     double ev_confidence = 1.0;
     bool edge_regressor_used = false;
     bool ev_calibration_applied = false;
@@ -49,6 +57,17 @@ struct ProbabilisticInference {
 
 class ProbabilisticRuntimeModel {
 public:
+    struct RuntimeSemanticsState {
+        std::string edge_semantics = "net";
+        bool root_cost_model_enabled_configured = false;
+        bool phase3_cost_model_enabled_configured = false;
+        bool root_cost_model_enabled_effective = false;
+        bool phase3_cost_model_enabled_effective = false;
+        bool guard_violation = false;
+        bool guard_forced_off = false;
+        std::string guard_action = "none";
+    };
+
     struct Phase3FrontierPolicy {
         bool enabled = false;
         double k_margin = 0.0;
@@ -481,6 +500,7 @@ public:
     const std::vector<std::string>& featureColumns() const { return feature_columns_; }
     const Phase3Policy& phase3Policy() const { return phase3_policy_; }
     const Phase4Policy& phase4Policy() const { return phase4_policy_; }
+    const RuntimeSemanticsState& runtimeSemanticsState() const { return runtime_semantics_state_; }
 
     // `transformed_features` must already match the runtime bundle transform contract.
     bool infer(
@@ -557,6 +577,7 @@ private:
     RuntimeCostModel cost_model_;
     Phase3Policy phase3_policy_;
     Phase4Policy phase4_policy_;
+    RuntimeSemanticsState runtime_semantics_state_;
     std::vector<EvCalibrationBucket> ev_calibration_buckets_;
     bool has_default_entry_ = false;
     bool prefer_default_entry_ = false;

@@ -166,6 +166,17 @@ void appendPolicyDecisionAudit(
         item["policy_score"] = d.policy_score;
         item["strength"] = d.strength;
         item["expected_value"] = d.expected_value;
+        item["expected_edge_calibrated_bps"] = d.expected_edge_calibrated_bps;
+        item["expected_edge_used_for_gate_bps"] = d.expected_edge_used_for_gate_bps;
+        item["cost_bps_estimate_used"] = d.cost_bps_estimate_used;
+        item["edge_semantics"] = d.edge_semantics;
+        item["root_cost_model_enabled_configured"] = d.root_cost_model_enabled_configured;
+        item["phase3_cost_model_enabled_configured"] = d.phase3_cost_model_enabled_configured;
+        item["root_cost_model_enabled_effective"] = d.root_cost_model_enabled_effective;
+        item["phase3_cost_model_enabled_effective"] = d.phase3_cost_model_enabled_effective;
+        item["edge_semantics_guard_violation"] = d.edge_semantics_guard_violation;
+        item["edge_semantics_guard_forced_off"] = d.edge_semantics_guard_forced_off;
+        item["edge_semantics_guard_action"] = d.edge_semantics_guard_action;
         item["liquidity"] = d.liquidity_score;
         item["volatility"] = d.volatility;
         item["trades"] = d.strategy_trades;
@@ -229,7 +240,16 @@ struct ProbabilisticRuntimeSnapshot {
     double margin_h5 = 0.0;
     double expected_edge_raw_pct = 0.0;
     double expected_edge_calibrated_pct = 0.0;
+    double expected_edge_calibrated_bps = 0.0;
     double expected_edge_pct = 0.0;
+    std::string edge_semantics = "net";
+    bool root_cost_model_enabled_configured = false;
+    bool phase3_cost_model_enabled_configured = false;
+    bool root_cost_model_enabled_effective = false;
+    bool phase3_cost_model_enabled_effective = false;
+    bool edge_semantics_guard_violation = false;
+    bool edge_semantics_guard_forced_off = false;
+    std::string edge_semantics_guard_action = "none";
     double ev_confidence = 1.0;
     bool edge_regressor_used = false;
     bool ev_calibration_applied = false;
@@ -237,6 +257,7 @@ struct ProbabilisticRuntimeSnapshot {
     double cost_exit_pct = 0.0;
     double cost_tail_pct = 0.0;
     double cost_used_pct = 0.0;
+    double cost_used_bps_estimate = 0.0;
     std::string cost_mode = "mean_mode";
     bool phase3_frontier_enabled = false;
     bool phase3_ev_calibration_enabled = false;
@@ -425,6 +446,8 @@ void appendPhase4CandidateArtifact(
         item["decision_time"] = normalizeTimestampMs(timestamp_ms);
         item["expected_edge_after_cost_pct"] = signal.expected_value;
         item["expected_edge_tail_after_cost_pct"] = signal.expected_value;
+        item["expected_edge_calibrated_bps"] = signal.phase3.expected_edge_calibrated_bps;
+        item["expected_edge_used_for_gate_bps"] = signal.phase3.expected_edge_used_for_gate_bps;
         item["margin"] = signal.probabilistic_h5_margin;
         item["prob_confidence"] = signal.probabilistic_h5_calibrated;
         item["ev_confidence"] = signal.phase3.ev_confidence;
@@ -437,6 +460,7 @@ void appendPhase4CandidateArtifact(
             {"exit_pct", signal.phase3.cost_exit_pct},
             {"tail_pct", signal.phase3.cost_tail_pct},
             {"used_pct", signal.phase3.cost_used_pct},
+            {"used_bps_estimate", signal.phase3.cost_used_bps_estimate},
         };
         item["execution_proxy"] = {
             {"signal_strength", signal.strength},
@@ -448,6 +472,14 @@ void appendPhase4CandidateArtifact(
             {"phase3_frontier_enabled", signal.phase3.frontier_enabled},
             {"phase3_cost_mode", signal.phase3.cost_mode},
             {"edge_regressor_used", signal.phase3.edge_regressor_used},
+            {"edge_semantics", signal.phase3.edge_semantics},
+            {"root_cost_model_enabled_configured", signal.phase3.root_cost_model_enabled_configured},
+            {"phase3_cost_model_enabled_configured", signal.phase3.phase3_cost_model_enabled_configured},
+            {"root_cost_model_enabled_effective", signal.phase3.root_cost_model_enabled_effective},
+            {"phase3_cost_model_enabled_effective", signal.phase3.phase3_cost_model_enabled_effective},
+            {"edge_semantics_guard_violation", signal.phase3.edge_semantics_guard_violation},
+            {"edge_semantics_guard_forced_off", signal.phase3.edge_semantics_guard_forced_off},
+            {"edge_semantics_guard_action", signal.phase3.edge_semantics_guard_action},
         };
         line["candidates"].push_back(std::move(item));
     }
@@ -784,7 +816,16 @@ bool inferProbabilisticRuntimeSnapshot(
         -0.05,
         0.05
     );
+    out_snapshot.expected_edge_calibrated_bps = inference.expected_edge_calibrated_bps;
     out_snapshot.expected_edge_pct = std::clamp(inference.expected_edge_pct, -0.05, 0.05);
+    out_snapshot.edge_semantics = inference.edge_semantics;
+    out_snapshot.root_cost_model_enabled_configured = inference.root_cost_model_enabled_configured;
+    out_snapshot.phase3_cost_model_enabled_configured = inference.phase3_cost_model_enabled_configured;
+    out_snapshot.root_cost_model_enabled_effective = inference.root_cost_model_enabled_effective;
+    out_snapshot.phase3_cost_model_enabled_effective = inference.phase3_cost_model_enabled_effective;
+    out_snapshot.edge_semantics_guard_violation = inference.edge_semantics_guard_violation;
+    out_snapshot.edge_semantics_guard_forced_off = inference.edge_semantics_guard_forced_off;
+    out_snapshot.edge_semantics_guard_action = inference.edge_semantics_guard_action;
     out_snapshot.ev_confidence = std::clamp(inference.ev_confidence, 0.0, 1.0);
     out_snapshot.edge_regressor_used = inference.edge_regressor_used;
     out_snapshot.ev_calibration_applied = inference.ev_calibration_applied;
@@ -792,6 +833,7 @@ bool inferProbabilisticRuntimeSnapshot(
     out_snapshot.cost_exit_pct = std::clamp(inference.exit_cost_bps_estimate / 10000.0, 0.0, 0.10);
     out_snapshot.cost_tail_pct = std::clamp(inference.tail_cost_bps_estimate / 10000.0, 0.0, 0.10);
     out_snapshot.cost_used_pct = std::clamp(inference.cost_used_bps_estimate / 10000.0, 0.0, 0.10);
+    out_snapshot.cost_used_bps_estimate = inference.cost_used_bps_estimate;
     out_snapshot.cost_mode = inference.cost_mode;
     const auto& phase3_policy = model.phase3Policy();
     const auto& phase4_policy = model.phase4Policy();
@@ -934,12 +976,22 @@ bool applyProbabilisticRuntimeAdjustment(
     signal.phase3.edge_regressor_used = snapshot.edge_regressor_used;
     signal.phase3.ev_calibration_applied = snapshot.ev_calibration_applied;
     signal.phase3.ev_confidence = snapshot.ev_confidence;
+    signal.phase3.edge_semantics = snapshot.edge_semantics;
+    signal.phase3.root_cost_model_enabled_configured = snapshot.root_cost_model_enabled_configured;
+    signal.phase3.phase3_cost_model_enabled_configured = snapshot.phase3_cost_model_enabled_configured;
+    signal.phase3.root_cost_model_enabled_effective = snapshot.root_cost_model_enabled_effective;
+    signal.phase3.phase3_cost_model_enabled_effective = snapshot.phase3_cost_model_enabled_effective;
+    signal.phase3.edge_semantics_guard_violation = snapshot.edge_semantics_guard_violation;
+    signal.phase3.edge_semantics_guard_forced_off = snapshot.edge_semantics_guard_forced_off;
+    signal.phase3.edge_semantics_guard_action = snapshot.edge_semantics_guard_action;
     signal.phase3.expected_edge_raw_pct = snapshot.expected_edge_raw_pct;
     signal.phase3.expected_edge_calibrated_pct = snapshot.expected_edge_calibrated_pct;
+    signal.phase3.expected_edge_calibrated_bps = snapshot.expected_edge_calibrated_bps;
     signal.phase3.cost_entry_pct = snapshot.cost_entry_pct;
     signal.phase3.cost_exit_pct = snapshot.cost_exit_pct;
     signal.phase3.cost_tail_pct = snapshot.cost_tail_pct;
     signal.phase3.cost_used_pct = snapshot.cost_used_pct;
+    signal.phase3.cost_used_bps_estimate = snapshot.cost_used_bps_estimate;
     signal.phase3.cost_mode = snapshot.cost_mode;
     signal.phase3.frontier_k_margin = snapshot.phase3_frontier_policy.k_margin;
     signal.phase3.frontier_k_margin_scale =
@@ -1219,11 +1271,13 @@ bool applyProbabilisticRuntimeAdjustment(
 
     if (cfg.probabilistic_runtime_hard_gate &&
         effective_margin < cfg.probabilistic_runtime_hard_gate_margin) {
+        signal.phase3.expected_edge_used_for_gate_bps = signal.expected_value * 10000.0;
         if (reject_reason != nullptr) {
             *reject_reason = "probabilistic_runtime_hard_gate";
         }
         return false;
     }
+    signal.phase3.expected_edge_used_for_gate_bps = signal.expected_value * 10000.0;
     return true;
 }
 

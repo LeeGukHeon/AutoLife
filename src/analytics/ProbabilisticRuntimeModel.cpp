@@ -573,6 +573,7 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
     cost_model_ = RuntimeCostModel{};
     phase3_policy_ = Phase3Policy{};
     phase4_policy_ = Phase4Policy{};
+    runtime_semantics_state_ = RuntimeSemanticsState{};
     ev_calibration_buckets_.clear();
 
     std::ifstream in(path, std::ios::binary);
@@ -621,7 +622,15 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         return false;
     }
 
+    std::string edge_semantics = lowerCopy(root.value("edge_semantics", std::string("net")));
+    if (edge_semantics != "gross") {
+        edge_semantics = "net";
+    }
+    runtime_semantics_state_.edge_semantics = edge_semantics;
+
     const auto cost_model_node = root.value("cost_model", nlohmann::json::object());
+    runtime_semantics_state_.root_cost_model_enabled_configured =
+        bool(cost_model_node.is_object() && cost_model_node.value("enabled", false));
     if (cost_model_node.is_object()) {
         cost_model_.enabled = cost_model_node.value("enabled", false);
         cost_model_.fee_floor_bps = parseCostParam(cost_model_node, "fee_floor_bps", 6.0, 0.0, 2000.0);
@@ -661,6 +670,8 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
     phase3_policy_.phase3_frontier_enabled = phase3_frontier_node.value("enabled", false);
     phase3_policy_.phase3_ev_calibration_enabled = phase3_ev_calibration_node.value("enabled", false);
     phase3_policy_.phase3_cost_tail_enabled = phase3_cost_node.value("enabled", false);
+    runtime_semantics_state_.phase3_cost_model_enabled_configured =
+        bool(phase3_cost_node.is_object() && phase3_cost_node.value("enabled", false));
     phase3_policy_.phase3_adaptive_ev_blend_enabled = phase3_blend_node.value("enabled", false);
     phase3_policy_.phase3_diagnostics_v2_enabled = phase3_diag_node.value("enabled", false);
 
@@ -868,6 +879,24 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         0.0,
         1.0
     );
+
+    // NET semantics guardrail:
+    // edge is already net in label/runtime semantics, so runtime cost subtraction path must stay OFF.
+    if (runtime_semantics_state_.edge_semantics == "net") {
+        const bool configured_root = runtime_semantics_state_.root_cost_model_enabled_configured;
+        const bool configured_phase3 = runtime_semantics_state_.phase3_cost_model_enabled_configured;
+        if (configured_root || configured_phase3) {
+            runtime_semantics_state_.guard_violation = true;
+            runtime_semantics_state_.guard_forced_off = true;
+            runtime_semantics_state_.guard_action = "force_off";
+            cost_model_.enabled = false;
+            phase3_policy_.phase3_cost_tail_enabled = false;
+            phase3_policy_.cost_model.enabled = false;
+        }
+    }
+    runtime_semantics_state_.root_cost_model_enabled_effective = bool(cost_model_.enabled);
+    runtime_semantics_state_.phase3_cost_model_enabled_effective =
+        bool(phase3_policy_.phase3_cost_tail_enabled && phase3_policy_.cost_model.enabled);
 
     phase3_policy_.adaptive_ev_blend.enabled = phase3_policy_.phase3_adaptive_ev_blend_enabled;
     phase3_policy_.adaptive_ev_blend.min = parseCostParam(phase3_blend_node, "min", 0.05, 0.0, 1.0);
@@ -3328,6 +3357,14 @@ bool ProbabilisticRuntimeModel::infer(
     out.phase3_cost_tail_enabled = phase3_policy_.phase3_cost_tail_enabled;
     out.phase3_adaptive_ev_blend_enabled = phase3_policy_.phase3_adaptive_ev_blend_enabled;
     out.phase3_diagnostics_v2_enabled = phase3_policy_.phase3_diagnostics_v2_enabled;
+    out.edge_semantics = runtime_semantics_state_.edge_semantics;
+    out.root_cost_model_enabled_configured = runtime_semantics_state_.root_cost_model_enabled_configured;
+    out.phase3_cost_model_enabled_configured = runtime_semantics_state_.phase3_cost_model_enabled_configured;
+    out.root_cost_model_enabled_effective = runtime_semantics_state_.root_cost_model_enabled_effective;
+    out.phase3_cost_model_enabled_effective = runtime_semantics_state_.phase3_cost_model_enabled_effective;
+    out.edge_semantics_guard_violation = runtime_semantics_state_.guard_violation;
+    out.edge_semantics_guard_forced_off = runtime_semantics_state_.guard_forced_off;
+    out.edge_semantics_guard_action = runtime_semantics_state_.guard_action;
     out.phase4_portfolio_allocator_enabled = phase4_policy_.phase4_portfolio_allocator_enabled;
     out.phase4_correlation_control_enabled = phase4_policy_.phase4_correlation_control_enabled;
     out.phase4_risk_budget_enabled = phase4_policy_.phase4_risk_budget_enabled;

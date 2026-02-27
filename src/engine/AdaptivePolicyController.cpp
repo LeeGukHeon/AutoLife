@@ -157,6 +157,17 @@ PolicyOutput AdaptivePolicyController::selectCandidates(const PolicyInput& input
         rec.strategy_trades = hist_trades;
         rec.strategy_win_rate = hist_wr;
         rec.strategy_profit_factor = hist_pf;
+        rec.expected_edge_calibrated_bps = s.phase3.expected_edge_calibrated_bps;
+        rec.expected_edge_used_for_gate_bps = s.phase3.expected_edge_used_for_gate_bps;
+        rec.cost_bps_estimate_used = s.phase3.cost_used_bps_estimate;
+        rec.edge_semantics = s.phase3.edge_semantics;
+        rec.root_cost_model_enabled_configured = s.phase3.root_cost_model_enabled_configured;
+        rec.phase3_cost_model_enabled_configured = s.phase3.phase3_cost_model_enabled_configured;
+        rec.root_cost_model_enabled_effective = s.phase3.root_cost_model_enabled_effective;
+        rec.phase3_cost_model_enabled_effective = s.phase3.phase3_cost_model_enabled_effective;
+        rec.edge_semantics_guard_violation = s.phase3.edge_semantics_guard_violation;
+        rec.edge_semantics_guard_forced_off = s.phase3.edge_semantics_guard_forced_off;
+        rec.edge_semantics_guard_action = s.phase3.edge_semantics_guard_action;
         rec.used_preloaded_tf_5m = s.used_preloaded_tf_5m;
         rec.used_preloaded_tf_1h = s.used_preloaded_tf_1h;
         rec.used_resampled_tf_fallback = s.used_resampled_tf_fallback;

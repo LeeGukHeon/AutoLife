@@ -32,6 +32,17 @@ struct PolicyDecisionRecord {
     int strategy_trades = 0;
     double strategy_win_rate = 0.0;
     double strategy_profit_factor = 0.0;
+    double expected_edge_calibrated_bps = 0.0;
+    double expected_edge_used_for_gate_bps = 0.0;
+    double cost_bps_estimate_used = 0.0;
+    std::string edge_semantics = "net";
+    bool root_cost_model_enabled_configured = false;
+    bool phase3_cost_model_enabled_configured = false;
+    bool root_cost_model_enabled_effective = false;
+    bool phase3_cost_model_enabled_effective = false;
+    bool edge_semantics_guard_violation = false;
+    bool edge_semantics_guard_forced_off = false;
+    std::string edge_semantics_guard_action = "none";
     bool used_preloaded_tf_5m = false;
     bool used_preloaded_tf_1h = false;
     bool used_resampled_tf_fallback = false;
