@@ -288,6 +288,14 @@ std::string normalizeCostMode(std::string mode) {
     return "mean_mode";
 }
 
+std::string normalizeMarginMinRangingMode(std::string mode) {
+    mode = lowerCopy(std::move(mode));
+    if (mode == "observe" || mode == "observe_only" || mode == "telemetry_only") {
+        return "observe_only";
+    }
+    return "enforce";
+}
+
 struct RuntimeCostBreakdown {
     std::string mode = "mean_mode";
     double entry_bps = 0.0;
@@ -2025,6 +2033,16 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         0.0,
         -0.20,
         0.20
+    );
+    phase3_policy_.manager_filter.margin_min_ranging = parseCostParam(
+        phase3_manager_filter_node,
+        "margin_min_ranging",
+        0.0,
+        0.0,
+        1.0
+    );
+    phase3_policy_.manager_filter.margin_min_ranging_mode = normalizeMarginMinRangingMode(
+        phase3_manager_filter_node.value("margin_min_ranging_mode", std::string("enforce"))
     );
     phase3_policy_.manager_filter.scan_prefilter_margin_add_hostile = parseCostParam(
         phase3_manager_filter_node,

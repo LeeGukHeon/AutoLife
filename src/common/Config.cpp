@@ -217,6 +217,12 @@ void Config::load(const std::string& path) {
             engine_config_.mode = (mode_str == "LIVE") ? engine::TradingMode::LIVE : engine::TradingMode::PAPER;
             engine_config_.dry_run = t.value("dry_run", false);
             engine_config_.allow_live_orders = t.value("allow_live_orders", false);
+            engine_config_.live_paper_use_fixed_initial_capital =
+                t.value("live_paper_use_fixed_initial_capital", false);
+            engine_config_.live_paper_fixed_initial_capital_krw = std::max(
+                0.0,
+                t.value("live_paper_fixed_initial_capital_krw", initial_capital_)
+            );
             engine_config_.use_confirmed_candle_only_for_signals =
                 t.value("use_confirmed_candle_only_for_signals", true);
             engine_config_.enable_realtime_entry_veto =

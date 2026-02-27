@@ -196,7 +196,12 @@ int runInteractiveLiveMode(
     engine_config.mode = engine::TradingMode::LIVE;
     engine_config.dry_run = dry_run;
     engine_config.allow_live_orders = allow_live_orders;
-    engine_config.initial_capital = 0;
+    engine_config.initial_capital = std::max(0.0, cfg_engine.initial_capital);
+    engine_config.live_paper_use_fixed_initial_capital = cfg_engine.live_paper_use_fixed_initial_capital;
+    engine_config.live_paper_fixed_initial_capital_krw = std::max(
+        0.0,
+        cfg_engine.live_paper_fixed_initial_capital_krw
+    );
     engine_config.max_positions = max_positions;
     engine_config.max_daily_trades = max_daily_trades;
     engine_config.max_drawdown = max_drawdown_pct / 100.0;
@@ -221,6 +226,8 @@ int runInteractiveLiveMode(
     engine_config.min_strategy_profit_factor = std::max(0.1, min_ev_pf);
     engine_config.avoid_high_volatility = avoid_high_volatility;
     engine_config.avoid_trending_down = avoid_trending_down;
+    engine_config.enable_probabilistic_runtime_model = cfg_engine.enable_probabilistic_runtime_model;
+    engine_config.probabilistic_runtime_bundle_path = cfg_engine.probabilistic_runtime_bundle_path;
 
     auto cfg_strategies = config.getEngineConfig().enabled_strategies;
     if (!cfg_strategies.empty()) {
@@ -230,6 +237,11 @@ int runInteractiveLiveMode(
     std::cout << "\n[설정 요약]\n";
     std::cout << "모드:            " << (dry_run ? "DRY RUN" : "LIVE") << "\n";
     std::cout << "실주문 제출:     " << (engine_config.allow_live_orders ? "허용" : "차단(시뮬레이션)") << "\n";
+    if (!engine_config.allow_live_orders && engine_config.live_paper_use_fixed_initial_capital) {
+        std::cout << "페이퍼 고정 예산:   "
+                  << static_cast<long long>(engine_config.live_paper_fixed_initial_capital_krw)
+                  << " KRW\n";
+    }
     std::cout << "설정 방식:       "
               << (advanced_mode ? "ADVANCED(직접입력)" : (std::string("SIMPLE(") + live_profile_name + ")"))
               << "\n";

@@ -918,6 +918,27 @@ def bundle_diff(lhs: Dict[str, Any], rhs: Dict[str, Any]) -> List[Dict[str, Any]
 
 def kpis(report: Dict[str, Any]) -> Dict[str, Any]:
     agg = report.get("aggregates", {}) if isinstance(report.get("aggregates"), dict) else {}
+    protocol_split = (
+        report.get("protocol_split", {})
+        if isinstance(report.get("protocol_split"), dict)
+        else {}
+    )
+    throughput_observed_legacy_avg = max(0.0, f64(agg.get("avg_total_trades", 0.0), 0.0))
+    throughput_observed_core_filled = throughput_observed_legacy_avg
+    throughput_source = "legacy_avg_fallback"
+    if isinstance(protocol_split, dict):
+        if "total_trades_core_effective" in protocol_split:
+            throughput_observed_core_filled = max(
+                0.0,
+                f64(protocol_split.get("total_trades_core_effective", 0.0), 0.0),
+            )
+            throughput_source = "core_filled"
+        elif "orders_filled_core_effective" in protocol_split:
+            throughput_observed_core_filled = max(
+                0.0,
+                f64(protocol_split.get("orders_filled_core_effective", 0.0), 0.0),
+            )
+            throughput_source = "core_filled_orders_fallback"
     aad = ng(report, ["adaptive_validation", "aggregates"], {})
     if not isinstance(aad, dict):
         aad = {}
@@ -931,7 +952,10 @@ def kpis(report: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(p4, dict):
         p4 = {}
     return {
-        "throughput_avg_trades": max(0.0, f64(agg.get("avg_total_trades", 0.0), 0.0)),
+        "throughput_avg_trades": float(throughput_observed_core_filled),
+        "throughput_observed_core_filled": float(throughput_observed_core_filled),
+        "throughput_observed_legacy_avg": float(throughput_observed_legacy_avg),
+        "throughput_source": str(throughput_source),
         "quality_risk_adjusted_score": f64(aad.get("avg_risk_adjusted_score", 0.0), 0.0),
         "quality_realized_edge_proxy_krw": f64(agg.get("avg_expectancy_krw", 0.0), 0.0),
         "risk_drawdown_pct": max(0.0, f64(agg.get("peak_max_drawdown_pct", 0.0), 0.0)),
@@ -1085,11 +1109,35 @@ def apply_dynamic_throughput_gate(
     history_reports: List[Dict[str, Any]],
     history_report_paths: List[str],
 ) -> Dict[str, Any]:
-    observed = max(0.0, f64(ng(evaluation, ["kpis", "throughput_avg_trades"], 0.0), 0.0))
+    observed_core_filled = max(
+        0.0,
+        f64(ng(evaluation, ["kpis", "throughput_observed_core_filled"], 0.0), 0.0),
+    )
+    observed_legacy_avg = max(
+        0.0,
+        f64(ng(evaluation, ["kpis", "throughput_observed_legacy_avg"], 0.0), 0.0),
+    )
+    observed_source = str(
+        ng(evaluation, ["kpis", "throughput_source"], "legacy_avg_fallback")
+    ).strip() or "legacy_avg_fallback"
+    observed = max(
+        0.0,
+        f64(
+            ng(
+                evaluation,
+                ["kpis", "throughput_avg_trades"],
+                observed_core_filled if observed_source.startswith("core_filled") else observed_legacy_avg,
+            ),
+            0.0,
+        ),
+    )
     if not isinstance(throughput_policy, dict) or not bool(throughput_policy.get("enabled", False)):
         return {
             "enabled": False,
             "throughput_observed": float(observed),
+            "throughput_observed_core_filled": float(observed_core_filled),
+            "throughput_observed_legacy_avg": float(observed_legacy_avg),
+            "throughput_observed_source": str(observed_source),
             "lookup_limit": float(legacy_min_avg_trades),
             "dist_limit": float(legacy_min_avg_trades),
             "final_limit": float(legacy_min_avg_trades),
@@ -1234,6 +1282,9 @@ def apply_dynamic_throughput_gate(
         "enabled": True,
         "mode": "dynamic_limit",
         "throughput_observed": round(float(observed), 6),
+        "throughput_observed_core_filled": round(float(observed_core_filled), 6),
+        "throughput_observed_legacy_avg": round(float(observed_legacy_avg), 6),
+        "throughput_observed_source": str(observed_source),
         "lookup_limit": round(float(lookup_limit), 6),
         "dist_limit": round(float(dist_limit), 6),
         "final_limit": round(float(final_limit), 6),
@@ -1441,7 +1492,13 @@ def promotion_fail_rows(
     value_avg_fee = f64(k.get("risk_avg_fee_krw", agg.get("avg_fee_krw", 0.0)), 0.0)
     value_profit_factor = f64(agg.get("avg_profit_factor", 0.0), 0.0)
     value_expectancy = f64(k.get("quality_realized_edge_proxy_krw", agg.get("avg_expectancy_krw", 0.0)), 0.0)
-    value_throughput = f64(k.get("throughput_avg_trades", agg.get("avg_total_trades", 0.0)), 0.0)
+    value_throughput = f64(
+        k.get(
+            "throughput_avg_trades",
+            ng(report, ["protocol_split", "total_trades_core_effective"], agg.get("avg_total_trades", 0.0)),
+        ),
+        0.0,
+    )
 
     rows: List[Dict[str, Any]] = []
 
@@ -1544,6 +1601,35 @@ def promotion_fail_rows(
 
     rows.sort(key=lambda item: (-f64(item.get("contribution_score", 0.0), 0.0), str(item.get("reason_key", ""))))
     return rows
+
+
+def derive_promotion_state(
+    *,
+    rollback: bool,
+    strict_parity_hold: bool,
+    current_stage: str,
+    next_stage: str,
+) -> Dict[str, Any]:
+    cur = str(current_stage).strip().lower()
+    nxt = str(next_stage).strip().lower()
+    if rollback:
+        promotion_state = "S0"
+    elif strict_parity_hold:
+        promotion_state = "S1"
+    elif cur == "live100" or nxt == "live100":
+        promotion_state = "S3"
+    elif cur in {"live10", "live30"} or nxt in {"live10", "live30"}:
+        promotion_state = "S2"
+    else:
+        promotion_state = "S1"
+
+    paper_allowed = promotion_state in {"S1", "S2", "S3"}
+    live_allowed = (promotion_state in {"S2", "S3"}) and (not strict_parity_hold)
+    return {
+        "promotion_state": promotion_state,
+        "paper_promotion_allowed": bool(paper_allowed),
+        "live_promotion_allowed": bool(live_allowed),
+    }
 
 
 def cmd_control(args: argparse.Namespace) -> int:
@@ -1719,6 +1805,17 @@ def cmd_promotion(args: argparse.Namespace) -> int:
             f64(ng(ev, ["kpis", "throughput_avg_trades"], 0.0), 0.0),
             6,
         ),
+        "throughput_observed_core_filled": round(
+            f64(ng(ev, ["kpis", "throughput_observed_core_filled"], 0.0), 0.0),
+            6,
+        ),
+        "throughput_observed_legacy_avg": round(
+            f64(ng(ev, ["kpis", "throughput_observed_legacy_avg"], 0.0), 0.0),
+            6,
+        ),
+        "throughput_observed_source": str(
+            ng(ev, ["kpis", "throughput_source"], "legacy_avg_fallback")
+        ),
         "legacy_threshold": round(float(args.min_avg_trades), 6),
     }
     history_reports: List[Dict[str, Any]] = []
@@ -1789,6 +1886,12 @@ def cmd_promotion(args: argparse.Namespace) -> int:
     strict_parity_eval["recent_n"] = int(recent_n)
     strict_parity_eval["recent_fail_count"] = int(recent_fail_count)
     strict_parity_eval["always_fail_recent_n"] = bool(always_fail_recent_n)
+    promotion_state = derive_promotion_state(
+        rollback=bool(rollback),
+        strict_parity_hold=bool(strict_parity_hold),
+        current_stage=cur,
+        next_stage=nxt,
+    )
 
     ps.update({
         "last_updated_at": now_iso(),
@@ -1805,6 +1908,10 @@ def cmd_promotion(args: argparse.Namespace) -> int:
             if str(row.get("reason_key", "")).strip()
         },
         "strict_parity_fail_history": strict_history,
+        "promotion_state": str(promotion_state.get("promotion_state", "S0")),
+        "strict_parity_hold": bool(strict_parity_hold),
+        "paper_promotion_allowed": bool(promotion_state.get("paper_promotion_allowed", False)),
+        "live_promotion_allowed": bool(promotion_state.get("live_promotion_allowed", False)),
     })
     state["promotion_gate"] = ps
     dump_json(spath, state)
@@ -1827,6 +1934,28 @@ def cmd_promotion(args: argparse.Namespace) -> int:
             debug_payload["bundle_json"] = str(resolve_repo_path(args.bundle_json))
         debug_payload["history_report_jsons"] = history_paths
         dump_json(resolve_repo_path(args.throughput_dynamic_debug_json), debug_payload)
+    if str(args.a21_throughput_source_debug_json).strip():
+        a21_payload = {
+            "generated_at": now_iso(),
+            "source": str(throughput_debug.get("throughput_observed_source", "")),
+            "throughput_observed_core_filled": round(
+                f64(throughput_debug.get("throughput_observed_core_filled", 0.0), 0.0),
+                6,
+            ),
+            "throughput_observed_legacy_avg": round(
+                f64(throughput_debug.get("throughput_observed_legacy_avg", 0.0), 0.0),
+                6,
+            ),
+            "lookup_limit": round(f64(throughput_debug.get("lookup_limit", args.min_avg_trades), 0.0), 6),
+            "dist_limit": round(f64(throughput_debug.get("dist_limit", args.min_avg_trades), 0.0), 6),
+            "final_limit": round(f64(throughput_debug.get("final_limit", args.min_avg_trades), 0.0), 6),
+            "throughput_ok": bool(throughput_debug.get("throughput_ok", False)),
+            "throughput_hold": bool(throughput_debug.get("throughput_hold", False)),
+            "paper_report_json": str(resolve_repo_path(args.paper_report_json)),
+            "bundle_json": str(resolve_repo_path(args.bundle_json)) if str(args.bundle_json).strip() else "",
+            "history_report_jsons": history_paths,
+        }
+        dump_json(resolve_repo_path(args.a21_throughput_source_debug_json), a21_payload)
     dump_json(
         resolve_repo_path(args.output_json),
         {
@@ -1837,6 +1966,10 @@ def cmd_promotion(args: argparse.Namespace) -> int:
             "action": action,
             "rollback": rollback,
             "consecutive_ok": c,
+            "promotion_state": str(promotion_state.get("promotion_state", "S0")),
+            "strict_parity_hold": bool(strict_parity_hold),
+            "paper_promotion_allowed": bool(promotion_state.get("paper_promotion_allowed", False)),
+            "live_promotion_allowed": bool(promotion_state.get("live_promotion_allowed", False)),
             "evaluation": ev,
             "top_failed_reasons": top_fail_rows,
             "strict_parity_gate": strict_parity_eval,
@@ -3196,6 +3329,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--bundle-json", default="")
     g.add_argument("--history-report-jsons", nargs="*", default=[])
     g.add_argument("--throughput-dynamic-debug-json", default="")
+    g.add_argument("--a21-throughput-source-debug-json", default="")
     g.add_argument("--strict-parity-diagnosis-json", default="")
 
     d = s.add_parser("bundle_diff")

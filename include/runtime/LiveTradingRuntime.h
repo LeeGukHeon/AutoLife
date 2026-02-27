@@ -182,6 +182,12 @@ private:
     bool isLiveRealOrderEnabled() const {
         return config_.mode == TradingMode::LIVE && !config_.dry_run && config_.allow_live_orders;
     }
+    bool isLivePaperFixedCapitalMode() const {
+        return config_.mode == TradingMode::LIVE &&
+               !config_.allow_live_orders &&
+               config_.live_paper_use_fixed_initial_capital &&
+               config_.live_paper_fixed_initial_capital_krw > 0.0;
+    }
     void logPerformance();
     // [異붽?] 怨꾩쥖 ?곹깭瑜?議고쉶?섏뿬 RiskManager? ?숆린??
     void syncAccountState();

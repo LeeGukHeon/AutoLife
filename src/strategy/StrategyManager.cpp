@@ -320,6 +320,7 @@ std::vector<Signal> StrategyManager::filterSignalsWithDiagnostics(
         diagnostics->input_count = static_cast<int>(signals.size());
         diagnostics->output_count = 0;
         diagnostics->rejection_reason_counts.clear();
+        diagnostics->frontier_decision_samples.clear();
     }
     auto* rejection_bucket =
         diagnostics != nullptr ? &diagnostics->rejection_reason_counts : nullptr;
@@ -405,8 +406,64 @@ std::vector<Signal> StrategyManager::filterSignalsWithDiagnostics(
         input.min_history_profit_factor = gate.min_profit_factor;
 
         const foundation::FilterDecision decision = foundation::evaluateFilter(input);
+        if (diagnostics != nullptr && decision.frontier_enabled) {
+            StrategyManager::FilterDiagnostics::FrontierDecisionSample sample;
+            sample.market = signal.market;
+            sample.strategy_name = signal.strategy_name;
+            sample.regime = autolife::common::runtime_diag::marketRegimeLabel(signal.market_regime);
+            sample.frontier_enabled = decision.frontier_enabled;
+            sample.frontier_pass = decision.frontier_pass;
+            sample.expected_value_pass = decision.expected_value_pass;
+            sample.margin_pass = decision.margin_pass;
+            sample.ev_confidence_pass = decision.ev_confidence_pass;
+            sample.cost_tail_pass = decision.cost_tail_pass;
+            sample.manager_pass = decision.pass;
+            sample.expected_value_observed = signal.expected_value;
+            sample.required_expected_value = decision.required_expected_value;
+            sample.expected_value_slack = signal.expected_value - decision.required_expected_value;
+            sample.margin_observed = std::clamp(signal.probabilistic_h5_margin, -1.0, 1.0);
+            sample.margin_floor = std::clamp(signal.phase3.frontier_margin_floor, -1.0, 1.0);
+            sample.margin_slack = sample.margin_observed - sample.margin_floor;
+            sample.ev_confidence_observed = std::clamp(decision.ev_confidence, 0.0, 1.0);
+            sample.ev_confidence_floor = std::clamp(signal.phase3.frontier_ev_confidence_floor, 0.0, 1.0);
+            sample.ev_confidence_slack = sample.ev_confidence_observed - sample.ev_confidence_floor;
+            sample.cost_tail_observed = std::max(0.0, decision.cost_tail_term);
+            sample.cost_tail_limit = std::clamp(signal.phase3.frontier_cost_tail_reject_threshold_pct, 0.0, 1.0);
+            sample.cost_tail_slack = sample.cost_tail_limit - sample.cost_tail_observed;
+            diagnostics->frontier_decision_samples.push_back(std::move(sample));
+        }
+        const double ranging_margin_min = std::max(
+            0.0,
+            signal.phase3.manager_filter.margin_min_ranging
+        );
+        const double h5_margin = std::isfinite(signal.probabilistic_h5_margin)
+            ? std::clamp(signal.probabilistic_h5_margin, -1.0, 1.0)
+            : -1.0;
+        const std::string ranging_margin_mode = toLowerCopy(
+            signal.phase3.manager_filter.margin_min_ranging_mode
+        );
+        const bool ranging_margin_observe_only =
+            ranging_margin_mode == "observe_only" ||
+            ranging_margin_mode == "observe" ||
+            ranging_margin_mode == "telemetry_only";
+        const bool reject_ranging_margin_insufficient =
+            regime == analytics::MarketRegime::RANGING &&
+            ranging_margin_min > 0.0 &&
+            h5_margin < ranging_margin_min;
         const bool reject_expected_edge_negative =
             std::isfinite(signal.expected_value) && signal.expected_value < 0.0;
+
+        if (decision.pass && reject_ranging_margin_insufficient) {
+            incrementCounter(rejection_bucket, "reject_ranging_margin_insufficient_count", 1);
+            incrementCounter(rejection_bucket, "ranging_margin_insufficient_observed_count", 1);
+            incrementCounter(rejection_bucket, "ranging_margin_insufficient_would_reject_count", 1);
+            if (!ranging_margin_observe_only) {
+                recordPhase3DiagnosticsV2(rejection_bucket, signal, false);
+                incrementRejectionReason(rejection_bucket, "reject_ranging_margin_insufficient");
+                continue;
+            }
+            incrementCounter(rejection_bucket, "ranging_margin_observe_only_mode_count", 1);
+        }
 
         if (decision.pass && reject_expected_edge_negative) {
             recordPhase3DiagnosticsV2(rejection_bucket, signal, false);

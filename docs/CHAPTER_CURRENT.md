@@ -118,8 +118,8 @@ Title: `Probabilistic Hybrid Foundation`
      - bundle parity: `build/Release/logs/probabilistic_runtime_bundle_parity_smokehybrid3_20260221.json` (`status=pass`)
 
 ## Post-Fetch Canonical Order
-- 수집 완료 후 실행 순서는 `docs/PROBABILISTIC_EXECUTION_ROADMAP_2026-02-21.md`의
-  `Post-Fetch Canonical Order (Ideal)`을 단일 기준으로 사용.
+- 수집 완료 후 실행 순서 및 Stage B~E 실험 규칙은
+  `docs/STRICT_GATE_RUNBOOK_2026-02-13.md`를 단일 기준으로 사용.
 - 요약:
   1. fetch 완료/실패건 고정
   2. feature rebuild

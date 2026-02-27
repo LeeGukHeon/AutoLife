@@ -107,6 +107,8 @@ struct Signal {
 
         struct ManagerFilterPolicy {
             bool enabled = false;
+            double margin_min_ranging = 0.0;
+            std::string margin_min_ranging_mode = "enforce";
             double required_strength_cap = 0.95;
             double core_signal_ownership_strength_relief = 0.02;
             double core_signal_ownership_expected_value_floor = -0.00005;

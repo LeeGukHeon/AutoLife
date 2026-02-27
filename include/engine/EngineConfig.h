@@ -348,6 +348,11 @@ struct EngineConfig {
     double entry_capacity_slippage_guard_multiplier = 1.50;
     bool dry_run = false;
     bool allow_live_orders = false;
+    // Live paper mode option:
+    // when true (LIVE + allow_live_orders=false), do not sync wallet balance and
+    // use fixed capital as single source of truth for risk/sizing/PnL baseline.
+    bool live_paper_use_fixed_initial_capital = false;
+    double live_paper_fixed_initial_capital_krw = 0.0;
     // Live signal quality guard:
     // use only confirmed candles (drop potentially in-progress latest bar).
     bool use_confirmed_candle_only_for_signals = true;

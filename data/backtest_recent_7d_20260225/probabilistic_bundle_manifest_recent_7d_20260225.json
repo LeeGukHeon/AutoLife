@@ -1,0 +1,532 @@
+{
+  "generated_at_utc": "2026-02-25T09:01:42.462628+00:00",
+  "run_state": "completed",
+  "history_window": {
+    "start_utc": "2026-02-18T09:00:32+00:00",
+    "end_utc": "2026-02-25T09:00:32+00:00"
+  },
+  "market_groups": {
+    "major": [
+      "KRW-BTC",
+      "KRW-ETH",
+      "KRW-XRP",
+      "KRW-SOL",
+      "KRW-DOGE"
+    ],
+    "alt": [
+      "KRW-BTC"
+    ],
+    "all_unique": [
+      "KRW-BTC",
+      "KRW-ETH",
+      "KRW-XRP",
+      "KRW-SOL",
+      "KRW-DOGE"
+    ]
+  },
+  "markets_scope": "all",
+  "universe_file_path": "",
+  "universe_file_hash": "",
+  "universe_final_1m_markets": [],
+  "timeframes_min": [
+    1,
+    5,
+    15,
+    60,
+    240
+  ],
+  "estimate_only": false,
+  "skip_existing": false,
+  "incremental_update": false,
+  "incremental_overlap_bars": 3,
+  "planned_job_count": 25,
+  "completed_job_count": 25,
+  "progress_pct": 100.0,
+  "job_count": 25,
+  "success_count": 25,
+  "failed_count": 0,
+  "skipped_existing_count": 0,
+  "estimated_totals": {
+    "rows": 64890,
+    "raw_ohlcv_csv_bytes": 7137900,
+    "raw_ohlcv_csv_human": "6.81 MB",
+    "enriched_csv_bytes": 36338400,
+    "enriched_csv_human": "34.65 MB",
+    "indicator_columns_assumed": 30
+  },
+  "actual_totals": {
+    "rows": 64875,
+    "csv_bytes": 4066333,
+    "csv_human": "3.88 MB"
+  },
+  "storage_guard": {
+    "output_dir": "D:\\MyApps\\AutoLife\\data\\backtest_recent_7d_20260225",
+    "current_output_bytes": 4066333,
+    "current_output_human": "3.88 MB",
+    "max_output_bytes": 0,
+    "max_output_human": "disabled",
+    "free_disk_bytes": 376709021696,
+    "free_disk_human": "350.84 GB",
+    "min_free_bytes": 1073741824,
+    "min_free_human": "1.00 GB",
+    "free_after_headroom_bytes": 375635279872,
+    "free_after_headroom_human": "349.84 GB",
+    "output_cap_remaining_bytes": -1,
+    "output_cap_remaining_human": "unbounded",
+    "allowed_new_bytes": 375635279872,
+    "allowed_new_human": "349.84 GB"
+  },
+  "current_job": {},
+  "jobs": [
+    {
+      "market": "KRW-BTC",
+      "unit_min": 1,
+      "output_path": "D:\\MyApps\\AutoLife\\data\\backtest_recent_7d_20260225\\upbit_KRW_BTC_1m_full.csv",
+      "estimated_candles": 10080,
+      "estimated_sizes": {
+        "raw_ohlcv_csv_bytes": 1108800,
+        "enriched_csv_bytes": 5644800
+      },
+      "incremental_mode": false,
+      "status": "fetched",
+      "rows": 10079,
+      "file_size_bytes": 712535,
+      "from_utc": "2026-02-18T09:02:58.031000+00:00",
+      "to_utc": "2026-02-25T09:00:31.776000+00:00",
+      "stderr_tail": "",
+      "elapsed_sec": 8.83
+    },
+    {
+      "market": "KRW-BTC",
+      "unit_min": 5,
+      "output_path": "D:\\MyApps\\AutoLife\\data\\backtest_recent_7d_20260225\\upbit_KRW_BTC_5m_full.csv",
+      "estimated_candles": 2016,
+      "estimated_sizes": {
+        "raw_ohlcv_csv_bytes": 221760,
+        "enriched_csv_bytes": 1128960
+      },
+      "incremental_mode": false,
+      "status": "fetched",
+      "rows": 2015,
+      "file_size_bytes": 142786,
+      "from_utc": "2026-02-18T09:14:58.666000+00:00",
+      "to_utc": "2026-02-25T09:00:40.895000+00:00",
+      "stderr_tail": "",
+      "elapsed_sec": 2.28
+    },
+    {
+      "market": "KRW-BTC",
+      "unit_min": 15,
+      "output_path": "D:\\MyApps\\AutoLife\\data\\backtest_recent_7d_20260225\\upbit_KRW_BTC_15m_full.csv",
+      "estimated_candles": 672,
+      "estimated_sizes": {
+        "raw_ohlcv_csv_bytes": 73920,
+        "enriched_csv_bytes": 376320
+      },
+      "incremental_mode": false,
+      "status": "fetched",
+      "rows": 671,
+      "file_size_bytes": 47865,
+      "from_utc": "2026-02-18T09:44:59.244000+00:00",
+      "to_utc": "2026-02-25T09:00:43.376000+00:00",
+      "stderr_tail": "",
+      "elapsed_sec": 1.14
+    },
+    {
+      "market": "KRW-BTC",
+      "unit_min": 60,
+      "output_path": "D:\\MyApps\\AutoLife\\data\\backtest_recent_7d_20260225\\upbit_KRW_BTC_60m_full.csv",
+      "estimated_candles": 168,
+      "estimated_sizes": {
+        "raw_ohlcv_csv_bytes": 18480,
+        "enriched_csv_bytes": 94080
+      },
+      "incremental_mode": false,
+      "status": "fetched",
+      "rows": 168,
+      "file_size_bytes": 12110,
+      "from_utc": "2026-02-18T10:59:59.998000+00:00",
+      "to_utc": "2026-02-25T09:00:45.596000+00:00",
+      "stderr_tail": "",
+      "elapsed_sec": 0.32
+    },
+    {
+      "market": "KRW-BTC",
+      "unit_min": 240,
+      "output_path": "D:\\MyApps\\AutoLife\\data\\backtest_recent_7d_20260225\\upbit_KRW_BTC_240m_full.csv",
+      "estimated_candles": 42,
+      "estimated_sizes": {
+        "raw_ohlcv_csv_bytes": 4620,
+        "enriched_csv_bytes": 23520
+      },
+      "incremental_mode": false,
+      "status": "fetched",
+      "rows": 42,
+      "file_size_bytes": 3086,
+      "from_utc": "2026-02-18T15:59:57.269000+00:00",
+      "to_utc": "2026-02-25T09:00:45.596000+00:00",
+      "stderr_tail": "",
+      "elapsed_sec": 0.32
+    },
+    {
+      "market": "KRW-ETH",
+      "unit_min": 1,
+      "output_path": "D:\\MyApps\\AutoLife\\data\\backtest_recent_7d_20260225\\upbit_KRW_ETH_1m_full.csv",
+      "estimated_candles": 10080,
+      "estimated_sizes": {
+        "raw_ohlcv_csv_bytes": 1108800,
+        "enriched_csv_bytes": 5644800
+      },
+      "incremental_mode": false,
+      "status": "fetched",
+      "rows": 10079,
+      "file_size_bytes": 670521,
+      "from_utc": "2026-02-18T09:02:59.757000+00:00",
+      "to_utc": "2026-02-25T09:00:46.711000+00:00",
+      "stderr_tail": "",
+      "elapsed_sec": 8.83
+    },
+    {
+      "market": "KRW-ETH",
+      "unit_min": 5,
+      "output_path": "D:\\MyApps\\AutoLife\\data\\backtest_recent_7d_20260225\\upbit_KRW_ETH_5m_full.csv",
+      "estimated_candles": 2016,
+      "estimated_sizes": {
+        "raw_ohlcv_csv_bytes": 221760,
+        "enriched_csv_bytes": 1128960
+      },
+      "incremental_mode": false,
+      "status": "fetched",
+      "rows": 2015,
+      "file_size_bytes": 135638,
+      "from_utc": "2026-02-18T09:14:59.978000+00:00",
+      "to_utc": "2026-02-25T09:00:56.139000+00:00",
+      "stderr_tail": "",
+      "elapsed_sec": 2.26
+    },
+    {
+      "market": "KRW-ETH",
+      "unit_min": 15,
+      "output_path": "D:\\MyApps\\AutoLife\\data\\backtest_recent_7d_20260225\\upbit_KRW_ETH_15m_full.csv",
+      "estimated_candles": 672,
+      "estimated_sizes": {
+        "raw_ohlcv_csv_bytes": 73920,
+        "enriched_csv_bytes": 376320
+      },
+      "incremental_mode": false,
+      "status": "fetched",
+      "rows": 671,
+      "file_size_bytes": 45580,
+      "from_utc": "2026-02-18T09:44:56.357000+00:00",
+      "to_utc": "2026-02-25T09:00:57.523000+00:00",
+      "stderr_tail": "",
+      "elapsed_sec": 1.12
+    },
+    {
+      "market": "KRW-ETH",
+      "unit_min": 60,
+      "output_path": "D:\\MyApps\\AutoLife\\data\\backtest_recent_7d_20260225\\upbit_KRW_ETH_60m_full.csv",
+      "estimated_candles": 168,
+      "estimated_sizes": {
+        "raw_ohlcv_csv_bytes": 18480,
+        "enriched_csv_bytes": 94080
+      },
+      "incremental_mode": false,
+      "status": "fetched",
+      "rows": 168,
+      "file_size_bytes": 11543,
+      "from_utc": "2026-02-18T10:59:55.946000+00:00",
+      "to_utc": "2026-02-25T09:01:00.760000+00:00",
+      "stderr_tail": "",
+      "elapsed_sec": 0.32
+    },
+    {
+      "market": "KRW-ETH",
+      "unit_min": 240,
+      "output_path": "D:\\MyApps\\AutoLife\\data\\backtest_recent_7d_20260225\\upbit_KRW_ETH_240m_full.csv",
+      "estimated_candles": 42,
+      "estimated_sizes": {
+        "raw_ohlcv_csv_bytes": 4620,
+        "enriched_csv_bytes": 23520
+      },
+      "incremental_mode": false,
+      "status": "fetched",
+      "rows": 42,
+      "file_size_bytes": 2940,
+      "from_utc": "2026-02-18T15:59:58.458000+00:00",
+      "to_utc": "2026-02-25T09:01:00.760000+00:00",
+      "stderr_tail": "",
+      "elapsed_sec": 0.31
+    },
+    {
+      "market": "KRW-XRP",
+      "unit_min": 1,
+      "output_path": "D:\\MyApps\\AutoLife\\data\\backtest_recent_7d_20260225\\upbit_KRW_XRP_1m_full.csv",
+      "estimated_candles": 10080,
+      "estimated_sizes": {
+        "raw_ohlcv_csv_bytes": 1108800,
+        "enriched_csv_bytes": 5644800
+      },
+      "incremental_mode": false,
+      "status": "fetched",
+      "rows": 10079,
+      "file_size_bytes": 585300,
+      "from_utc": "2026-02-18T09:02:59.624000+00:00",
+      "to_utc": "2026-02-25T09:01:00.022000+00:00",
+      "stderr_tail": "",
+      "elapsed_sec": 8.83
+    },
+    {
+      "market": "KRW-XRP",
+      "unit_min": 5,
+      "output_path": "D:\\MyApps\\AutoLife\\data\\backtest_recent_7d_20260225\\upbit_KRW_XRP_5m_full.csv",
+      "estimated_candles": 2016,
+      "estimated_sizes": {
+        "raw_ohlcv_csv_bytes": 221760,
+        "enriched_csv_bytes": 1128960
+      },
+      "incremental_mode": false,
+      "status": "fetched",
+      "rows": 2015,
+      "file_size_bytes": 118649,
+      "from_utc": "2026-02-18T09:14:58.372000+00:00",
+      "to_utc": "2026-02-25T09:01:08.924000+00:00",
+      "stderr_tail": "",
+      "elapsed_sec": 2.26
+    },
+    {
+      "market": "KRW-XRP",
+      "unit_min": 15,
+      "output_path": "D:\\MyApps\\AutoLife\\data\\backtest_recent_7d_20260225\\upbit_KRW_XRP_15m_full.csv",
+      "estimated_candles": 672,
+      "estimated_sizes": {
+        "raw_ohlcv_csv_bytes": 73920,
+        "enriched_csv_bytes": 376320
+      },
+      "incremental_mode": false,
+      "status": "fetched",
+      "rows": 671,
+      "file_size_bytes": 39877,
+      "from_utc": "2026-02-18T09:44:57.199000+00:00",
+      "to_utc": "2026-02-25T09:01:13.105000+00:00",
+      "stderr_tail": "",
+      "elapsed_sec": 1.11
+    },
+    {
+      "market": "KRW-XRP",
+      "unit_min": 60,
+      "output_path": "D:\\MyApps\\AutoLife\\data\\backtest_recent_7d_20260225\\upbit_KRW_XRP_60m_full.csv",
+      "estimated_candles": 168,
+      "estimated_sizes": {
+        "raw_ohlcv_csv_bytes": 18480,
+        "enriched_csv_bytes": 94080
+      },
+      "incremental_mode": false,
+      "status": "fetched",
+      "rows": 168,
+      "file_size_bytes": 10100,
+      "from_utc": "2026-02-18T10:59:59.436000+00:00",
+      "to_utc": "2026-02-25T09:01:14.049000+00:00",
+      "stderr_tail": "",
+      "elapsed_sec": 0.33
+    },
+    {
+      "market": "KRW-XRP",
+      "unit_min": 240,
+      "output_path": "D:\\MyApps\\AutoLife\\data\\backtest_recent_7d_20260225\\upbit_KRW_XRP_240m_full.csv",
+      "estimated_candles": 42,
+      "estimated_sizes": {
+        "raw_ohlcv_csv_bytes": 4620,
+        "enriched_csv_bytes": 23520
+      },
+      "incremental_mode": false,
+      "status": "fetched",
+      "rows": 42,
+      "file_size_bytes": 2582,
+      "from_utc": "2026-02-18T15:59:59.362000+00:00",
+      "to_utc": "2026-02-25T09:01:14.049000+00:00",
+      "stderr_tail": "",
+      "elapsed_sec": 0.33
+    },
+    {
+      "market": "KRW-SOL",
+      "unit_min": 1,
+      "output_path": "D:\\MyApps\\AutoLife\\data\\backtest_recent_7d_20260225\\upbit_KRW_SOL_1m_full.csv",
+      "estimated_candles": 10080,
+      "estimated_sizes": {
+        "raw_ohlcv_csv_bytes": 1108800,
+        "enriched_csv_bytes": 5644800
+      },
+      "incremental_mode": false,
+      "status": "fetched",
+      "rows": 10079,
+      "file_size_bytes": 638551,
+      "from_utc": "2026-02-18T08:36:19.156000+00:00",
+      "to_utc": "2026-02-25T09:00:43.322000+00:00",
+      "stderr_tail": "",
+      "elapsed_sec": 8.79
+    },
+    {
+      "market": "KRW-SOL",
+      "unit_min": 5,
+      "output_path": "D:\\MyApps\\AutoLife\\data\\backtest_recent_7d_20260225\\upbit_KRW_SOL_5m_full.csv",
+      "estimated_candles": 2016,
+      "estimated_sizes": {
+        "raw_ohlcv_csv_bytes": 221760,
+        "enriched_csv_bytes": 1128960
+      },
+      "incremental_mode": false,
+      "status": "fetched",
+      "rows": 2015,
+      "file_size_bytes": 129570,
+      "from_utc": "2026-02-18T09:14:58.707000+00:00",
+      "to_utc": "2026-02-25T09:01:24.034000+00:00",
+      "stderr_tail": "",
+      "elapsed_sec": 2.25
+    },
+    {
+      "market": "KRW-SOL",
+      "unit_min": 15,
+      "output_path": "D:\\MyApps\\AutoLife\\data\\backtest_recent_7d_20260225\\upbit_KRW_SOL_15m_full.csv",
+      "estimated_candles": 672,
+      "estimated_sizes": {
+        "raw_ohlcv_csv_bytes": 73920,
+        "enriched_csv_bytes": 376320
+      },
+      "incremental_mode": false,
+      "status": "fetched",
+      "rows": 671,
+      "file_size_bytes": 43533,
+      "from_utc": "2026-02-18T09:44:39.715000+00:00",
+      "to_utc": "2026-02-25T09:01:24.034000+00:00",
+      "stderr_tail": "",
+      "elapsed_sec": 1.15
+    },
+    {
+      "market": "KRW-SOL",
+      "unit_min": 60,
+      "output_path": "D:\\MyApps\\AutoLife\\data\\backtest_recent_7d_20260225\\upbit_KRW_SOL_60m_full.csv",
+      "estimated_candles": 168,
+      "estimated_sizes": {
+        "raw_ohlcv_csv_bytes": 18480,
+        "enriched_csv_bytes": 94080
+      },
+      "incremental_mode": false,
+      "status": "fetched",
+      "rows": 168,
+      "file_size_bytes": 11038,
+      "from_utc": "2026-02-18T10:59:59.860000+00:00",
+      "to_utc": "2026-02-25T09:01:24.034000+00:00",
+      "stderr_tail": "",
+      "elapsed_sec": 0.32
+    },
+    {
+      "market": "KRW-SOL",
+      "unit_min": 240,
+      "output_path": "D:\\MyApps\\AutoLife\\data\\backtest_recent_7d_20260225\\upbit_KRW_SOL_240m_full.csv",
+      "estimated_candles": 42,
+      "estimated_sizes": {
+        "raw_ohlcv_csv_bytes": 4620,
+        "enriched_csv_bytes": 23520
+      },
+      "incremental_mode": false,
+      "status": "fetched",
+      "rows": 42,
+      "file_size_bytes": 2811,
+      "from_utc": "2026-02-18T15:59:59.791000+00:00",
+      "to_utc": "2026-02-25T09:01:24.034000+00:00",
+      "stderr_tail": "",
+      "elapsed_sec": 0.32
+    },
+    {
+      "market": "KRW-DOGE",
+      "unit_min": 1,
+      "output_path": "D:\\MyApps\\AutoLife\\data\\backtest_recent_7d_20260225\\upbit_KRW_DOGE_1m_full.csv",
+      "estimated_candles": 10080,
+      "estimated_sizes": {
+        "raw_ohlcv_csv_bytes": 1108800,
+        "enriched_csv_bytes": 5644800
+      },
+      "incremental_mode": false,
+      "status": "fetched",
+      "rows": 10079,
+      "file_size_bytes": 540226,
+      "from_utc": "2026-02-18T02:14:18.853000+00:00",
+      "to_utc": "2026-02-25T09:00:59.268000+00:00",
+      "stderr_tail": "",
+      "elapsed_sec": 8.86
+    },
+    {
+      "market": "KRW-DOGE",
+      "unit_min": 5,
+      "output_path": "D:\\MyApps\\AutoLife\\data\\backtest_recent_7d_20260225\\upbit_KRW_DOGE_5m_full.csv",
+      "estimated_candles": 2016,
+      "estimated_sizes": {
+        "raw_ohlcv_csv_bytes": 221760,
+        "enriched_csv_bytes": 1128960
+      },
+      "incremental_mode": false,
+      "status": "fetched",
+      "rows": 2015,
+      "file_size_bytes": 110411,
+      "from_utc": "2026-02-18T09:14:58.885000+00:00",
+      "to_utc": "2026-02-25T09:01:33.909000+00:00",
+      "stderr_tail": "",
+      "elapsed_sec": 2.27
+    },
+    {
+      "market": "KRW-DOGE",
+      "unit_min": 15,
+      "output_path": "D:\\MyApps\\AutoLife\\data\\backtest_recent_7d_20260225\\upbit_KRW_DOGE_15m_full.csv",
+      "estimated_candles": 672,
+      "estimated_sizes": {
+        "raw_ohlcv_csv_bytes": 73920,
+        "enriched_csv_bytes": 376320
+      },
+      "incremental_mode": false,
+      "status": "fetched",
+      "rows": 671,
+      "file_size_bytes": 37204,
+      "from_utc": "2026-02-18T09:44:55.975000+00:00",
+      "to_utc": "2026-02-25T09:01:33.909000+00:00",
+      "stderr_tail": "",
+      "elapsed_sec": 1.11
+    },
+    {
+      "market": "KRW-DOGE",
+      "unit_min": 60,
+      "output_path": "D:\\MyApps\\AutoLife\\data\\backtest_recent_7d_20260225\\upbit_KRW_DOGE_60m_full.csv",
+      "estimated_candles": 168,
+      "estimated_sizes": {
+        "raw_ohlcv_csv_bytes": 18480,
+        "enriched_csv_bytes": 94080
+      },
+      "incremental_mode": false,
+      "status": "fetched",
+      "rows": 168,
+      "file_size_bytes": 9449,
+      "from_utc": "2026-02-18T10:59:59.700000+00:00",
+      "to_utc": "2026-02-25T09:01:33.909000+00:00",
+      "stderr_tail": "",
+      "elapsed_sec": 0.33
+    },
+    {
+      "market": "KRW-DOGE",
+      "unit_min": 240,
+      "output_path": "D:\\MyApps\\AutoLife\\data\\backtest_recent_7d_20260225\\upbit_KRW_DOGE_240m_full.csv",
+      "estimated_candles": 42,
+      "estimated_sizes": {
+        "raw_ohlcv_csv_bytes": 4620,
+        "enriched_csv_bytes": 23520
+      },
+      "incremental_mode": false,
+      "status": "fetched",
+      "rows": 42,
+      "file_size_bytes": 2428,
+      "from_utc": "2026-02-18T15:59:51.159000+00:00",
+      "to_utc": "2026-02-25T09:01:33.909000+00:00",
+      "stderr_tail": "",
+      "elapsed_sec": 0.31
+    }
+  ]
+}

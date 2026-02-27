@@ -532,6 +532,76 @@ void appendEntryStageFunnelAudit(
     out << line.dump() << "\n";
 }
 
+std::filesystem::path frontierFilterArtifactPath() {
+    return autolife::utils::PathUtils::resolveRelativePath("logs/frontier_filter_backtest.jsonl");
+}
+
+void resetFrontierFilterArtifact() {
+    const auto path = frontierFilterArtifactPath();
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+}
+
+void appendFrontierFilterAudit(
+    long long timestamp_ms,
+    const std::string& market,
+    const std::vector<autolife::strategy::StrategyManager::FilterDiagnostics::FrontierDecisionSample>& samples
+) {
+    if (samples.empty()) {
+        return;
+    }
+
+    nlohmann::json line;
+    line["ts"] = normalizeTimestampMs(timestamp_ms);
+    line["source"] = "backtest";
+    line["market"] = market;
+    line["samples"] = nlohmann::json::array();
+
+    const auto pushNumberOrNull = [](nlohmann::json& node, const char* key, double value) {
+        if (std::isfinite(value)) {
+            node[key] = value;
+        } else {
+            node[key] = nullptr;
+        }
+    };
+
+    for (const auto& sample : samples) {
+        nlohmann::json item;
+        item["market"] = sample.market;
+        item["strategy_name"] = sample.strategy_name;
+        item["regime"] = sample.regime;
+        item["frontier_enabled"] = sample.frontier_enabled;
+        item["frontier_pass"] = sample.frontier_pass;
+        item["expected_value_pass"] = sample.expected_value_pass;
+        item["margin_pass"] = sample.margin_pass;
+        item["ev_confidence_pass"] = sample.ev_confidence_pass;
+        item["cost_tail_pass"] = sample.cost_tail_pass;
+        item["manager_pass"] = sample.manager_pass;
+        pushNumberOrNull(item, "expected_value_observed", sample.expected_value_observed);
+        pushNumberOrNull(item, "required_expected_value", sample.required_expected_value);
+        pushNumberOrNull(item, "expected_value_slack", sample.expected_value_slack);
+        pushNumberOrNull(item, "margin_observed", sample.margin_observed);
+        pushNumberOrNull(item, "margin_floor", sample.margin_floor);
+        pushNumberOrNull(item, "margin_slack", sample.margin_slack);
+        pushNumberOrNull(item, "ev_confidence_observed", sample.ev_confidence_observed);
+        pushNumberOrNull(item, "ev_confidence_floor", sample.ev_confidence_floor);
+        pushNumberOrNull(item, "ev_confidence_slack", sample.ev_confidence_slack);
+        pushNumberOrNull(item, "cost_tail_observed", sample.cost_tail_observed);
+        pushNumberOrNull(item, "cost_tail_limit", sample.cost_tail_limit);
+        pushNumberOrNull(item, "cost_tail_slack", sample.cost_tail_slack);
+        line["samples"].push_back(std::move(item));
+    }
+
+    const auto path = frontierFilterArtifactPath();
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream out(path, std::ios::binary | std::ios::app);
+    if (!out.is_open()) {
+        LOG_WARN("Frontier filter artifact open failed: {}", path.string());
+        return;
+    }
+    out << line.dump() << "\n";
+}
+
 double effectiveProbabilisticScanPrefilterMargin(
     const autolife::engine::EngineConfig& cfg,
     autolife::analytics::MarketRegime regime,
@@ -926,6 +996,10 @@ bool applyProbabilisticRuntimeAdjustment(
     signal.phase3.primary_priority.uptrend_bonus_prob_floor =
         snapshot.phase3_primary_priority_policy.uptrend_bonus_prob_floor;
     signal.phase3.manager_filter.enabled = snapshot.phase3_manager_filter_policy.enabled;
+    signal.phase3.manager_filter.margin_min_ranging =
+        snapshot.phase3_manager_filter_policy.margin_min_ranging;
+    signal.phase3.manager_filter.margin_min_ranging_mode =
+        snapshot.phase3_manager_filter_policy.margin_min_ranging_mode;
     signal.phase3.manager_filter.required_strength_cap =
         snapshot.phase3_manager_filter_policy.required_strength_cap;
     signal.phase3.manager_filter.core_signal_ownership_strength_relief =
@@ -1880,6 +1954,7 @@ void BacktestEngine::init(const Config& config) {
     resetExecutionUpdateArtifact();
     resetPolicyDecisionArtifact();
     resetEntryStageFunnelArtifact();
+    resetFrontierFilterArtifact();
     resetPhase4CandidateArtifact();
     balance_krw_ = config.getInitialCapital();
     balance_asset_ = 0.0;
@@ -2920,6 +2995,11 @@ void BacktestEngine::processCandle(const Candle& candle) {
         stage_candidates_after_manager = std::max(
             0,
             static_cast<int>(filtered_signals.size())
+        );
+        appendFrontierFilterAudit(
+            candle.timestamp,
+            market_name_,
+            manager_filter_diag.frontier_decision_samples
         );
         if (reject_expected_edge_negative_count > 0) {
             entry_funnel_.reject_expected_edge_negative_count +=

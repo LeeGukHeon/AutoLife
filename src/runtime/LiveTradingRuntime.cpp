@@ -692,6 +692,10 @@ bool applyProbabilisticRuntimeAdjustment(
     signal.phase3.primary_priority.uptrend_bonus_prob_floor =
         snapshot.phase3_primary_priority_policy.uptrend_bonus_prob_floor;
     signal.phase3.manager_filter.enabled = snapshot.phase3_manager_filter_policy.enabled;
+    signal.phase3.manager_filter.margin_min_ranging =
+        snapshot.phase3_manager_filter_policy.margin_min_ranging;
+    signal.phase3.manager_filter.margin_min_ranging_mode =
+        snapshot.phase3_manager_filter_policy.margin_min_ranging_mode;
     signal.phase3.manager_filter.required_strength_cap =
         snapshot.phase3_manager_filter_policy.required_strength_cap;
     signal.phase3.manager_filter.core_signal_ownership_strength_relief =
@@ -2002,9 +2006,20 @@ TradingEngine::TradingEngine(
     , total_scans_(0)
     , total_signals_(0)
 {
+    if (config_.mode == TradingMode::LIVE &&
+        !config_.allow_live_orders &&
+        config_.live_paper_use_fixed_initial_capital &&
+        config_.live_paper_fixed_initial_capital_krw > 0.0) {
+        config_.initial_capital = config_.live_paper_fixed_initial_capital_krw;
+        LOG_INFO(
+            "Live paper fixed-capital mode enabled: {:.0f} KRW (wallet sync bypass)",
+            config_.initial_capital
+        );
+    }
+
     LOG_INFO("TradingEngine initialized");
-    LOG_INFO("Trading mode: {}", config.mode == TradingMode::LIVE ? "LIVE" : "PAPER");
-    LOG_INFO("Initial capital: {:.0f} KRW", config.initial_capital);
+    LOG_INFO("Trading mode: {}", config_.mode == TradingMode::LIVE ? "LIVE" : "PAPER");
+    LOG_INFO("Initial capital: {:.0f} KRW", config_.initial_capital);
 
     if (config.mode == TradingMode::LIVE) {
         LOG_INFO("Live risk and order constraints enabled");
@@ -2013,6 +2028,10 @@ TradingEngine::TradingEngine(
         LOG_INFO("  Min order amount (KRW): {:.0f}", config.min_order_krw);
         LOG_INFO("  Dry Run: {}", config.dry_run ? "ON" : "OFF");
         LOG_INFO("  Live Order Submission: {}", config.allow_live_orders ? "ENABLED" : "DISABLED");
+        LOG_INFO(
+            "  Fixed live-paper capital mode: {}",
+            isLivePaperFixedCapitalMode() ? "ON" : "OFF"
+        );
         LOG_INFO(
             "  Live MTF dataset capture: {} (interval={}s, output={}, tf={})",
             config.enable_live_mtf_dataset_capture ? "ON" : "OFF",
@@ -2037,7 +2056,7 @@ TradingEngine::TradingEngine(
     strategy_manager_ = std::make_unique<strategy::StrategyManager>(http_client);
     policy_controller_ = std::make_unique<AdaptivePolicyController>();
     performance_store_ = std::make_unique<PerformanceStore>();
-    risk_manager_ = std::make_unique<risk::RiskManager>(config.initial_capital);
+    risk_manager_ = std::make_unique<risk::RiskManager>(config_.initial_capital);
     const bool enable_my_order_ws =
         config.mode == TradingMode::LIVE &&
         !config.dry_run &&
@@ -2151,7 +2170,14 @@ bool TradingEngine::start() {
     loadState();
     loadLearningState();
     if (config_.mode == TradingMode::LIVE) {
-        syncAccountState();
+        if (isLivePaperFixedCapitalMode()) {
+            LOG_INFO(
+                "Skipping startup account sync (fixed live-paper capital): {:.0f} KRW",
+                config_.initial_capital
+            );
+        } else {
+            syncAccountState();
+        }
     }
 
     running_ = true;
@@ -2332,7 +2358,7 @@ void TradingEngine::run() {
             }
 
             auto now = std::chrono::steady_clock::now();
-            if (config_.mode == TradingMode::LIVE) {
+            if (config_.mode == TradingMode::LIVE && !isLivePaperFixedCapitalMode()) {
                 if (now - last_account_sync_time >= account_sync_interval) {
                     LOG_INFO("Periodic account sync started");
                     syncAccountState();
@@ -5710,6 +5736,14 @@ void TradingEngine::logPerformance() {
     LOG_INFO("========================================");
 }
 void TradingEngine::syncAccountState() {
+    if (isLivePaperFixedCapitalMode()) {
+        LOG_INFO(
+            "Account sync skipped: fixed live-paper capital mode is active ({:.0f} KRW)",
+            config_.initial_capital
+        );
+        return;
+    }
+
     LOG_INFO("???????????????????????????????????????遺얘턁????????좎룞???????..");
 
     try {

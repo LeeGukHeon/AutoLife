@@ -266,6 +266,8 @@ public:
         double base_min_strength_high_volatility = 0.48;
         double base_min_strength_trending_down = 0.52;
         double base_min_expected_value = 0.0;
+        double margin_min_ranging = 0.0;
+        std::string margin_min_ranging_mode = "enforce";
         double scan_prefilter_margin_add_hostile = 0.015;
         double scan_prefilter_margin_add_trending_up = -0.005;
         double scan_prefilter_margin_clamp_min = -0.30;

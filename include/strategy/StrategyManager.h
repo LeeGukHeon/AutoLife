@@ -29,9 +29,35 @@ public:
     };
 
     struct FilterDiagnostics {
+        struct FrontierDecisionSample {
+            std::string market;
+            std::string strategy_name;
+            std::string regime;
+            bool frontier_enabled = false;
+            bool frontier_pass = false;
+            bool expected_value_pass = false;
+            bool margin_pass = true;
+            bool ev_confidence_pass = true;
+            bool cost_tail_pass = true;
+            bool manager_pass = false;
+            double expected_value_observed = 0.0;
+            double required_expected_value = 0.0;
+            double expected_value_slack = 0.0;
+            double margin_observed = 0.0;
+            double margin_floor = 0.0;
+            double margin_slack = 0.0;
+            double ev_confidence_observed = 0.0;
+            double ev_confidence_floor = 0.0;
+            double ev_confidence_slack = 0.0;
+            double cost_tail_observed = 0.0;
+            double cost_tail_limit = 0.0;
+            double cost_tail_slack = 0.0;
+        };
+
         int input_count = 0;
         int output_count = 0;
         std::map<std::string, int> rejection_reason_counts;
+        std::vector<FrontierDecisionSample> frontier_decision_samples;
     };
 
     StrategyManager(std::shared_ptr<network::UpbitHttpClient> client);

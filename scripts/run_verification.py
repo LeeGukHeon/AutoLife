@@ -944,6 +944,11 @@ def run_backtest(
         start_ts=cumulative_start_ts,
         end_ts=cumulative_end_ts,
     )
+    parsed["frontier_filter_samples"] = load_frontier_filter_range_samples(
+        exe_dir=exe_path.parent,
+        start_ts=evaluation_start_ts,
+        end_ts=evaluation_end_ts,
+    )
     return parsed
 
 
@@ -1406,6 +1411,95 @@ def load_entry_stage_funnel_range_stats(
     else:
         out["ev_at_manager_pass_avg_in_range"] = 0.0
         out["ev_at_order_submit_check_avg_in_range"] = 0.0
+    return out
+
+
+def load_frontier_filter_range_samples(
+    exe_dir: pathlib.Path,
+    start_ts: Optional[int],
+    end_ts: Optional[int],
+) -> Dict[str, Any]:
+    start = int(start_ts) if start_ts is not None else 0
+    end = int(end_ts) if end_ts is not None else 0
+    enabled = bool(start > 0 and end > 0 and end >= start)
+    artifact_path = (exe_dir / "logs" / "frontier_filter_backtest.jsonl").resolve()
+    out: Dict[str, Any] = {
+        "enabled": enabled,
+        "start_ts": int(start),
+        "end_ts": int(end),
+        "path": str(artifact_path),
+        "line_count_total": 0,
+        "line_count_in_range": 0,
+        "sample_count_total": 0,
+        "sample_count_in_range": 0,
+        "frontier_enabled_count_in_range": 0,
+        "frontier_fail_count_in_range": 0,
+        "samples": [],
+    }
+    if not artifact_path.exists():
+        out["reason"] = "frontier_filter_log_missing"
+        return out
+    try:
+        with artifact_path.open("r", encoding="utf-8", errors="ignore") as fp:
+            for raw_line in fp:
+                line = str(raw_line).strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                ts_value = max(0, to_int(payload.get("ts", 0)))
+                samples = payload.get("samples", [])
+                if not isinstance(samples, list):
+                    samples = []
+                out["line_count_total"] = int(out["line_count_total"]) + 1
+                out["sample_count_total"] = int(out["sample_count_total"]) + int(len(samples))
+                in_range = bool(enabled and ts_value > 0 and start <= ts_value <= end)
+                if not in_range:
+                    continue
+                out["line_count_in_range"] = int(out["line_count_in_range"]) + 1
+                out["sample_count_in_range"] = int(out["sample_count_in_range"]) + int(len(samples))
+                for sample in samples:
+                    if not isinstance(sample, dict):
+                        continue
+                    row = {
+                        "ts": int(ts_value),
+                        "market": str(sample.get("market", payload.get("market", ""))).strip().upper(),
+                        "strategy_name": str(sample.get("strategy_name", "")).strip(),
+                        "regime": str(sample.get("regime", "")).strip(),
+                        "frontier_enabled": bool(sample.get("frontier_enabled", False)),
+                        "frontier_pass": bool(sample.get("frontier_pass", False)),
+                        "expected_value_pass": bool(sample.get("expected_value_pass", False)),
+                        "margin_pass": bool(sample.get("margin_pass", True)),
+                        "ev_confidence_pass": bool(sample.get("ev_confidence_pass", True)),
+                        "cost_tail_pass": bool(sample.get("cost_tail_pass", True)),
+                        "manager_pass": bool(sample.get("manager_pass", False)),
+                        "expected_value_observed": to_float(sample.get("expected_value_observed", float("nan"))),
+                        "required_expected_value": to_float(sample.get("required_expected_value", float("nan"))),
+                        "expected_value_slack": to_float(sample.get("expected_value_slack", float("nan"))),
+                        "margin_observed": to_float(sample.get("margin_observed", float("nan"))),
+                        "margin_floor": to_float(sample.get("margin_floor", float("nan"))),
+                        "margin_slack": to_float(sample.get("margin_slack", float("nan"))),
+                        "ev_confidence_observed": to_float(sample.get("ev_confidence_observed", float("nan"))),
+                        "ev_confidence_floor": to_float(sample.get("ev_confidence_floor", float("nan"))),
+                        "ev_confidence_slack": to_float(sample.get("ev_confidence_slack", float("nan"))),
+                        "cost_tail_observed": to_float(sample.get("cost_tail_observed", float("nan"))),
+                        "cost_tail_limit": to_float(sample.get("cost_tail_limit", float("nan"))),
+                        "cost_tail_slack": to_float(sample.get("cost_tail_slack", float("nan"))),
+                    }
+                    if bool(row["frontier_enabled"]):
+                        out["frontier_enabled_count_in_range"] = int(
+                            out["frontier_enabled_count_in_range"]
+                        ) + 1
+                    if bool(row["frontier_enabled"]) and not bool(row["frontier_pass"]):
+                        out["frontier_fail_count_in_range"] = int(out["frontier_fail_count_in_range"]) + 1
+                    out["samples"].append(row)
+    except Exception:
+        out["reason"] = "frontier_filter_log_parse_failed"
+        return out
     return out
 
 
@@ -4834,6 +4928,197 @@ def build_a10_2_stage_funnel_report(
     }
 
 
+def build_frontier_fail_breakdown(
+    frontier_filter_dataset_samples: List[Dict[str, Any]],
+    split_filter_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    source_dataset_rows: List[Dict[str, Any]] = []
+    samples: List[Dict[str, Any]] = []
+    if isinstance(frontier_filter_dataset_samples, list):
+        for dataset_payload in frontier_filter_dataset_samples:
+            if not isinstance(dataset_payload, dict):
+                continue
+            dataset_name = str(dataset_payload.get("dataset", "")).strip()
+            row_samples = dataset_payload.get("samples", [])
+            if not isinstance(row_samples, list):
+                row_samples = []
+            source_dataset_rows.append(
+                {
+                    "dataset": dataset_name,
+                    "line_count_in_range": max(0, to_int(dataset_payload.get("line_count_in_range", 0))),
+                    "sample_count_in_range": max(0, to_int(dataset_payload.get("sample_count_in_range", 0))),
+                    "frontier_enabled_count_in_range": max(
+                        0,
+                        to_int(dataset_payload.get("frontier_enabled_count_in_range", 0)),
+                    ),
+                    "frontier_fail_count_in_range": max(
+                        0,
+                        to_int(dataset_payload.get("frontier_fail_count_in_range", 0)),
+                    ),
+                }
+            )
+            for sample in row_samples:
+                if isinstance(sample, dict):
+                    sample_with_dataset = dict(sample)
+                    sample_with_dataset["_dataset"] = dataset_name
+                    samples.append(sample_with_dataset)
+
+    reason_specs = {
+        "required_ev_fail": {
+            "observed_key": "expected_value_observed",
+            "limit_key": "required_expected_value",
+            "slack_key": "expected_value_slack",
+            "desc": "expected_value < required_expected_value",
+        },
+        "required_margin_fail": {
+            "observed_key": "margin_observed",
+            "limit_key": "margin_floor",
+            "slack_key": "margin_slack",
+            "desc": "margin < margin_floor",
+        },
+        "confidence_fail": {
+            "observed_key": "ev_confidence_observed",
+            "limit_key": "ev_confidence_floor",
+            "slack_key": "ev_confidence_slack",
+            "desc": "ev_confidence < ev_confidence_floor",
+        },
+        "cost_tail_fail": {
+            "observed_key": "cost_tail_observed",
+            "limit_key": "cost_tail_limit",
+            "slack_key": "cost_tail_slack",
+            "desc": "cost_tail_term > cost_tail_limit",
+        },
+        "other_frontier_fail": {
+            "observed_key": "",
+            "limit_key": "",
+            "slack_key": "",
+            "desc": "frontier_fail_with_no_subreason_flag",
+        },
+    }
+
+    reason_counts: Dict[str, int] = {key: 0 for key in reason_specs.keys()}
+    observed_values: Dict[str, List[float]] = {key: [] for key in reason_specs.keys()}
+    limit_values: Dict[str, List[float]] = {key: [] for key in reason_specs.keys()}
+    slack_values: Dict[str, List[float]] = {key: [] for key in reason_specs.keys()}
+
+    frontier_enabled_count = 0
+    frontier_fail_count = 0
+    for row in samples:
+        if not isinstance(row, dict):
+            continue
+        if not bool(row.get("frontier_enabled", False)):
+            continue
+        frontier_enabled_count += 1
+        if bool(row.get("frontier_pass", True)):
+            continue
+        frontier_fail_count += 1
+        fail_reason_count = 0
+
+        if not bool(row.get("expected_value_pass", True)):
+            reason_key = "required_ev_fail"
+            reason_counts[reason_key] += 1
+            fail_reason_count += 1
+            observed_values[reason_key].append(to_float(row.get("expected_value_observed", float("nan"))))
+            limit_values[reason_key].append(to_float(row.get("required_expected_value", float("nan"))))
+            slack_values[reason_key].append(to_float(row.get("expected_value_slack", float("nan"))))
+
+        if not bool(row.get("margin_pass", True)):
+            reason_key = "required_margin_fail"
+            reason_counts[reason_key] += 1
+            fail_reason_count += 1
+            observed_values[reason_key].append(to_float(row.get("margin_observed", float("nan"))))
+            limit_values[reason_key].append(to_float(row.get("margin_floor", float("nan"))))
+            slack_values[reason_key].append(to_float(row.get("margin_slack", float("nan"))))
+
+        if not bool(row.get("ev_confidence_pass", True)):
+            reason_key = "confidence_fail"
+            reason_counts[reason_key] += 1
+            fail_reason_count += 1
+            observed_values[reason_key].append(to_float(row.get("ev_confidence_observed", float("nan"))))
+            limit_values[reason_key].append(to_float(row.get("ev_confidence_floor", float("nan"))))
+            slack_values[reason_key].append(to_float(row.get("ev_confidence_slack", float("nan"))))
+
+        if not bool(row.get("cost_tail_pass", True)):
+            reason_key = "cost_tail_fail"
+            reason_counts[reason_key] += 1
+            fail_reason_count += 1
+            observed_values[reason_key].append(to_float(row.get("cost_tail_observed", float("nan"))))
+            limit_values[reason_key].append(to_float(row.get("cost_tail_limit", float("nan"))))
+            slack_values[reason_key].append(to_float(row.get("cost_tail_slack", float("nan"))))
+
+        if fail_reason_count <= 0:
+            reason_counts["other_frontier_fail"] += 1
+
+    reason_rows: List[Dict[str, Any]] = []
+    for reason_key, spec in reason_specs.items():
+        count = max(0, to_int(reason_counts.get(reason_key, 0)))
+        if count <= 0:
+            continue
+        reason_rows.append(
+            {
+                "reason": str(reason_key),
+                "description": str(spec.get("desc", "")).strip(),
+                "count": int(count),
+                "contribution_share_vs_frontier_fail": round(
+                    float(count) / float(max(1, frontier_fail_count)),
+                    6,
+                ),
+                "observed_distribution": summarize_values_quantiles(observed_values.get(reason_key, [])),
+                "limit_distribution": summarize_values_quantiles(limit_values.get(reason_key, [])),
+                "slack_distribution": summarize_values_quantiles(slack_values.get(reason_key, [])),
+            }
+        )
+    reason_rows.sort(
+        key=lambda item: (
+            -int(item.get("count", 0)),
+            str(item.get("reason", "")),
+        )
+    )
+    top3 = reason_rows[:3]
+    top1_reason = str(top3[0].get("reason", "")) if top3 else ""
+
+    recommended_axis = "A18-1d"
+    if top1_reason == "required_ev_fail":
+        recommended_axis = "A18-1a"
+    elif top1_reason == "required_margin_fail":
+        recommended_axis = "A18-1b"
+    elif top1_reason == "confidence_fail":
+        recommended_axis = "A18-1d"
+    elif top1_reason == "cost_tail_fail":
+        recommended_axis = "A18-1d"
+
+    return {
+        "enabled": bool(frontier_fail_count > 0),
+        "split_name": str(
+            split_filter_context.get("split_name", "")
+            if isinstance(split_filter_context, dict)
+            else ""
+        ).strip(),
+        "evaluation_range_effective": (
+            split_filter_context.get("evaluation_range_effective", [])
+            if isinstance(split_filter_context, dict)
+            else []
+        ),
+        "source": {
+            "artifact": "logs/frontier_filter_backtest.jsonl (per-dataset run capture)",
+            "dataset_count": int(len(source_dataset_rows)),
+            "line_count_in_range_total": int(
+                sum(max(0, to_int(x.get("line_count_in_range", 0))) for x in source_dataset_rows)
+            ),
+            "sample_count_in_range_total": int(
+                sum(max(0, to_int(x.get("sample_count_in_range", 0))) for x in source_dataset_rows)
+            ),
+            "per_dataset": source_dataset_rows,
+        },
+        "frontier_enabled_count_in_range": int(frontier_enabled_count),
+        "frontier_fail_count_in_range": int(frontier_fail_count),
+        "frontier_fail_breakdown_top3": top3,
+        "frontier_fail_breakdown_all": reason_rows,
+        "recommended_single_axis_case": recommended_axis,
+        "recommended_top1_reason": top1_reason,
+    }
+
+
 def build_phase4_exposure_summary_from_samples(
     backtest_result: Dict[str, Any],
     phase4_market_cluster_map: Dict[str, str],
@@ -7936,6 +8221,19 @@ def main(argv=None) -> int:
         default=r".\build\Release\logs\a10_2_stage_funnel_quarantine.json",
         help="Output JSON path for A10-2 core-effective stage funnel diagnostics.",
     )
+    parser.add_argument(
+        "--frontier-fail-breakdown-json",
+        default=r".\build\Release\logs\frontier_fail_breakdown_quarantine.json",
+        help="Output JSON path for A18-0 frontier fail breakdown diagnostics.",
+    )
+    parser.add_argument(
+        "--a20-consistency-check-json",
+        default=r".\build\Release\logs\a20_consistency_check.json",
+        help=(
+            "Output JSON path for A20 consistency check "
+            "(total_trades_core_effective vs orders_filled_core_effective)."
+        ),
+    )
     args = parser.parse_args(argv)
 
     exe_path = resolve_path(args.exe_path, "Executable")
@@ -7987,6 +8285,16 @@ def main(argv=None) -> int:
     a10_2_stage_funnel_json = resolve_path(
         args.a10_2_stage_funnel_json,
         "A10-2 stage funnel json",
+        must_exist=False,
+    )
+    frontier_fail_breakdown_json = resolve_path(
+        args.frontier_fail_breakdown_json,
+        "Frontier fail breakdown json",
+        must_exist=False,
+    )
+    a20_consistency_check_json = resolve_path(
+        args.a20_consistency_check_json,
+        "A20 consistency check json",
         must_exist=False,
     )
     core_zero_diagnosis_json = resolve_path(
@@ -8102,6 +8410,7 @@ def main(argv=None) -> int:
     dataset_diagnostics: List[Dict[str, Any]] = []
     adaptive_dataset_profiles: List[Dict[str, Any]] = []
     vol_bucket_pct_dataset_profiles: List[Dict[str, Any]] = []
+    frontier_filter_dataset_samples: List[Dict[str, Any]] = []
     split_eval_profiles: List[Dict[str, Any]] = []
     phase4_off_on_comparison: Dict[str, Any] = {}
     core_window_direct_report: Dict[str, Any] = {}
@@ -8179,6 +8488,24 @@ def main(argv=None) -> int:
                 cumulative_start_ts=cumulative_start_ts,
                 cumulative_end_ts=cumulative_end_ts,
             )
+            frontier_payload = result.get("frontier_filter_samples", {})
+            if not isinstance(frontier_payload, dict):
+                frontier_payload = {}
+            frontier_payload_row = {
+                "dataset": str(dataset_path.name),
+                "line_count_in_range": max(0, to_int(frontier_payload.get("line_count_in_range", 0))),
+                "sample_count_in_range": max(0, to_int(frontier_payload.get("sample_count_in_range", 0))),
+                "frontier_enabled_count_in_range": max(
+                    0, to_int(frontier_payload.get("frontier_enabled_count_in_range", 0))
+                ),
+                "frontier_fail_count_in_range": max(
+                    0, to_int(frontier_payload.get("frontier_fail_count_in_range", 0))
+                ),
+                "samples": frontier_payload.get("samples", [])
+                if isinstance(frontier_payload.get("samples", []), list)
+                else [],
+            }
+            frontier_filter_dataset_samples.append(frontier_payload_row)
             rows.append(build_verification_row(dataset_path.name, result))
             split_eval_stats = result.get("split_eval_stats", {})
             split_trade_eval_stats = result.get("split_trade_eval_stats", {})
@@ -8220,11 +8547,22 @@ def main(argv=None) -> int:
                         if isinstance(split_eval_stats, dict)
                         else 0,
                     ),
-                    "total_trades_core_proxy": max(
+                    "total_round_trips_core_proxy": max(
                         0,
                         to_int(split_trade_eval_stats.get("terminal_sell_fills_in_range", 0))
                         if isinstance(split_trade_eval_stats, dict)
                         else 0,
+                    ),
+                    "total_trades_core_proxy": max(
+                        0,
+                        to_int(split_stage_eval_stats.get("orders_filled_in_range", 0))
+                        if isinstance(split_stage_eval_stats, dict)
+                        else max(
+                            0,
+                            to_int(split_trade_eval_stats.get("buy_filled_in_range", 0))
+                            if isinstance(split_trade_eval_stats, dict)
+                            else 0,
+                        ),
                     ),
                     "orders_submitted_core_proxy": max(
                         0,
@@ -8315,11 +8653,22 @@ def main(argv=None) -> int:
                         if isinstance(split_cumulative_stats, dict)
                         else 0,
                     ),
-                    "total_trades_cumulative_proxy": max(
+                    "total_round_trips_cumulative_proxy": max(
                         0,
                         to_int(split_trade_cumulative_stats.get("terminal_sell_fills_in_range", 0))
                         if isinstance(split_trade_cumulative_stats, dict)
                         else 0,
+                    ),
+                    "total_trades_cumulative_proxy": max(
+                        0,
+                        to_int(split_stage_cumulative_stats.get("orders_filled_in_range", 0))
+                        if isinstance(split_stage_cumulative_stats, dict)
+                        else max(
+                            0,
+                            to_int(split_trade_cumulative_stats.get("buy_filled_in_range", 0))
+                            if isinstance(split_trade_cumulative_stats, dict)
+                            else 0,
+                        ),
                     ),
                     "orders_submitted_cumulative_proxy": max(
                         0,
@@ -8562,6 +8911,13 @@ def main(argv=None) -> int:
                 if isinstance(item, dict)
             )
         )
+        split_filter_context["total_round_trips_core_proxy"] = int(
+            sum(
+                max(0, to_int(item.get("total_round_trips_core_proxy", 0)))
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
         split_filter_context["candidate_total_cumulative_proxy"] = int(
             sum(
                 max(0, to_int(item.get("candidate_total_cumulative_proxy", 0)))
@@ -8579,6 +8935,13 @@ def main(argv=None) -> int:
         split_filter_context["total_trades_cumulative_proxy"] = int(
             sum(
                 max(0, to_int(item.get("total_trades_cumulative_proxy", 0)))
+                for item in split_eval_profiles
+                if isinstance(item, dict)
+            )
+        )
+        split_filter_context["total_round_trips_cumulative_proxy"] = int(
+            sum(
+                max(0, to_int(item.get("total_round_trips_cumulative_proxy", 0)))
                 for item in split_eval_profiles
                 if isinstance(item, dict)
             )
@@ -8816,6 +9179,9 @@ def main(argv=None) -> int:
             split_filter_context["total_trades_core_effective"] = int(
                 split_filter_context.get("total_trades_cumulative_proxy", 0)
             )
+            split_filter_context["total_round_trips_core_effective"] = int(
+                split_filter_context.get("total_round_trips_cumulative_proxy", 0)
+            )
             split_filter_context["orders_submitted_core_effective"] = int(
                 split_filter_context.get("orders_submitted_cumulative_proxy", 0)
             )
@@ -8882,6 +9248,9 @@ def main(argv=None) -> int:
             )
             split_filter_context["total_trades_core_effective"] = int(
                 split_filter_context.get("total_trades_core_proxy", 0)
+            )
+            split_filter_context["total_round_trips_core_effective"] = int(
+                split_filter_context.get("total_round_trips_core_proxy", 0)
             )
             split_filter_context["orders_submitted_core_effective"] = int(
                 split_filter_context.get("orders_submitted_core_proxy", 0)
@@ -9070,6 +9439,85 @@ def main(argv=None) -> int:
             ensure_ascii=False,
             indent=4,
         )
+    frontier_fail_breakdown = build_frontier_fail_breakdown(
+        frontier_filter_dataset_samples=frontier_filter_dataset_samples,
+        split_filter_context=split_filter_context,
+    )
+    ensure_parent(frontier_fail_breakdown_json)
+    with frontier_fail_breakdown_json.open("w", encoding="utf-8", newline="\n") as fp:
+        json.dump(
+            frontier_fail_breakdown,
+            fp,
+            ensure_ascii=False,
+            indent=4,
+        )
+
+    a20_total_trades_core_effective = int(
+        split_filter_context.get("total_trades_core_effective", 0)
+        if isinstance(split_filter_context, dict)
+        else 0
+    )
+    a20_orders_filled_core_effective = int(
+        split_filter_context.get("orders_filled_core_effective", 0)
+        if isinstance(split_filter_context, dict)
+        else 0
+    )
+    a20_total_round_trips_core_effective = int(
+        split_filter_context.get("total_round_trips_core_effective", 0)
+        if isinstance(split_filter_context, dict)
+        else 0
+    )
+    a20_funnel_s5_orders_filled_core = int(
+        (a10_2_stage_funnel_report.get("funnel_summary_core", {}) or {}).get(
+            "S5_orders_filled_core",
+            0,
+        )
+        if isinstance(a10_2_stage_funnel_report, dict)
+        else 0
+    )
+    a20_consistency_check_payload = {
+        "generated_at": __import__("datetime").datetime.now().astimezone().isoformat(),
+        "split_name": str(args.split_name).strip(),
+        "evaluation_range_effective": (
+            split_filter_context.get("evaluation_range_effective", [])
+            if isinstance(split_filter_context, dict)
+            else []
+        ),
+        "definitions": {
+            "total_trades_core_effective_basis": "orders_filled_core_effective",
+            "total_round_trips_core_effective_basis": "terminal_sell_fills_in_range",
+        },
+        "values": {
+            "total_trades_core_effective": int(a20_total_trades_core_effective),
+            "orders_filled_core_effective": int(a20_orders_filled_core_effective),
+            "total_round_trips_core_effective": int(a20_total_round_trips_core_effective),
+            "funnel_s5_orders_filled_core": int(a20_funnel_s5_orders_filled_core),
+        },
+        "checks": {
+            "trades_equals_filled": bool(
+                int(a20_total_trades_core_effective)
+                == int(a20_orders_filled_core_effective)
+            ),
+            "trades_equals_funnel_s5": bool(
+                int(a20_total_trades_core_effective)
+                == int(a20_funnel_s5_orders_filled_core)
+            ),
+        },
+    }
+    a20_consistency_check_payload["mismatch"] = int(
+        not (
+            bool(a20_consistency_check_payload["checks"]["trades_equals_filled"])
+            and bool(a20_consistency_check_payload["checks"]["trades_equals_funnel_s5"])
+        )
+    )
+    ensure_parent(a20_consistency_check_json)
+    with a20_consistency_check_json.open("w", encoding="utf-8", newline="\n") as fp:
+        json.dump(
+            a20_consistency_check_payload,
+            fp,
+            ensure_ascii=False,
+            indent=4,
+        )
 
     core_zero_diagnosis_payload = {
         "generated_at": __import__("datetime").datetime.now().astimezone().isoformat(),
@@ -9137,8 +9585,23 @@ def main(argv=None) -> int:
             if isinstance(split_filter_context, dict)
             else 0
         ),
+        "total_round_trips_core_proxy": int(
+            split_filter_context.get("total_round_trips_core_proxy", 0)
+            if isinstance(split_filter_context, dict)
+            else 0
+        ),
         "total_trades_core_effective": int(
             split_filter_context.get("total_trades_core_effective", 0)
+            if isinstance(split_filter_context, dict)
+            else 0
+        ),
+        "total_round_trips_core_effective": int(
+            split_filter_context.get("total_round_trips_core_effective", 0)
+            if isinstance(split_filter_context, dict)
+            else 0
+        ),
+        "orders_filled_core_effective": int(
+            split_filter_context.get("orders_filled_core_effective", 0)
             if isinstance(split_filter_context, dict)
             else 0
         ),
@@ -9255,6 +9718,8 @@ def main(argv=None) -> int:
             "edge_sign_distribution": edge_sign_distribution,
             "edge_pos_but_no_trade_breakdown": edge_pos_no_trade_breakdown,
             "a10_2_stage_funnel": a10_2_stage_funnel_report,
+            "frontier_fail_breakdown": frontier_fail_breakdown,
+            "a20_consistency_check": a20_consistency_check_payload,
         },
         "split_filter": split_filter_context,
         "split_eval_profiles": split_eval_profiles,
@@ -9281,6 +9746,8 @@ def main(argv=None) -> int:
             "edge_sign_distribution_json": str(edge_sign_distribution_json),
             "edge_pos_but_no_trade_breakdown_json": str(edge_pos_no_trade_breakdown_json),
             "a10_2_stage_funnel_json": str(a10_2_stage_funnel_json),
+            "frontier_fail_breakdown_json": str(frontier_fail_breakdown_json),
+            "a20_consistency_check_json": str(a20_consistency_check_json),
             "core_zero_diagnosis_json": str(core_zero_diagnosis_json),
         },
     }
@@ -9359,6 +9826,9 @@ def main(argv=None) -> int:
         )
         split_protocol["total_trades_core_effective"] = int(
             split_filter_context.get("total_trades_core_effective", 0)
+        )
+        split_protocol["total_round_trips_core_effective"] = int(
+            split_filter_context.get("total_round_trips_core_effective", 0)
         )
         split_protocol["orders_submitted_core_effective"] = int(
             split_filter_context.get("orders_submitted_core_effective", 0)
@@ -9538,6 +10008,25 @@ def main(argv=None) -> int:
         f"ev_mismatch={a10_stage_counters.get('ev_mismatch_count_core', 0)} "
         f"top_order_block={top_reason or 'none'} "
         f"case_hint={a10_2_stage_funnel_report.get('a10_3_case_hint', '')}"
+    )
+    frontier_top3 = (
+        frontier_fail_breakdown.get("frontier_fail_breakdown_top3", [])
+        if isinstance(frontier_fail_breakdown, dict)
+        else []
+    )
+    frontier_top1 = ""
+    frontier_top1_count = 0
+    if isinstance(frontier_top3, list) and frontier_top3:
+        first = frontier_top3[0]
+        if isinstance(first, dict):
+            frontier_top1 = str(first.get("reason", "")).strip()
+            frontier_top1_count = max(0, to_int(first.get("count", 0)))
+    print(
+        "[Verification] frontier_fail_breakdown "
+        f"frontier_fail_count={frontier_fail_breakdown.get('frontier_fail_count_in_range', 0)} "
+        f"top1={frontier_top1 or 'none'} "
+        f"top1_count={frontier_top1_count} "
+        f"recommended_case={frontier_fail_breakdown.get('recommended_single_axis_case', '')}"
     )
     if bool(args.phase4_off_on_compare):
         phase4_compare = report.get("phase4_off_on_comparison", {})
