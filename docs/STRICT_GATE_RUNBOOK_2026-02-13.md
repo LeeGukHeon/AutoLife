@@ -5,43 +5,53 @@
 - Keep only the actionable roadmap content needed for repeatable execution across contexts.
 - Historical A1-A22 implementation logs are intentionally trimmed from this runbook.
 
+## Build Path Lock (Windows)
+- Use CMake from `D:\MyApps\vcpkg` explicitly.
+- Locked CMake path:
+  - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe`
+- Release build command:
+  - `D:\MyApps\vcpkg\downloads\tools\cmake-3.31.10-windows\cmake-3.31.10-windows-x86_64\bin\cmake.exe --build build --config Release --target AutoLifeTrading`
+- Build evidence outputs:
+  - `build/Release/logs/build_log_release.txt`
+  - `build/Release/logs/binary_version_stamp.txt`
+  - `build/Release/logs/binary_smoke_60s.log`
+
 ## 0) Hard Lock (Always-On)
 
-### Code / Head
-- Git head lock: `e2d9247e78010120519162a03ed7cc1d0b7deed8` (A21 throughput `core_filled` included).
-- Before every experiment round: record git hash and commit/tag any change.
-
 ### Runtime Config
-- Runtime source of truth: `build/Release/config/config.json`
+- Runtime source of truth (single source): `build/Release/config/config.json`
 - Root config must be synchronized every run:
   - `config/config.json == build/Release/config/config.json`
 
-### Paper Safety
+### Bundle
+- `config/model/probabilistic_runtime_bundle_v2_a19_margin_observe_only_step1.json` (default Paper/Backtest bundle)
+- `edge_semantics="net"` is required at bundle root.
+
+### Backtest
+- Split manifest: `build/Release/logs/time_split_manifest_r21_prefix.json`
+- Dataset root: `data/backtest_real` (6 markets)
+- Prewarm: `168h`
+- Execution/evaluation split: `execution_range = prewarm + core`, `evaluation_range = core`
+- `split_applied=true` is mandatory with report evidence.
+
+### Safety
 - `allow_live_orders=false`
 - `live_paper_use_fixed_initial_capital=true`
 - `live_paper_fixed_initial_capital_krw=200000`
 
-### Backtest Hard Lock
-- Split manifest: `build/Release/logs/time_split_manifest_r21_prefix.json`
-- Dataset root: `data/backtest_real` (6 markets)
-- Execution/evaluation split:
-  - `execution_range = prewarm(168h) + core`
-  - `evaluation_range = core`
-- `split_applied=true` is mandatory with report evidence.
+### Semantics
+- `edge_semantics = net`
+- throughput source: `core_filled` (`protocol_split.total_trades_core_effective`)
+- negative EV block: ON (`signal.expected_value < 0`)
+- strict parity mode: `warning_hold`
 
-### Bundle Hard Lock (Default Operating Bundles)
-- A bundle (Paper baseline only):
-  - `config/model/probabilistic_runtime_bundle_v2_a19_margin_observe_only_step1.json`
-  - `margin_min_ranging=0.03`, `mode=observe_only`
-- R bundle (Phase4 experiment only, not default Paper):
-  - `config/model/probabilistic_runtime_bundle_v2_r49_cap_high_cluster_cap_reallocate_step1.json`
-
-### Gate Hard Lock (Keep ON)
-- A9-1 negative EV block: ON (`signal.expected_value < 0` block)
-- A10-3 EV SSoT: ON (no order-stage EV recalculation; manager-pass EV only)
-- A13 throughput dynamic gate: ON
-- A15 strict parity mode: `warning_hold` (pass/fail separated, hold recorded)
-- A21 throughput observed source: `core_filled` (`protocol_split.total_trades_core_effective`)
+### Code Version Policy
+- Commit hash is excluded from hard lock.
+- Code version is managed by `HEAD at run time + runbook snapshot`.
+- Commit hash is recorded only in experiment logs/artifacts.
+- Optional tracking:
+  - semantic code tag (for example, `CODE_VERSION: StageB_semantics_lock`)
+  - `git describe --tags` in logs (not a hard-lock condition)
 
 ## 1) Target State (Final)
 - G1: Promotion gate remains `rollback=false` + `overall_pass=true`.
@@ -62,6 +72,24 @@
   - Distribution/limits/history estimation must come from Dev/Val only.
 - R3: Invariance checks are mandatory.
   - Diagnostic tracks (A8-0/A9-0 and similar) must not alter `candidate_total`/`total_trades`.
+
+## 2.1) Legacy Cleanup Principles (Refactor-Only Rounds)
+- Do not mix feature changes with refactor changes.
+  - Stage B rounds permit behavior-preserving edits only.
+- Refactor rounds allow move/rename/organization only.
+  - Logic/threshold/default numeric changes are next rounds.
+- Deletion is allowed only when usage count is proven zero.
+  - Verify with grep/report/telemetry evidence first.
+- Legacy removal uses kill-switch first, then deletion after 1-2 safe rounds.
+- Cleanup scope is limited to one module per round (max 1-2 files).
+
+### Cleanup Checklist
+- hard lock (`code/bundle/config/dataset/split`) unchanged
+- baseline repro run1/run2 key counters unchanged
+- stage funnel (`S0~S5`) unchanged
+- promotion gate result unchanged (`hold/rollback/top_failed_reasons`)
+- `semantics_lock_report.json` is `OK`
+- commit note explicitly states `refactor-only` and no numeric logic change
 
 ## 3) Stage Map (A -> E)
 - Stage A: Consistency/gate/aggregation normalization (completed, recheck only).
@@ -219,3 +247,45 @@ Use the same report template every round:
    - If switching to gross, retraining labels must be changed first.
 3. Stage C first round: apply budget multiplier in RANGING (no strategy addition).
    - A16 showed high RANGING share with loss structure; one mode-switch axis is the safest entry point.
+
+## 11) Post-Stage-B Execution Order (Current Hard-Lock)
+### Step 1) Build/Link Verification (Required)
+- Build Release with locked CMake path from `D:\MyApps\vcpkg`.
+- Confirm:
+  - build succeeds,
+  - `build/Release/AutoLifeTrading.exe` exists,
+  - 60s smoke run exits without crash/assert.
+- Required artifacts:
+  - `build/Release/logs/build_log_release.txt`
+  - `build/Release/logs/binary_version_stamp.txt`
+  - `build/Release/logs/binary_smoke_60s.log`
+
+### Step 2) Baseline Repro Check (Required, Quarantine x1)
+- Run `run_verification.py` with hard lock (`split manifest`, `prewarm=168h`, `execution=prewarm+core`, `evaluation=core`).
+- Confirm:
+  - `semantics_lock_report.json` is `OK`,
+  - `runtime_cost_semantics_debug.json` has cost mean/max `0`,
+  - core funnel and `total_trades_core_effective` are non-zero.
+
+### Step 3) Paper10 Smoke (4-8h, Safety Locked)
+- Keep `allow_live_orders=false`, `paper fixed capital=200000`.
+- Run paper-equivalent 10% sizing (risk budget/sizing multiplier only).
+- Track mandatory KPIs:
+  - trades/hour,
+  - realized pnl sum,
+  - realized expectancy,
+  - stop_loss / take_profit / strategy_exit ratio,
+  - RANGING share,
+  - edge_cal / `signal.expected_value` distribution samples.
+- Stop conditions:
+  - trades=0 for 2h+,
+  - realized pnl <= `-3000 KRW`,
+  - crash/assert/log integrity failure.
+
+### Step 4) Strict Parity Fix Track (Parallel)
+- Diagnose and resolve any `cli_strict_parity_pass_flag` mismatch path.
+- Keep live blocked until strict parity hold is cleared.
+
+### Step 5) Stage C Entry Condition
+- Start Stage C only after Paper10 stability.
+- Apply a single mode-switch axis only (no strategy proliferation).
