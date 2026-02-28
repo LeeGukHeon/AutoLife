@@ -208,6 +208,61 @@ bool passesRegimeGate(analytics::MarketRegime regime, const engine::EngineConfig
     return true;
 }
 
+std::string normalizeRegimeEntryDisableKey(const std::string& raw_key) {
+    const std::string key = toLowerCopy(raw_key);
+    if (key == "ranging" || key == "range") {
+        return "RANGING";
+    }
+    if (key == "trending_up" || key == "trending-up" || key == "trending up" || key == "up") {
+        return "TRENDING_UP";
+    }
+    if (key == "trending_down" || key == "trending-down" || key == "trending down" || key == "down") {
+        return "TRENDING_DOWN";
+    }
+    if (key == "high_volatility" || key == "high-volatility" || key == "high volatility" ||
+        key == "volatile" || key == "hostile") {
+        return "HIGH_VOLATILITY";
+    }
+    if (key == "unknown") {
+        return "UNKNOWN";
+    }
+    if (key == "any" || key == "default") {
+        return "ANY";
+    }
+    return std::string();
+}
+
+std::string normalizeRegimeEntryDisableKey(analytics::MarketRegime regime) {
+    return normalizeRegimeEntryDisableKey(
+        autolife::common::runtime_diag::marketRegimeLabel(regime)
+    );
+}
+
+bool isRegimeEntryDisabled(
+    const std::map<std::string, bool>& disable_map,
+    analytics::MarketRegime regime,
+    std::string* matched_key = nullptr
+) {
+    const std::string regime_key = normalizeRegimeEntryDisableKey(regime);
+    if (!regime_key.empty()) {
+        const auto it = disable_map.find(regime_key);
+        if (it != disable_map.end() && it->second) {
+            if (matched_key != nullptr) {
+                *matched_key = regime_key;
+            }
+            return true;
+        }
+    }
+    const auto any_it = disable_map.find("ANY");
+    if (any_it != disable_map.end() && any_it->second) {
+        if (matched_key != nullptr) {
+            *matched_key = "ANY";
+        }
+        return true;
+    }
+    return false;
+}
+
 using autolife::common::signal_policy::normalizeStrategyToken;
 using autolife::common::signal_policy::isStrategyEnabledByConfig;
 using autolife::common::signal_policy::rebalanceSignalRiskReward;
@@ -264,6 +319,9 @@ struct ProbabilisticRuntimeSnapshot {
     bool phase3_cost_tail_enabled = false;
     bool phase3_adaptive_ev_blend_enabled = false;
     bool phase3_diagnostics_v2_enabled = false;
+    bool phase3_regime_entry_disable_enabled = false;
+    bool phase3_disable_ranging_entry = false;
+    std::map<std::string, bool> phase3_regime_entry_disable;
     bool phase4_portfolio_allocator_enabled = false;
     bool phase4_correlation_control_enabled = false;
     bool phase4_risk_budget_enabled = false;
@@ -289,6 +347,12 @@ struct ProbabilisticRuntimeSnapshot {
     autolife::analytics::ProbabilisticRuntimeModel::Phase3PrimaryDecisionProfilePolicy
         phase3_primary_decision_profile_policy{};
     autolife::analytics::ProbabilisticRuntimeModel::Phase3ManagerFilterPolicy phase3_manager_filter_policy{};
+    autolife::analytics::ProbabilisticRuntimeModel::Phase3LiquidityVolumeGatePolicy
+        phase3_liq_vol_gate_policy{};
+    autolife::analytics::ProbabilisticRuntimeModel::Phase3FoundationStructureGatePolicy
+        phase3_foundation_structure_gate_policy{};
+    autolife::analytics::ProbabilisticRuntimeModel::Phase3BearReboundGuardPolicy
+        phase3_bear_rebound_guard_policy{};
     double online_margin_bias = 0.0;
     double online_strength_gain = 1.0;
     autolife::common::probabilistic_regime::State regime_state =
@@ -402,6 +466,7 @@ void appendPhase4CandidateArtifact(
         {"risk_budget_per_market_cap", snapshot.phase4_risk_budget_policy.per_market_cap},
         {"risk_budget_gross_cap", snapshot.phase4_risk_budget_policy.gross_cap},
         {"risk_budget_cap", snapshot.phase4_risk_budget_policy.risk_budget_cap},
+        {"risk_budget_regime_multipliers", snapshot.phase4_risk_budget_policy.regime_budget_multipliers},
         {"risk_budget_proxy_stop_pct", snapshot.phase4_risk_budget_policy.risk_proxy_stop_pct},
         {"dd_threshold_soft", snapshot.phase4_drawdown_governor_policy.dd_threshold_soft},
         {"dd_threshold_hard", snapshot.phase4_drawdown_governor_policy.dd_threshold_hard},
@@ -634,6 +699,98 @@ void appendFrontierFilterAudit(
     out << line.dump() << "\n";
 }
 
+std::filesystem::path rangingShadowArtifactPath() {
+    return autolife::utils::PathUtils::resolveRelativePath("logs/ranging_shadow_signals.jsonl");
+}
+
+void resetRangingShadowArtifact() {
+    const auto path = rangingShadowArtifactPath();
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+}
+
+void appendRangingShadowEvent(const nlohmann::json& line) {
+    const auto path = rangingShadowArtifactPath();
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream out(path, std::ios::binary | std::ios::app);
+    if (!out.is_open()) {
+        LOG_WARN("Ranging shadow artifact open failed: {}", path.string());
+        return;
+    }
+    out << line.dump() << "\n";
+}
+
+struct RealtimeEntryVetoProbeResult {
+    bool would_pass = true;
+    std::string veto_reason;
+};
+
+RealtimeEntryVetoProbeResult probeRealtimeEntryVeto(
+    const autolife::engine::EngineConfig& cfg,
+    const autolife::strategy::Signal& signal,
+    const autolife::analytics::OrderbookSnapshot& snapshot,
+    double market_hostility_ewma,
+    double recent_best_ask_price,
+    long long recent_best_ask_timestamp_ms,
+    long long now_ms
+) {
+    RealtimeEntryVetoProbeResult out;
+    out.would_pass = true;
+    out.veto_reason.clear();
+    if (!cfg.enable_realtime_entry_veto) {
+        return out;
+    }
+    const auto veto_thresholds = computeRealtimeEntryVetoThresholds(
+        cfg,
+        signal.market_regime,
+        signal.strength,
+        signal.liquidity_score,
+        market_hostility_ewma
+    );
+    if (!snapshot.valid || snapshot.best_ask <= 0.0) {
+        out.would_pass = false;
+        out.veto_reason = "blocked_realtime_entry_veto_invalid_orderbook";
+        return out;
+    }
+    if (snapshot.spread_pct > veto_thresholds.max_spread_pct) {
+        out.would_pass = false;
+        out.veto_reason = "blocked_realtime_entry_veto_spread";
+        return out;
+    }
+    if (snapshot.imbalance < veto_thresholds.min_orderbook_imbalance) {
+        out.would_pass = false;
+        out.veto_reason = "blocked_realtime_entry_veto_imbalance";
+        return out;
+    }
+    const double max_drop_pct = std::max(0.0001, veto_thresholds.max_drop_pct);
+    const double drop_vs_signal = (signal.entry_price > 0.0)
+        ? ((signal.entry_price - snapshot.best_ask) / signal.entry_price)
+        : 0.0;
+    if (drop_vs_signal > max_drop_pct) {
+        out.would_pass = false;
+        out.veto_reason = "blocked_realtime_entry_veto_drop_vs_signal";
+        return out;
+    }
+    if (recent_best_ask_price > 0.0 && recent_best_ask_timestamp_ms > 0) {
+        const long long age_ms = now_ms - recent_best_ask_timestamp_ms;
+        const int tracking_window_seconds = std::max(
+            10,
+            cfg.realtime_entry_veto_tracking_window_seconds
+        );
+        if (age_ms >= 0 &&
+            age_ms <= static_cast<long long>(tracking_window_seconds) * 1000LL) {
+            const double drop_vs_recent =
+                (recent_best_ask_price - snapshot.best_ask) / recent_best_ask_price;
+            if (drop_vs_recent > max_drop_pct) {
+                out.would_pass = false;
+                out.veto_reason = "blocked_realtime_entry_veto_drop_vs_recent";
+                return out;
+            }
+        }
+    }
+    return out;
+}
+
 double effectiveProbabilisticScanPrefilterMargin(
     const autolife::engine::EngineConfig& cfg,
     autolife::analytics::MarketRegime regime,
@@ -855,6 +1012,15 @@ bool inferProbabilisticRuntimeSnapshot(
     out_snapshot.phase3_primary_priority_policy = phase3_policy.primary_priority;
     out_snapshot.phase3_primary_decision_profile_policy = phase3_policy.primary_decision_profile;
     out_snapshot.phase3_manager_filter_policy = phase3_policy.manager_filter;
+    out_snapshot.phase3_liq_vol_gate_policy = phase3_policy.liq_vol_gate;
+    out_snapshot.phase3_foundation_structure_gate_policy = phase3_policy.foundation_structure_gate;
+    out_snapshot.phase3_bear_rebound_guard_policy = phase3_policy.bear_rebound_guard;
+    out_snapshot.phase3_regime_entry_disable_enabled = phase3_policy.regime_entry_disable_enabled;
+    out_snapshot.phase3_disable_ranging_entry = phase3_policy.disable_ranging_entry;
+    out_snapshot.phase3_regime_entry_disable.clear();
+    for (const auto& kv : phase3_policy.regime_entry_disable) {
+        out_snapshot.phase3_regime_entry_disable[kv.first] = kv.second;
+    }
     out_snapshot.phase4_portfolio_allocator_policy = phase4_policy.portfolio_allocator;
     out_snapshot.phase4_risk_budget_policy = phase4_policy.risk_budget;
     out_snapshot.phase4_drawdown_governor_policy = phase4_policy.drawdown_governor;
@@ -1000,6 +1166,8 @@ bool applyProbabilisticRuntimeAdjustment(
     signal.phase3.frontier_k_cost_tail = snapshot.phase3_frontier_policy.k_cost_tail;
     signal.phase3.required_ev_offset =
         snapshot.phase3_operations_control_policy.required_ev_offset;
+    signal.phase3.required_ev_offset_trending_add =
+        snapshot.phase3_operations_control_policy.required_ev_offset_trending_add;
     signal.phase3.frontier_min_required_ev = snapshot.phase3_frontier_policy.min_required_ev;
     signal.phase3.frontier_max_required_ev = snapshot.phase3_frontier_policy.max_required_ev;
     signal.phase3.frontier_margin_floor = snapshot.phase3_frontier_policy.margin_floor;
@@ -2010,6 +2178,7 @@ void BacktestEngine::init(const Config& config) {
     resetEntryStageFunnelArtifact();
     resetFrontierFilterArtifact();
     resetPhase4CandidateArtifact();
+    resetRangingShadowArtifact();
     balance_krw_ = config.getInitialCapital();
     balance_asset_ = 0.0;
     max_balance_ = balance_krw_;
@@ -2039,10 +2208,12 @@ void BacktestEngine::init(const Config& config) {
     strategyless_current_stop_hits_ = 0;
     strategyless_current_tp1_hits_ = 0;
     strategyless_current_tp2_hits_ = 0;
+    ranging_shadow_summary_ = Result::RangingShadowSummary{};
     phase4_portfolio_diagnostics_ = Result::Phase4PortfolioDiagnostics{};
     phase4_candidate_snapshot_samples_.clear();
     recent_best_ask_price_ = 0.0;
     recent_best_ask_timestamp_ms_ = 0;
+    current_candle_index_ = 0;
     
     // Reset Risk Manager with initial capital
     risk_manager_ = std::make_unique<risk::RiskManager>(balance_krw_);
@@ -2308,8 +2479,9 @@ void BacktestEngine::run() {
         risk_manager_->clearTimeOverride();
     }
     
-    for (const auto& candle : history_data_) {
-        processCandle(candle);
+    for (size_t idx = 0; idx < history_data_.size(); ++idx) {
+        current_candle_index_ = idx;
+        processCandle(history_data_[idx]);
     }
 
     if (risk_manager_ && !history_data_.empty()) {
@@ -2853,6 +3025,13 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 stage_reject_reason_counts[reason]++;
             }
         };
+        auto markEntryRejectCount = [&](const std::string& reason, int count) {
+            if (reason.empty() || count <= 0) {
+                return;
+            }
+            entry_rejection_reason_counts_[reason] += count;
+            stage_reject_reason_counts[reason] += count;
+        };
         auto mergeEntryRejectCounts = [&](const std::map<std::string, int>& counts) {
             for (const auto& kv : counts) {
                 if (kv.first.empty() || kv.second <= 0) {
@@ -2865,6 +3044,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
         ProbabilisticRuntimeSnapshot probabilistic_snapshot;
         std::string probabilistic_prefilter_reason;
         std::vector<strategy::Signal> signals;
+        bool signals_suppressed_by_regime_shadow = false;
         if (!inferProbabilisticRuntimeSnapshot(
                 probabilistic_runtime_model_,
                 engine_config_,
@@ -2885,6 +3065,38 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 "|liq=" + liquidityBucket(metrics.liquidity_score);
             no_signal_pattern_counts_[no_signal_pattern_key]++;
         } else {
+            metrics.liq_vol_gate_policy.enabled =
+                probabilistic_snapshot.phase3_liq_vol_gate_policy.enabled;
+            metrics.liq_vol_gate_policy.mode =
+                probabilistic_snapshot.phase3_liq_vol_gate_policy.mode;
+            metrics.liq_vol_gate_policy.window_minutes =
+                probabilistic_snapshot.phase3_liq_vol_gate_policy.window_minutes;
+            metrics.liq_vol_gate_policy.quantile_q =
+                probabilistic_snapshot.phase3_liq_vol_gate_policy.quantile_q;
+            metrics.liq_vol_gate_policy.min_samples_required =
+                probabilistic_snapshot.phase3_liq_vol_gate_policy.min_samples_required;
+            metrics.liq_vol_gate_policy.low_conf_action =
+                probabilistic_snapshot.phase3_liq_vol_gate_policy.low_conf_action;
+            metrics.foundation_structure_gate_policy.enabled =
+                probabilistic_snapshot.phase3_foundation_structure_gate_policy.enabled;
+            metrics.foundation_structure_gate_policy.mode =
+                probabilistic_snapshot.phase3_foundation_structure_gate_policy.mode;
+            metrics.foundation_structure_gate_policy.relax_delta =
+                probabilistic_snapshot.phase3_foundation_structure_gate_policy.relax_delta;
+            metrics.bear_rebound_guard_policy.enabled =
+                probabilistic_snapshot.phase3_bear_rebound_guard_policy.enabled;
+            metrics.bear_rebound_guard_policy.mode =
+                probabilistic_snapshot.phase3_bear_rebound_guard_policy.mode;
+            metrics.bear_rebound_guard_policy.window_minutes =
+                probabilistic_snapshot.phase3_bear_rebound_guard_policy.window_minutes;
+            metrics.bear_rebound_guard_policy.quantile_q =
+                probabilistic_snapshot.phase3_bear_rebound_guard_policy.quantile_q;
+            metrics.bear_rebound_guard_policy.min_samples_required =
+                probabilistic_snapshot.phase3_bear_rebound_guard_policy.min_samples_required;
+            metrics.bear_rebound_guard_policy.low_conf_action =
+                probabilistic_snapshot.phase3_bear_rebound_guard_policy.low_conf_action;
+            metrics.bear_rebound_guard_policy.static_threshold =
+                probabilistic_snapshot.phase3_bear_rebound_guard_policy.static_threshold;
             signals = strategy_manager_->collectSignals(
                 market_name_,
                 metrics,
@@ -2895,6 +3107,9 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 &collect_diag
             );
         }
+        entry_funnel_.regime_entry_disable_enabled =
+            probabilistic_snapshot.phase3_regime_entry_disable_enabled;
+        entry_funnel_.regime_entry_disable = probabilistic_snapshot.phase3_regime_entry_disable;
         if (!signals.empty()) {
             std::vector<strategy::Signal> adjusted_signals;
             adjusted_signals.reserve(signals.size());
@@ -2916,6 +3131,202 @@ void BacktestEngine::processCandle(const Candle& candle) {
             }
             signals = std::move(adjusted_signals);
         }
+        if (!signals.empty() && probabilistic_snapshot.phase3_regime_entry_disable_enabled) {
+            std::string disabled_regime_key;
+            if (isRegimeEntryDisabled(
+                    probabilistic_snapshot.phase3_regime_entry_disable,
+                    regime.regime,
+                    &disabled_regime_key)) {
+                signals_suppressed_by_regime_shadow = true;
+                const int skipped_candidates = static_cast<int>(signals.size());
+                const std::string regime_key =
+                    disabled_regime_key.empty() ? marketRegimeLabel(regime.regime) : disabled_regime_key;
+                const auto& manager_policy = probabilistic_snapshot.phase3_manager_filter_policy;
+                const auto manager_defaults =
+                    autolife::analytics::ProbabilisticRuntimeModel::Phase3ManagerFilterPolicy{};
+                const bool use_manager_policy = manager_policy.enabled;
+                const auto manager_pick = [&](double policy_value, double default_value) {
+                    return use_manager_policy ? policy_value : default_value;
+                };
+                double shadow_min_strength = manager_pick(
+                    manager_policy.base_min_strength_default,
+                    manager_defaults.base_min_strength_default
+                );
+                double shadow_min_expected_value = manager_pick(
+                    manager_policy.base_min_expected_value,
+                    manager_defaults.base_min_expected_value
+                );
+                if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
+                    shadow_min_strength = manager_pick(
+                        manager_policy.base_min_strength_high_volatility,
+                        manager_defaults.base_min_strength_high_volatility
+                    );
+                } else if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
+                    shadow_min_strength = manager_pick(
+                        manager_policy.base_min_strength_trending_down,
+                        manager_defaults.base_min_strength_trending_down
+                    );
+                } else if (regime.regime == analytics::MarketRegime::RANGING) {
+                    shadow_min_strength = manager_pick(
+                        manager_policy.base_min_strength_ranging,
+                        manager_defaults.base_min_strength_ranging
+                    );
+                }
+                applyProbabilisticManagerFloors(
+                    engine_config_,
+                    probabilistic_snapshot,
+                    regime.regime,
+                    &shadow_min_strength,
+                    &shadow_min_expected_value
+                );
+
+                const double hostility_alpha =
+                    std::clamp(engine_config_.hostility_ewma_alpha, 0.01, 0.99);
+                const double hostility_now = computeMarketHostilityScore(
+                    engine_config_,
+                    metrics,
+                    regime.regime
+                );
+                const double hostility_probe = (market_hostility_ewma_ <= 1e-9)
+                    ? hostility_now
+                    : std::clamp(
+                        market_hostility_ewma_ * (1.0 - hostility_alpha) +
+                            hostility_now * hostility_alpha,
+                        0.0,
+                        1.0
+                    );
+                const long long now_ms = toMsTimestamp(candle.timestamp);
+                const bool future_available =
+                    (current_candle_index_ + static_cast<size_t>(5)) < history_data_.size();
+                const double entry_price_proxy = candle.close;
+                double future_close_t5 = std::numeric_limits<double>::quiet_NaN();
+                double return_bps_t5 = std::numeric_limits<double>::quiet_NaN();
+                double shadow_pnl_bps = std::numeric_limits<double>::quiet_NaN();
+                if (future_available && entry_price_proxy > 0.0) {
+                    future_close_t5 = history_data_[current_candle_index_ + 5].close;
+                    if (std::isfinite(future_close_t5) && future_close_t5 > 0.0) {
+                        return_bps_t5 = ((future_close_t5 / entry_price_proxy) - 1.0) * 10000.0;
+                        shadow_pnl_bps = return_bps_t5 - 12.0;
+                    }
+                }
+
+                for (const auto& shadow_signal : signals) {
+                    strategy::StrategyManager::FilterDiagnostics shadow_filter_diag;
+                    const std::vector<strategy::Signal> one_signal{shadow_signal};
+                    const auto filtered_shadow = strategy_manager_->filterSignalsWithDiagnostics(
+                        one_signal,
+                        shadow_min_strength,
+                        shadow_min_expected_value,
+                        regime.regime,
+                        &shadow_filter_diag
+                    );
+                    const bool would_pass_manager = !filtered_shadow.empty();
+                    bool would_pass_frontier = true;
+                    double required_expected_value = std::numeric_limits<double>::quiet_NaN();
+                    if (!shadow_filter_diag.frontier_decision_samples.empty()) {
+                        const auto& sample = shadow_filter_diag.frontier_decision_samples.front();
+                        would_pass_frontier = sample.frontier_pass;
+                        required_expected_value = sample.required_expected_value;
+                    }
+                    const auto veto_probe = probeRealtimeEntryVeto(
+                        engine_config_,
+                        shadow_signal,
+                        metrics.orderbook_snapshot,
+                        hostility_probe,
+                        recent_best_ask_price_,
+                        recent_best_ask_timestamp_ms_,
+                        now_ms
+                    );
+                    const bool would_pass_execution_guard = veto_probe.would_pass;
+
+                    nlohmann::json shadow_line;
+                    shadow_line["ts_ms"] = normalizeTimestampMs(candle.timestamp);
+                    shadow_line["source"] = "backtest";
+                    shadow_line["mode"] = "ranging_shadow";
+                    shadow_line["market"] = market_name_;
+                    shadow_line["regime"] = regime_key;
+                    shadow_line["vol_bucket_pct"] = volatilityBucket(metrics.volatility);
+                    shadow_line["atr_pct"] = regime.atr_pct;
+                    shadow_line["adx"] = regime.adx;
+                    shadow_line["p_h5_calibrated"] = shadow_signal.probabilistic_h5_calibrated;
+                    shadow_line["selection_threshold_h5"] = shadow_signal.probabilistic_h5_threshold;
+                    shadow_line["margin"] = shadow_signal.probabilistic_h5_margin;
+                    shadow_line["expected_edge_calibrated_bps"] =
+                        shadow_signal.phase3.expected_edge_calibrated_bps;
+                    shadow_line["expected_edge_bps_after_cost"] =
+                        shadow_signal.phase3.expected_edge_used_for_gate_bps;
+                    shadow_line["signal_expected_value"] = shadow_signal.expected_value;
+                    shadow_line["signal_strength"] = shadow_signal.strength;
+                    shadow_line["ev_blend"] = shadow_signal.phase3.adaptive_ev_blend;
+                    if (std::isfinite(required_expected_value)) {
+                        shadow_line["required_expected_value"] = required_expected_value;
+                    } else {
+                        shadow_line["required_expected_value"] = nullptr;
+                    }
+                    shadow_line["required_margin_floor"] = shadow_signal.phase3.frontier_margin_floor;
+                    shadow_line["disabled_reason"] = "REGIME_RANGING_SHADOW";
+                    shadow_line["would_pass_frontier"] = would_pass_frontier;
+                    shadow_line["would_pass_manager"] = would_pass_manager;
+                    shadow_line["would_pass_execution_guard"] = would_pass_execution_guard;
+                    shadow_line["note"] = veto_probe.veto_reason;
+                    shadow_line["entry_price_proxy_close_t"] = entry_price_proxy;
+                    shadow_line["future_horizon_bars"] = 5;
+                    shadow_line["future_close_t5_available"] = future_available;
+                    if (std::isfinite(future_close_t5)) {
+                        shadow_line["future_close_t5"] = future_close_t5;
+                    } else {
+                        shadow_line["future_close_t5"] = nullptr;
+                    }
+                    shadow_line["label_cost_bps"] = 12.0;
+                    if (std::isfinite(return_bps_t5)) {
+                        shadow_line["return_bps_t5"] = return_bps_t5;
+                    } else {
+                        shadow_line["return_bps_t5"] = nullptr;
+                    }
+                    if (std::isfinite(shadow_pnl_bps)) {
+                        shadow_line["shadow_pnl_bps"] = shadow_pnl_bps;
+                    } else {
+                        shadow_line["shadow_pnl_bps"] = nullptr;
+                    }
+                    appendRangingShadowEvent(shadow_line);
+
+                    ranging_shadow_summary_.shadow_count_total++;
+                    ranging_shadow_summary_.shadow_count_by_regime[regime_key]++;
+                    ranging_shadow_summary_.shadow_count_by_market[market_name_]++;
+                    if (would_pass_frontier) {
+                        ranging_shadow_summary_.shadow_would_pass_frontier_count++;
+                    }
+                    if (would_pass_manager) {
+                        ranging_shadow_summary_.shadow_would_pass_manager_count++;
+                    }
+                    if (would_pass_execution_guard) {
+                        ranging_shadow_summary_.shadow_would_pass_execution_guard_count++;
+                    }
+                    if (shadow_signal.phase3.expected_edge_calibrated_bps < 0.0) {
+                        ranging_shadow_summary_.shadow_edge_neg_count++;
+                    } else if (shadow_signal.phase3.expected_edge_calibrated_bps > 0.0) {
+                        ranging_shadow_summary_.shadow_edge_pos_count++;
+                    }
+                }
+
+                entry_funnel_.reject_regime_entry_disabled_count += skipped_candidates;
+                entry_funnel_.reject_regime_entry_disabled_by_regime[regime_key] += skipped_candidates;
+                markEntryRejectCount("reject_regime_entry_disabled_count", skipped_candidates);
+                markEntryRejectCount("reject_regime_entry_disabled", skipped_candidates);
+                markEntryRejectCount(
+                    std::string("reject_regime_entry_disabled_by_regime::") + regime_key,
+                    skipped_candidates
+                );
+                LOG_INFO(
+                    "{} regime entry disabled: regime={}, skipped_candidates={}",
+                    market_name_,
+                    regime_key,
+                    skipped_candidates
+                );
+                signals.clear();
+                markEntryReject("reject_regime_ranging_shadow_mode");
+            }
+        }
         for (const auto& kv : collect_diag.skipped_disabled_by_strategy) {
             if (!kv.first.empty() && kv.second > 0) {
                 strategy_skipped_disabled_counts_[kv.first] += kv.second;
@@ -2930,18 +3341,20 @@ void BacktestEngine::processCandle(const Candle& candle) {
             strategy_collect_exception_count_ += collect_diag.exception_count;
         }
         if (signals.empty()) {
-            entry_funnel_.no_signal_generated++;
-            markEntryReject("no_signal_generated");
-            const std::string no_signal_pattern_key =
-                std::string("regime=") + marketRegimeLabel(regime.regime) +
-                "|vol=" + volatilityBucket(metrics.volatility) +
-                "|liq=" + liquidityBucket(metrics.liquidity_score);
-            no_signal_pattern_counts_[no_signal_pattern_key]++;
-            for (const auto& kv : collect_diag.no_signal_reason_counts) {
-                if (kv.first.empty() || kv.second <= 0) {
-                    continue;
+            if (!signals_suppressed_by_regime_shadow) {
+                entry_funnel_.no_signal_generated++;
+                markEntryReject("no_signal_generated");
+                const std::string no_signal_pattern_key =
+                    std::string("regime=") + marketRegimeLabel(regime.regime) +
+                    "|vol=" + volatilityBucket(metrics.volatility) +
+                    "|liq=" + liquidityBucket(metrics.liquidity_score);
+                no_signal_pattern_counts_[no_signal_pattern_key]++;
+                for (const auto& kv : collect_diag.no_signal_reason_counts) {
+                    if (kv.first.empty() || kv.second <= 0) {
+                        continue;
+                    }
+                    entry_rejection_reason_counts_[kv.first] += kv.second;
                 }
-                entry_rejection_reason_counts_[kv.first] += kv.second;
             }
         }
         for (const auto& signal : signals) {
@@ -3366,100 +3779,139 @@ void BacktestEngine::processCandle(const Candle& candle) {
 
         double phase4_drawdown_current = 0.0;
         double phase4_drawdown_budget_multiplier = 1.0;
+        const bool phase4_has_regime_budget_multiplier =
+            !probabilistic_snapshot.phase4_risk_budget_policy.regime_budget_multipliers.empty();
         if ((probabilistic_snapshot.phase4_risk_budget_enabled ||
-             probabilistic_snapshot.phase4_drawdown_governor_enabled) &&
+             probabilistic_snapshot.phase4_drawdown_governor_enabled ||
+             phase4_has_regime_budget_multiplier) &&
             !candidate_signals.empty()) {
-            const auto runtime_metrics = risk_manager_->getRiskMetrics();
-            phase4_drawdown_current = std::clamp(runtime_metrics.current_drawdown, 0.0, 1.0);
-            const double existing_gross_exposure =
-                (runtime_metrics.total_capital > 1e-9)
-                    ? std::clamp(
-                          (runtime_metrics.total_capital - runtime_metrics.available_capital) /
-                              runtime_metrics.total_capital,
-                          0.0,
-                          10.0
-                      )
-                    : 0.0;
-            auto effective_budget_policy = probabilistic_snapshot.phase4_risk_budget_policy;
-            phase4_drawdown_budget_multiplier = autolife::common::phase4::drawdownBudgetMultiplier(
-                phase4_drawdown_current,
-                probabilistic_snapshot.phase4_drawdown_governor_policy
-            );
-            effective_budget_policy.per_market_cap = std::clamp(
-                effective_budget_policy.per_market_cap * phase4_drawdown_budget_multiplier,
-                0.0,
-                1.0
-            );
-            effective_budget_policy.gross_cap = std::max(
-                0.0,
-                effective_budget_policy.gross_cap * phase4_drawdown_budget_multiplier
-            );
-            effective_budget_policy.risk_budget_cap = std::max(
-                0.0,
-                effective_budget_policy.risk_budget_cap * phase4_drawdown_budget_multiplier
-            );
-            const double existing_risk_exposure =
-                existing_gross_exposure *
-                std::max(0.0, effective_budget_policy.risk_proxy_stop_pct);
-
-            const int before_budget_count = static_cast<int>(candidate_signals.size());
-            int baseline_selected_count = before_budget_count;
-            if (probabilistic_snapshot.phase4_drawdown_governor_enabled &&
-                phase4_drawdown_budget_multiplier < 0.999999) {
-                const auto baseline_result = autolife::common::phase4::applyRiskBudgetPrefixFilter(
-                    candidate_signals,
+            int regime_multiplier_applied_this_round = 0;
+            std::map<std::string, int> regime_multiplier_count_this_round;
+            std::map<std::string, double> regime_multiplier_sum_this_round;
+            for (auto& signal : candidate_signals) {
+                const auto resolution = autolife::common::phase4::resolveRegimeBudgetMultiplier(
                     probabilistic_snapshot.phase4_risk_budget_policy,
+                    signal.market_regime
+                );
+                if (!resolution.configured) {
+                    continue;
+                }
+                signal.position_size = std::clamp(signal.position_size * resolution.multiplier, 0.0, 1.0);
+                const std::string regime_key = resolution.matched_key.empty()
+                    ? marketRegimeLabel(signal.market_regime)
+                    : resolution.matched_key;
+                regime_multiplier_applied_this_round += 1;
+                regime_multiplier_count_this_round[regime_key] += 1;
+                regime_multiplier_sum_this_round[regime_key] += resolution.multiplier;
+            }
+            if (probabilistic_snapshot.phase4_portfolio_diagnostics_enabled &&
+                regime_multiplier_applied_this_round > 0) {
+                phase4_portfolio_diagnostics_.regime_budget_multiplier_applied_count +=
+                    regime_multiplier_applied_this_round;
+                for (const auto& kv : regime_multiplier_count_this_round) {
+                    phase4_portfolio_diagnostics_.regime_budget_multiplier_count_by_regime[kv.first] +=
+                        kv.second;
+                }
+                for (const auto& kv : regime_multiplier_sum_this_round) {
+                    phase4_portfolio_diagnostics_.regime_budget_multiplier_sum_by_regime[kv.first] +=
+                        kv.second;
+                }
+            }
+
+            if (probabilistic_snapshot.phase4_risk_budget_enabled ||
+                probabilistic_snapshot.phase4_drawdown_governor_enabled) {
+                const auto runtime_metrics = risk_manager_->getRiskMetrics();
+                phase4_drawdown_current = std::clamp(runtime_metrics.current_drawdown, 0.0, 1.0);
+                const double existing_gross_exposure =
+                    (runtime_metrics.total_capital > 1e-9)
+                        ? std::clamp(
+                              (runtime_metrics.total_capital - runtime_metrics.available_capital) /
+                                  runtime_metrics.total_capital,
+                              0.0,
+                              10.0
+                          )
+                        : 0.0;
+                auto effective_budget_policy = probabilistic_snapshot.phase4_risk_budget_policy;
+                phase4_drawdown_budget_multiplier = autolife::common::phase4::drawdownBudgetMultiplier(
+                    phase4_drawdown_current,
+                    probabilistic_snapshot.phase4_drawdown_governor_policy
+                );
+                effective_budget_policy.per_market_cap = std::clamp(
+                    effective_budget_policy.per_market_cap * phase4_drawdown_budget_multiplier,
+                    0.0,
+                    1.0
+                );
+                effective_budget_policy.gross_cap = std::max(
+                    0.0,
+                    effective_budget_policy.gross_cap * phase4_drawdown_budget_multiplier
+                );
+                effective_budget_policy.risk_budget_cap = std::max(
+                    0.0,
+                    effective_budget_policy.risk_budget_cap * phase4_drawdown_budget_multiplier
+                );
+                const double existing_risk_exposure =
+                    existing_gross_exposure *
+                    std::max(0.0, effective_budget_policy.risk_proxy_stop_pct);
+
+                const int before_budget_count = static_cast<int>(candidate_signals.size());
+                int baseline_selected_count = before_budget_count;
+                if (probabilistic_snapshot.phase4_drawdown_governor_enabled &&
+                    phase4_drawdown_budget_multiplier < 0.999999) {
+                    const auto baseline_result = autolife::common::phase4::applyRiskBudgetPrefixFilter(
+                        candidate_signals,
+                        probabilistic_snapshot.phase4_risk_budget_policy,
+                        existing_gross_exposure,
+                        existing_risk_exposure
+                    );
+                    baseline_selected_count = std::clamp(
+                        baseline_result.selected_count,
+                        0,
+                        before_budget_count
+                    );
+                }
+                const auto budget_result = autolife::common::phase4::applyRiskBudgetPrefixFilter(
+                    candidate_signals,
+                    effective_budget_policy,
                     existing_gross_exposure,
                     existing_risk_exposure
                 );
-                baseline_selected_count = std::clamp(
-                    baseline_result.selected_count,
+                const int selected_count = std::clamp(
+                    budget_result.selected_count,
                     0,
                     before_budget_count
                 );
-            }
-            const auto budget_result = autolife::common::phase4::applyRiskBudgetPrefixFilter(
-                candidate_signals,
-                effective_budget_policy,
-                existing_gross_exposure,
-                existing_risk_exposure
-            );
-            const int selected_count = std::clamp(
-                budget_result.selected_count,
-                0,
-                before_budget_count
-            );
-            const int drawdown_reject_count =
-                (probabilistic_snapshot.phase4_drawdown_governor_enabled &&
-                 phase4_drawdown_budget_multiplier < 0.999999)
-                    ? std::max(0, baseline_selected_count - selected_count)
-                    : 0;
-            const int budget_reject_count = std::max(
-                0,
-                budget_result.rejected_by_budget - drawdown_reject_count
-            );
-            for (int i = 0; i < selected_count; ++i) {
-                candidate_signals[static_cast<std::size_t>(i)].position_size =
-                    budget_result.selected_position_sizes[static_cast<std::size_t>(i)];
-            }
-            if (selected_count < before_budget_count) {
-                candidate_signals.resize(static_cast<std::size_t>(selected_count));
-                phase4_selected_count = std::min(phase4_selected_count, selected_count);
-                if (probabilistic_snapshot.phase4_portfolio_diagnostics_enabled) {
-                    if (budget_reject_count > 0) {
-                        phase4_portfolio_diagnostics_.rejected_by_budget += budget_reject_count;
-                    }
-                    if (drawdown_reject_count > 0) {
-                        phase4_portfolio_diagnostics_.rejected_by_drawdown_governor +=
-                            drawdown_reject_count;
-                    }
+                const int drawdown_reject_count =
+                    (probabilistic_snapshot.phase4_drawdown_governor_enabled &&
+                     phase4_drawdown_budget_multiplier < 0.999999)
+                        ? std::max(0, baseline_selected_count - selected_count)
+                        : 0;
+                const int budget_reject_count = std::max(
+                    0,
+                    budget_result.rejected_by_budget - drawdown_reject_count
+                );
+                for (int i = 0; i < selected_count; ++i) {
+                    candidate_signals[static_cast<std::size_t>(i)].position_size =
+                        budget_result.selected_position_sizes[static_cast<std::size_t>(i)];
                 }
-                if (selected_count <= 0) {
-                    markEntryReject(
-                        drawdown_reject_count > 0
-                            ? "filtered_out_by_phase4_drawdown_governor"
-                            : "filtered_out_by_phase4_budget"
-                    );
+                if (selected_count < before_budget_count) {
+                    candidate_signals.resize(static_cast<std::size_t>(selected_count));
+                    phase4_selected_count = std::min(phase4_selected_count, selected_count);
+                    if (probabilistic_snapshot.phase4_portfolio_diagnostics_enabled) {
+                        if (budget_reject_count > 0) {
+                            phase4_portfolio_diagnostics_.rejected_by_budget += budget_reject_count;
+                        }
+                        if (drawdown_reject_count > 0) {
+                            phase4_portfolio_diagnostics_.rejected_by_drawdown_governor +=
+                                drawdown_reject_count;
+                        }
+                    }
+                    if (selected_count <= 0) {
+                        markEntryReject(
+                            drawdown_reject_count > 0
+                                ? "filtered_out_by_phase4_drawdown_governor"
+                                : "filtered_out_by_phase4_budget"
+                        );
+                    }
                 }
             }
         }
@@ -3710,6 +4162,11 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 probabilistic_snapshot.phase4_risk_budget_policy.gross_cap;
             phase4_portfolio_diagnostics_.risk_budget_cap =
                 probabilistic_snapshot.phase4_risk_budget_policy.risk_budget_cap;
+            phase4_portfolio_diagnostics_.risk_budget_regime_multipliers.clear();
+            for (const auto& kv :
+                 probabilistic_snapshot.phase4_risk_budget_policy.regime_budget_multipliers) {
+                phase4_portfolio_diagnostics_.risk_budget_regime_multipliers[kv.first] = kv.second;
+            }
             phase4_portfolio_diagnostics_.drawdown_current = phase4_drawdown_current;
             phase4_portfolio_diagnostics_.drawdown_budget_multiplier =
                 phase4_drawdown_budget_multiplier;
@@ -4584,6 +5041,7 @@ BacktestEngine::Result BacktestEngine::getResult() const {
         });
     result.strategy_collect_exception_count = strategy_collect_exception_count_;
     result.entry_funnel = entry_funnel_;
+    result.ranging_shadow = ranging_shadow_summary_;
     result.shadow_funnel = shadow_funnel_;
     if (result.shadow_funnel.rounds > 0) {
         const double rounds = static_cast<double>(result.shadow_funnel.rounds);
@@ -4606,7 +5064,19 @@ BacktestEngine::Result BacktestEngine::getResult() const {
     result.strategyless_current_stop_hits = strategyless_current_stop_hits_;
     result.strategyless_current_tp1_hits = strategyless_current_tp1_hits_;
     result.strategyless_current_tp2_hits = strategyless_current_tp2_hits_;
-    result.phase4_portfolio_diagnostics = phase4_portfolio_diagnostics_;
+    auto phase4_diag = phase4_portfolio_diagnostics_;
+    phase4_diag.regime_budget_multiplier_avg_by_regime.clear();
+    for (const auto& kv : phase4_diag.regime_budget_multiplier_count_by_regime) {
+        if (kv.second <= 0) {
+            continue;
+        }
+        const double sum = phase4_diag.regime_budget_multiplier_sum_by_regime.count(kv.first) > 0
+            ? phase4_diag.regime_budget_multiplier_sum_by_regime.at(kv.first)
+            : 0.0;
+        phase4_diag.regime_budget_multiplier_avg_by_regime[kv.first] =
+            sum / static_cast<double>(kv.second);
+    }
+    result.phase4_portfolio_diagnostics = std::move(phase4_diag);
     result.phase4_portfolio_diagnostics.candidate_snapshot_sampled =
         static_cast<int>(phase4_candidate_snapshot_samples_.size());
     result.phase4_portfolio_diagnostics.selection_rate =

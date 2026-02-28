@@ -4,6 +4,7 @@
 #include "strategy/IStrategy.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <map>
@@ -196,6 +197,87 @@ inline double signalRiskPct(
         return fallback;
     }
     return std::clamp(risk_pct, 0.0, 1.0);
+}
+
+struct RegimeBudgetMultiplierResolution {
+    double multiplier = 1.0;
+    bool configured = false;
+    std::string matched_key;
+};
+
+inline std::string normalizeRegimeBudgetKey(std::string key) {
+    std::string out;
+    out.reserve(key.size());
+    for (unsigned char c : key) {
+        if (std::isalnum(c)) {
+            out.push_back(static_cast<char>(std::toupper(c)));
+        } else if (c == '_' || c == '-' || std::isspace(c)) {
+            out.push_back('_');
+        }
+    }
+    while (out.find("__") != std::string::npos) {
+        out.erase(out.find("__"), 1);
+    }
+    if (!out.empty() && out.front() == '_') {
+        out.erase(out.begin());
+    }
+    if (!out.empty() && out.back() == '_') {
+        out.pop_back();
+    }
+    if (out == "TRENDINGUP") {
+        out = "TRENDING_UP";
+    } else if (out == "TRENDINGDOWN") {
+        out = "TRENDING_DOWN";
+    } else if (out == "HIGHVOLATILITY" || out == "VOLATILE" || out == "HOSTILE") {
+        out = "HIGH_VOLATILITY";
+    } else if (out == "RANGE") {
+        out = "RANGING";
+    }
+    return out;
+}
+
+inline std::string regimeBudgetKey(autolife::analytics::MarketRegime regime) {
+    switch (regime) {
+        case autolife::analytics::MarketRegime::TRENDING_UP:
+            return "TRENDING_UP";
+        case autolife::analytics::MarketRegime::TRENDING_DOWN:
+            return "TRENDING_DOWN";
+        case autolife::analytics::MarketRegime::RANGING:
+            return "RANGING";
+        case autolife::analytics::MarketRegime::HIGH_VOLATILITY:
+            return "HIGH_VOLATILITY";
+        case autolife::analytics::MarketRegime::UNKNOWN:
+        default:
+            return "UNKNOWN";
+    }
+}
+
+inline RegimeBudgetMultiplierResolution resolveRegimeBudgetMultiplier(
+    const autolife::analytics::ProbabilisticRuntimeModel::Phase4Policy::RiskBudgetPolicy& policy,
+    autolife::analytics::MarketRegime regime
+) {
+    RegimeBudgetMultiplierResolution out;
+    if (policy.regime_budget_multipliers.empty()) {
+        return out;
+    }
+
+    const std::string regime_key = regimeBudgetKey(regime);
+    const auto exact_it = policy.regime_budget_multipliers.find(regime_key);
+    if (exact_it != policy.regime_budget_multipliers.end()) {
+        out.multiplier = std::clamp(exact_it->second, 0.0, 1.0);
+        out.configured = true;
+        out.matched_key = regime_key;
+        return out;
+    }
+
+    const auto any_it = policy.regime_budget_multipliers.find("ANY");
+    if (any_it != policy.regime_budget_multipliers.end()) {
+        out.multiplier = std::clamp(any_it->second, 0.0, 1.0);
+        out.configured = true;
+        out.matched_key = "ANY";
+        return out;
+    }
+    return out;
 }
 
 inline RiskBudgetFilterResult applyRiskBudgetPrefixFilter(

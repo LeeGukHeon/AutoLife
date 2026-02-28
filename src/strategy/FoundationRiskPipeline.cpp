@@ -436,12 +436,17 @@ FilterDecision evaluateFilter(const FilterInput& input) {
         out.cost_tail_term = std::max(0.0, signal.phase3.cost_tail_pct - signal.phase3.cost_used_pct);
         const double k_margin_effective =
             signal.phase3.frontier_k_margin * std::clamp(signal.phase3.frontier_k_margin_scale, 0.0, 10.0);
+        double required_ev_offset = signal.phase3.required_ev_offset;
+        if (input.regime == analytics::MarketRegime::TRENDING_UP ||
+            input.regime == analytics::MarketRegime::TRENDING_DOWN) {
+            required_ev_offset += signal.phase3.required_ev_offset_trending_add;
+        }
         double required_ev =
             out.base_required_expected_value -
             (k_margin_effective * margin) +
             (signal.phase3.frontier_k_uncertainty * out.uncertainty_term) +
             (signal.phase3.frontier_k_cost_tail * out.cost_tail_term) +
-            signal.phase3.required_ev_offset;
+            required_ev_offset;
         required_ev = std::clamp(
             required_ev,
             signal.phase3.frontier_min_required_ev,

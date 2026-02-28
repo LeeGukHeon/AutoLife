@@ -26,6 +26,9 @@
 ### Bundle
 - `config/model/probabilistic_runtime_bundle_v2_a19_margin_observe_only_step1.json` (default Paper/Backtest bundle)
 - `edge_semantics="net"` is required at bundle root.
+- Stage C v2 lock:
+  - `phase3.regime_entry_disable.RANGING=true`
+  - non-RANGING regimes remain `false`
 
 ### Backtest
 - Split manifest: `build/Release/logs/time_split_manifest_r21_prefix.json`
@@ -49,6 +52,7 @@
 - Commit hash is excluded from hard lock.
 - Code version is managed by `HEAD at run time + runbook snapshot`.
 - Commit hash is recorded only in experiment logs/artifacts.
+- Current semantic code tag: `CODE_VERSION: StageD_v1_ranging_shadow_mode`
 - Optional tracking:
   - semantic code tag (for example, `CODE_VERSION: StageB_semantics_lock`)
   - `git describe --tags` in logs (not a hard-lock condition)
@@ -98,7 +102,7 @@
 - Stage D: Optional ranging-only strategy or model split.
 - Stage E: Paper 24-72h promotion and Live readiness (after strict parity fix).
 
-Current focus (2026-02-27): Stage A mostly complete. Stage B to Stage E pending.
+Current focus (2026-02-27): Stage E operations mode (`RANGING real-entry OFF`, `TRENDING-only real execution`, `RANGING shadow accumulation ON`).
 
 ## 4) Stage A Recheck (Already Implemented)
 - A1 split real separation applied in `run_verification` main loop.
@@ -180,6 +184,12 @@ Current recommendation: choose `B1-NET` because gate4 training is already NET (`
 - `C1-1 budget multiplier` (recommended first):
   - RANGING `capital_multiplier = 0.0~0.3`
   - TRENDING `capital_multiplier = 1.0`
+  - Stage C v1 lock:
+    - `phase4.risk_budget.regime_budget_multipliers.RANGING = 0.30`
+    - `phase4.risk_budget.regime_budget_multipliers.TRENDING_UP = 1.00`
+    - `phase4.risk_budget.regime_budget_multipliers.TRENDING_DOWN = 1.00`
+    - `phase4.risk_budget.regime_budget_multipliers.HIGH_VOLATILITY = 1.00`
+    - `phase4.risk_budget.regime_budget_multipliers.UNKNOWN = 1.00`
 - `C1-2 required_ev_add` (alternative):
   - Increase required EV in RANGING to suppress entry.
 - `C1-3 hard disable` (last resort):
@@ -188,7 +198,7 @@ Current recommendation: choose `B1-NET` because gate4 training is already NET (`
 ### C2) Apply Single-Axis Round
 - Apply exactly one mechanism only.
 - Output artifact set:
-  - `aC_mode_switch_config.json`
+  - `stageC_mode_switch_config.json`
   - before/after reports
 
 ### C3) Paper Expansion
@@ -200,26 +210,92 @@ Current recommendation: choose `B1-NET` because gate4 training is already NET (`
 - Realized expectancy improves toward/above zero.
 - Stop-loss share decreases (especially in RANGING).
 
-## 7) Stage D (Optional): RANGING Strategy or Model Split
-- Only start Stage D after Stage B semantic lock and Stage C loss reduction confirmation.
-- D1: Add RANGING mean-reversion strategy (last, highest complexity).
-- D2: Train separate TRENDING and RANGING models (evaluate market-id feature in single-axis rounds).
-- D3: Keep trend-focused architecture unchanged (safest implementation path).
+## 7) Stage D v1 (Single Axis): RANGING Shadow Mode
+- Keep `RANGING` real entry disabled (risk 0) but log deterministic shadow events per candidate.
+- No strategy addition and no gate threshold retuning in this round.
+- Required outputs:
+  - `build/Release/logs/ranging_shadow_signals.jsonl`
+  - `build/Release/logs/ranging_shadow_run_meta.json`
+  - `build/Release/logs/verification_report_stageD_v1_quarantine_exec_eval.json`
+  - `build/Release/logs/stageD_v1_effect_summary.json`
+- Required telemetry:
+  - `shadow_count_total`
+  - `shadow_count_by_regime` (`RANGING` only expected in v1)
+  - `shadow_count_by_market`
+  - `shadow_would_pass_frontier_count`
+  - `shadow_would_pass_execution_guard_count`
+  - optional: `shadow_edge_neg_count`, `shadow_edge_pos_count`
+- Validation/paper follow-up is separate:
+  - Validation x1 (recommended)
+  - Paper 20m smoke (recommended, still `allow_live_orders=false`)
+- Stage D v2 remains locked until v1 evidence is accumulated.
 
-## 8) Stage E: Paper -> Live Readiness (After Strict Parity Fix)
-- E1: Paper 24-72h success repeated twice.
-- E2: Execute `docs/strict_parity_fix_plan.md`.
-  - Resolve `cli_strict_parity_pass_flag` mismatch if confirmed as real bug.
-  - Live remains blocked until resolved.
-- E3: Live promotion in steps:
-  - `10% -> 30% -> 100%`
-  - minimum `24h` stable at each step.
+## 8) Stage E Operations Mode (Integrated)
+
+### E0) Decision Lock (Must Stay Fixed in Runbook)
+- Stage D v2 decision is locked as `NO_GO_KEEP_OFF`.
+- Policy lock:
+  - RANGING real orders stay OFF.
+  - RANGING shadow logging stays ON.
+  - TRENDING_UP/TRENDING_DOWN are the only real-order path candidates.
+- Required evidence:
+  - `build/Release/logs/stageD_v2_shadow_eval/stageD_v2_choice.json`
+  - explicit runbook statement for RANGING OFF policy (this section).
+
+### E1) Backtest Validation + Quarantine (1 run each, required)
+- Purpose:
+  - verify that real trades can still happen under TRENDING-only execution path,
+  - verify split hard lock evidence remains intact.
+- Required checks:
+  - `split_applied=true`,
+  - `total_trades_core_effective > 0` preferred (if 0, treat as market mostly RANGING and move to single-axis easing round),
+  - shadow counters continue increasing while RANGING real entry remains blocked.
+- Required artifacts:
+  - `build/Release/logs/verification_report_E1_validation.json`
+  - `build/Release/logs/verification_report_E1_quarantine.json`
+  - `build/Release/logs/E1_effect_summary.json`
+
+### E2) Paper TRENDING-only Soak (4-8h, recommended)
+- Keep safety lock fixed:
+  - `allow_live_orders=false`,
+  - `live_paper_fixed_initial_capital_krw=200000`.
+- Required KPIs:
+  - total trades, trades/hour,
+  - realized pnl, realized expectancy,
+  - exit reason breakdown,
+  - regime distribution (`RANGING real trades=0`),
+  - shadow count growth continuity.
+- Required artifacts:
+  - `build/Release/logs/paper_run_summary_E2_8h.json`
+  - `build/Release/logs/paper_gate_funnel_breakdown_E2.json`
+  - `build/Release/logs/paper_top_loss_markets_cells_E2.json`
+  - `build/Release/logs/ranging_shadow_signals.jsonl` (append mode)
+
+### E3) Strict Parity Fix Track (Live prerequisite)
+- Current lock remains `strict_parity=warning_hold` for Paper.
+- Live promotion is blocked until mismatch is resolved.
+- Required artifacts:
+  - `docs/strict_parity_fix_plan.md`
+  - `build/Release/logs/strict_parity_diagnosis_after_fix.json`
+
+### E4) Live Promotion Path (only after E3 pass)
+- Step-up schedule:
+  - Live 10% for 24h,
+  - Live 30% for 24h,
+  - Live 100%.
+- Keep `RANGING real-entry OFF` and shadow accumulation ON during all promotion steps.
+
+### E5) Long-horizon Re-evaluation (Phase D v3 gate)
+- While RANGING shadow mean edge remains negative, keep RANGING real-entry OFF.
+- Run Stage D2-0 shadow evaluation periodically (recommended 6-12 week cadence).
+- Re-open RANGING strategy discussion only when:
+  - mean edge approaches non-negative, or
+  - stable positive cluster appears in limited bucket/market scope.
 
 ## 9) Round Output Format (Fixed)
 Use the same report template every round:
 
 ### Hard Lock
-- `code_hash`
 - `bundle_path`
 - `runtime_config_path`
 - `dataset_root`
@@ -240,15 +316,15 @@ Use the same report template every round:
 - runbook update (`docs/STRICT_GATE_RUNBOOK_2026-02-13.md`)
 
 ## 10) Immediate Next 3 TODO (Current State)
-1. Stage B start: document and lock edge semantics (`NET` vs `GROSS`).
-   - Current gate4 training is NET (`-12bps`), so `B1-NET` is recommended.
-2. Stage B execution: unify `cost_model.enabled` / `phase3.cost_model.enabled` to the selected semantic.
-   - Avoid accidental `{}` defaults that break semantic intent.
-   - If switching to gross, retraining labels must be changed first.
-3. Stage C first round: apply budget multiplier in RANGING (no strategy addition).
-   - A16 showed high RANGING share with loss structure; one mode-switch axis is the safest entry point.
+1. Finalize E1 summary from latest Validation/Quarantine runs.
+   - Confirm `split_applied=true` in both reports.
+   - Confirm RANGING shadow accumulation and `RANGING real-entry OFF` evidence.
+2. Run E2 Paper TRENDING-only soak (`4-8h`) under fixed safety lock.
+   - Collect KPI artifacts and verify no RANGING real orders.
+3. Continue strict parity fix track in parallel.
+   - Keep Live blocked until hold is resolved.
 
-## 11) Post-Stage-B Execution Order (Current Hard-Lock)
+## 11) Stage E Execution Order (Current Hard-Lock)
 ### Step 1) Build/Link Verification (Required)
 - Build Release with locked CMake path from `D:\MyApps\vcpkg`.
 - Confirm:
@@ -260,32 +336,24 @@ Use the same report template every round:
   - `build/Release/logs/binary_version_stamp.txt`
   - `build/Release/logs/binary_smoke_60s.log`
 
-### Step 2) Baseline Repro Check (Required, Quarantine x1)
-- Run `run_verification.py` with hard lock (`split manifest`, `prewarm=168h`, `execution=prewarm+core`, `evaluation=core`).
+### Step 2) E1 Backtest Pair (Validation + Quarantine, Required)
+- Run exactly one `validation` and one `quarantine` with split hard lock.
 - Confirm:
-  - `semantics_lock_report.json` is `OK`,
-  - `runtime_cost_semantics_debug.json` has cost mean/max `0`,
-  - core funnel and `total_trades_core_effective` are non-zero.
+  - `split_applied=true`,
+  - split execution/evaluation ranges match manifest core rules,
+  - `E1_effect_summary.json` is updated with pass/fail notes and counters.
 
-### Step 3) Paper10 Smoke (4-8h, Safety Locked)
-- Keep `allow_live_orders=false`, `paper fixed capital=200000`.
-- Run paper-equivalent 10% sizing (risk budget/sizing multiplier only).
-- Track mandatory KPIs:
-  - trades/hour,
-  - realized pnl sum,
-  - realized expectancy,
-  - stop_loss / take_profit / strategy_exit ratio,
-  - RANGING share,
-  - edge_cal / `signal.expected_value` distribution samples.
-- Stop conditions:
-  - trades=0 for 2h+,
-  - realized pnl <= `-3000 KRW`,
-  - crash/assert/log integrity failure.
+### Step 3) E2 Paper TRENDING-only Soak (4-8h)
+- Keep `allow_live_orders=false` and fixed paper capital.
+- Verify:
+  - RANGING real orders remain `0`,
+  - shadow counts continue to grow,
+  - TRENDING real-trade flow is observable (if market allows).
 
-### Step 4) Strict Parity Fix Track (Parallel)
-- Diagnose and resolve any `cli_strict_parity_pass_flag` mismatch path.
-- Keep live blocked until strict parity hold is cleared.
+### Step 4) Strict Parity Fix Track (Parallel, Live Blocker)
+- Diagnose and resolve `cli_strict_parity_pass_flag` mismatch.
+- Live remains blocked until strict parity hold is cleared.
 
-### Step 5) Stage C Entry Condition
-- Start Stage C only after Paper10 stability.
-- Apply a single mode-switch axis only (no strategy proliferation).
+### Step 5) Live Promotion (After Step 4 Pass Only)
+- Promotion sequence: `10% -> 30% -> 100%`, minimum `24h` stability each.
+- Keep Stage E policy lock (`RANGING OFF + shadow ON`) unchanged during promotion.

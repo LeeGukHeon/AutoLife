@@ -967,6 +967,43 @@ def run_backtest(
     return parsed
 
 
+def load_ranging_shadow_events(exe_dir: pathlib.Path, dataset_name: str) -> List[Dict[str, Any]]:
+    artifact_path = (exe_dir / "logs" / "ranging_shadow_signals.jsonl").resolve()
+    if not artifact_path.exists():
+        return []
+    events: List[Dict[str, Any]] = []
+    try:
+        with artifact_path.open("r", encoding="utf-8", errors="ignore") as fp:
+            for raw_line in fp:
+                line = str(raw_line).strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                row = dict(payload)
+                row["dataset"] = str(dataset_name).strip()
+                events.append(row)
+    except Exception:
+        return []
+    return events
+
+
+def write_ranging_shadow_events_jsonl(
+    output_path: pathlib.Path,
+    events: List[Dict[str, Any]],
+) -> None:
+    ensure_parent(output_path)
+    with output_path.open("w", encoding="utf-8", newline="\n") as fp:
+        for row in events:
+            if not isinstance(row, dict):
+                continue
+            fp.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
 def load_policy_decision_ev_samples(exe_dir: pathlib.Path) -> List[Dict[str, Any]]:
     artifact_path = (exe_dir / "logs" / "policy_decisions_backtest.jsonl").resolve()
     if not artifact_path.exists():
@@ -4418,6 +4455,9 @@ def build_phase3_diagnostics_v2(reason_counts: Dict[str, int]) -> Dict[str, Any]
         "reject_expected_edge_negative_count": max(
             0, to_int(reason_counts.get("reject_expected_edge_negative_count", 0))
         ),
+        "reject_regime_entry_disabled_count": max(
+            0, to_int(reason_counts.get("reject_regime_entry_disabled_count", 0))
+        ),
         "reject_frontier_fail": max(0, to_int(reason_counts.get("reject_frontier_fail", 0))),
         "reject_ev_confidence_low": max(0, to_int(reason_counts.get("reject_ev_confidence_low", 0))),
         "reject_cost_tail_fail": max(0, to_int(reason_counts.get("reject_cost_tail_fail", 0))),
@@ -4460,6 +4500,9 @@ def build_phase3_diagnostics_v2(reason_counts: Dict[str, int]) -> Dict[str, Any]
             "reject_expected_value_fail": int(counters["reject_expected_value_fail"]),
             "reject_expected_edge_negative_count": int(
                 counters["reject_expected_edge_negative_count"]
+            ),
+            "reject_regime_entry_disabled_count": int(
+                counters["reject_regime_entry_disabled_count"]
             ),
             "reject_frontier_fail": int(counters["reject_frontier_fail"]),
             "reject_ev_confidence_low": int(counters["reject_ev_confidence_low"]),
@@ -4907,6 +4950,175 @@ def build_semantics_lock_report(
     }
 
 
+def build_ranging_shadow_run_meta(
+    runtime_config_path: pathlib.Path,
+    bundle_meta: Dict[str, Any],
+    split_manifest_path: str,
+    data_dir: pathlib.Path,
+    execution_prewarm_hours: float,
+    split_filter_context: Dict[str, Any],
+    verification_report_json: pathlib.Path,
+    ranging_shadow_signals_jsonl: pathlib.Path,
+    semantics_lock_report: Dict[str, Any],
+) -> Dict[str, Any]:
+    split_context = split_filter_context if isinstance(split_filter_context, dict) else {}
+    semantics = semantics_lock_report if isinstance(semantics_lock_report, dict) else {}
+    return {
+        "generated_at": __import__("datetime").datetime.now().astimezone().isoformat(),
+        "hard_lock": {
+            "runtime_config_path": str(runtime_config_path),
+            "bundle_path": str(bundle_meta.get("bundle_path", "")) if isinstance(bundle_meta, dict) else "",
+            "split_manifest_path": str(split_manifest_path or ""),
+            "dataset_root": str(data_dir),
+            "execution_prewarm_hours": float(max(0.0, execution_prewarm_hours)),
+            "execution_range_used": (
+                split_context.get("execution_range_used", [])
+                if isinstance(split_context.get("execution_range_used", []), list)
+                else []
+            ),
+            "evaluation_range_used": (
+                split_context.get("evaluation_range_used", [])
+                if isinstance(split_context.get("evaluation_range_used", []), list)
+                else []
+            ),
+            "evaluation_range_effective": (
+                split_context.get("evaluation_range_effective", [])
+                if isinstance(split_context.get("evaluation_range_effective", []), list)
+                else []
+            ),
+            "split_applied": bool(split_context.get("split_applied", False)),
+        },
+        "semantics": {
+            "edge_semantics": str(semantics.get("edge_semantics", "unknown")).strip().lower()
+            or "unknown",
+            "status": str(semantics.get("status", "unknown")).strip(),
+        },
+        "artifacts": {
+            "verification_report_json": str(verification_report_json),
+            "ranging_shadow_signals_jsonl": str(ranging_shadow_signals_jsonl),
+        },
+    }
+
+
+def build_stage_d_v1_effect_summary(
+    aggregate_diagnostics: Dict[str, Any],
+    dataset_diagnostics: List[Dict[str, Any]],
+    split_filter_context: Dict[str, Any],
+    split_eval_profiles: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    split_context = split_filter_context if isinstance(split_filter_context, dict) else {}
+    aggregate = aggregate_diagnostics if isinstance(aggregate_diagnostics, dict) else {}
+    aggregate_ranging_shadow = aggregate.get("ranging_shadow", {})
+    if not isinstance(aggregate_ranging_shadow, dict):
+        aggregate_ranging_shadow = {}
+
+    profile_by_dataset: Dict[str, Dict[str, Any]] = {}
+    if isinstance(split_eval_profiles, list):
+        for row in split_eval_profiles:
+            if not isinstance(row, dict):
+                continue
+            dataset_name = str(row.get("dataset", "")).strip()
+            if not dataset_name:
+                continue
+            profile_by_dataset[dataset_name] = row
+
+    per_dataset_rows: List[Dict[str, Any]] = []
+    for item in dataset_diagnostics:
+        if not isinstance(item, dict):
+            continue
+        dataset_name = str(item.get("dataset", "")).strip()
+        ranging_shadow = item.get("ranging_shadow", {})
+        if not isinstance(ranging_shadow, dict):
+            ranging_shadow = {}
+        profile = profile_by_dataset.get(dataset_name, {})
+        per_dataset_rows.append(
+            {
+                "dataset": dataset_name,
+                "total_trades_core_effective": int(
+                    max(0, to_int(profile.get("total_trades_core_effective", 0)))
+                ),
+                "orders_filled_core_effective": int(
+                    max(0, to_int(profile.get("orders_filled_core_effective", 0)))
+                ),
+                "shadow_count_total": int(max(0, to_int(ranging_shadow.get("shadow_count_total", 0)))),
+                "top_shadow_markets": (
+                    ranging_shadow.get("top_shadow_markets", [])
+                    if isinstance(ranging_shadow.get("top_shadow_markets", []), list)
+                    else []
+                ),
+                "shadow_count_by_regime": (
+                    ranging_shadow.get("shadow_count_by_regime", {})
+                    if isinstance(ranging_shadow.get("shadow_count_by_regime", {}), dict)
+                    else {}
+                ),
+            }
+        )
+
+    per_dataset_rows.sort(key=lambda row: str(row.get("dataset", "")))
+    total_trades_core_effective = int(max(0, to_int(split_context.get("total_trades_core_effective", 0))))
+    orders_filled_core_effective = int(max(0, to_int(split_context.get("orders_filled_core_effective", 0))))
+
+    return {
+        "generated_at": __import__("datetime").datetime.now().astimezone().isoformat(),
+        "split_name": str(split_context.get("split_name", "")).strip(),
+        "split_applied": bool(split_context.get("split_applied", False)),
+        "execution_range_used": (
+            split_context.get("execution_range_used", [])
+            if isinstance(split_context.get("execution_range_used", []), list)
+            else []
+        ),
+        "evaluation_range_used": (
+            split_context.get("evaluation_range_used", [])
+            if isinstance(split_context.get("evaluation_range_used", []), list)
+            else []
+        ),
+        "evaluation_range_effective": (
+            split_context.get("evaluation_range_effective", [])
+            if isinstance(split_context.get("evaluation_range_effective", []), list)
+            else []
+        ),
+        "real_orders_core_effective": {
+            "total_trades_core_effective": total_trades_core_effective,
+            "orders_filled_core_effective": orders_filled_core_effective,
+            "real_order_trades_zero": bool(total_trades_core_effective <= 0),
+        },
+        "ranging_shadow": {
+            "shadow_count_total": int(max(0, to_int(aggregate_ranging_shadow.get("shadow_count_total", 0)))),
+            "shadow_count_by_regime": (
+                aggregate_ranging_shadow.get("shadow_count_by_regime", {})
+                if isinstance(aggregate_ranging_shadow.get("shadow_count_by_regime", {}), dict)
+                else {}
+            ),
+            "shadow_count_by_market": (
+                aggregate_ranging_shadow.get("shadow_count_by_market", {})
+                if isinstance(aggregate_ranging_shadow.get("shadow_count_by_market", {}), dict)
+                else {}
+            ),
+            "shadow_would_pass_frontier_count": int(
+                max(0, to_int(aggregate_ranging_shadow.get("shadow_would_pass_frontier_count", 0)))
+            ),
+            "shadow_would_pass_execution_guard_count": int(
+                max(
+                    0,
+                    to_int(aggregate_ranging_shadow.get("shadow_would_pass_execution_guard_count", 0)),
+                )
+            ),
+            "shadow_edge_neg_count": int(
+                max(0, to_int(aggregate_ranging_shadow.get("shadow_edge_neg_count", 0)))
+            ),
+            "shadow_edge_pos_count": int(
+                max(0, to_int(aggregate_ranging_shadow.get("shadow_edge_pos_count", 0)))
+            ),
+            "top_shadow_markets": (
+                aggregate_ranging_shadow.get("top_shadow_markets", [])
+                if isinstance(aggregate_ranging_shadow.get("top_shadow_markets", []), list)
+                else []
+            ),
+        },
+        "per_dataset": per_dataset_rows,
+    }
+
+
 def build_edge_sign_distribution(
     dataset_diagnostics: List[Dict[str, Any]],
     split_filter_context: Dict[str, Any],
@@ -5272,6 +5484,29 @@ def build_a10_2_stage_funnel_report(
             )
         )
     )
+    reject_regime_entry_disabled_count_core_actual = max(
+        0,
+        to_int(order_block_reason_counts.get("reject_regime_entry_disabled_count", 0))
+        + to_int(order_block_reason_counts.get("reject_regime_entry_disabled", 0)),
+    )
+    reject_regime_entry_disabled_count_core_est = (
+        int(reject_regime_entry_disabled_count_core_actual)
+        if reject_regime_entry_disabled_count_core_actual > 0
+        else int(
+            round(
+                float(
+                    max(
+                        0,
+                        to_int(phase3_funnel.get("reject_regime_entry_disabled_count", 0)),
+                    )
+                )
+                * (
+                    float(max(0, to_int(ctx.get("candidate_total_core_effective", 0))))
+                    / float(max(1, to_int(ctx.get("candidate_total_execution", 1))))
+                )
+            )
+        )
+    )
 
     return {
         "enabled": True,
@@ -5288,6 +5523,9 @@ def build_a10_2_stage_funnel_report(
         "stage_counters_core": {
             "reject_expected_edge_negative_count_core_est": int(
                 max(0, reject_expected_edge_negative_count_core_est)
+            ),
+            "reject_regime_entry_disabled_count_core_est": int(
+                max(0, reject_regime_entry_disabled_count_core_est)
             ),
             "rejected_by_budget_core_est": int(max(0, rejected_by_budget_core_est)),
             "rejected_by_cluster_cap_core_est": int(
@@ -5651,10 +5889,39 @@ def build_phase4_portfolio_diagnostics(
         "top_k": max(1, to_int(raw.get("allocator_top_k", 1))),
         "min_score": round(to_float(raw.get("allocator_min_score", -1.0e6)), 8),
     }
+
+    raw_regime_budget_multipliers = raw.get("risk_budget_regime_multipliers", {})
+    regime_budget_multipliers: Dict[str, float] = {}
+    if isinstance(raw_regime_budget_multipliers, dict):
+        for key, value in raw_regime_budget_multipliers.items():
+            regime_key = str(key).strip()
+            if not regime_key:
+                continue
+            regime_budget_multipliers[regime_key] = round(max(0.0, min(1.0, to_float(value))), 8)
+
+    raw_regime_budget_count_map = raw.get("regime_budget_multiplier_count_by_regime", {})
+    regime_budget_multiplier_count_by_regime: Dict[str, int] = {}
+    if isinstance(raw_regime_budget_count_map, dict):
+        for key, value in raw_regime_budget_count_map.items():
+            regime_key = str(key).strip()
+            if not regime_key:
+                continue
+            regime_budget_multiplier_count_by_regime[regime_key] = max(0, to_int(value))
+
+    raw_regime_budget_avg_map = raw.get("regime_budget_multiplier_avg_by_regime", {})
+    regime_budget_multiplier_avg_by_regime: Dict[str, float] = {}
+    if isinstance(raw_regime_budget_avg_map, dict):
+        for key, value in raw_regime_budget_avg_map.items():
+            regime_key = str(key).strip()
+            if not regime_key:
+                continue
+            regime_budget_multiplier_avg_by_regime[regime_key] = round(max(0.0, min(1.0, to_float(value))), 8)
+
     risk_budget_policy = {
         "per_market_cap": round(to_float(raw.get("risk_budget_per_market_cap", 0.0)), 8),
         "gross_cap": round(to_float(raw.get("risk_budget_gross_cap", 0.0)), 8),
         "risk_budget_cap": round(to_float(raw.get("risk_budget_cap", 0.0)), 8),
+        "regime_budget_multipliers": regime_budget_multipliers,
     }
     drawdown_policy = {
         "drawdown_current": round(to_float(raw.get("drawdown_current", 0.0)), 8),
@@ -5887,6 +6154,11 @@ def build_phase4_portfolio_diagnostics(
             "cluster_exposure_update_count": int(counters["cluster_exposure_update_count"]),
             "rejected_by_execution_cap": int(counters["rejected_by_execution_cap"]),
             "rejected_by_drawdown_governor": int(counters["rejected_by_drawdown_governor"]),
+        },
+        "regime_budget_multiplier": {
+            "applied_count": max(0, to_int(raw.get("regime_budget_multiplier_applied_count", 0))),
+            "count_by_regime": regime_budget_multiplier_count_by_regime,
+            "avg_by_regime": regime_budget_multiplier_avg_by_regime,
         },
         "top3_bottlenecks": reject_rows[:3],
     }
@@ -6394,6 +6666,30 @@ def build_dataset_diagnostics(
     no_signal_generated = max(0, to_int(entry_funnel.get("no_signal_generated", 0)))
     filtered_out_by_manager = max(0, to_int(entry_funnel.get("filtered_out_by_manager", 0)))
     filtered_out_by_policy = max(0, to_int(entry_funnel.get("filtered_out_by_policy", 0)))
+    reject_regime_entry_disabled_count = max(
+        0, to_int(entry_funnel.get("reject_regime_entry_disabled_count", 0))
+    )
+    regime_entry_disable_enabled = bool(entry_funnel.get("regime_entry_disable_enabled", False))
+    raw_regime_entry_disable = entry_funnel.get("regime_entry_disable", {})
+    regime_entry_disable: Dict[str, bool] = {}
+    if isinstance(raw_regime_entry_disable, dict):
+        for key, value in raw_regime_entry_disable.items():
+            regime_key = str(key).strip()
+            if not regime_key:
+                continue
+            regime_entry_disable[regime_key] = bool(value)
+    disabled_regimes = sorted([key for key, value in regime_entry_disable.items() if bool(value)])
+    raw_reject_regime_entry_disabled_by_regime = entry_funnel.get(
+        "reject_regime_entry_disabled_by_regime",
+        {},
+    )
+    reject_regime_entry_disabled_by_regime: Dict[str, int] = {}
+    if isinstance(raw_reject_regime_entry_disabled_by_regime, dict):
+        for key, value in raw_reject_regime_entry_disabled_by_regime.items():
+            regime_key = str(key).strip()
+            if not regime_key:
+                continue
+            reject_regime_entry_disabled_by_regime[regime_key] = max(0, to_int(value))
     no_best_signal = max(0, to_int(entry_funnel.get("no_best_signal", 0)))
     blocked_pattern_gate = max(0, to_int(entry_funnel.get("blocked_pattern_gate", 0)))
     blocked_rr_rebalance = max(0, to_int(entry_funnel.get("blocked_rr_rebalance", 0)))
@@ -6448,6 +6744,47 @@ def build_dataset_diagnostics(
         ),
     }
     shadow_contract["all_pass"] = all(bool(v) for v in shadow_contract.values())
+    ranging_shadow_raw = backtest_result.get("ranging_shadow", {})
+    if not isinstance(ranging_shadow_raw, dict):
+        ranging_shadow_raw = {}
+    shadow_count_total = max(0, to_int(ranging_shadow_raw.get("shadow_count_total", 0)))
+    raw_shadow_count_by_regime = ranging_shadow_raw.get("shadow_count_by_regime", {})
+    shadow_count_by_regime: Dict[str, int] = {}
+    if isinstance(raw_shadow_count_by_regime, dict):
+        for key, value in raw_shadow_count_by_regime.items():
+            regime_key = str(key).strip()
+            if not regime_key:
+                continue
+            shadow_count_by_regime[regime_key] = max(0, to_int(value))
+    raw_shadow_count_by_market = ranging_shadow_raw.get("shadow_count_by_market", {})
+    shadow_count_by_market: Dict[str, int] = {}
+    if isinstance(raw_shadow_count_by_market, dict):
+        for key, value in raw_shadow_count_by_market.items():
+            market_key = str(key).strip()
+            if not market_key:
+                continue
+            shadow_count_by_market[market_key] = max(0, to_int(value))
+    shadow_would_pass_frontier_count = max(
+        0,
+        to_int(ranging_shadow_raw.get("shadow_would_pass_frontier_count", 0)),
+    )
+    shadow_would_pass_manager_count = max(
+        0,
+        to_int(ranging_shadow_raw.get("shadow_would_pass_manager_count", 0)),
+    )
+    shadow_would_pass_execution_guard_count = max(
+        0,
+        to_int(ranging_shadow_raw.get("shadow_would_pass_execution_guard_count", 0)),
+    )
+    shadow_edge_neg_count = max(0, to_int(ranging_shadow_raw.get("shadow_edge_neg_count", 0)))
+    shadow_edge_pos_count = max(0, to_int(ranging_shadow_raw.get("shadow_edge_pos_count", 0)))
+    top_shadow_markets = [
+        {"market": str(market), "count": int(count)}
+        for market, count in sorted(
+            shadow_count_by_market.items(),
+            key=lambda item: (-int(item[1]), str(item[0])),
+        )[:5]
+    ]
 
     candidate_generation = (
         no_signal_generated
@@ -6609,6 +6946,31 @@ def build_dataset_diagnostics(
         "phase3_pass_ev_distribution": phase3_pass_ev_distribution,
         "phase3_diagnostics_v2": phase3_diag,
         "phase4_portfolio_diagnostics": phase4_diag,
+        "regime_entry_disable": {
+            "enabled": regime_entry_disable_enabled,
+            "disabled_regimes": disabled_regimes,
+            "reject_regime_entry_disabled_count": int(reject_regime_entry_disabled_count),
+            "reject_regime_entry_disabled_by_regime": reject_regime_entry_disabled_by_regime,
+        },
+        "ranging_shadow": {
+            "shadow_count_total": int(shadow_count_total),
+            "shadow_count_by_regime": {
+                str(k): int(max(0, to_int(v)))
+                for k, v in sorted(shadow_count_by_regime.items(), key=lambda item: str(item[0]))
+            },
+            "shadow_count_by_market": {
+                str(k): int(max(0, to_int(v)))
+                for k, v in sorted(shadow_count_by_market.items(), key=lambda item: str(item[0]))
+            },
+            "shadow_would_pass_frontier_count": int(shadow_would_pass_frontier_count),
+            "shadow_would_pass_manager_count": int(shadow_would_pass_manager_count),
+            "shadow_would_pass_execution_guard_count": int(
+                shadow_would_pass_execution_guard_count
+            ),
+            "shadow_edge_neg_count": int(shadow_edge_neg_count),
+            "shadow_edge_pos_count": int(shadow_edge_pos_count),
+            "top_shadow_markets": top_shadow_markets,
+        },
         "shadow_funnel": {
             "rounds": int(shadow_rounds),
             "primary_generated_signals": int(shadow_primary_generated_signals),
@@ -6691,6 +7053,7 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         "reject_strength_fail",
         "reject_expected_value_fail",
         "reject_expected_edge_negative_count",
+        "reject_regime_entry_disabled_count",
         "reject_frontier_fail",
         "reject_ev_confidence_low",
         "reject_cost_tail_fail",
@@ -6740,6 +7103,20 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
     aggregate_phase4_corr_near_cap_rows: List[Dict[str, Any]] = []
     aggregate_phase4_corr_penalty_score_rows: List[Dict[str, Any]] = []
     aggregate_phase4_corr_debug_trace_rows: List[Dict[str, Any]] = []
+    aggregate_regime_entry_disable_enabled = False
+    aggregate_disabled_regimes = set()
+    aggregate_reject_regime_entry_disabled_count = 0
+    aggregate_reject_regime_entry_disabled_by_regime: Dict[str, int] = {}
+    aggregate_ranging_shadow: Dict[str, Any] = {
+        "shadow_count_total": 0,
+        "shadow_count_by_regime": {},
+        "shadow_count_by_market": {},
+        "shadow_would_pass_frontier_count": 0,
+        "shadow_would_pass_manager_count": 0,
+        "shadow_would_pass_execution_guard_count": 0,
+        "shadow_edge_neg_count": 0,
+        "shadow_edge_pos_count": 0,
+    }
 
     for item in dataset_diagnostics:
         groups = item.get("bottleneck_groups", {})
@@ -6754,6 +7131,79 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
                 if not reason_key:
                     continue
                 aggregate_reasons[reason_key] = aggregate_reasons.get(reason_key, 0) + max(0, to_int(v))
+
+        regime_entry_disable = item.get("regime_entry_disable", {})
+        if isinstance(regime_entry_disable, dict):
+            aggregate_regime_entry_disable_enabled = bool(
+                aggregate_regime_entry_disable_enabled
+                or bool(regime_entry_disable.get("enabled", False))
+            )
+            disabled_rows = regime_entry_disable.get("disabled_regimes", [])
+            if isinstance(disabled_rows, list):
+                for value in disabled_rows:
+                    regime_key = str(value).strip()
+                    if regime_key:
+                        aggregate_disabled_regimes.add(regime_key)
+            aggregate_reject_regime_entry_disabled_count += max(
+                0,
+                to_int(regime_entry_disable.get("reject_regime_entry_disabled_count", 0)),
+            )
+            by_regime = regime_entry_disable.get("reject_regime_entry_disabled_by_regime", {})
+            if isinstance(by_regime, dict):
+                for k, v in by_regime.items():
+                    regime_key = str(k).strip()
+                    if not regime_key:
+                        continue
+                    aggregate_reject_regime_entry_disabled_by_regime[regime_key] = (
+                        aggregate_reject_regime_entry_disabled_by_regime.get(regime_key, 0)
+                        + max(0, to_int(v))
+                    )
+        ranging_shadow = item.get("ranging_shadow", {})
+        if isinstance(ranging_shadow, dict):
+            aggregate_ranging_shadow["shadow_count_total"] += max(
+                0,
+                to_int(ranging_shadow.get("shadow_count_total", 0)),
+            )
+            aggregate_ranging_shadow["shadow_would_pass_frontier_count"] += max(
+                0,
+                to_int(ranging_shadow.get("shadow_would_pass_frontier_count", 0)),
+            )
+            aggregate_ranging_shadow["shadow_would_pass_manager_count"] += max(
+                0,
+                to_int(ranging_shadow.get("shadow_would_pass_manager_count", 0)),
+            )
+            aggregate_ranging_shadow["shadow_would_pass_execution_guard_count"] += max(
+                0,
+                to_int(ranging_shadow.get("shadow_would_pass_execution_guard_count", 0)),
+            )
+            aggregate_ranging_shadow["shadow_edge_neg_count"] += max(
+                0,
+                to_int(ranging_shadow.get("shadow_edge_neg_count", 0)),
+            )
+            aggregate_ranging_shadow["shadow_edge_pos_count"] += max(
+                0,
+                to_int(ranging_shadow.get("shadow_edge_pos_count", 0)),
+            )
+            by_regime = ranging_shadow.get("shadow_count_by_regime", {})
+            if isinstance(by_regime, dict):
+                for k, v in by_regime.items():
+                    regime_key = str(k).strip()
+                    if not regime_key:
+                        continue
+                    aggregate_ranging_shadow["shadow_count_by_regime"][regime_key] = (
+                        aggregate_ranging_shadow["shadow_count_by_regime"].get(regime_key, 0)
+                        + max(0, to_int(v))
+                    )
+            by_market = ranging_shadow.get("shadow_count_by_market", {})
+            if isinstance(by_market, dict):
+                for k, v in by_market.items():
+                    market_key = str(k).strip()
+                    if not market_key:
+                        continue
+                    aggregate_ranging_shadow["shadow_count_by_market"][market_key] = (
+                        aggregate_ranging_shadow["shadow_count_by_market"].get(market_key, 0)
+                        + max(0, to_int(v))
+                    )
 
         phase3_diag = item.get("phase3_diagnostics_v2", {})
         if isinstance(phase3_diag, dict) and bool(phase3_diag.get("enabled", False)):
@@ -7169,6 +7619,42 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
             4,
         ),
     }
+    aggregate_top_shadow_markets = [
+        {"market": str(market), "count": int(count)}
+        for market, count in sorted(
+            aggregate_ranging_shadow["shadow_count_by_market"].items(),
+            key=lambda item: (-int(item[1]), str(item[0])),
+        )[:5]
+    ]
+    aggregate_ranging_shadow_summary = {
+        "shadow_count_total": int(aggregate_ranging_shadow["shadow_count_total"]),
+        "shadow_count_by_regime": {
+            str(k): int(max(0, to_int(v)))
+            for k, v in sorted(
+                aggregate_ranging_shadow["shadow_count_by_regime"].items(),
+                key=lambda item: str(item[0]),
+            )
+        },
+        "shadow_count_by_market": {
+            str(k): int(max(0, to_int(v)))
+            for k, v in sorted(
+                aggregate_ranging_shadow["shadow_count_by_market"].items(),
+                key=lambda item: str(item[0]),
+            )
+        },
+        "shadow_would_pass_frontier_count": int(
+            aggregate_ranging_shadow["shadow_would_pass_frontier_count"]
+        ),
+        "shadow_would_pass_manager_count": int(
+            aggregate_ranging_shadow["shadow_would_pass_manager_count"]
+        ),
+        "shadow_would_pass_execution_guard_count": int(
+            aggregate_ranging_shadow["shadow_would_pass_execution_guard_count"]
+        ),
+        "shadow_edge_neg_count": int(aggregate_ranging_shadow["shadow_edge_neg_count"]),
+        "shadow_edge_pos_count": int(aggregate_ranging_shadow["shadow_edge_pos_count"]),
+        "top_shadow_markets": aggregate_top_shadow_markets,
+    }
     candidate_component_total = max(0, sum(aggregate_candidate_components.values()))
     candidate_component_denom = float(max(1, candidate_component_total))
     ordered_candidate_components = sorted(
@@ -7254,6 +7740,9 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
             ),
             "reject_expected_edge_negative_count": int(
                 aggregate_phase3_counters.get("reject_expected_edge_negative_count", 0)
+            ),
+            "reject_regime_entry_disabled_count": int(
+                aggregate_phase3_counters.get("reject_regime_entry_disabled_count", 0)
             ),
             "reject_frontier_fail": int(aggregate_phase3_counters.get("reject_frontier_fail", 0)),
             "reject_ev_confidence_low": int(
@@ -7540,6 +8029,21 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         },
         "phase3_diagnostics_v2": aggregate_phase3_diag,
         "phase4_portfolio_diagnostics": aggregate_phase4_diag,
+        "regime_entry_disable": {
+            "enabled": bool(aggregate_regime_entry_disable_enabled),
+            "disabled_regimes": sorted(list(aggregate_disabled_regimes)),
+            "reject_regime_entry_disabled_count": int(
+                max(0, aggregate_reject_regime_entry_disabled_count)
+            ),
+            "reject_regime_entry_disabled_by_regime": {
+                str(k): int(max(0, to_int(v)))
+                for k, v in sorted(
+                    aggregate_reject_regime_entry_disabled_by_regime.items(),
+                    key=lambda item: (item[0]),
+                )
+            },
+        },
+        "ranging_shadow": aggregate_ranging_shadow_summary,
         "shadow_funnel": aggregate_shadow_summary,
     }
 
@@ -8649,6 +9153,21 @@ def main(argv=None) -> int:
         default=r".\build\Release\logs\semantics_lock_report.json",
         help="Output JSON path for B1/B2-1 semantics lock report.",
     )
+    parser.add_argument(
+        "--ranging-shadow-signals-jsonl",
+        default=r".\build\Release\logs\ranging_shadow_signals.jsonl",
+        help="Artifact JSONL path for Stage D v1 ranging shadow signal events.",
+    )
+    parser.add_argument(
+        "--ranging-shadow-run-meta-json",
+        default=r".\build\Release\logs\ranging_shadow_run_meta.json",
+        help="Output JSON path for Stage D v1 ranging shadow run metadata.",
+    )
+    parser.add_argument(
+        "--stage-d-v1-effect-summary-json",
+        default=r".\build\Release\logs\stageD_v1_effect_summary.json",
+        help="Output JSON path for Stage D v1 effect summary (real trades + shadow).",
+    )
     args = parser.parse_args(argv)
 
     exe_path = resolve_path(args.exe_path, "Executable")
@@ -8720,6 +9239,21 @@ def main(argv=None) -> int:
     semantics_lock_report_json = resolve_path(
         args.semantics_lock_report_json,
         "Semantics lock report json",
+        must_exist=False,
+    )
+    ranging_shadow_signals_jsonl = resolve_path(
+        args.ranging_shadow_signals_jsonl,
+        "Ranging shadow signals jsonl",
+        must_exist=False,
+    )
+    ranging_shadow_run_meta_json = resolve_path(
+        args.ranging_shadow_run_meta_json,
+        "Ranging shadow run meta json",
+        must_exist=False,
+    )
+    stage_d_v1_effect_summary_json = resolve_path(
+        args.stage_d_v1_effect_summary_json,
+        "Stage D v1 effect summary json",
         must_exist=False,
     )
     core_zero_diagnosis_json = resolve_path(
@@ -8836,6 +9370,7 @@ def main(argv=None) -> int:
     adaptive_dataset_profiles: List[Dict[str, Any]] = []
     vol_bucket_pct_dataset_profiles: List[Dict[str, Any]] = []
     frontier_filter_dataset_samples: List[Dict[str, Any]] = []
+    ranging_shadow_events_all: List[Dict[str, Any]] = []
     split_eval_profiles: List[Dict[str, Any]] = []
     phase4_off_on_comparison: Dict[str, Any] = {}
     core_window_direct_report: Dict[str, Any] = {}
@@ -8912,6 +9447,12 @@ def main(argv=None) -> int:
                 evaluation_end_ts=eval_end_ts,
                 cumulative_start_ts=cumulative_start_ts,
                 cumulative_end_ts=cumulative_end_ts,
+            )
+            ranging_shadow_events_all.extend(
+                load_ranging_shadow_events(
+                    exe_dir=exe_path.parent,
+                    dataset_name=dataset_path.name,
+                )
             )
             frontier_payload = result.get("frontier_filter_samples", {})
             if not isinstance(frontier_payload, dict):
@@ -10089,6 +10630,43 @@ def main(argv=None) -> int:
     with core_zero_diagnosis_json.open("w", encoding="utf-8", newline="\n") as fp:
         json.dump(core_zero_diagnosis_payload, fp, ensure_ascii=False, indent=4)
 
+    ranging_shadow_events_all.sort(
+        key=lambda row: (
+            max(0, to_int(row.get("ts_ms", 0))) if isinstance(row, dict) else 0,
+            str(row.get("dataset", "")) if isinstance(row, dict) else "",
+            str(row.get("market", "")) if isinstance(row, dict) else "",
+        )
+    )
+    write_ranging_shadow_events_jsonl(
+        output_path=ranging_shadow_signals_jsonl,
+        events=ranging_shadow_events_all,
+    )
+
+    ranging_shadow_run_meta = build_ranging_shadow_run_meta(
+        runtime_config_path=config_path,
+        bundle_meta=bundle_meta if isinstance(bundle_meta, dict) else {},
+        split_manifest_path=split_manifest_path_value,
+        data_dir=data_dir,
+        execution_prewarm_hours=float(max(0.0, to_float(args.split_execution_prewarm_hours))),
+        split_filter_context=split_filter_context if isinstance(split_filter_context, dict) else {},
+        verification_report_json=output_json,
+        ranging_shadow_signals_jsonl=ranging_shadow_signals_jsonl,
+        semantics_lock_report=semantics_lock_report if isinstance(semantics_lock_report, dict) else {},
+    )
+    ensure_parent(ranging_shadow_run_meta_json)
+    with ranging_shadow_run_meta_json.open("w", encoding="utf-8", newline="\n") as fp:
+        json.dump(ranging_shadow_run_meta, fp, ensure_ascii=False, indent=4)
+
+    stage_d_v1_effect_summary = build_stage_d_v1_effect_summary(
+        aggregate_diagnostics=aggregate_diagnostics,
+        dataset_diagnostics=dataset_diagnostics,
+        split_filter_context=split_filter_context if isinstance(split_filter_context, dict) else {},
+        split_eval_profiles=split_eval_profiles if isinstance(split_eval_profiles, list) else [],
+    )
+    ensure_parent(stage_d_v1_effect_summary_json)
+    with stage_d_v1_effect_summary_json.open("w", encoding="utf-8", newline="\n") as fp:
+        json.dump(stage_d_v1_effect_summary, fp, ensure_ascii=False, indent=4)
+
     report = {
         "mode": "verification_adaptive",
         "validation_profile": str(args.validation_profile),
@@ -10171,6 +10749,8 @@ def main(argv=None) -> int:
             "a20_consistency_check": a20_consistency_check_payload,
             "runtime_cost_semantics_debug": runtime_cost_semantics_debug,
             "semantics_lock_report": semantics_lock_report,
+            "ranging_shadow_run_meta": ranging_shadow_run_meta,
+            "stage_d_v1_effect_summary": stage_d_v1_effect_summary,
         },
         "split_filter": split_filter_context,
         "split_eval_profiles": split_eval_profiles,
@@ -10201,6 +10781,9 @@ def main(argv=None) -> int:
             "a20_consistency_check_json": str(a20_consistency_check_json),
             "runtime_cost_semantics_debug_json": str(runtime_cost_semantics_debug_json),
             "semantics_lock_report_json": str(semantics_lock_report_json),
+            "ranging_shadow_signals_jsonl": str(ranging_shadow_signals_jsonl),
+            "ranging_shadow_run_meta_json": str(ranging_shadow_run_meta_json),
+            "stage_d_v1_effect_summary_json": str(stage_d_v1_effect_summary_json),
             "core_zero_diagnosis_json": str(core_zero_diagnosis_json),
         },
     }
@@ -10452,6 +11035,29 @@ def main(argv=None) -> int:
         f"phase3_cost_eff_true={semantics_runtime.get('phase3_cost_model_enabled_effective_true_count', 0)} "
         f"cost_bps_mean={semantics_cost.get('mean_bps', 0.0)} "
         f"cost_bps_max={semantics_cost.get('max_bps', 0.0)}"
+    )
+    stage_d_shadow = (
+        stage_d_v1_effect_summary.get("ranging_shadow", {})
+        if isinstance(stage_d_v1_effect_summary, dict)
+        else {}
+    )
+    if not isinstance(stage_d_shadow, dict):
+        stage_d_shadow = {}
+    top_shadow_market = ""
+    top_shadow_market_count = 0
+    top_shadow_rows = stage_d_shadow.get("top_shadow_markets", [])
+    if isinstance(top_shadow_rows, list) and top_shadow_rows:
+        first = top_shadow_rows[0]
+        if isinstance(first, dict):
+            top_shadow_market = str(first.get("market", "")).strip()
+            top_shadow_market_count = max(0, to_int(first.get("count", 0)))
+    print(
+        "[Verification] ranging_shadow "
+        f"shadow_count_total={stage_d_shadow.get('shadow_count_total', 0)} "
+        f"would_pass_frontier={stage_d_shadow.get('shadow_would_pass_frontier_count', 0)} "
+        f"would_pass_exec_guard={stage_d_shadow.get('shadow_would_pass_execution_guard_count', 0)} "
+        f"top_shadow_market={top_shadow_market or 'none'} "
+        f"top_shadow_market_count={top_shadow_market_count}"
     )
     a10_funnel_core = (
         a10_2_stage_funnel_report.get("funnel_summary_core", {})

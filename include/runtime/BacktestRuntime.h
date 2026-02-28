@@ -94,6 +94,10 @@ public:
             int filtered_out_by_manager = 0;
             int filtered_out_by_policy = 0;
             int reject_expected_edge_negative_count = 0;
+            int reject_regime_entry_disabled_count = 0;
+            std::map<std::string, int> reject_regime_entry_disabled_by_regime;
+            bool regime_entry_disable_enabled = false;
+            std::map<std::string, bool> regime_entry_disable;
             int no_best_signal = 0;
             int blocked_pattern_gate = 0;
             int blocked_rr_rebalance = 0;
@@ -110,6 +114,16 @@ public:
             int blocked_min_order_or_capital = 0;
             int blocked_order_sizing = 0;
             int entries_executed = 0;
+        };
+        struct RangingShadowSummary {
+            int shadow_count_total = 0;
+            std::map<std::string, int> shadow_count_by_regime;
+            std::map<std::string, int> shadow_count_by_market;
+            int shadow_would_pass_frontier_count = 0;
+            int shadow_would_pass_manager_count = 0;
+            int shadow_would_pass_execution_guard_count = 0;
+            int shadow_edge_neg_count = 0;
+            int shadow_edge_pos_count = 0;
         };
         struct ShadowFunnelSummary {
             int rounds = 0;
@@ -186,6 +200,11 @@ public:
             double risk_budget_per_market_cap = 0.0;
             double risk_budget_gross_cap = 0.0;
             double risk_budget_cap = 0.0;
+            std::map<std::string, double> risk_budget_regime_multipliers;
+            int regime_budget_multiplier_applied_count = 0;
+            std::map<std::string, int> regime_budget_multiplier_count_by_regime;
+            std::map<std::string, double> regime_budget_multiplier_sum_by_regime;
+            std::map<std::string, double> regime_budget_multiplier_avg_by_regime;
             double drawdown_current = 0.0;
             double drawdown_budget_multiplier = 1.0;
             double correlation_default_cluster_cap = 0.0;
@@ -265,6 +284,7 @@ public:
         std::map<std::string, int> no_signal_pattern_counts;
         std::map<std::string, int> entry_quality_edge_gap_buckets;
         std::map<std::string, int> intrabar_collision_by_strategy;
+        RangingShadowSummary ranging_shadow;
         std::vector<StrategySummary> strategy_summaries;
         std::vector<PatternSummary> pattern_summaries;
         std::vector<TradeHistorySample> trade_history_samples;
@@ -352,9 +372,11 @@ private:
     int strategyless_current_stop_hits_ = 0;
     int strategyless_current_tp1_hits_ = 0;
     int strategyless_current_tp2_hits_ = 0;
+    Result::RangingShadowSummary ranging_shadow_summary_;
     Result::ShadowFunnelSummary shadow_funnel_;
     Result::Phase4PortfolioDiagnostics phase4_portfolio_diagnostics_;
     std::vector<Result::Phase4CandidateSnapshotSample> phase4_candidate_snapshot_samples_;
+    size_t current_candle_index_ = 0;
 
     // Simulation Methods
     void processCandle(const Candle& candle);

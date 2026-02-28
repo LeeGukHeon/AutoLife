@@ -16,6 +16,28 @@ namespace analytics {
 
 // 코인별 수급 메트릭
 struct CoinMetrics {
+    struct LiquidityVolumeGatePolicy {
+        bool enabled = false;
+        std::string mode = "legacy_fixed";
+        int window_minutes = 60;
+        double quantile_q = 0.20;
+        int min_samples_required = 30;
+        std::string low_conf_action = "hold";
+    };
+    struct FoundationStructureGatePolicy {
+        bool enabled = false;
+        std::string mode = "legacy_fixed";
+        double relax_delta = 0.0;
+    };
+    struct BearReboundGuardPolicy {
+        bool enabled = false;
+        std::string mode = "legacy_fixed";
+        int window_minutes = 60;
+        double quantile_q = 0.20;
+        int min_samples_required = 30;
+        std::string low_conf_action = "hold";
+        double static_threshold = 1.0;
+    };
     std::string market;                  // 마켓 코드
     double current_price;                 // 현재가
     double volume_24h;                    // 24시간 거래량
@@ -36,6 +58,9 @@ struct CoinMetrics {
     // ✅ 캔들 데이터 추가
     std::vector<Candle> candles;
     std::map<std::string, std::vector<Candle>> candles_by_tf;
+    LiquidityVolumeGatePolicy liq_vol_gate_policy;
+    FoundationStructureGatePolicy foundation_structure_gate_policy;
+    BearReboundGuardPolicy bear_rebound_guard_policy;
     
     CoinMetrics() : current_price(0), volume_24h(0), volume_surge_ratio(1.0),
                     price_change_rate(0), price_momentum(0), 

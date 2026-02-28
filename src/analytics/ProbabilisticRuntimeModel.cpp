@@ -499,6 +499,52 @@ std::string lowerCopy(std::string s) {
     return s;
 }
 
+std::string normalizeRegimeBudgetKeyForConfig(const std::string& raw_key) {
+    const std::string key = lowerCopy(raw_key);
+    if (key == "ranging" || key == "range") {
+        return "RANGING";
+    }
+    if (key == "trending_up" || key == "trending-up" || key == "trending up" || key == "up") {
+        return "TRENDING_UP";
+    }
+    if (key == "trending_down" || key == "trending-down" || key == "trending down" || key == "down") {
+        return "TRENDING_DOWN";
+    }
+    if (key == "high_volatility" || key == "high-volatility" || key == "high volatility" ||
+        key == "volatile" || key == "hostile") {
+        return "HIGH_VOLATILITY";
+    }
+    if (key == "unknown") {
+        return "UNKNOWN";
+    }
+    if (key == "any" || key == "default") {
+        return "ANY";
+    }
+    return std::string();
+}
+
+bool parseOptionalBool(const nlohmann::json& node, bool fallback = false) {
+    if (node.is_boolean()) {
+        return node.get<bool>();
+    }
+    if (node.is_number_integer()) {
+        return node.get<int>() != 0;
+    }
+    if (node.is_number_float()) {
+        return std::fabs(node.get<double>()) > 1e-12;
+    }
+    if (node.is_string()) {
+        const std::string raw = lowerCopy(node.get<std::string>());
+        if (raw == "true" || raw == "1" || raw == "on" || raw == "yes") {
+            return true;
+        }
+        if (raw == "false" || raw == "0" || raw == "off" || raw == "no") {
+            return false;
+        }
+    }
+    return fallback;
+}
+
 bool validateBundleVersionAndContracts(
     const nlohmann::json& root,
     std::string* error_message
@@ -666,6 +712,16 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         phase3_root.value("primary_decision_profile", nlohmann::json::object());
     const auto phase3_manager_filter_node = phase3_root.value("manager_filter", nlohmann::json::object());
     const auto phase3_diag_node = phase3_root.value("diagnostics_v2", nlohmann::json::object());
+    const auto phase3_execution_guard_node =
+        phase3_root.value("execution_guard", nlohmann::json::object());
+    const auto phase3_liq_vol_gate_node =
+        phase3_execution_guard_node.value("liq_vol_gate", nlohmann::json::object());
+    const auto phase3_foundation_structure_gate_node =
+        phase3_root.value("foundation_structure_gate", nlohmann::json::object());
+    const auto phase3_bear_rebound_guard_node =
+        phase3_root.value("bear_rebound_guard", nlohmann::json::object());
+    const auto phase3_regime_entry_disable_node =
+        phase3_root.value("regime_entry_disable", nlohmann::json::object());
 
     phase3_policy_.phase3_frontier_enabled = phase3_frontier_node.value("enabled", false);
     phase3_policy_.phase3_ev_calibration_enabled = phase3_ev_calibration_node.value("enabled", false);
@@ -674,6 +730,141 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         bool(phase3_cost_node.is_object() && phase3_cost_node.value("enabled", false));
     phase3_policy_.phase3_adaptive_ev_blend_enabled = phase3_blend_node.value("enabled", false);
     phase3_policy_.phase3_diagnostics_v2_enabled = phase3_diag_node.value("enabled", false);
+
+    phase3_policy_.liq_vol_gate = Phase3LiquidityVolumeGatePolicy{};
+    {
+        std::string mode = lowerCopy(phase3_liq_vol_gate_node.value("mode", std::string("legacy_fixed")));
+        if (mode != "quantile_dynamic") {
+            mode = "legacy_fixed";
+        }
+        bool enabled = phase3_liq_vol_gate_node.value("enabled", mode == "quantile_dynamic");
+        std::string low_conf_action = lowerCopy(
+            phase3_liq_vol_gate_node.value("low_conf_action", std::string("hold"))
+        );
+        if (low_conf_action != "fallback_legacy") {
+            low_conf_action = "hold";
+        }
+        phase3_policy_.liq_vol_gate.mode = mode;
+        phase3_policy_.liq_vol_gate.enabled = enabled && mode == "quantile_dynamic";
+        phase3_policy_.liq_vol_gate.window_minutes = std::clamp(
+            phase3_liq_vol_gate_node.value("window_minutes", 60),
+            1,
+            24 * 60
+        );
+        phase3_policy_.liq_vol_gate.quantile_q = parseCostParam(
+            phase3_liq_vol_gate_node,
+            "quantile_q",
+            0.20,
+            0.0,
+            1.0
+        );
+        phase3_policy_.liq_vol_gate.min_samples_required = std::clamp(
+            phase3_liq_vol_gate_node.value("min_samples_required", 30),
+            1,
+            200000
+        );
+        phase3_policy_.liq_vol_gate.low_conf_action = low_conf_action;
+        if (!phase3_policy_.liq_vol_gate.enabled) {
+            phase3_policy_.liq_vol_gate.mode = "legacy_fixed";
+        }
+    }
+
+    phase3_policy_.foundation_structure_gate = Phase3FoundationStructureGatePolicy{};
+    {
+        std::string mode = lowerCopy(
+            phase3_foundation_structure_gate_node.value("mode", std::string("legacy_fixed"))
+        );
+        if (mode != "trend_only_relax") {
+            mode = "legacy_fixed";
+        }
+        const bool enabled =
+            phase3_foundation_structure_gate_node.value("enabled", mode == "trend_only_relax");
+        phase3_policy_.foundation_structure_gate.mode = mode;
+        phase3_policy_.foundation_structure_gate.enabled = enabled && mode == "trend_only_relax";
+        phase3_policy_.foundation_structure_gate.relax_delta = parseCostParam(
+            phase3_foundation_structure_gate_node,
+            "relax_delta",
+            0.0,
+            0.0,
+            1.0
+        );
+        if (!phase3_policy_.foundation_structure_gate.enabled) {
+            phase3_policy_.foundation_structure_gate.mode = "legacy_fixed";
+            phase3_policy_.foundation_structure_gate.relax_delta = 0.0;
+        }
+    }
+
+    phase3_policy_.bear_rebound_guard = Phase3BearReboundGuardPolicy{};
+    {
+        std::string mode = lowerCopy(
+            phase3_bear_rebound_guard_node.value("mode", std::string("legacy_fixed"))
+        );
+        if (mode != "quantile_dynamic") {
+            mode = "legacy_fixed";
+        }
+        const bool enabled =
+            phase3_bear_rebound_guard_node.value("enabled", mode == "quantile_dynamic");
+        std::string low_conf_action = lowerCopy(
+            phase3_bear_rebound_guard_node.value("low_conf_action", std::string("hold"))
+        );
+        if (low_conf_action != "fallback_legacy") {
+            low_conf_action = "hold";
+        }
+        phase3_policy_.bear_rebound_guard.mode = mode;
+        phase3_policy_.bear_rebound_guard.enabled = enabled && mode == "quantile_dynamic";
+        phase3_policy_.bear_rebound_guard.window_minutes = std::clamp(
+            phase3_bear_rebound_guard_node.value("window_minutes", 60),
+            1,
+            24 * 60
+        );
+        phase3_policy_.bear_rebound_guard.quantile_q = parseCostParam(
+            phase3_bear_rebound_guard_node,
+            "quantile_q",
+            0.20,
+            0.0,
+            1.0
+        );
+        phase3_policy_.bear_rebound_guard.min_samples_required = std::clamp(
+            phase3_bear_rebound_guard_node.value("min_samples_required", 30),
+            1,
+            200000
+        );
+        phase3_policy_.bear_rebound_guard.low_conf_action = low_conf_action;
+        phase3_policy_.bear_rebound_guard.static_threshold = parseCostParam(
+            phase3_bear_rebound_guard_node,
+            "static_threshold",
+            1.0,
+            0.0,
+            10.0
+        );
+        if (!phase3_policy_.bear_rebound_guard.enabled) {
+            phase3_policy_.bear_rebound_guard.mode = "legacy_fixed";
+        }
+    }
+
+    phase3_policy_.disable_ranging_entry = phase3_root.value("disable_ranging_entry", false);
+    phase3_policy_.regime_entry_disable.clear();
+    if (phase3_regime_entry_disable_node.is_object()) {
+        for (auto it = phase3_regime_entry_disable_node.begin();
+             it != phase3_regime_entry_disable_node.end();
+             ++it) {
+            const std::string normalized_key = normalizeRegimeBudgetKeyForConfig(it.key());
+            if (normalized_key.empty()) {
+                continue;
+            }
+            phase3_policy_.regime_entry_disable[normalized_key] = parseOptionalBool(it.value(), false);
+        }
+    }
+    if (phase3_policy_.disable_ranging_entry) {
+        phase3_policy_.regime_entry_disable["RANGING"] = true;
+    }
+    phase3_policy_.regime_entry_disable_enabled = false;
+    for (const auto& kv : phase3_policy_.regime_entry_disable) {
+        if (kv.second) {
+            phase3_policy_.regime_entry_disable_enabled = true;
+            break;
+        }
+    }
 
     phase3_policy_.frontier.enabled = phase3_policy_.phase3_frontier_enabled;
     phase3_policy_.frontier.k_margin = parseCostParam(phase3_frontier_node, "k_margin", 0.0, -100.0, 100.0);
@@ -957,6 +1148,13 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         0.0,
         phase3_policy_.operations_control.required_ev_offset_min,
         phase3_policy_.operations_control.required_ev_offset_max
+    );
+    phase3_policy_.operations_control.required_ev_offset_trending_add = parseCostParam(
+        phase3_ops_node,
+        "required_ev_offset_trending_add",
+        0.0,
+        -0.20,
+        0.20
     );
     phase3_policy_.operations_control.k_margin_scale_min = parseCostParam(
         phase3_ops_node,
@@ -3070,6 +3268,26 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         0.0,
         1.0
     );
+    phase4_policy_.risk_budget.regime_budget_multipliers.clear();
+    const auto regime_budget_multipliers_node =
+        phase4_risk_budget_node.value("regime_budget_multipliers", nlohmann::json::object());
+    if (regime_budget_multipliers_node.is_object()) {
+        for (auto it = regime_budget_multipliers_node.begin();
+             it != regime_budget_multipliers_node.end();
+             ++it) {
+            if (!it.value().is_number()) {
+                continue;
+            }
+            const std::string normalized_key = normalizeRegimeBudgetKeyForConfig(it.key());
+            if (normalized_key.empty()) {
+                continue;
+            }
+            const double multiplier = std::clamp(it.value().get<double>(), 0.0, 1.0);
+            if (std::isfinite(multiplier)) {
+                phase4_policy_.risk_budget.regime_budget_multipliers[normalized_key] = multiplier;
+            }
+        }
+    }
     phase4_policy_.phase4_risk_budget_enabled =
         phase4_policy_.risk_budget.enabled;
     phase4_policy_.drawdown_governor.enabled =

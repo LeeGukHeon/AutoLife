@@ -5,6 +5,7 @@
 
 #include <memory>
 #include <mutex>
+#include <deque>
 
 namespace autolife {
 namespace strategy {
@@ -73,6 +74,8 @@ private:
     bool enabled_ = true;
     mutable std::mutex mutex_;
     Statistics stats_;
+    std::deque<std::pair<long long, double>> liq_vol_gate_history_;
+    std::deque<std::pair<long long, double>> bear_rebound_guard_history_;
 };
 
 } // namespace strategy

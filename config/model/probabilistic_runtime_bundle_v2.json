@@ -301,6 +301,30 @@
       "max_step_per_update": 0.05,
       "min_update_interval_sec": 3600
     },
+    "execution_guard": {
+      "liq_vol_gate": {
+        "enabled": false,
+        "mode": "legacy_fixed",
+        "window_minutes": 60,
+        "quantile_q": 0.2,
+        "min_samples_required": 30,
+        "low_conf_action": "hold"
+      }
+    },
+    "foundation_structure_gate": {
+      "enabled": false,
+      "mode": "legacy_fixed",
+      "relax_delta": 0.0
+    },
+    "bear_rebound_guard": {
+      "enabled": false,
+      "mode": "legacy_fixed",
+      "window_minutes": 60,
+      "quantile_q": 0.2,
+      "min_samples_required": 30,
+      "low_conf_action": "hold",
+      "static_threshold": 1.0
+    },
     "operations_dynamic_gate": {
       "enabled": true,
       "prefer_core_window_direct": true,

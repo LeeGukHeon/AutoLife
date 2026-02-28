@@ -121,6 +121,7 @@ public:
         bool enabled = false;
         std::string mode = "manual";
         double required_ev_offset = 0.0;
+        double required_ev_offset_trending_add = 0.0;
         double required_ev_offset_min = -0.0030;
         double required_ev_offset_max = 0.0030;
         double k_margin_scale = 1.0;
@@ -409,12 +410,38 @@ public:
         bool enabled = false;
     };
 
+    struct Phase3LiquidityVolumeGatePolicy {
+        bool enabled = false;
+        std::string mode = "legacy_fixed";
+        int window_minutes = 60;
+        double quantile_q = 0.20;
+        int min_samples_required = 30;
+        std::string low_conf_action = "hold";
+    };
+    struct Phase3FoundationStructureGatePolicy {
+        bool enabled = false;
+        std::string mode = "legacy_fixed";
+        double relax_delta = 0.0;
+    };
+    struct Phase3BearReboundGuardPolicy {
+        bool enabled = false;
+        std::string mode = "legacy_fixed";
+        int window_minutes = 60;
+        double quantile_q = 0.20;
+        int min_samples_required = 30;
+        std::string low_conf_action = "hold";
+        double static_threshold = 1.0;
+    };
+
     struct Phase3Policy {
         bool phase3_frontier_enabled = false;
         bool phase3_ev_calibration_enabled = false;
         bool phase3_cost_tail_enabled = false;
         bool phase3_adaptive_ev_blend_enabled = false;
         bool phase3_diagnostics_v2_enabled = false;
+        bool regime_entry_disable_enabled = false;
+        bool disable_ranging_entry = false;
+        std::unordered_map<std::string, bool> regime_entry_disable;
         Phase3FrontierPolicy frontier;
         Phase3EvCalibrationPolicy ev_calibration;
         Phase3CostPolicy cost_model;
@@ -425,6 +452,9 @@ public:
         Phase3PrimaryDecisionProfilePolicy primary_decision_profile;
         Phase3ManagerFilterPolicy manager_filter;
         Phase3DiagnosticsPolicy diagnostics_v2;
+        Phase3LiquidityVolumeGatePolicy liq_vol_gate;
+        Phase3FoundationStructureGatePolicy foundation_structure_gate;
+        Phase3BearReboundGuardPolicy bear_rebound_guard;
     };
 
     struct Phase4Policy {
@@ -445,6 +475,7 @@ public:
             double gross_cap = 1.0;
             double risk_budget_cap = 1.0;
             double risk_proxy_stop_pct = 0.03;
+            std::unordered_map<std::string, double> regime_budget_multipliers;
         };
         struct DrawdownGovernorPolicy {
             bool enabled = false;

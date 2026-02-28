@@ -62,8 +62,27 @@ def infer_train_summary_pipeline_version(summary: Dict[str, Any]) -> str:
     return "unknown"
 
 
+def normalize_regime_entry_disable_key(raw_key: Any) -> str:
+    token = str(raw_key or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if token in ("ranging", "range"):
+        return "RANGING"
+    if token in ("trending_up", "up"):
+        return "TRENDING_UP"
+    if token in ("trending_down", "down"):
+        return "TRENDING_DOWN"
+    if token in ("high_volatility", "volatile", "hostile"):
+        return "HIGH_VOLATILITY"
+    if token == "unknown":
+        return "UNKNOWN"
+    if token in ("any", "default"):
+        return "ANY"
+    return ""
+
+
 def default_phase3_bundle_config() -> Dict[str, Any]:
     return {
+        "disable_ranging_entry": False,
+        "regime_entry_disable": {},
         "frontier": {
             "enabled": True,
             "k_margin": 0.08,
@@ -140,6 +159,30 @@ def default_phase3_bundle_config() -> Dict[str, Any]:
             "ev_blend_scale_max": 1.50,
             "max_step_per_update": 0.05,
             "min_update_interval_sec": 3600,
+        },
+        "execution_guard": {
+            "liq_vol_gate": {
+                "enabled": False,
+                "mode": "legacy_fixed",
+                "window_minutes": 60,
+                "quantile_q": 0.20,
+                "min_samples_required": 30,
+                "low_conf_action": "hold",
+            }
+        },
+        "foundation_structure_gate": {
+            "enabled": False,
+            "mode": "legacy_fixed",
+            "relax_delta": 0.0,
+        },
+        "bear_rebound_guard": {
+            "enabled": False,
+            "mode": "legacy_fixed",
+            "window_minutes": 60,
+            "quantile_q": 0.20,
+            "min_samples_required": 30,
+            "low_conf_action": "hold",
+            "static_threshold": 1.0,
         },
         "primary_minimums": {
             "enabled": True,
@@ -417,6 +460,84 @@ def build_phase3_bundle_config(summary: Dict[str, Any]) -> Dict[str, Any]:
     merged["cost_model"]["enabled"] = bool(merged["cost_model"].get("enabled", False))
     merged["adaptive_ev_blend"]["enabled"] = bool(merged["adaptive_ev_blend"].get("enabled", False))
     merged["operations_control"]["enabled"] = bool(merged["operations_control"].get("enabled", False))
+    execution_guard = merged.get("execution_guard", {})
+    if not isinstance(execution_guard, dict):
+        execution_guard = {}
+    liq_vol_gate = execution_guard.get("liq_vol_gate", {})
+    if not isinstance(liq_vol_gate, dict):
+        liq_vol_gate = {}
+    mode = str(liq_vol_gate.get("mode", "legacy_fixed")).strip().lower()
+    if mode != "quantile_dynamic":
+        mode = "legacy_fixed"
+    low_conf_action = str(liq_vol_gate.get("low_conf_action", "hold")).strip().lower()
+    if low_conf_action != "fallback_legacy":
+        low_conf_action = "hold"
+    liq_vol_gate_clean = {
+        "enabled": bool(liq_vol_gate.get("enabled", False) and mode == "quantile_dynamic"),
+        "mode": mode,
+        "window_minutes": int(np.clip(round(finite_float(liq_vol_gate.get("window_minutes", 60), 60.0)), 1, 1440)),
+        "quantile_q": float(np.clip(finite_float(liq_vol_gate.get("quantile_q", 0.20), 0.20), 0.0, 1.0)),
+        "min_samples_required": int(
+            np.clip(round(finite_float(liq_vol_gate.get("min_samples_required", 30), 30.0)), 1, 200000)
+        ),
+        "low_conf_action": low_conf_action,
+    }
+    if not liq_vol_gate_clean["enabled"]:
+        liq_vol_gate_clean["mode"] = "legacy_fixed"
+    execution_guard["liq_vol_gate"] = liq_vol_gate_clean
+    merged["execution_guard"] = execution_guard
+    foundation_structure_gate = merged.get("foundation_structure_gate", {})
+    if not isinstance(foundation_structure_gate, dict):
+        foundation_structure_gate = {}
+    structure_mode = str(foundation_structure_gate.get("mode", "legacy_fixed")).strip().lower()
+    if structure_mode != "trend_only_relax":
+        structure_mode = "legacy_fixed"
+    foundation_structure_gate_clean = {
+        "enabled": bool(
+            foundation_structure_gate.get("enabled", False) and structure_mode == "trend_only_relax"
+        ),
+        "mode": structure_mode,
+        "relax_delta": float(
+            np.clip(finite_float(foundation_structure_gate.get("relax_delta", 0.0), 0.0), 0.0, 1.0)
+        ),
+    }
+    if not foundation_structure_gate_clean["enabled"]:
+        foundation_structure_gate_clean["mode"] = "legacy_fixed"
+        foundation_structure_gate_clean["relax_delta"] = 0.0
+    merged["foundation_structure_gate"] = foundation_structure_gate_clean
+    bear_rebound_guard = merged.get("bear_rebound_guard", {})
+    if not isinstance(bear_rebound_guard, dict):
+        bear_rebound_guard = {}
+    bear_mode = str(bear_rebound_guard.get("mode", "legacy_fixed")).strip().lower()
+    if bear_mode != "quantile_dynamic":
+        bear_mode = "legacy_fixed"
+    bear_low_conf_action = str(bear_rebound_guard.get("low_conf_action", "hold")).strip().lower()
+    if bear_low_conf_action != "fallback_legacy":
+        bear_low_conf_action = "hold"
+    bear_rebound_guard_clean = {
+        "enabled": bool(bear_rebound_guard.get("enabled", False) and bear_mode == "quantile_dynamic"),
+        "mode": bear_mode,
+        "window_minutes": int(
+            np.clip(round(finite_float(bear_rebound_guard.get("window_minutes", 60), 60.0)), 1, 1440)
+        ),
+        "quantile_q": float(
+            np.clip(finite_float(bear_rebound_guard.get("quantile_q", 0.20), 0.20), 0.0, 1.0)
+        ),
+        "min_samples_required": int(
+            np.clip(
+                round(finite_float(bear_rebound_guard.get("min_samples_required", 30), 30.0)),
+                1,
+                200000,
+            )
+        ),
+        "low_conf_action": bear_low_conf_action,
+        "static_threshold": float(
+            np.clip(finite_float(bear_rebound_guard.get("static_threshold", 1.0), 1.0), 0.0, 10.0)
+        ),
+    }
+    if not bear_rebound_guard_clean["enabled"]:
+        bear_rebound_guard_clean["mode"] = "legacy_fixed"
+    merged["bear_rebound_guard"] = bear_rebound_guard_clean
     merged["diagnostics_v2"]["enabled"] = bool(merged["diagnostics_v2"].get("enabled", False))
     merged["primary_minimums"]["enabled"] = bool(merged["primary_minimums"].get("enabled", False))
     merged["primary_priority"]["enabled"] = bool(merged["primary_priority"].get("enabled", False))
@@ -424,6 +545,19 @@ def build_phase3_bundle_config(summary: Dict[str, Any]) -> Dict[str, Any]:
         merged["primary_decision_profile"].get("enabled", False)
     )
     merged["manager_filter"]["enabled"] = bool(merged["manager_filter"].get("enabled", False))
+    merged["disable_ranging_entry"] = bool(merged.get("disable_ranging_entry", False))
+    raw_regime_entry_disable = merged.get("regime_entry_disable", {})
+    if not isinstance(raw_regime_entry_disable, dict):
+        raw_regime_entry_disable = {}
+    cleaned_regime_entry_disable: Dict[str, bool] = {}
+    for key, value in raw_regime_entry_disable.items():
+        regime_key = normalize_regime_entry_disable_key(key)
+        if not regime_key:
+            continue
+        cleaned_regime_entry_disable[regime_key] = bool(value)
+    if merged["disable_ranging_entry"]:
+        cleaned_regime_entry_disable["RANGING"] = True
+    merged["regime_entry_disable"] = cleaned_regime_entry_disable
     return merged
 
 
@@ -452,6 +586,7 @@ def default_phase4_bundle_config() -> Dict[str, Any]:
             "gross_cap": 1.0,
             "risk_budget_cap": 1.0,
             "risk_proxy_stop_pct": 0.03,
+            "regime_budget_multipliers": {},
         },
         "drawdown_governor": {
             "enabled": False,
@@ -540,6 +675,18 @@ def build_phase4_bundle_config(summary: Dict[str, Any]) -> Dict[str, Any]:
     risk_budget["risk_proxy_stop_pct"] = float(
         np.clip(finite_float(risk_budget.get("risk_proxy_stop_pct", 0.03), 0.03), 0.0, 1.0)
     )
+    raw_regime_budget_multipliers = risk_budget.get("regime_budget_multipliers", {})
+    if not isinstance(raw_regime_budget_multipliers, dict):
+        raw_regime_budget_multipliers = {}
+    cleaned_regime_budget_multipliers: Dict[str, float] = {}
+    for key, value in raw_regime_budget_multipliers.items():
+        regime_key = str(key).strip().upper()
+        if not regime_key:
+            continue
+        cleaned_regime_budget_multipliers[regime_key] = float(
+            np.clip(finite_float(value, 1.0), 0.0, 1.0)
+        )
+    risk_budget["regime_budget_multipliers"] = cleaned_regime_budget_multipliers
     drawdown_governor = merged["drawdown_governor"]
     drawdown_governor["enabled"] = bool(drawdown_governor.get("enabled", False))
     drawdown_governor["dd_threshold_soft"] = float(

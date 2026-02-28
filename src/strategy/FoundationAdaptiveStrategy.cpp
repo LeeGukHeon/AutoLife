@@ -4,6 +4,7 @@
 #include "common/Config.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <string>
@@ -409,7 +410,238 @@ struct EntryGateDecision {
     bool thin_liquidity_adaptive_path = false;
     bool ranging_low_flow_path = false;
     bool downtrend_low_flow_rebound_path = false;
+    bool liq_vol_gate_telemetry_valid = false;
+    std::string liq_vol_gate_mode = "legacy_fixed";
+    double liq_vol_gate_observed = 0.0;
+    double liq_vol_gate_threshold_dynamic = 0.0;
+    int liq_vol_gate_history_count = 0;
+    bool liq_vol_gate_pass = false;
+    bool liq_vol_gate_low_conf_triggered = false;
+    double liq_vol_gate_quantile_q = 0.0;
+    int liq_vol_gate_window_minutes = 0;
+    int liq_vol_gate_min_samples_required = 0;
+    std::string liq_vol_gate_low_conf_action = "hold";
+    bool structure_gate_telemetry_valid = false;
+    std::string structure_gate_mode = "legacy_fixed";
+    double structure_gate_observed_score = 0.0;
+    double structure_gate_threshold_before = 0.0;
+    double structure_gate_threshold_after = 0.0;
+    bool structure_gate_pass = false;
+    bool structure_gate_relax_applied = false;
+    double structure_gate_relax_delta = 0.0;
+    bool bear_rebound_guard_telemetry_valid = false;
+    std::string bear_rebound_guard_mode = "legacy_fixed";
+    double bear_rebound_observed = 0.0;
+    double bear_rebound_threshold_dynamic = 0.0;
+    int bear_rebound_history_count = 0;
+    bool bear_rebound_pass = false;
+    bool bear_rebound_low_conf_triggered = false;
+    double bear_rebound_quantile_q = 0.0;
+    int bear_rebound_window_minutes = 0;
+    int bear_rebound_min_samples_required = 0;
+    std::string bear_rebound_low_conf_action = "hold";
 };
+
+double quantileFromSorted(const std::vector<double>& values, double q) {
+    if (values.empty()) {
+        return 0.0;
+    }
+    const double qq = std::clamp(q, 0.0, 1.0);
+    const double pos = qq * static_cast<double>(values.size() - 1);
+    const std::size_t lo = static_cast<std::size_t>(std::floor(pos));
+    const std::size_t hi = static_cast<std::size_t>(std::ceil(pos));
+    if (lo >= values.size()) {
+        return values.back();
+    }
+    if (hi >= values.size() || lo == hi) {
+        return values[lo];
+    }
+    const double w = pos - static_cast<double>(lo);
+    return values[lo] * (1.0 - w) + values[hi] * w;
+}
+
+EntryGateDecision evaluateLiqVolGate(
+    const analytics::CoinMetrics& metrics,
+    const engine::EngineConfig& engine_cfg,
+    std::deque<std::pair<long long, double>>& history
+) {
+    EntryGateDecision out;
+    out.liq_vol_gate_telemetry_valid = true;
+    out.liq_vol_gate_mode = "legacy_fixed";
+    out.liq_vol_gate_threshold_dynamic = 1.0;
+    out.liq_vol_gate_pass = false;
+    out.liq_vol_gate_low_conf_triggered = false;
+    out.liq_vol_gate_quantile_q = 0.0;
+    out.liq_vol_gate_window_minutes = 0;
+    out.liq_vol_gate_min_samples_required = 0;
+    out.liq_vol_gate_low_conf_action = "hold";
+
+    const double base_liq_min = std::max(0.0, engine_cfg.foundation_entry_base_liquidity_min);
+    const double base_vol_min = std::max(0.0, engine_cfg.foundation_entry_base_volume_surge_min);
+    const double liq_ratio = (base_liq_min > 1e-9)
+        ? (metrics.liquidity_score / base_liq_min)
+        : 1.0;
+    const double vol_ratio = (base_vol_min > 1e-9)
+        ? (metrics.volume_surge_ratio / base_vol_min)
+        : 1.0;
+    out.liq_vol_gate_observed = std::clamp(
+        std::min(std::max(0.0, liq_ratio), std::max(0.0, vol_ratio)),
+        0.0,
+        1.0e9
+    );
+
+    const bool legacy_pass = out.liq_vol_gate_observed >= 1.0;
+    const auto& policy = metrics.liq_vol_gate_policy;
+    const std::string mode = policy.enabled ? policy.mode : "legacy_fixed";
+    const bool dynamic_mode = policy.enabled && mode == "quantile_dynamic";
+    if (!dynamic_mode) {
+        out.liq_vol_gate_mode = "legacy_fixed";
+        out.liq_vol_gate_pass = legacy_pass;
+        out.pass = legacy_pass;
+        return out;
+    }
+
+    const int window_minutes = std::clamp(policy.window_minutes, 1, 24 * 60);
+    const int min_samples_required = std::clamp(policy.min_samples_required, 1, 200000);
+    const double quantile_q = std::clamp(policy.quantile_q, 0.0, 1.0);
+    std::string low_conf_action = policy.low_conf_action;
+    std::transform(
+        low_conf_action.begin(),
+        low_conf_action.end(),
+        low_conf_action.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); }
+    );
+    if (low_conf_action != "fallback_legacy") {
+        low_conf_action = "hold";
+    }
+
+    out.liq_vol_gate_mode = "quantile_dynamic";
+    out.liq_vol_gate_quantile_q = quantile_q;
+    out.liq_vol_gate_window_minutes = window_minutes;
+    out.liq_vol_gate_min_samples_required = min_samples_required;
+    out.liq_vol_gate_low_conf_action = low_conf_action;
+
+    const long long now_ms = static_cast<long long>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()
+        ).count()
+    );
+    const long long window_ms = static_cast<long long>(window_minutes) * 60LL * 1000LL;
+    while (!history.empty() && (now_ms - history.front().first) > window_ms) {
+        history.pop_front();
+    }
+    history.emplace_back(now_ms, out.liq_vol_gate_observed);
+    out.liq_vol_gate_history_count = static_cast<int>(history.size());
+
+    if (out.liq_vol_gate_history_count < min_samples_required) {
+        out.liq_vol_gate_low_conf_triggered = true;
+        out.liq_vol_gate_threshold_dynamic = 1.0;
+        out.liq_vol_gate_pass =
+            (low_conf_action == "fallback_legacy") ? legacy_pass : false;
+        out.pass = out.liq_vol_gate_pass;
+        return out;
+    }
+
+    std::vector<double> values;
+    values.reserve(history.size());
+    for (const auto& row : history) {
+        values.push_back(row.second);
+    }
+    std::sort(values.begin(), values.end());
+    out.liq_vol_gate_threshold_dynamic =
+        std::max(0.0, quantileFromSorted(values, quantile_q));
+    out.liq_vol_gate_pass = out.liq_vol_gate_observed >= out.liq_vol_gate_threshold_dynamic;
+    out.pass = out.liq_vol_gate_pass;
+    return out;
+}
+
+EntryGateDecision evaluateBearReboundGuard(
+    const analytics::CoinMetrics& metrics,
+    double legacy_threshold,
+    std::deque<std::pair<long long, double>>& history
+) {
+    EntryGateDecision out;
+    out.bear_rebound_guard_telemetry_valid = true;
+    out.bear_rebound_guard_mode = "legacy_fixed";
+    out.bear_rebound_threshold_dynamic = 1.0;
+    out.bear_rebound_pass = false;
+    out.bear_rebound_low_conf_triggered = false;
+    out.bear_rebound_quantile_q = 0.0;
+    out.bear_rebound_window_minutes = 0;
+    out.bear_rebound_min_samples_required = 0;
+    out.bear_rebound_low_conf_action = "hold";
+
+    const double sell = std::max(0.0, metrics.sell_pressure);
+    const double buy = std::max(0.0, metrics.buy_pressure);
+    out.bear_rebound_observed =
+        (sell > 1e-9) ? std::clamp(buy / sell, 0.0, 1.0e9) : std::clamp(buy, 0.0, 1.0e9);
+
+    const auto& policy = metrics.bear_rebound_guard_policy;
+    const double static_threshold = std::max(0.0, legacy_threshold);
+    const bool legacy_pass = out.bear_rebound_observed >= static_threshold;
+    const std::string mode = policy.enabled ? policy.mode : "legacy_fixed";
+    const bool dynamic_mode = policy.enabled && mode == "quantile_dynamic";
+    if (!dynamic_mode) {
+        out.bear_rebound_guard_mode = "legacy_fixed";
+        out.bear_rebound_threshold_dynamic = static_threshold;
+        out.bear_rebound_pass = legacy_pass;
+        out.pass = out.bear_rebound_pass;
+        return out;
+    }
+
+    const int window_minutes = std::clamp(policy.window_minutes, 1, 24 * 60);
+    const int min_samples_required = std::clamp(policy.min_samples_required, 1, 200000);
+    const double quantile_q = std::clamp(policy.quantile_q, 0.0, 1.0);
+    std::string low_conf_action = policy.low_conf_action;
+    std::transform(
+        low_conf_action.begin(),
+        low_conf_action.end(),
+        low_conf_action.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); }
+    );
+    if (low_conf_action != "fallback_legacy") {
+        low_conf_action = "hold";
+    }
+    out.bear_rebound_guard_mode = "quantile_dynamic";
+    out.bear_rebound_quantile_q = quantile_q;
+    out.bear_rebound_window_minutes = window_minutes;
+    out.bear_rebound_min_samples_required = min_samples_required;
+    out.bear_rebound_low_conf_action = low_conf_action;
+
+    const long long now_ms = static_cast<long long>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()
+        ).count()
+    );
+    const long long window_ms = static_cast<long long>(window_minutes) * 60LL * 1000LL;
+    while (!history.empty() && (now_ms - history.front().first) > window_ms) {
+        history.pop_front();
+    }
+    history.emplace_back(now_ms, out.bear_rebound_observed);
+    out.bear_rebound_history_count = static_cast<int>(history.size());
+
+    if (out.bear_rebound_history_count < min_samples_required) {
+        out.bear_rebound_low_conf_triggered = true;
+        out.bear_rebound_threshold_dynamic = static_threshold;
+        out.bear_rebound_pass =
+            (low_conf_action == "fallback_legacy") ? legacy_pass : false;
+        out.pass = out.bear_rebound_pass;
+        return out;
+    }
+
+    std::vector<double> values;
+    values.reserve(history.size());
+    for (const auto& row : history) {
+        values.push_back(row.second);
+    }
+    std::sort(values.begin(), values.end());
+    out.bear_rebound_threshold_dynamic =
+        std::max(0.0, quantileFromSorted(values, quantile_q));
+    out.bear_rebound_pass =
+        out.bear_rebound_observed >= out.bear_rebound_threshold_dynamic;
+    out.pass = out.bear_rebound_pass;
+    return out;
+}
 
 EntryGateDecision evaluateEntryGate(
     const analytics::CoinMetrics& metrics,
@@ -419,15 +651,42 @@ EntryGateDecision evaluateEntryGate(
     double ema_slow,
     double rsi,
     double bb_middle,
-    analytics::MarketRegime regime
+    analytics::MarketRegime regime,
+    std::deque<std::pair<long long, double>>& liq_vol_gate_history,
+    std::deque<std::pair<long long, double>>& bear_rebound_guard_history
 ) {
     EntryGateDecision decision;
     const auto& engine_cfg = autolife::Config::getInstance().getEngineConfig();
-    const bool base_liquidity_pass = (
-        metrics.liquidity_score >= std::max(0.0, engine_cfg.foundation_entry_base_liquidity_min) &&
-        metrics.volume_surge_ratio >=
-            std::max(0.0, engine_cfg.foundation_entry_base_volume_surge_min)
+    const auto& structure_policy = metrics.foundation_structure_gate_policy;
+    const bool structure_relax_enabled =
+        structure_policy.enabled &&
+        structure_policy.mode == "trend_only_relax" &&
+        (regime == analytics::MarketRegime::TRENDING_UP ||
+         regime == analytics::MarketRegime::TRENDING_DOWN);
+    const double structure_relax_delta =
+        structure_relax_enabled ? std::clamp(structure_policy.relax_delta, 0.0, 1.0) : 0.0;
+    decision.structure_gate_telemetry_valid = true;
+    decision.structure_gate_mode = structure_relax_enabled ? "trend_only_relax" : "legacy_fixed";
+    decision.structure_gate_observed_score = metrics.order_book_imbalance;
+    decision.structure_gate_relax_applied = structure_relax_enabled;
+    decision.structure_gate_relax_delta = structure_relax_delta;
+    const EntryGateDecision liq_vol_gate = evaluateLiqVolGate(
+        metrics,
+        engine_cfg,
+        liq_vol_gate_history
     );
+    decision.liq_vol_gate_telemetry_valid = liq_vol_gate.liq_vol_gate_telemetry_valid;
+    decision.liq_vol_gate_mode = liq_vol_gate.liq_vol_gate_mode;
+    decision.liq_vol_gate_observed = liq_vol_gate.liq_vol_gate_observed;
+    decision.liq_vol_gate_threshold_dynamic = liq_vol_gate.liq_vol_gate_threshold_dynamic;
+    decision.liq_vol_gate_history_count = liq_vol_gate.liq_vol_gate_history_count;
+    decision.liq_vol_gate_pass = liq_vol_gate.liq_vol_gate_pass;
+    decision.liq_vol_gate_low_conf_triggered = liq_vol_gate.liq_vol_gate_low_conf_triggered;
+    decision.liq_vol_gate_quantile_q = liq_vol_gate.liq_vol_gate_quantile_q;
+    decision.liq_vol_gate_window_minutes = liq_vol_gate.liq_vol_gate_window_minutes;
+    decision.liq_vol_gate_min_samples_required = liq_vol_gate.liq_vol_gate_min_samples_required;
+    decision.liq_vol_gate_low_conf_action = liq_vol_gate.liq_vol_gate_low_conf_action;
+    const bool base_liquidity_pass = liq_vol_gate.pass;
     const bool non_hostile_regime =
         regime != analytics::MarketRegime::HIGH_VOLATILITY &&
         regime != analytics::MarketRegime::TRENDING_DOWN;
@@ -607,6 +866,12 @@ EntryGateDecision evaluateEntryGate(
             const double ret3 = rollingReturn(closes, 3);
             const double ret5 = rollingReturn(closes, 5);
             const double ret20 = rollingReturn(closes, 20);
+            const double base_imbalance_before =
+                engine_cfg.foundation_entry_uptrend_base_imbalance_min;
+            const double relief_imbalance_before =
+                engine_cfg.foundation_entry_uptrend_relief_imbalance_min;
+            const double base_imbalance_after = base_imbalance_before - structure_relax_delta;
+            const double relief_imbalance_after = relief_imbalance_before - structure_relax_delta;
             const double ret20_floor =
                 (metrics.liquidity_score >= engine_cfg.foundation_entry_uptrend_ret20_floor_liquidity_pivot)
                     ? engine_cfg.foundation_entry_uptrend_ret20_floor_high_liq
@@ -622,7 +887,7 @@ EntryGateDecision evaluateEntryGate(
                 rsi >= engine_cfg.foundation_entry_uptrend_base_rsi_min &&
                 rsi <= engine_cfg.foundation_entry_uptrend_base_rsi_max &&
                 metrics.order_book_imbalance >
-                    engine_cfg.foundation_entry_uptrend_base_imbalance_min &&
+                    base_imbalance_after &&
                 metrics.buy_pressure >=
                     (metrics.sell_pressure *
                      engine_cfg.foundation_entry_uptrend_base_buy_pressure_ratio_min) &&
@@ -643,12 +908,17 @@ EntryGateDecision evaluateEntryGate(
                 rsi >= engine_cfg.foundation_entry_uptrend_relief_rsi_min &&
                 rsi <= engine_cfg.foundation_entry_uptrend_relief_rsi_max &&
                 metrics.order_book_imbalance >
-                    engine_cfg.foundation_entry_uptrend_relief_imbalance_min &&
+                    relief_imbalance_after &&
                 metrics.buy_pressure >=
                     (metrics.sell_pressure *
                      engine_cfg.foundation_entry_uptrend_relief_buy_pressure_ratio_min) &&
                 ret5 >= engine_cfg.foundation_entry_uptrend_relief_ret5_min &&
                 ret20 >= (ret20_floor + engine_cfg.foundation_entry_uptrend_relief_ret20_offset);
+            decision.structure_gate_threshold_before =
+                thin_uptrend_structure_relief_context ? relief_imbalance_before : base_imbalance_before;
+            decision.structure_gate_threshold_after =
+                thin_uptrend_structure_relief_context ? relief_imbalance_after : base_imbalance_after;
+            decision.structure_gate_pass = base_structure_ok || relaxed_structure_ok;
             if ((!base_structure_ok && !relaxed_structure_ok) || overextended_uptrend) {
                 decision.reject_reason = "foundation_no_signal_uptrend_structure";
                 return decision;
@@ -687,6 +957,10 @@ EntryGateDecision evaluateEntryGate(
             return decision;
         }
         case analytics::MarketRegime::RANGING:
+            decision.structure_gate_threshold_before =
+                engine_cfg.foundation_entry_ranging_structure_imbalance_min;
+            decision.structure_gate_threshold_after = decision.structure_gate_threshold_before;
+            decision.structure_gate_pass = false;
             if (!(current_price <=
                       bb_middle * engine_cfg.foundation_entry_ranging_structure_price_to_bb_middle_max &&
                   rsi <= engine_cfg.foundation_entry_ranging_structure_rsi_max &&
@@ -706,22 +980,56 @@ EntryGateDecision evaluateEntryGate(
                         (metrics.sell_pressure *
                          engine_cfg.foundation_entry_ranging_relief_buy_pressure_ratio_min);
                 if (narrow_ranging_relief) {
+                    decision.structure_gate_pass = true;
                     decision.pass = true;
                     return decision;
                 }
                 decision.reject_reason = "foundation_no_signal_ranging_structure";
                 return decision;
             }
+            decision.structure_gate_pass = true;
             decision.pass = true;
             return decision;
         case analytics::MarketRegime::TRENDING_DOWN:
-        case analytics::MarketRegime::HIGH_VOLATILITY:
+        case analytics::MarketRegime::HIGH_VOLATILITY: {
+            const double hostile_buy_ratio_observed =
+                (metrics.sell_pressure > 1e-9)
+                    ? (metrics.buy_pressure / metrics.sell_pressure)
+                    : metrics.buy_pressure;
+            const double hostile_buy_ratio_before =
+                engine_cfg.foundation_entry_hostile_bear_rebound_buy_pressure_ratio_min;
+            const double hostile_buy_ratio_after =
+                (regime == analytics::MarketRegime::TRENDING_DOWN)
+                    ? std::max(0.0, hostile_buy_ratio_before - structure_relax_delta)
+                    : hostile_buy_ratio_before;
+            decision.structure_gate_observed_score = hostile_buy_ratio_observed;
+            decision.structure_gate_threshold_before = hostile_buy_ratio_before;
+            decision.structure_gate_threshold_after = hostile_buy_ratio_after;
+            decision.structure_gate_pass = hostile_buy_ratio_observed >= hostile_buy_ratio_after;
+            const EntryGateDecision bear_rebound_guard = evaluateBearReboundGuard(
+                metrics,
+                hostile_buy_ratio_after,
+                bear_rebound_guard_history
+            );
+            decision.bear_rebound_guard_telemetry_valid =
+                bear_rebound_guard.bear_rebound_guard_telemetry_valid;
+            decision.bear_rebound_guard_mode = bear_rebound_guard.bear_rebound_guard_mode;
+            decision.bear_rebound_observed = bear_rebound_guard.bear_rebound_observed;
+            decision.bear_rebound_threshold_dynamic =
+                bear_rebound_guard.bear_rebound_threshold_dynamic;
+            decision.bear_rebound_history_count = bear_rebound_guard.bear_rebound_history_count;
+            decision.bear_rebound_pass = bear_rebound_guard.bear_rebound_pass;
+            decision.bear_rebound_low_conf_triggered =
+                bear_rebound_guard.bear_rebound_low_conf_triggered;
+            decision.bear_rebound_quantile_q = bear_rebound_guard.bear_rebound_quantile_q;
+            decision.bear_rebound_window_minutes = bear_rebound_guard.bear_rebound_window_minutes;
+            decision.bear_rebound_min_samples_required =
+                bear_rebound_guard.bear_rebound_min_samples_required;
+            decision.bear_rebound_low_conf_action = bear_rebound_guard.bear_rebound_low_conf_action;
             if (!(rsi <= engine_cfg.foundation_entry_hostile_bear_rebound_rsi_max &&
                   current_price >
                       ema_fast * engine_cfg.foundation_entry_hostile_bear_rebound_price_to_ema_fast_min &&
-                  metrics.buy_pressure >=
-                      (metrics.sell_pressure *
-                       engine_cfg.foundation_entry_hostile_bear_rebound_buy_pressure_ratio_min) &&
+                  bear_rebound_guard.pass &&
                   metrics.liquidity_score >=
                       engine_cfg.foundation_entry_hostile_bear_rebound_liquidity_min &&
                   metrics.volume_surge_ratio >=
@@ -729,10 +1037,17 @@ EntryGateDecision evaluateEntryGate(
                 decision.reject_reason = "foundation_no_signal_bear_rebound_guard";
                 return decision;
             }
+            decision.structure_gate_pass = true;
             decision.pass = true;
             return decision;
+        }
         case analytics::MarketRegime::UNKNOWN:
         default:
+            decision.structure_gate_threshold_before =
+                engine_cfg.foundation_entry_unknown_structure_imbalance_min;
+            decision.structure_gate_threshold_after = decision.structure_gate_threshold_before;
+            decision.structure_gate_pass =
+                metrics.order_book_imbalance > decision.structure_gate_threshold_after;
             if (!(current_price >
                       ema_fast * engine_cfg.foundation_entry_unknown_structure_price_to_ema_fast_min &&
                   rsi < engine_cfg.foundation_entry_unknown_structure_rsi_max &&
@@ -761,7 +1076,9 @@ EntryEvaluationSnapshot evaluateEntrySnapshot(
     const analytics::CoinMetrics& metrics,
     const std::vector<Candle>& candles,
     double current_price,
-    analytics::MarketRegime regime
+    analytics::MarketRegime regime,
+    std::deque<std::pair<long long, double>>& liq_vol_gate_history,
+    std::deque<std::pair<long long, double>>& bear_rebound_guard_history
 ) {
     EntryEvaluationSnapshot snapshot;
     const auto& engine_cfg = autolife::Config::getInstance().getEngineConfig();
@@ -802,7 +1119,9 @@ EntryEvaluationSnapshot evaluateEntrySnapshot(
         snapshot.ema_slow,
         snapshot.rsi,
         snapshot.bb_middle,
-        regime
+        regime,
+        liq_vol_gate_history,
+        bear_rebound_guard_history
     );
     if (!snapshot.entry_gate.pass) {
         snapshot.reject_reason = snapshot.entry_gate.reject_reason;
@@ -868,13 +1187,45 @@ Signal FoundationAdaptiveStrategy::generateSignal(
         metrics,
         candles,
         current_price,
-        regime.regime
+        regime.regime,
+        liq_vol_gate_history_,
+        bear_rebound_guard_history_
     );
+    const EntryGateDecision& entry_gate = entry_snapshot.entry_gate;
+    signal.phase3.liq_vol_gate_telemetry_valid = entry_gate.liq_vol_gate_telemetry_valid;
+    signal.phase3.liq_vol_gate_mode = entry_gate.liq_vol_gate_mode;
+    signal.phase3.liq_vol_gate_observed = entry_gate.liq_vol_gate_observed;
+    signal.phase3.liq_vol_gate_threshold_dynamic = entry_gate.liq_vol_gate_threshold_dynamic;
+    signal.phase3.liq_vol_gate_history_count = entry_gate.liq_vol_gate_history_count;
+    signal.phase3.liq_vol_gate_pass = entry_gate.liq_vol_gate_pass;
+    signal.phase3.liq_vol_gate_low_conf_triggered = entry_gate.liq_vol_gate_low_conf_triggered;
+    signal.phase3.liq_vol_gate_quantile_q = entry_gate.liq_vol_gate_quantile_q;
+    signal.phase3.liq_vol_gate_window_minutes = entry_gate.liq_vol_gate_window_minutes;
+    signal.phase3.liq_vol_gate_min_samples_required = entry_gate.liq_vol_gate_min_samples_required;
+    signal.phase3.liq_vol_gate_low_conf_action = entry_gate.liq_vol_gate_low_conf_action;
+    signal.phase3.structure_gate_telemetry_valid = entry_gate.structure_gate_telemetry_valid;
+    signal.phase3.structure_gate_mode = entry_gate.structure_gate_mode;
+    signal.phase3.structure_gate_observed_score = entry_gate.structure_gate_observed_score;
+    signal.phase3.structure_gate_threshold_before = entry_gate.structure_gate_threshold_before;
+    signal.phase3.structure_gate_threshold_after = entry_gate.structure_gate_threshold_after;
+    signal.phase3.structure_gate_pass = entry_gate.structure_gate_pass;
+    signal.phase3.structure_gate_relax_applied = entry_gate.structure_gate_relax_applied;
+    signal.phase3.structure_gate_relax_delta = entry_gate.structure_gate_relax_delta;
+    signal.phase3.bear_rebound_guard_telemetry_valid = entry_gate.bear_rebound_guard_telemetry_valid;
+    signal.phase3.bear_rebound_guard_mode = entry_gate.bear_rebound_guard_mode;
+    signal.phase3.bear_rebound_observed = entry_gate.bear_rebound_observed;
+    signal.phase3.bear_rebound_threshold_dynamic = entry_gate.bear_rebound_threshold_dynamic;
+    signal.phase3.bear_rebound_history_count = entry_gate.bear_rebound_history_count;
+    signal.phase3.bear_rebound_pass = entry_gate.bear_rebound_pass;
+    signal.phase3.bear_rebound_low_conf_triggered = entry_gate.bear_rebound_low_conf_triggered;
+    signal.phase3.bear_rebound_quantile_q = entry_gate.bear_rebound_quantile_q;
+    signal.phase3.bear_rebound_window_minutes = entry_gate.bear_rebound_window_minutes;
+    signal.phase3.bear_rebound_min_samples_required = entry_gate.bear_rebound_min_samples_required;
+    signal.phase3.bear_rebound_low_conf_action = entry_gate.bear_rebound_low_conf_action;
     if (!entry_snapshot.pass) {
         signal.reason = entry_snapshot.reject_reason;
         return signal;
     }
-    const EntryGateDecision& entry_gate = entry_snapshot.entry_gate;
     const MtfConfirmation& mtf_confirmation = entry_snapshot.mtf_confirmation;
     const double ema_fast = entry_snapshot.ema_fast;
     const double ema_slow = entry_snapshot.ema_slow;
@@ -1193,6 +1544,7 @@ bool FoundationAdaptiveStrategy::shouldEnter(
     double current_price,
     const analytics::RegimeAnalysis& regime
 ) {
+    std::lock_guard<std::mutex> lock(mutex_);
     (void)market;
     if (!enabled_ || current_price <= 0.0 || candles.size() < 80) {
         return false;
@@ -1201,7 +1553,9 @@ bool FoundationAdaptiveStrategy::shouldEnter(
         metrics,
         candles,
         current_price,
-        regime.regime
+        regime.regime,
+        liq_vol_gate_history_,
+        bear_rebound_guard_history_
     );
     return entry_snapshot.pass;
 }
