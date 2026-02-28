@@ -1,7 +1,7 @@
 # Strict Gate Runbook (Roadmap Locked, 2026-02-27)
 
 ## Purpose
-- This document is the operational single source of truth for Stage B to Stage E execution.
+- This document is the operational single source of truth for Stage B to Stage F execution.
 - Keep only the actionable roadmap content needed for repeatable execution across contexts.
 - Historical A1-A22 implementation logs are intentionally trimmed from this runbook.
 
@@ -29,6 +29,8 @@
 - Stage C v2 lock:
   - `phase3.regime_entry_disable.RANGING=true`
   - non-RANGING regimes remain `false`
+- Stage F3 lock:
+  - `phase3.exit.strategy_exit_mode="observe_only"`
 
 ### Backtest
 - Split manifest: `build/Release/logs/time_split_manifest_r21_prefix.json`
@@ -52,7 +54,7 @@
 - Commit hash is excluded from hard lock.
 - Code version is managed by `HEAD at run time + runbook snapshot`.
 - Commit hash is recorded only in experiment logs/artifacts.
-- Current semantic code tag: `CODE_VERSION: StageD_v1_ranging_shadow_mode`
+- Current semantic code tag: `CODE_VERSION: StageF3_strategy_exit_observe_only`
 - Optional tracking:
   - semantic code tag (for example, `CODE_VERSION: StageB_semantics_lock`)
   - `git describe --tags` in logs (not a hard-lock condition)
@@ -95,14 +97,15 @@
 - `semantics_lock_report.json` is `OK`
 - commit note explicitly states `refactor-only` and no numeric logic change
 
-## 3) Stage Map (A -> E)
+## 3) Stage Map (A -> F)
 - Stage A: Consistency/gate/aggregation normalization (completed, recheck only).
 - Stage B: Cost/label/edge semantics alignment (highest priority now).
 - Stage C: First regime mode-switch (no new strategy).
 - Stage D: Optional ranging-only strategy or model split.
 - Stage E: Paper 24-72h promotion and Live readiness (after strict parity fix).
+- Stage F: Entry/exit structure deep-dive and single-axis exit hardening.
 
-Current focus (2026-02-27): Stage E operations mode (`RANGING real-entry OFF`, `TRENDING-only real execution`, `RANGING shadow accumulation ON`).
+Current focus (2026-02-28): Stage F3 (`strategy_exit observe_only`, telemetry evidence required).
 
 ## 4) Stage A Recheck (Already Implemented)
 - A1 split real separation applied in `run_verification` main loop.

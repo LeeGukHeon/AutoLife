@@ -173,6 +173,7 @@ struct ProbabilisticRuntimeSnapshot {
     bool phase3_diagnostics_v2_enabled = false;
     bool phase3_regime_entry_disable_enabled = false;
     bool phase3_disable_ranging_entry = false;
+    std::string phase3_strategy_exit_mode = "enforce";
     std::map<std::string, bool> phase3_regime_entry_disable;
     bool phase4_portfolio_allocator_enabled = false;
     bool phase4_correlation_control_enabled = false;
@@ -636,6 +637,7 @@ bool inferProbabilisticRuntimeSnapshot(
     out_snapshot.phase3_diagnostics_v2_enabled = inference.phase3_diagnostics_v2_enabled;
     out_snapshot.phase3_regime_entry_disable_enabled = phase3_policy.regime_entry_disable_enabled;
     out_snapshot.phase3_disable_ranging_entry = phase3_policy.disable_ranging_entry;
+    out_snapshot.phase3_strategy_exit_mode = phase3_policy.exit.strategy_exit_mode;
     out_snapshot.phase3_regime_entry_disable.clear();
     for (const auto& kv : phase3_policy.regime_entry_disable) {
         out_snapshot.phase3_regime_entry_disable[kv.first] = kv.second;
@@ -3241,6 +3243,8 @@ void TradingEngine::generateSignals() {
                 probabilistic_snapshot.phase3_regime_entry_disable_enabled;
             live_signal_funnel_.regime_entry_disable =
                 probabilistic_snapshot.phase3_regime_entry_disable;
+            live_signal_funnel_.strategy_exit_mode_effective =
+                probabilistic_snapshot.phase3_strategy_exit_mode;
 
             if (!signals.empty()) {
                 std::vector<strategy::Signal> adjusted_signals;
@@ -3881,6 +3885,17 @@ void TradingEngine::flushLiveSignalFunnelTaxonomyReport(
             {"low_conf", sample.low_conf},
         });
     }
+    nlohmann::json strategy_exit_trigger_samples = nlohmann::json::array();
+    for (const auto& sample : snapshot.strategy_exit_trigger_samples) {
+        strategy_exit_trigger_samples.push_back({
+            {"ts_ms", sample.ts_ms},
+            {"market", sample.market},
+            {"regime", sample.regime},
+            {"unrealized_pnl_at_trigger", sample.unrealized_pnl_at_trigger},
+            {"holding_time_seconds", sample.holding_time_seconds},
+            {"reason_code", sample.reason_code},
+        });
+    }
 
     nlohmann::json report;
     report["updated_at_ms"] = getCurrentTimestampMs();
@@ -3949,6 +3964,15 @@ void TradingEngine::flushLiveSignalFunnelTaxonomyReport(
         {"observed_mean", bear_rebound_guard_observed_mean},
         {"threshold_dynamic_mean", bear_rebound_guard_threshold_mean},
         {"samples", bear_rebound_guard_samples},
+    };
+    report["strategy_exit"] = {
+        {"mode_effective", snapshot.strategy_exit_mode_effective},
+        {"strategy_exit_triggered_count", snapshot.strategy_exit_triggered_count},
+        {"strategy_exit_observe_only_suppressed_count",
+         snapshot.strategy_exit_observe_only_suppressed_count},
+        {"strategy_exit_triggered_by_market", snapshot.strategy_exit_triggered_by_market},
+        {"strategy_exit_triggered_by_regime", snapshot.strategy_exit_triggered_by_regime},
+        {"strategy_exit_trigger_samples", strategy_exit_trigger_samples},
     };
     report["markets_with_selected_candidate"] = snapshot.markets_with_selected_candidate;
     report["generated_signal_candidates"] = snapshot.generated_signal_candidates;
@@ -5309,6 +5333,10 @@ void TradingEngine::monitorPositions() {
 
     static int log_counter = 0;
     bool should_log = (log_counter++ % 10 == 0);
+    const auto& phase3_policy = probabilistic_runtime_model_.phase3Policy();
+    const bool strategy_exit_observe_only =
+        phase3_policy.exit.strategy_exit_mode == "observe_only";
+    live_signal_funnel_.strategy_exit_mode_effective = phase3_policy.exit.strategy_exit_mode;
 
     // 1. ????????좎럡?썹땟戮녹???좎럩?????좎?留????????????좎럥諭??????????????좎럥??????????좎럡??????????????????좎럥큔??????????????좎럥큔????????좎럥釉뜹뜝???좎뜾異?에?吏?????좎럩肉???????????????????????됰Ŧ?????????耀붾굝?????????좎떊?곷퉲????좎럥?????????
     auto positions = risk_manager_->getAllPositions();
@@ -5414,21 +5442,56 @@ void TradingEngine::monitorPositions() {
         risk_manager_->applyAdaptiveRiskControls(pos.market);
         updated_pos = risk_manager_->getPosition(pos.market);
         if (!updated_pos) continue;
+        const long long now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()
+        ).count();
+        const double holding_time_seconds = (now_ms - updated_pos->entry_time) / 1000.0;
+        bool strategy_exit_trigger_recorded = false;
+        bool strategy_exit_suppressed_this_loop = false;
+        auto record_strategy_exit_trigger = [&](const char* reason_code) {
+            if (strategy_exit_trigger_recorded) {
+                return;
+            }
+            strategy_exit_trigger_recorded = true;
+            live_signal_funnel_.strategy_exit_triggered_count++;
+            live_signal_funnel_.strategy_exit_triggered_by_market[pos.market]++;
+            const std::string regime_key = regimeToString(updated_pos->market_regime);
+            live_signal_funnel_.strategy_exit_triggered_by_regime[regime_key]++;
+            if (live_signal_funnel_.strategy_exit_trigger_samples.size() < 10) {
+                LiveSignalFunnelTelemetry::StrategyExitTriggerSample sample;
+                sample.ts_ms = now_ms;
+                sample.market = pos.market;
+                sample.regime = regime_key;
+                sample.unrealized_pnl_at_trigger = updated_pos->unrealized_pnl;
+                sample.holding_time_seconds = holding_time_seconds;
+                sample.reason_code = reason_code == nullptr ? std::string() : std::string(reason_code);
+                live_signal_funnel_.strategy_exit_trigger_samples.push_back(std::move(sample));
+            }
+        };
 
         // --- ??????좎럥큔?????????????됰엨?????????????????븍툖??????(????????좎럡?썹땟戮녹???좎럩?????좎?留??????????????????????????????) ---
 
 
         // ????????좎럡?썹땟戮녹???좎럩?????좎?留??????????????????????????(?????????????????
         if (strategy) {
-            long long now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::system_clock::now().time_since_epoch()
-            ).count();
-            double holding_time_seconds = (now_ms - updated_pos->entry_time) / 1000.0;
 
             if (strategy->shouldExit(pos.market, updated_pos->entry_price, current_price, holding_time_seconds)) {
                 LOG_INFO("??????熬곣뫖利닷뜝??좎룞?쇿뜝????????????????????????黎앸럽?????沃섃넄??????? {} (??????熬곣뫖利닷뜝??좎룞?쇿뜝?? {})", pos.market, updated_pos->strategy_name);
-                executeSellOrder(pos.market, *updated_pos, "strategy_exit", current_price);
-                continue;
+                record_strategy_exit_trigger("strategy_should_exit");
+                if (strategy_exit_observe_only) {
+                    strategy_exit_suppressed_this_loop = true;
+                    live_signal_funnel_.strategy_exit_observe_only_suppressed_count++;
+                    LOG_INFO(
+                        "{} strategy_exit observe_only suppress: strategy={} holding_sec={:.1f} unrealized_pnl={:+.0f}",
+                        pos.market,
+                        updated_pos->strategy_name,
+                        holding_time_seconds,
+                        updated_pos->unrealized_pnl
+                    );
+                } else {
+                    executeSellOrder(pos.market, *updated_pos, "strategy_exit", current_price);
+                    continue;
+                }
             }
         }
 
@@ -5454,6 +5517,19 @@ void TradingEngine::monitorPositions() {
                 reason = "strategy_exit"; // ????????좎럡?썹땟戮녹???좎럩?????좎?留?????????????????????⑥ъ８???????????좎럡萸?????(TS ??
             }
             
+            if (reason == "strategy_exit" && strategy_exit_observe_only) {
+                if (!strategy_exit_suppressed_this_loop) {
+                    record_strategy_exit_trigger("risk_manager_should_exit");
+                    live_signal_funnel_.strategy_exit_observe_only_suppressed_count++;
+                }
+                LOG_INFO(
+                    "{} strategy_exit observe_only suppress (risk_manager): holding_sec={:.1f} unrealized_pnl={:+.0f}",
+                    pos.market,
+                    holding_time_seconds,
+                    updated_pos->unrealized_pnl
+                );
+                continue;
+            }
             executeSellOrder(pos.market, *updated_pos, reason, current_price);
         }
     }

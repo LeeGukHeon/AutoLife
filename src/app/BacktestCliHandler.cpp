@@ -274,6 +274,17 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
         {"current_tp2_hits", result.strategyless_current_tp2_hits}
     };
 
+    nlohmann::json strategy_exit_trigger_samples = nlohmann::json::array();
+    for (const auto& sample : result.entry_funnel.strategy_exit_trigger_samples) {
+        strategy_exit_trigger_samples.push_back({
+            {"ts_ms", sample.ts_ms},
+            {"market", sample.market},
+            {"regime", sample.regime},
+            {"unrealized_pnl_at_trigger", sample.unrealized_pnl_at_trigger},
+            {"holding_time_seconds", sample.holding_time_seconds},
+            {"reason_code", sample.reason_code}
+        });
+    }
     j["entry_funnel"] = {
         {"entry_rounds", result.entry_funnel.entry_rounds},
         {"skipped_due_to_open_position", result.entry_funnel.skipped_due_to_open_position},
@@ -290,6 +301,15 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
          result.entry_funnel.regime_entry_disable_enabled},
         {"regime_entry_disable",
          result.entry_funnel.regime_entry_disable},
+        {"strategy_exit_mode_effective", result.entry_funnel.strategy_exit_mode_effective},
+        {"strategy_exit_triggered_count", result.entry_funnel.strategy_exit_triggered_count},
+        {"strategy_exit_observe_only_suppressed_count",
+         result.entry_funnel.strategy_exit_observe_only_suppressed_count},
+        {"strategy_exit_triggered_by_market",
+         result.entry_funnel.strategy_exit_triggered_by_market},
+        {"strategy_exit_triggered_by_regime",
+         result.entry_funnel.strategy_exit_triggered_by_regime},
+        {"strategy_exit_trigger_samples", strategy_exit_trigger_samples},
         {"no_best_signal", result.entry_funnel.no_best_signal},
         {"blocked_pattern_gate", result.entry_funnel.blocked_pattern_gate},
         {"blocked_rr_rebalance", result.entry_funnel.blocked_rr_rebalance},

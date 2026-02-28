@@ -432,6 +432,9 @@ public:
         std::string low_conf_action = "hold";
         double static_threshold = 1.0;
     };
+    struct Phase3ExitPolicy {
+        std::string strategy_exit_mode = "enforce";
+    };
 
     struct Phase3Policy {
         bool phase3_frontier_enabled = false;
@@ -455,6 +458,7 @@ public:
         Phase3LiquidityVolumeGatePolicy liq_vol_gate;
         Phase3FoundationStructureGatePolicy foundation_structure_gate;
         Phase3BearReboundGuardPolicy bear_rebound_guard;
+        Phase3ExitPolicy exit;
     };
 
     struct Phase4Policy {

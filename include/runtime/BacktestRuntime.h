@@ -98,6 +98,20 @@ public:
             std::map<std::string, int> reject_regime_entry_disabled_by_regime;
             bool regime_entry_disable_enabled = false;
             std::map<std::string, bool> regime_entry_disable;
+            std::string strategy_exit_mode_effective = "enforce";
+            int strategy_exit_triggered_count = 0;
+            int strategy_exit_observe_only_suppressed_count = 0;
+            std::map<std::string, int> strategy_exit_triggered_by_market;
+            std::map<std::string, int> strategy_exit_triggered_by_regime;
+            struct StrategyExitTriggerSample {
+                long long ts_ms = 0;
+                std::string market;
+                std::string regime;
+                double unrealized_pnl_at_trigger = 0.0;
+                double holding_time_seconds = 0.0;
+                std::string reason_code;
+            };
+            std::vector<StrategyExitTriggerSample> strategy_exit_trigger_samples;
             int no_best_signal = 0;
             int blocked_pattern_gate = 0;
             int blocked_rr_rebalance = 0;

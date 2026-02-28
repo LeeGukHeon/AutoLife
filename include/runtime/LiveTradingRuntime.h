@@ -371,6 +371,20 @@ private:
             bool low_conf = false;
         };
         std::vector<BearReboundGuardSample> bear_rebound_guard_samples;
+        std::string strategy_exit_mode_effective = "enforce";
+        long long strategy_exit_triggered_count = 0;
+        long long strategy_exit_observe_only_suppressed_count = 0;
+        std::map<std::string, long long> strategy_exit_triggered_by_market;
+        std::map<std::string, long long> strategy_exit_triggered_by_regime;
+        struct StrategyExitTriggerSample {
+            long long ts_ms = 0;
+            std::string market;
+            std::string regime;
+            double unrealized_pnl_at_trigger = 0.0;
+            double holding_time_seconds = 0.0;
+            std::string reason_code;
+        };
+        std::vector<StrategyExitTriggerSample> strategy_exit_trigger_samples;
         long long markets_with_selected_candidate = 0;
         long long generated_signal_candidates = 0;
         long long selected_signal_candidates = 0;

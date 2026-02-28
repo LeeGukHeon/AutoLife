@@ -720,6 +720,7 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         phase3_root.value("foundation_structure_gate", nlohmann::json::object());
     const auto phase3_bear_rebound_guard_node =
         phase3_root.value("bear_rebound_guard", nlohmann::json::object());
+    const auto phase3_exit_node = phase3_root.value("exit", nlohmann::json::object());
     const auto phase3_regime_entry_disable_node =
         phase3_root.value("regime_entry_disable", nlohmann::json::object());
 
@@ -840,6 +841,17 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         if (!phase3_policy_.bear_rebound_guard.enabled) {
             phase3_policy_.bear_rebound_guard.mode = "legacy_fixed";
         }
+    }
+
+    phase3_policy_.exit = Phase3ExitPolicy{};
+    {
+        std::string strategy_exit_mode = lowerCopy(
+            phase3_exit_node.value("strategy_exit_mode", std::string("enforce"))
+        );
+        if (strategy_exit_mode != "observe_only") {
+            strategy_exit_mode = "enforce";
+        }
+        phase3_policy_.exit.strategy_exit_mode = strategy_exit_mode;
     }
 
     phase3_policy_.disable_ranging_entry = phase3_root.value("disable_ranging_entry", false);

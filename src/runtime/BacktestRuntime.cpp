@@ -321,6 +321,7 @@ struct ProbabilisticRuntimeSnapshot {
     bool phase3_diagnostics_v2_enabled = false;
     bool phase3_regime_entry_disable_enabled = false;
     bool phase3_disable_ranging_entry = false;
+    std::string phase3_strategy_exit_mode = "enforce";
     std::map<std::string, bool> phase3_regime_entry_disable;
     bool phase4_portfolio_allocator_enabled = false;
     bool phase4_correlation_control_enabled = false;
@@ -1017,6 +1018,7 @@ bool inferProbabilisticRuntimeSnapshot(
     out_snapshot.phase3_bear_rebound_guard_policy = phase3_policy.bear_rebound_guard;
     out_snapshot.phase3_regime_entry_disable_enabled = phase3_policy.regime_entry_disable_enabled;
     out_snapshot.phase3_disable_ranging_entry = phase3_policy.disable_ranging_entry;
+    out_snapshot.phase3_strategy_exit_mode = phase3_policy.exit.strategy_exit_mode;
     out_snapshot.phase3_regime_entry_disable.clear();
     for (const auto& kv : phase3_policy.regime_entry_disable) {
         out_snapshot.phase3_regime_entry_disable[kv.first] = kv.second;
@@ -2599,6 +2601,30 @@ void BacktestEngine::processCandle(const Candle& candle) {
         const double net_pnl = exit_value - closed_position.invested_amount - entry_fee - exit_fee;
         strategy->updateStatistics(closed_position.market, net_pnl > 0.0, net_pnl);
     };
+    const std::string strategy_exit_mode_effective =
+        probabilistic_runtime_model_.phase3Policy().exit.strategy_exit_mode;
+    const bool strategy_exit_observe_only = strategy_exit_mode_effective == "observe_only";
+    entry_funnel_.strategy_exit_mode_effective = strategy_exit_mode_effective;
+    auto recordStrategyExitTrigger = [&](const risk::Position& position, const char* reason_code) {
+        entry_funnel_.strategy_exit_triggered_count++;
+        entry_funnel_.strategy_exit_triggered_by_market[position.market]++;
+        const std::string regime_key = marketRegimeLabel(position.market_regime);
+        entry_funnel_.strategy_exit_triggered_by_regime[regime_key]++;
+        if (entry_funnel_.strategy_exit_trigger_samples.size() < 10) {
+            Result::EntryFunnelSummary::StrategyExitTriggerSample sample;
+            sample.ts_ms = toMsTimestamp(candle.timestamp);
+            sample.market = position.market;
+            sample.regime = regime_key;
+            sample.unrealized_pnl_at_trigger =
+                (current_price - position.entry_price) * position.quantity;
+            sample.holding_time_seconds = std::max(
+                0.0,
+                static_cast<double>(sample.ts_ms - position.entry_time) / 1000.0
+            );
+            sample.reason_code = reason_code == nullptr ? std::string() : std::string(reason_code);
+            entry_funnel_.strategy_exit_trigger_samples.push_back(std::move(sample));
+        }
+    };
     
     // 2. Market/Regime Analysis
     auto regime = regime_detector_->analyzeRegime(current_candles_);
@@ -2952,33 +2978,53 @@ void BacktestEngine::processCandle(const Candle& candle) {
                         notifyStrategyClosed(closed_position, tp2_fill);
                         position = nullptr;
                     } else if (should_exit || risk_manager_exit) {
-                        const risk::Position closed_position = *position;
-                        const auto strategy_exit_slippage = computeDynamicSlippageThresholds(
-                            engine_config_,
-                            market_hostility_ewma_,
-                            false,
-                            position->market_regime,
-                            position->signal_strength,
-                            position->liquidity_score,
-                            position->expected_value,
-                            "strategy_exit"
-                        );
-                        const double strategy_exit_fill_slippage = std::min(
-                            exitSlippagePct(engine_config_),
-                            strategy_exit_slippage.max_slippage_pct
-                        );
-                        // Execute Sell
-                        Order order;
-                        order.market = market_name_;
-                        order.side = OrderSide::SELL;
-                        order.volume = position->quantity;
-                        order.price = current_price * (1.0 - strategy_exit_fill_slippage);
-                        order.strategy_name = position->strategy_name;
-                        executeOrder(order, order.price);
-                        const std::string exit_reason = risk_manager_exit ? "RiskManagerExit" : "StrategyExit";
-                        risk_manager_->exitPosition(market_name_, order.price, exit_reason);
-                        notifyStrategyClosed(closed_position, order.price);
-                        position = nullptr;
+                        const char* reason_code = should_exit
+                            ? (risk_manager_exit ? "strategy_and_risk_manager" : "strategy_should_exit")
+                            : "risk_manager_should_exit";
+                        recordStrategyExitTrigger(*position, reason_code);
+                        if (strategy_exit_observe_only) {
+                            entry_funnel_.strategy_exit_observe_only_suppressed_count++;
+                            LOG_INFO(
+                                "Backtest strategy_exit observe_only suppress: market={} reason={} hold_sec={:.1f}",
+                                market_name_,
+                                reason_code,
+                                std::max(
+                                    0.0,
+                                    static_cast<double>(toMsTimestamp(candle.timestamp) - position->entry_time) /
+                                        1000.0
+                                )
+                            );
+                        } else {
+                            const risk::Position closed_position = *position;
+                            const auto strategy_exit_slippage = computeDynamicSlippageThresholds(
+                                engine_config_,
+                                market_hostility_ewma_,
+                                false,
+                                position->market_regime,
+                                position->signal_strength,
+                                position->liquidity_score,
+                                position->expected_value,
+                                "strategy_exit"
+                            );
+                            const double strategy_exit_fill_slippage = std::min(
+                                exitSlippagePct(engine_config_),
+                                strategy_exit_slippage.max_slippage_pct
+                            );
+                            // Execute Sell
+                            Order order;
+                            order.market = market_name_;
+                            order.side = OrderSide::SELL;
+                            order.volume = position->quantity;
+                            order.price = current_price * (1.0 - strategy_exit_fill_slippage);
+                            order.strategy_name = position->strategy_name;
+                            executeOrder(order, order.price);
+                            const std::string exit_reason = risk_manager_exit
+                                ? "RiskManagerExit"
+                                : "StrategyExit";
+                            risk_manager_->exitPosition(market_name_, order.price, exit_reason);
+                            notifyStrategyClosed(closed_position, order.price);
+                            position = nullptr;
+                        }
                     }
                 }
             }
