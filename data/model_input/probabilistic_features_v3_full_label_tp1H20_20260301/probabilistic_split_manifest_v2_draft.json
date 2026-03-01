@@ -1,0 +1,1891 @@
+{
+  "generated_at_utc": "2026-03-01T07:19:17.190067+00:00",
+  "source_manifest_json": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\feature_dataset_manifest.json",
+  "source_manifest_kind": "feature",
+  "source_manifest_version": "prob_features_v2_draft",
+  "cost_model": {
+    "enabled": false,
+    "fee_floor_bps": 6.0,
+    "volatility_weight": 3.0,
+    "range_weight": 1.5,
+    "liquidity_weight": 2.5,
+    "volatility_norm_bps": 50.0,
+    "range_norm_bps": 80.0,
+    "liquidity_ref_ratio": 1.0,
+    "liquidity_penalty_cap": 8.0,
+    "cost_cap_bps": 200.0
+  },
+  "split_policy": {
+    "mode": "walk_forward_time_ordered",
+    "train_ratio": 0.7,
+    "valid_ratio": 0.15,
+    "test_ratio": 0.15,
+    "walk_forward_folds": 3,
+    "random_split_allowed": false
+  },
+  "dataset_count": 49,
+  "datasets": [
+    {
+      "market": "KRW-XRP",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 253647,
+      "from_utc": "2025-08-29T19:59:59.783000+00:00",
+      "to_utc": "2026-02-22T11:15:55.340000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_XRP_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:59:59.783000+00:00",
+          "train_end_utc": "2026-01-09T07:26:56.450000+00:00",
+          "valid_start_utc": "2026-01-09T07:26:56.451000+00:00",
+          "valid_end_utc": "2026-01-31T09:21:25.894000+00:00",
+          "test_start_utc": "2026-01-31T09:21:25.895000+00:00",
+          "test_end_utc": "2026-02-22T11:15:55.338000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:59:59.783000+00:00",
+          "train_end_utc": "2026-01-18T03:24:44.228000+00:00",
+          "valid_start_utc": "2026-01-18T03:24:44.229000+00:00",
+          "valid_end_utc": "2026-02-04T19:20:19.783000+00:00",
+          "test_start_utc": "2026-02-04T19:20:19.784000+00:00",
+          "test_end_utc": "2026-02-22T11:15:55.338000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:59:59.783000+00:00",
+          "train_end_utc": "2026-01-26T23:22:32.006000+00:00",
+          "valid_start_utc": "2026-01-26T23:22:32.007000+00:00",
+          "valid_end_utc": "2026-02-09T05:19:13.672000+00:00",
+          "test_start_utc": "2026-02-09T05:19:13.673000+00:00",
+          "test_end_utc": "2026-02-22T11:15:55.338000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-BTC",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 253645,
+      "from_utc": "2025-08-29T19:59:59.272000+00:00",
+      "to_utc": "2026-02-22T11:15:57.373000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_BTC_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:59:59.272000+00:00",
+          "train_end_utc": "2026-01-09T07:26:57.847000+00:00",
+          "valid_start_utc": "2026-01-09T07:26:57.848000+00:00",
+          "valid_end_utc": "2026-01-31T09:21:27.609000+00:00",
+          "test_start_utc": "2026-01-31T09:21:27.610000+00:00",
+          "test_end_utc": "2026-02-22T11:15:57.371000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:59:59.272000+00:00",
+          "train_end_utc": "2026-01-18T03:24:45.752000+00:00",
+          "valid_start_utc": "2026-01-18T03:24:45.753000+00:00",
+          "valid_end_utc": "2026-02-04T19:20:21.562000+00:00",
+          "test_start_utc": "2026-02-04T19:20:21.563000+00:00",
+          "test_end_utc": "2026-02-22T11:15:57.372000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:59:59.272000+00:00",
+          "train_end_utc": "2026-01-26T23:22:33.657000+00:00",
+          "valid_start_utc": "2026-01-26T23:22:33.658000+00:00",
+          "valid_end_utc": "2026-02-09T05:19:15.514000+00:00",
+          "test_start_utc": "2026-02-09T05:19:15.515000+00:00",
+          "test_end_utc": "2026-02-22T11:15:57.371000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-ENSO",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 112536,
+      "from_utc": "2025-11-01T19:59:32.216000+00:00",
+      "to_utc": "2026-02-22T11:15:59.439000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_ENSO_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-11-01T19:59:32.216000+00:00",
+          "train_end_utc": "2026-01-25T07:26:52.633000+00:00",
+          "valid_start_utc": "2026-01-25T07:26:52.634000+00:00",
+          "valid_end_utc": "2026-02-08T09:21:26.035000+00:00",
+          "test_start_utc": "2026-02-08T09:21:26.036000+00:00",
+          "test_end_utc": "2026-02-22T11:15:59.437000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-11-01T19:59:32.216000+00:00",
+          "train_end_utc": "2026-01-30T22:36:41.994000+00:00",
+          "valid_start_utc": "2026-01-30T22:36:41.995000+00:00",
+          "valid_end_utc": "2026-02-11T04:56:20.716000+00:00",
+          "test_start_utc": "2026-02-11T04:56:20.717000+00:00",
+          "test_end_utc": "2026-02-22T11:15:59.438000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-11-01T19:59:32.216000+00:00",
+          "train_end_utc": "2026-02-05T13:46:31.355000+00:00",
+          "valid_start_utc": "2026-02-05T13:46:31.356000+00:00",
+          "valid_end_utc": "2026-02-14T00:31:15.396000+00:00",
+          "test_start_utc": "2026-02-14T00:31:15.397000+00:00",
+          "test_end_utc": "2026-02-22T11:15:59.437000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-ETH",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 253635,
+      "from_utc": "2025-08-29T19:59:59.699000+00:00",
+      "to_utc": "2026-02-22T11:15:59.640000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_ETH_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:59:59.699000+00:00",
+          "train_end_utc": "2026-01-09T07:26:59.654000+00:00",
+          "valid_start_utc": "2026-01-09T07:26:59.655000+00:00",
+          "valid_end_utc": "2026-01-31T09:21:29.646000+00:00",
+          "test_start_utc": "2026-01-31T09:21:29.647000+00:00",
+          "test_end_utc": "2026-02-22T11:15:59.638000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:59:59.699000+00:00",
+          "train_end_utc": "2026-01-18T03:24:47.651000+00:00",
+          "valid_start_utc": "2026-01-18T03:24:47.652000+00:00",
+          "valid_end_utc": "2026-02-04T19:20:23.645000+00:00",
+          "test_start_utc": "2026-02-04T19:20:23.646000+00:00",
+          "test_end_utc": "2026-02-22T11:15:59.639000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:59:59.699000+00:00",
+          "train_end_utc": "2026-01-26T23:22:35.648000+00:00",
+          "valid_start_utc": "2026-01-26T23:22:35.649000+00:00",
+          "valid_end_utc": "2026-02-09T05:19:17.643000+00:00",
+          "test_start_utc": "2026-02-09T05:19:17.644000+00:00",
+          "test_end_utc": "2026-02-22T11:15:59.638000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-KITE",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 99378,
+      "from_utc": "2025-11-06T23:59:59.087000+00:00",
+      "to_utc": "2026-02-22T11:15:57.813000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_KITE_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-11-06T23:59:59.087000+00:00",
+          "train_end_utc": "2026-01-26T14:26:58.131000+00:00",
+          "valid_start_utc": "2026-01-26T14:26:58.132000+00:00",
+          "valid_end_utc": "2026-02-09T00:51:27.971000+00:00",
+          "test_start_utc": "2026-02-09T00:51:27.972000+00:00",
+          "test_end_utc": "2026-02-22T11:15:57.811000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-11-06T23:59:59.087000+00:00",
+          "train_end_utc": "2026-01-31T23:24:46.067000+00:00",
+          "valid_start_utc": "2026-01-31T23:24:46.068000+00:00",
+          "valid_end_utc": "2026-02-11T17:20:21.939000+00:00",
+          "test_start_utc": "2026-02-11T17:20:21.940000+00:00",
+          "test_end_utc": "2026-02-22T11:15:57.811000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-11-06T23:59:59.087000+00:00",
+          "train_end_utc": "2026-02-06T08:22:34.004000+00:00",
+          "valid_start_utc": "2026-02-06T08:22:34.005000+00:00",
+          "valid_end_utc": "2026-02-14T09:49:15.908000+00:00",
+          "test_start_utc": "2026-02-14T09:49:15.909000+00:00",
+          "test_end_utc": "2026-02-22T11:15:57.812000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-SOL",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 253436,
+      "from_utc": "2025-08-29T19:59:56.609000+00:00",
+      "to_utc": "2026-02-22T11:15:34.810000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_SOL_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:59:56.609000+00:00",
+          "train_end_utc": "2026-01-09T07:26:40.259000+00:00",
+          "valid_start_utc": "2026-01-09T07:26:40.260000+00:00",
+          "valid_end_utc": "2026-01-31T09:21:07.534000+00:00",
+          "test_start_utc": "2026-01-31T09:21:07.535000+00:00",
+          "test_end_utc": "2026-02-22T11:15:34.809000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:59:56.609000+00:00",
+          "train_end_utc": "2026-01-18T03:24:27.169000+00:00",
+          "valid_start_utc": "2026-01-18T03:24:27.170000+00:00",
+          "valid_end_utc": "2026-02-04T19:20:00.989000+00:00",
+          "test_start_utc": "2026-02-04T19:20:00.990000+00:00",
+          "test_end_utc": "2026-02-22T11:15:34.809000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:59:56.609000+00:00",
+          "train_end_utc": "2026-01-26T23:22:14.079000+00:00",
+          "valid_start_utc": "2026-01-26T23:22:14.080000+00:00",
+          "valid_end_utc": "2026-02-09T05:18:54.444000+00:00",
+          "test_start_utc": "2026-02-09T05:18:54.445000+00:00",
+          "test_end_utc": "2026-02-22T11:15:34.809000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-DOGE",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 249672,
+      "from_utc": "2025-08-29T19:59:55.271000+00:00",
+      "to_utc": "2026-02-22T11:14:55.465000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_DOGE_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:59:55.271000+00:00",
+          "train_end_utc": "2026-01-09T07:26:10.416000+00:00",
+          "valid_start_utc": "2026-01-09T07:26:10.417000+00:00",
+          "valid_end_utc": "2026-01-31T09:20:32.940000+00:00",
+          "test_start_utc": "2026-01-31T09:20:32.941000+00:00",
+          "test_end_utc": "2026-02-22T11:14:55.464000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:59:55.271000+00:00",
+          "train_end_utc": "2026-01-18T03:23:55.426000+00:00",
+          "valid_start_utc": "2026-01-18T03:23:55.427000+00:00",
+          "valid_end_utc": "2026-02-04T19:19:25.445000+00:00",
+          "test_start_utc": "2026-02-04T19:19:25.446000+00:00",
+          "test_end_utc": "2026-02-22T11:14:55.464000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:59:55.271000+00:00",
+          "train_end_utc": "2026-01-26T23:21:40.435000+00:00",
+          "valid_start_utc": "2026-01-26T23:21:40.436000+00:00",
+          "valid_end_utc": "2026-02-09T05:18:17.949000+00:00",
+          "test_start_utc": "2026-02-09T05:18:17.950000+00:00",
+          "test_end_utc": "2026-02-22T11:14:55.463000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-BOUNTY",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 83723,
+      "from_utc": "2025-08-29T19:10:23.144000+00:00",
+      "to_utc": "2026-02-22T10:58:54.548000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_BOUNTY_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:10:23.144000+00:00",
+          "train_end_utc": "2026-01-09T07:01:46.697000+00:00",
+          "valid_start_utc": "2026-01-09T07:01:46.698000+00:00",
+          "valid_end_utc": "2026-01-31T09:00:20.622000+00:00",
+          "test_start_utc": "2026-01-31T09:00:20.623000+00:00",
+          "test_end_utc": "2026-02-22T10:58:54.547000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:10:23.144000+00:00",
+          "train_end_utc": "2026-01-18T03:01:12.267000+00:00",
+          "valid_start_utc": "2026-01-18T03:01:12.268000+00:00",
+          "valid_end_utc": "2026-02-04T19:00:03.407000+00:00",
+          "test_start_utc": "2026-02-04T19:00:03.408000+00:00",
+          "test_end_utc": "2026-02-22T10:58:54.547000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:10:23.144000+00:00",
+          "train_end_utc": "2026-01-26T23:00:37.837000+00:00",
+          "valid_start_utc": "2026-01-26T23:00:37.838000+00:00",
+          "valid_end_utc": "2026-02-09T04:59:46.192000+00:00",
+          "test_start_utc": "2026-02-09T04:59:46.193000+00:00",
+          "test_end_utc": "2026-02-22T10:58:54.547000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-CYBER",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 108667,
+      "from_utc": "2025-08-29T19:53:38.995000+00:00",
+      "to_utc": "2026-02-22T11:15:54.482000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_CYBER_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:53:38.995000+00:00",
+          "train_end_utc": "2026-01-09T07:25:20.610000+00:00",
+          "valid_start_utc": "2026-01-09T07:25:20.611000+00:00",
+          "valid_end_utc": "2026-01-31T09:20:37.545000+00:00",
+          "test_start_utc": "2026-01-31T09:20:37.546000+00:00",
+          "test_end_utc": "2026-02-22T11:15:54.480000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:53:38.995000+00:00",
+          "train_end_utc": "2026-01-18T03:23:27.384000+00:00",
+          "valid_start_utc": "2026-01-18T03:23:27.385000+00:00",
+          "valid_end_utc": "2026-02-04T19:19:40.932000+00:00",
+          "test_start_utc": "2026-02-04T19:19:40.933000+00:00",
+          "test_end_utc": "2026-02-22T11:15:54.480000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:53:38.995000+00:00",
+          "train_end_utc": "2026-01-26T23:21:34.158000+00:00",
+          "valid_start_utc": "2026-01-26T23:21:34.159000+00:00",
+          "valid_end_utc": "2026-02-09T05:18:44.319000+00:00",
+          "test_start_utc": "2026-02-09T05:18:44.320000+00:00",
+          "test_end_utc": "2026-02-22T11:15:54.480000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-BERA",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 188457,
+      "from_utc": "2025-08-29T19:59:53.162000+00:00",
+      "to_utc": "2026-02-22T11:15:53.666000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_BERA_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:59:53.162000+00:00",
+          "train_end_utc": "2026-01-09T07:26:53.540000+00:00",
+          "valid_start_utc": "2026-01-09T07:26:53.541000+00:00",
+          "valid_end_utc": "2026-01-31T09:21:23.603000+00:00",
+          "test_start_utc": "2026-01-31T09:21:23.604000+00:00",
+          "test_end_utc": "2026-02-22T11:15:53.666000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:59:53.162000+00:00",
+          "train_end_utc": "2026-01-18T03:24:41.565000+00:00",
+          "valid_start_utc": "2026-01-18T03:24:41.566000+00:00",
+          "valid_end_utc": "2026-02-04T19:20:17.615000+00:00",
+          "test_start_utc": "2026-02-04T19:20:17.616000+00:00",
+          "test_end_utc": "2026-02-22T11:15:53.665000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:59:53.162000+00:00",
+          "train_end_utc": "2026-01-26T23:22:29.590000+00:00",
+          "valid_start_utc": "2026-01-26T23:22:29.591000+00:00",
+          "valid_end_utc": "2026-02-09T05:19:11.627000+00:00",
+          "test_start_utc": "2026-02-09T05:19:11.628000+00:00",
+          "test_end_utc": "2026-02-22T11:15:53.664000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-BIO",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 63345,
+      "from_utc": "2025-10-23T19:52:19.260000+00:00",
+      "to_utc": "2026-02-22T11:14:43.009000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_BIO_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-10-23T19:52:19.260000+00:00",
+          "train_end_utc": "2026-01-23T01:24:07.071000+00:00",
+          "valid_start_utc": "2026-01-23T01:24:07.072000+00:00",
+          "valid_end_utc": "2026-02-07T06:19:25.039000+00:00",
+          "test_start_utc": "2026-02-07T06:19:25.040000+00:00",
+          "test_end_utc": "2026-02-22T11:14:43.007000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-10-23T19:52:19.260000+00:00",
+          "train_end_utc": "2026-01-29T03:22:14.259000+00:00",
+          "valid_start_utc": "2026-01-29T03:22:14.260000+00:00",
+          "valid_end_utc": "2026-02-10T07:18:28.633000+00:00",
+          "test_start_utc": "2026-02-10T07:18:28.634000+00:00",
+          "test_end_utc": "2026-02-22T11:14:43.007000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-10-23T19:52:19.260000+00:00",
+          "train_end_utc": "2026-02-04T05:20:21.446000+00:00",
+          "valid_start_utc": "2026-02-04T05:20:21.447000+00:00",
+          "valid_end_utc": "2026-02-13T08:17:32.227000+00:00",
+          "test_start_utc": "2026-02-13T08:17:32.228000+00:00",
+          "test_end_utc": "2026-02-22T11:14:43.008000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-JTO",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 107226,
+      "from_utc": "2025-08-29T19:58:55.317000+00:00",
+      "to_utc": "2026-02-22T11:15:52.146000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_JTO_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:58:55.317000+00:00",
+          "train_end_utc": "2026-01-09T07:26:37.938000+00:00",
+          "valid_start_utc": "2026-01-09T07:26:37.939000+00:00",
+          "valid_end_utc": "2026-01-31T09:21:15.041000+00:00",
+          "test_start_utc": "2026-01-31T09:21:15.042000+00:00",
+          "test_end_utc": "2026-02-22T11:15:52.144000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:58:55.317000+00:00",
+          "train_end_utc": "2026-01-18T03:24:28.780000+00:00",
+          "valid_start_utc": "2026-01-18T03:24:28.781000+00:00",
+          "valid_end_utc": "2026-02-04T19:20:10.462000+00:00",
+          "test_start_utc": "2026-02-04T19:20:10.463000+00:00",
+          "test_end_utc": "2026-02-22T11:15:52.144000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:58:55.317000+00:00",
+          "train_end_utc": "2026-01-26T23:22:19.621000+00:00",
+          "valid_start_utc": "2026-01-26T23:22:19.622000+00:00",
+          "valid_end_utc": "2026-02-09T05:19:05.883000+00:00",
+          "test_start_utc": "2026-02-09T05:19:05.884000+00:00",
+          "test_end_utc": "2026-02-22T11:15:52.145000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-INJ",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 90858,
+      "from_utc": "2025-08-29T19:57:09.068000+00:00",
+      "to_utc": "2026-02-22T11:13:59.829000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_INJ_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:57:09.068000+00:00",
+          "train_end_utc": "2026-01-09T07:24:47.138000+00:00",
+          "valid_start_utc": "2026-01-09T07:24:47.139000+00:00",
+          "valid_end_utc": "2026-01-31T09:19:23.483000+00:00",
+          "test_start_utc": "2026-01-31T09:19:23.484000+00:00",
+          "test_end_utc": "2026-02-22T11:13:59.828000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:57:09.068000+00:00",
+          "train_end_utc": "2026-01-18T03:22:37.676000+00:00",
+          "valid_start_utc": "2026-01-18T03:22:37.677000+00:00",
+          "valid_end_utc": "2026-02-04T19:18:18.752000+00:00",
+          "test_start_utc": "2026-02-04T19:18:18.753000+00:00",
+          "test_end_utc": "2026-02-22T11:13:59.828000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:57:09.068000+00:00",
+          "train_end_utc": "2026-01-26T23:20:28.214000+00:00",
+          "valid_start_utc": "2026-01-26T23:20:28.215000+00:00",
+          "valid_end_utc": "2026-02-09T05:17:14.021000+00:00",
+          "test_start_utc": "2026-02-09T05:17:14.022000+00:00",
+          "test_end_utc": "2026-02-22T11:13:59.828000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-AQT",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 95005,
+      "from_utc": "2025-08-29T19:55:39.908000+00:00",
+      "to_utc": "2026-02-22T10:58:46.634000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_AQT_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:55:39.908000+00:00",
+          "train_end_utc": "2026-01-09T07:12:59.952000+00:00",
+          "valid_start_utc": "2026-01-09T07:12:59.953000+00:00",
+          "valid_end_utc": "2026-01-31T09:05:53.292000+00:00",
+          "test_start_utc": "2026-01-31T09:05:53.293000+00:00",
+          "test_end_utc": "2026-02-22T10:58:46.632000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:55:39.908000+00:00",
+          "train_end_utc": "2026-01-18T03:10:09.288000+00:00",
+          "valid_start_utc": "2026-01-18T03:10:09.289000+00:00",
+          "valid_end_utc": "2026-02-04T19:04:27.960000+00:00",
+          "test_start_utc": "2026-02-04T19:04:27.961000+00:00",
+          "test_end_utc": "2026-02-22T10:58:46.632000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:55:39.908000+00:00",
+          "train_end_utc": "2026-01-26T23:07:18.625000+00:00",
+          "valid_start_utc": "2026-01-26T23:07:18.626000+00:00",
+          "valid_end_utc": "2026-02-09T05:03:02.629000+00:00",
+          "test_start_utc": "2026-02-09T05:03:02.630000+00:00",
+          "test_end_utc": "2026-02-22T10:58:46.633000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-0G",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 180312,
+      "from_utc": "2025-09-25T19:59:49.422000+00:00",
+      "to_utc": "2026-02-22T11:14:52.169000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_0G_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-09-25T19:59:49.422000+00:00",
+          "train_end_utc": "2026-01-16T01:26:06.482000+00:00",
+          "valid_start_utc": "2026-01-16T01:26:06.483000+00:00",
+          "valid_end_utc": "2026-02-03T18:20:29.325000+00:00",
+          "test_start_utc": "2026-02-03T18:20:29.326000+00:00",
+          "test_end_utc": "2026-02-22T11:14:52.168000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-09-25T19:59:49.422000+00:00",
+          "train_end_utc": "2026-01-23T12:59:51.619000+00:00",
+          "valid_start_utc": "2026-01-23T12:59:51.620000+00:00",
+          "valid_end_utc": "2026-02-07T12:07:21.893000+00:00",
+          "test_start_utc": "2026-02-07T12:07:21.894000+00:00",
+          "test_end_utc": "2026-02-22T11:14:52.167000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-09-25T19:59:49.422000+00:00",
+          "train_end_utc": "2026-01-31T00:33:36.756000+00:00",
+          "valid_start_utc": "2026-01-31T00:33:36.757000+00:00",
+          "valid_end_utc": "2026-02-11T05:54:14.462000+00:00",
+          "test_start_utc": "2026-02-11T05:54:14.463000+00:00",
+          "test_end_utc": "2026-02-22T11:14:52.168000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-FLOW",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 146978,
+      "from_utc": "2025-08-29T19:58:06.404000+00:00",
+      "to_utc": "2026-02-22T11:16:00.018000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_FLOW_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:58:06.404000+00:00",
+          "train_end_utc": "2026-01-09T07:26:31.614000+00:00",
+          "valid_start_utc": "2026-01-09T07:26:31.615000+00:00",
+          "valid_end_utc": "2026-01-31T09:21:15.815000+00:00",
+          "test_start_utc": "2026-01-31T09:21:15.816000+00:00",
+          "test_end_utc": "2026-02-22T11:16:00.016000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:58:06.404000+00:00",
+          "train_end_utc": "2026-01-18T03:24:25.295000+00:00",
+          "valid_start_utc": "2026-01-18T03:24:25.296000+00:00",
+          "valid_end_utc": "2026-02-04T19:20:12.656000+00:00",
+          "test_start_utc": "2026-02-04T19:20:12.657000+00:00",
+          "test_end_utc": "2026-02-22T11:16:00.017000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:58:06.404000+00:00",
+          "train_end_utc": "2026-01-26T23:22:18.975000+00:00",
+          "valid_start_utc": "2026-01-26T23:22:18.976000+00:00",
+          "valid_end_utc": "2026-02-09T05:19:09.496000+00:00",
+          "test_start_utc": "2026-02-09T05:19:09.497000+00:00",
+          "test_end_utc": "2026-02-22T11:16:00.017000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-CTC",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 137604,
+      "from_utc": "2025-08-29T19:51:11.935000+00:00",
+      "to_utc": "2026-02-22T11:06:01.451000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_CTC_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:51:11.935000+00:00",
+          "train_end_utc": "2026-01-09T07:17:19.072000+00:00",
+          "valid_start_utc": "2026-01-09T07:17:19.073000+00:00",
+          "valid_end_utc": "2026-01-31T09:11:40.261000+00:00",
+          "test_start_utc": "2026-01-31T09:11:40.262000+00:00",
+          "test_end_utc": "2026-02-22T11:06:01.450000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:51:11.935000+00:00",
+          "train_end_utc": "2026-01-18T03:15:03.547000+00:00",
+          "valid_start_utc": "2026-01-18T03:15:03.548000+00:00",
+          "valid_end_utc": "2026-02-04T19:10:32.498000+00:00",
+          "test_start_utc": "2026-02-04T19:10:32.499000+00:00",
+          "test_end_utc": "2026-02-22T11:06:01.449000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:51:11.935000+00:00",
+          "train_end_utc": "2026-01-26T23:12:48.023000+00:00",
+          "valid_start_utc": "2026-01-26T23:12:48.024000+00:00",
+          "valid_end_utc": "2026-02-09T05:09:24.736000+00:00",
+          "test_start_utc": "2026-02-09T05:09:24.737000+00:00",
+          "test_end_utc": "2026-02-22T11:06:01.449000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-IP",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 210734,
+      "from_utc": "2025-08-29T19:59:41.229000+00:00",
+      "to_utc": "2026-02-22T11:15:52.119000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_IP_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:59:41.229000+00:00",
+          "train_end_utc": "2026-01-09T07:26:49.396000+00:00",
+          "valid_start_utc": "2026-01-09T07:26:49.397000+00:00",
+          "valid_end_utc": "2026-01-31T09:21:20.757000+00:00",
+          "test_start_utc": "2026-01-31T09:21:20.758000+00:00",
+          "test_end_utc": "2026-02-22T11:15:52.118000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:59:41.229000+00:00",
+          "train_end_utc": "2026-01-18T03:24:37.941000+00:00",
+          "valid_start_utc": "2026-01-18T03:24:37.942000+00:00",
+          "valid_end_utc": "2026-02-04T19:20:15.030000+00:00",
+          "test_start_utc": "2026-02-04T19:20:15.031000+00:00",
+          "test_end_utc": "2026-02-22T11:15:52.119000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:59:41.229000+00:00",
+          "train_end_utc": "2026-01-26T23:22:26.485000+00:00",
+          "valid_start_utc": "2026-01-26T23:22:26.486000+00:00",
+          "valid_end_utc": "2026-02-09T05:19:09.301000+00:00",
+          "test_start_utc": "2026-02-09T05:19:09.302000+00:00",
+          "test_end_utc": "2026-02-22T11:15:52.117000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-DEEP",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 110844,
+      "from_utc": "2025-08-29T19:59:42.274000+00:00",
+      "to_utc": "2026-02-22T10:25:54.026000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_DEEP_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:59:42.274000+00:00",
+          "train_end_utc": "2026-01-09T06:49:21.088000+00:00",
+          "valid_start_utc": "2026-01-09T06:49:21.089000+00:00",
+          "valid_end_utc": "2026-01-31T08:37:37.557000+00:00",
+          "test_start_utc": "2026-01-31T08:37:37.558000+00:00",
+          "test_end_utc": "2026-02-22T10:25:54.026000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:59:42.274000+00:00",
+          "train_end_utc": "2026-01-18T02:44:39.675000+00:00",
+          "valid_start_utc": "2026-01-18T02:44:39.676000+00:00",
+          "valid_end_utc": "2026-02-04T18:35:16.850000+00:00",
+          "test_start_utc": "2026-02-04T18:35:16.851000+00:00",
+          "test_end_utc": "2026-02-22T10:25:54.025000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:59:42.274000+00:00",
+          "train_end_utc": "2026-01-26T22:39:58.263000+00:00",
+          "valid_start_utc": "2026-01-26T22:39:58.264000+00:00",
+          "valid_end_utc": "2026-02-09T04:32:56.144000+00:00",
+          "test_start_utc": "2026-02-09T04:32:56.145000+00:00",
+          "test_end_utc": "2026-02-22T10:25:54.025000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-COMP",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 88184,
+      "from_utc": "2025-08-29T19:21:45.458000+00:00",
+      "to_utc": "2026-02-22T10:32:49.163000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_COMP_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:21:45.458000+00:00",
+          "train_end_utc": "2026-01-09T06:45:03.236000+00:00",
+          "valid_start_utc": "2026-01-09T06:45:03.237000+00:00",
+          "valid_end_utc": "2026-01-31T08:38:56.199000+00:00",
+          "test_start_utc": "2026-01-31T08:38:56.200000+00:00",
+          "test_end_utc": "2026-02-22T10:32:49.162000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:21:45.458000+00:00",
+          "train_end_utc": "2026-01-18T02:42:36.422000+00:00",
+          "valid_start_utc": "2026-01-18T02:42:36.423000+00:00",
+          "valid_end_utc": "2026-02-04T18:37:42.792000+00:00",
+          "test_start_utc": "2026-02-04T18:37:42.793000+00:00",
+          "test_end_utc": "2026-02-22T10:32:49.162000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:21:45.458000+00:00",
+          "train_end_utc": "2026-01-26T22:40:09.607000+00:00",
+          "valid_start_utc": "2026-01-26T22:40:09.608000+00:00",
+          "valid_end_utc": "2026-02-09T04:36:29.384000+00:00",
+          "test_start_utc": "2026-02-09T04:36:29.385000+00:00",
+          "test_end_utc": "2026-02-22T10:32:49.161000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-API3",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 115208,
+      "from_utc": "2025-08-29T19:59:35.112000+00:00",
+      "to_utc": "2026-02-22T10:42:37.866000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_API3_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:59:35.112000+00:00",
+          "train_end_utc": "2026-01-09T07:01:52.177000+00:00",
+          "valid_start_utc": "2026-01-09T07:01:52.178000+00:00",
+          "valid_end_utc": "2026-01-31T08:52:15.021000+00:00",
+          "test_start_utc": "2026-01-31T08:52:15.022000+00:00",
+          "test_end_utc": "2026-02-22T10:42:37.865000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:59:35.112000+00:00",
+          "train_end_utc": "2026-01-18T02:58:01.315000+00:00",
+          "valid_start_utc": "2026-01-18T02:58:01.316000+00:00",
+          "valid_end_utc": "2026-02-04T18:50:19.590000+00:00",
+          "test_start_utc": "2026-02-04T18:50:19.591000+00:00",
+          "test_end_utc": "2026-02-22T10:42:37.865000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:59:35.112000+00:00",
+          "train_end_utc": "2026-01-26T22:54:10.452000+00:00",
+          "valid_start_utc": "2026-01-26T22:54:10.453000+00:00",
+          "valid_end_utc": "2026-02-09T04:48:24.158000+00:00",
+          "test_start_utc": "2026-02-09T04:48:24.159000+00:00",
+          "test_end_utc": "2026-02-22T10:42:37.864000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-AXS",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 150684,
+      "from_utc": "2025-08-29T19:50:25.983000+00:00",
+      "to_utc": "2026-02-22T11:14:00.695000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_AXS_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:50:25.983000+00:00",
+          "train_end_utc": "2026-01-09T07:23:07.017000+00:00",
+          "valid_start_utc": "2026-01-09T07:23:07.018000+00:00",
+          "valid_end_utc": "2026-01-31T09:18:33.856000+00:00",
+          "test_start_utc": "2026-01-31T09:18:33.857000+00:00",
+          "test_end_utc": "2026-02-22T11:14:00.695000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:50:25.983000+00:00",
+          "train_end_utc": "2026-01-18T03:21:17.752000+00:00",
+          "valid_start_utc": "2026-01-18T03:21:17.753000+00:00",
+          "valid_end_utc": "2026-02-04T19:17:39.223000+00:00",
+          "test_start_utc": "2026-02-04T19:17:39.224000+00:00",
+          "test_end_utc": "2026-02-22T11:14:00.694000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:50:25.983000+00:00",
+          "train_end_utc": "2026-01-26T23:19:28.488000+00:00",
+          "valid_start_utc": "2026-01-26T23:19:28.489000+00:00",
+          "valid_end_utc": "2026-02-09T05:16:44.591000+00:00",
+          "test_start_utc": "2026-02-09T05:16:44.592000+00:00",
+          "test_end_utc": "2026-02-22T11:14:00.694000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-LINEA",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 133612,
+      "from_utc": "2025-09-14T03:59:59.262000+00:00",
+      "to_utc": "2026-02-22T11:13:54.246000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_LINEA_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-09-14T03:59:59.262000+00:00",
+          "train_end_utc": "2026-01-13T03:25:25.500000+00:00",
+          "valid_start_utc": "2026-01-13T03:25:25.501000+00:00",
+          "valid_end_utc": "2026-02-02T07:19:39.873000+00:00",
+          "test_start_utc": "2026-02-02T07:19:39.874000+00:00",
+          "test_end_utc": "2026-02-22T11:13:54.246000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-09-14T03:59:59.262000+00:00",
+          "train_end_utc": "2026-01-21T04:59:07.249000+00:00",
+          "valid_start_utc": "2026-01-21T04:59:07.250000+00:00",
+          "valid_end_utc": "2026-02-06T08:06:30.747000+00:00",
+          "test_start_utc": "2026-02-06T08:06:30.748000+00:00",
+          "test_end_utc": "2026-02-22T11:13:54.245000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-09-14T03:59:59.262000+00:00",
+          "train_end_utc": "2026-01-29T06:32:48.998000+00:00",
+          "valid_start_utc": "2026-01-29T06:32:48.999000+00:00",
+          "valid_end_utc": "2026-02-10T08:53:21.621000+00:00",
+          "test_start_utc": "2026-02-10T08:53:21.622000+00:00",
+          "test_end_utc": "2026-02-22T11:13:54.244000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-ANKR",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 59863,
+      "from_utc": "2025-08-29T19:57:38.168000+00:00",
+      "to_utc": "2026-02-22T09:56:04.184000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_ANKR_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:57:38.168000+00:00",
+          "train_end_utc": "2026-01-09T06:26:27.680000+00:00",
+          "valid_start_utc": "2026-01-09T06:26:27.681000+00:00",
+          "valid_end_utc": "2026-01-31T08:11:15.932000+00:00",
+          "test_start_utc": "2026-01-31T08:11:15.933000+00:00",
+          "test_end_utc": "2026-02-22T09:56:04.184000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:57:38.168000+00:00",
+          "train_end_utc": "2026-01-18T02:20:22.980000+00:00",
+          "valid_start_utc": "2026-01-18T02:20:22.981000+00:00",
+          "valid_end_utc": "2026-02-04T18:08:13.581000+00:00",
+          "test_start_utc": "2026-02-04T18:08:13.582000+00:00",
+          "test_end_utc": "2026-02-22T09:56:04.182000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:57:38.168000+00:00",
+          "train_end_utc": "2026-01-26T22:14:18.281000+00:00",
+          "valid_start_utc": "2026-01-26T22:14:18.282000+00:00",
+          "valid_end_utc": "2026-02-09T04:05:11.232000+00:00",
+          "test_start_utc": "2026-02-09T04:05:11.233000+00:00",
+          "test_end_utc": "2026-02-22T09:56:04.183000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-AGLD",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 85503,
+      "from_utc": "2025-08-29T19:55:12.144000+00:00",
+      "to_utc": "2026-02-22T11:15:58.050000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_AGLD_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:55:12.144000+00:00",
+          "train_end_utc": "2026-01-09T07:25:46.573000+00:00",
+          "valid_start_utc": "2026-01-09T07:25:46.574000+00:00",
+          "valid_end_utc": "2026-01-31T09:20:52.311000+00:00",
+          "test_start_utc": "2026-01-31T09:20:52.312000+00:00",
+          "test_end_utc": "2026-02-22T11:15:58.049000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:55:12.144000+00:00",
+          "train_end_utc": "2026-01-18T03:23:48.868000+00:00",
+          "valid_start_utc": "2026-01-18T03:23:48.869000+00:00",
+          "valid_end_utc": "2026-02-04T19:19:53.458000+00:00",
+          "test_start_utc": "2026-02-04T19:19:53.459000+00:00",
+          "test_end_utc": "2026-02-22T11:15:58.048000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:55:12.144000+00:00",
+          "train_end_utc": "2026-01-26T23:21:51.164000+00:00",
+          "valid_start_utc": "2026-01-26T23:21:51.165000+00:00",
+          "valid_end_utc": "2026-02-09T05:18:54.606000+00:00",
+          "test_start_utc": "2026-02-09T05:18:54.607000+00:00",
+          "test_end_utc": "2026-02-22T11:15:58.048000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-AWE",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 117757,
+      "from_utc": "2025-08-29T19:56:26.254000+00:00",
+      "to_utc": "2026-02-22T11:14:56.559000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_AWE_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:56:26.254000+00:00",
+          "train_end_utc": "2026-01-09T07:25:18.982000+00:00",
+          "valid_start_utc": "2026-01-09T07:25:18.983000+00:00",
+          "valid_end_utc": "2026-01-31T09:20:07.770000+00:00",
+          "test_start_utc": "2026-01-31T09:20:07.771000+00:00",
+          "test_end_utc": "2026-02-22T11:14:56.558000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:56:26.254000+00:00",
+          "train_end_utc": "2026-01-18T03:23:14.498000+00:00",
+          "valid_start_utc": "2026-01-18T03:23:14.499000+00:00",
+          "valid_end_utc": "2026-02-04T19:19:05.528000+00:00",
+          "test_start_utc": "2026-02-04T19:19:05.529000+00:00",
+          "test_end_utc": "2026-02-22T11:14:56.558000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:56:26.254000+00:00",
+          "train_end_utc": "2026-01-26T23:21:10.013000+00:00",
+          "valid_start_utc": "2026-01-26T23:21:10.014000+00:00",
+          "valid_end_utc": "2026-02-09T05:18:03.285000+00:00",
+          "test_start_utc": "2026-02-09T05:18:03.286000+00:00",
+          "test_end_utc": "2026-02-22T11:14:56.557000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-CPOOL",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 103172,
+      "from_utc": "2025-10-25T15:59:02.542000+00:00",
+      "to_utc": "2026-02-22T10:57:58.814000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_CPOOL_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-10-25T15:59:02.542000+00:00",
+          "train_end_utc": "2026-01-23T12:13:14.746000+00:00",
+          "valid_start_utc": "2026-01-23T12:13:14.747000+00:00",
+          "valid_end_utc": "2026-02-07T11:35:36.780000+00:00",
+          "test_start_utc": "2026-02-07T11:35:36.781000+00:00",
+          "test_end_utc": "2026-02-22T10:57:58.814000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-10-25T15:59:02.542000+00:00",
+          "train_end_utc": "2026-01-29T11:58:11.559000+00:00",
+          "valid_start_utc": "2026-01-29T11:58:11.560000+00:00",
+          "valid_end_utc": "2026-02-10T11:28:05.186000+00:00",
+          "test_start_utc": "2026-02-10T11:28:05.187000+00:00",
+          "test_end_utc": "2026-02-22T10:57:58.813000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-10-25T15:59:02.542000+00:00",
+          "train_end_utc": "2026-02-04T11:43:08.373000+00:00",
+          "valid_start_utc": "2026-02-04T11:43:08.374000+00:00",
+          "valid_end_utc": "2026-02-13T11:20:33.593000+00:00",
+          "test_start_utc": "2026-02-13T11:20:33.594000+00:00",
+          "test_end_utc": "2026-02-22T10:57:58.813000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-ENS",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 183795,
+      "from_utc": "2025-08-29T19:58:18.188000+00:00",
+      "to_utc": "2026-02-22T11:09:31.839000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_ENS_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:58:18.188000+00:00",
+          "train_end_utc": "2026-01-09T07:21:43.426000+00:00",
+          "valid_start_utc": "2026-01-09T07:21:43.427000+00:00",
+          "valid_end_utc": "2026-01-31T09:15:37.632000+00:00",
+          "test_start_utc": "2026-01-31T09:15:37.633000+00:00",
+          "test_end_utc": "2026-02-22T11:09:31.838000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:58:18.188000+00:00",
+          "train_end_utc": "2026-01-18T03:19:17.108000+00:00",
+          "valid_start_utc": "2026-01-18T03:19:17.109000+00:00",
+          "valid_end_utc": "2026-02-04T19:14:24.473000+00:00",
+          "test_start_utc": "2026-02-04T19:14:24.474000+00:00",
+          "test_end_utc": "2026-02-22T11:09:31.838000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:58:18.188000+00:00",
+          "train_end_utc": "2026-01-26T23:16:50.791000+00:00",
+          "valid_start_utc": "2026-01-26T23:16:50.792000+00:00",
+          "valid_end_utc": "2026-02-09T05:13:11.314000+00:00",
+          "test_start_utc": "2026-02-09T05:13:11.315000+00:00",
+          "test_end_utc": "2026-02-22T11:09:31.837000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-BSV",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 121807,
+      "from_utc": "2025-08-29T19:59:04.861000+00:00",
+      "to_utc": "2026-02-22T10:35:50.821000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_BSV_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:59:04.861000+00:00",
+          "train_end_utc": "2026-01-09T06:56:39.331000+00:00",
+          "valid_start_utc": "2026-01-09T06:56:39.332000+00:00",
+          "valid_end_utc": "2026-01-31T08:46:15.076000+00:00",
+          "test_start_utc": "2026-01-31T08:46:15.077000+00:00",
+          "test_end_utc": "2026-02-22T10:35:50.821000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:59:04.861000+00:00",
+          "train_end_utc": "2026-01-18T02:52:29.629000+00:00",
+          "valid_start_utc": "2026-01-18T02:52:29.630000+00:00",
+          "valid_end_utc": "2026-02-04T18:44:10.225000+00:00",
+          "test_start_utc": "2026-02-04T18:44:10.226000+00:00",
+          "test_end_utc": "2026-02-22T10:35:50.821000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:59:04.861000+00:00",
+          "train_end_utc": "2026-01-26T22:48:19.927000+00:00",
+          "valid_start_utc": "2026-01-26T22:48:19.928000+00:00",
+          "valid_end_utc": "2026-02-09T04:42:05.374000+00:00",
+          "test_start_utc": "2026-02-09T04:42:05.375000+00:00",
+          "test_end_utc": "2026-02-22T10:35:50.821000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-ADA",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 241122,
+      "from_utc": "2025-08-29T19:59:54.866000+00:00",
+      "to_utc": "2026-02-22T11:11:07.268000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_ADA_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:59:54.866000+00:00",
+          "train_end_utc": "2026-01-09T07:23:19.167000+00:00",
+          "valid_start_utc": "2026-01-09T07:23:19.168000+00:00",
+          "valid_end_utc": "2026-01-31T09:17:13.217000+00:00",
+          "test_start_utc": "2026-01-31T09:17:13.218000+00:00",
+          "test_end_utc": "2026-02-22T11:11:07.267000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:59:54.866000+00:00",
+          "train_end_utc": "2026-01-18T03:20:52.787000+00:00",
+          "valid_start_utc": "2026-01-18T03:20:52.788000+00:00",
+          "valid_end_utc": "2026-02-04T19:16:00.027000+00:00",
+          "test_start_utc": "2026-02-04T19:16:00.028000+00:00",
+          "test_end_utc": "2026-02-22T11:11:07.267000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:59:54.866000+00:00",
+          "train_end_utc": "2026-01-26T23:18:26.407000+00:00",
+          "valid_start_utc": "2026-01-26T23:18:26.408000+00:00",
+          "valid_end_utc": "2026-02-09T05:14:46.837000+00:00",
+          "test_start_utc": "2026-02-09T05:14:46.838000+00:00",
+          "test_end_utc": "2026-02-22T11:11:07.267000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-LPT",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 92548,
+      "from_utc": "2025-08-29T19:59:51.869000+00:00",
+      "to_utc": "2026-02-22T10:03:42.513000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_LPT_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:59:51.869000+00:00",
+          "train_end_utc": "2026-01-09T06:32:44.852000+00:00",
+          "valid_start_utc": "2026-01-09T06:32:44.853000+00:00",
+          "valid_end_utc": "2026-01-31T08:18:13.682000+00:00",
+          "test_start_utc": "2026-01-31T08:18:13.683000+00:00",
+          "test_end_utc": "2026-02-22T10:03:42.512000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:59:51.869000+00:00",
+          "train_end_utc": "2026-01-18T02:26:56.384000+00:00",
+          "valid_start_utc": "2026-01-18T02:26:56.385000+00:00",
+          "valid_end_utc": "2026-02-04T18:15:19.448000+00:00",
+          "test_start_utc": "2026-02-04T18:15:19.449000+00:00",
+          "test_end_utc": "2026-02-22T10:03:42.512000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:59:51.869000+00:00",
+          "train_end_utc": "2026-01-26T22:21:07.916000+00:00",
+          "valid_start_utc": "2026-01-26T22:21:07.917000+00:00",
+          "valid_end_utc": "2026-02-09T04:12:25.214000+00:00",
+          "test_start_utc": "2026-02-09T04:12:25.215000+00:00",
+          "test_end_utc": "2026-02-22T10:03:42.512000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-KERNEL",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 54897,
+      "from_utc": "2025-10-31T15:59:35.777000+00:00",
+      "to_utc": "2026-02-22T10:31:07.318000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_KERNEL_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-10-31T15:59:35.777000+00:00",
+          "train_end_utc": "2026-01-24T23:53:14.432000+00:00",
+          "valid_start_utc": "2026-01-24T23:53:14.433000+00:00",
+          "valid_end_utc": "2026-02-08T05:12:10.874000+00:00",
+          "test_start_utc": "2026-02-08T05:12:10.875000+00:00",
+          "test_end_utc": "2026-02-22T10:31:07.316000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-10-31T15:59:35.777000+00:00",
+          "train_end_utc": "2026-01-30T16:24:49.009000+00:00",
+          "valid_start_utc": "2026-01-30T16:24:49.010000+00:00",
+          "valid_end_utc": "2026-02-11T01:27:58.163000+00:00",
+          "test_start_utc": "2026-02-11T01:27:58.164000+00:00",
+          "test_end_utc": "2026-02-22T10:31:07.317000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-10-31T15:59:35.777000+00:00",
+          "train_end_utc": "2026-02-05T08:56:23.586000+00:00",
+          "valid_start_utc": "2026-02-05T08:56:23.587000+00:00",
+          "valid_end_utc": "2026-02-13T21:43:45.451000+00:00",
+          "test_start_utc": "2026-02-13T21:43:45.452000+00:00",
+          "test_end_utc": "2026-02-22T10:31:07.316000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-XLM",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 224069,
+      "from_utc": "2025-08-27T15:59:46.929000+00:00",
+      "to_utc": "2026-02-20T06:19:04.700000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_XLM_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-27T15:59:46.929000+00:00",
+          "train_end_utc": "2026-01-07T02:44:15.257000+00:00",
+          "valid_start_utc": "2026-01-07T02:44:15.258000+00:00",
+          "valid_end_utc": "2026-01-29T04:31:39.978000+00:00",
+          "test_start_utc": "2026-01-29T04:31:39.979000+00:00",
+          "test_end_utc": "2026-02-20T06:19:04.699000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-27T15:59:46.929000+00:00",
+          "train_end_utc": "2026-01-15T22:39:13.145000+00:00",
+          "valid_start_utc": "2026-01-15T22:39:13.146000+00:00",
+          "valid_end_utc": "2026-02-02T14:29:08.922000+00:00",
+          "test_start_utc": "2026-02-02T14:29:08.923000+00:00",
+          "test_end_utc": "2026-02-20T06:19:04.699000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-27T15:59:46.929000+00:00",
+          "train_end_utc": "2026-01-24T18:34:11.034000+00:00",
+          "valid_start_utc": "2026-01-24T18:34:11.035000+00:00",
+          "valid_end_utc": "2026-02-07T00:26:37.866000+00:00",
+          "test_start_utc": "2026-02-07T00:26:37.867000+00:00",
+          "test_end_utc": "2026-02-20T06:19:04.698000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-BCH",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 193327,
+      "from_utc": "2025-08-29T19:58:04.945000+00:00",
+      "to_utc": "2026-02-22T11:15:54.206000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_BCH_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:58:04.945000+00:00",
+          "train_end_utc": "2026-01-09T07:26:26.890000+00:00",
+          "valid_start_utc": "2026-01-09T07:26:26.891000+00:00",
+          "valid_end_utc": "2026-01-31T09:21:10.547000+00:00",
+          "test_start_utc": "2026-01-31T09:21:10.548000+00:00",
+          "test_end_utc": "2026-02-22T11:15:54.204000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:58:04.945000+00:00",
+          "train_end_utc": "2026-01-18T03:24:20.353000+00:00",
+          "valid_start_utc": "2026-01-18T03:24:20.354000+00:00",
+          "valid_end_utc": "2026-02-04T19:20:07.279000+00:00",
+          "test_start_utc": "2026-02-04T19:20:07.280000+00:00",
+          "test_end_utc": "2026-02-22T11:15:54.205000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:58:04.945000+00:00",
+          "train_end_utc": "2026-01-26T23:22:13.816000+00:00",
+          "valid_start_utc": "2026-01-26T23:22:13.817000+00:00",
+          "valid_end_utc": "2026-02-09T05:19:04.010000+00:00",
+          "test_start_utc": "2026-02-09T05:19:04.011000+00:00",
+          "test_end_utc": "2026-02-22T11:15:54.204000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-COW",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 53934,
+      "from_utc": "2025-08-29T19:58:45.706000+00:00",
+      "to_utc": "2026-02-22T11:15:55.261000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_COW_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:58:45.706000+00:00",
+          "train_end_utc": "2026-01-09T07:26:37.872000+00:00",
+          "valid_start_utc": "2026-01-09T07:26:37.873000+00:00",
+          "valid_end_utc": "2026-01-31T09:21:16.566000+00:00",
+          "test_start_utc": "2026-01-31T09:21:16.567000+00:00",
+          "test_end_utc": "2026-02-22T11:15:55.260000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:58:45.706000+00:00",
+          "train_end_utc": "2026-01-18T03:24:29.350000+00:00",
+          "valid_start_utc": "2026-01-18T03:24:29.351000+00:00",
+          "valid_end_utc": "2026-02-04T19:20:12.305000+00:00",
+          "test_start_utc": "2026-02-04T19:20:12.306000+00:00",
+          "test_end_utc": "2026-02-22T11:15:55.260000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:58:45.706000+00:00",
+          "train_end_utc": "2026-01-26T23:22:20.827000+00:00",
+          "valid_start_utc": "2026-01-26T23:22:20.828000+00:00",
+          "valid_end_utc": "2026-02-09T05:19:08.043000+00:00",
+          "test_start_utc": "2026-02-09T05:19:08.044000+00:00",
+          "test_end_utc": "2026-02-22T11:15:55.259000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-BREV",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 49326,
+      "from_utc": "2026-01-10T15:59:55.729000+00:00",
+      "to_utc": "2026-02-22T10:45:42.079000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_BREV_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2026-01-10T15:59:55.729000+00:00",
+          "train_end_utc": "2026-02-11T18:04:15.491000+00:00",
+          "valid_start_utc": "2026-02-11T18:04:15.492000+00:00",
+          "valid_end_utc": "2026-02-17T02:24:58.784000+00:00",
+          "test_start_utc": "2026-02-17T02:24:58.785000+00:00",
+          "test_end_utc": "2026-02-22T10:45:42.077000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2026-01-10T15:59:55.729000+00:00",
+          "train_end_utc": "2026-02-13T21:24:32.809000+00:00",
+          "valid_start_utc": "2026-02-13T21:24:32.810000+00:00",
+          "valid_end_utc": "2026-02-18T04:05:07.444000+00:00",
+          "test_start_utc": "2026-02-18T04:05:07.445000+00:00",
+          "test_end_utc": "2026-02-22T10:45:42.079000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2026-01-10T15:59:55.729000+00:00",
+          "train_end_utc": "2026-02-16T00:44:50.126000+00:00",
+          "valid_start_utc": "2026-02-16T00:44:50.127000+00:00",
+          "valid_end_utc": "2026-02-19T05:45:16.102000+00:00",
+          "test_start_utc": "2026-02-19T05:45:16.103000+00:00",
+          "test_end_utc": "2026-02-22T10:45:42.078000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-AUCTION",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 131289,
+      "from_utc": "2025-08-29T19:48:01.754000+00:00",
+      "to_utc": "2026-02-22T11:04:12.905000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_AUCTION_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:48:01.754000+00:00",
+          "train_end_utc": "2026-01-09T07:15:10.117000+00:00",
+          "valid_start_utc": "2026-01-09T07:15:10.118000+00:00",
+          "valid_end_utc": "2026-01-31T09:09:41.510000+00:00",
+          "test_start_utc": "2026-01-31T09:09:41.511000+00:00",
+          "test_end_utc": "2026-02-22T11:04:12.903000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:48:01.754000+00:00",
+          "train_end_utc": "2026-01-18T03:12:58.674000+00:00",
+          "valid_start_utc": "2026-01-18T03:12:58.675000+00:00",
+          "valid_end_utc": "2026-02-04T19:08:35.789000+00:00",
+          "test_start_utc": "2026-02-04T19:08:35.790000+00:00",
+          "test_end_utc": "2026-02-22T11:04:12.904000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:48:01.754000+00:00",
+          "train_end_utc": "2026-01-26T23:10:47.232000+00:00",
+          "valid_start_utc": "2026-01-26T23:10:47.233000+00:00",
+          "valid_end_utc": "2026-02-09T05:07:30.068000+00:00",
+          "test_start_utc": "2026-02-09T05:07:30.069000+00:00",
+          "test_end_utc": "2026-02-22T11:04:12.904000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-ELSA",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 29755,
+      "from_utc": "2026-01-25T15:59:59.601000+00:00",
+      "to_utc": "2026-02-22T10:17:40.008000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_ELSA_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2026-01-25T15:59:59.601000+00:00",
+          "train_end_utc": "2026-02-15T11:43:14.906000+00:00",
+          "valid_start_utc": "2026-02-15T11:43:14.907000+00:00",
+          "valid_end_utc": "2026-02-18T23:00:27.456000+00:00",
+          "test_start_utc": "2026-02-18T23:00:27.457000+00:00",
+          "test_end_utc": "2026-02-22T10:17:40.006000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2026-01-25T15:59:59.601000+00:00",
+          "train_end_utc": "2026-02-16T21:02:07.926000+00:00",
+          "valid_start_utc": "2026-02-16T21:02:07.927000+00:00",
+          "valid_end_utc": "2026-02-19T15:39:53.966000+00:00",
+          "test_start_utc": "2026-02-19T15:39:53.967000+00:00",
+          "test_end_utc": "2026-02-22T10:17:40.006000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2026-01-25T15:59:59.601000+00:00",
+          "train_end_utc": "2026-02-18T06:21:00.946000+00:00",
+          "valid_start_utc": "2026-02-18T06:21:00.947000+00:00",
+          "valid_end_utc": "2026-02-20T08:19:20.476000+00:00",
+          "test_start_utc": "2026-02-20T08:19:20.477000+00:00",
+          "test_end_utc": "2026-02-22T10:17:40.006000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-HUNT",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 59767,
+      "from_utc": "2025-08-29T19:35:17.889000+00:00",
+      "to_utc": "2026-02-22T09:38:53.366000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_HUNT_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:35:17.889000+00:00",
+          "train_end_utc": "2026-01-09T06:07:59.496000+00:00",
+          "valid_start_utc": "2026-01-09T06:07:59.497000+00:00",
+          "valid_end_utc": "2026-01-31T07:53:26.430000+00:00",
+          "test_start_utc": "2026-01-31T07:53:26.431000+00:00",
+          "test_end_utc": "2026-02-22T09:38:53.364000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:35:17.889000+00:00",
+          "train_end_utc": "2026-01-18T02:02:10.270000+00:00",
+          "valid_start_utc": "2026-01-18T02:02:10.271000+00:00",
+          "valid_end_utc": "2026-02-04T17:50:31.817000+00:00",
+          "test_start_utc": "2026-02-04T17:50:31.818000+00:00",
+          "test_end_utc": "2026-02-22T09:38:53.364000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:35:17.889000+00:00",
+          "train_end_utc": "2026-01-26T21:56:21.044000+00:00",
+          "valid_start_utc": "2026-01-26T21:56:21.045000+00:00",
+          "valid_end_utc": "2026-02-09T03:47:37.204000+00:00",
+          "test_start_utc": "2026-02-09T03:47:37.205000+00:00",
+          "test_end_utc": "2026-02-22T09:38:53.364000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-ARDR",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 94258,
+      "from_utc": "2025-08-29T19:57:14.347000+00:00",
+      "to_utc": "2026-02-22T11:11:56.509000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_ARDR_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:57:14.347000+00:00",
+          "train_end_utc": "2026-01-09T07:23:15.968000+00:00",
+          "valid_start_utc": "2026-01-09T07:23:15.969000+00:00",
+          "valid_end_utc": "2026-01-31T09:17:36.238000+00:00",
+          "test_start_utc": "2026-01-31T09:17:36.239000+00:00",
+          "test_end_utc": "2026-02-22T11:11:56.508000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:57:14.347000+00:00",
+          "train_end_utc": "2026-01-18T03:21:00.076000+00:00",
+          "valid_start_utc": "2026-01-18T03:21:00.077000+00:00",
+          "valid_end_utc": "2026-02-04T19:16:28.292000+00:00",
+          "test_start_utc": "2026-02-04T19:16:28.293000+00:00",
+          "test_end_utc": "2026-02-22T11:11:56.508000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:57:14.347000+00:00",
+          "train_end_utc": "2026-01-26T23:18:44.184000+00:00",
+          "valid_start_utc": "2026-01-26T23:18:44.185000+00:00",
+          "valid_end_utc": "2026-02-09T05:15:20.346000+00:00",
+          "test_start_utc": "2026-02-09T05:15:20.347000+00:00",
+          "test_end_utc": "2026-02-22T11:11:56.508000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-CBK",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 85013,
+      "from_utc": "2025-08-29T19:46:51.583000+00:00",
+      "to_utc": "2026-02-22T10:49:29.031000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_CBK_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:46:51.583000+00:00",
+          "train_end_utc": "2026-01-09T07:03:49.669000+00:00",
+          "valid_start_utc": "2026-01-09T07:03:49.670000+00:00",
+          "valid_end_utc": "2026-01-31T08:56:39.350000+00:00",
+          "test_start_utc": "2026-01-31T08:56:39.351000+00:00",
+          "test_end_utc": "2026-02-22T10:49:29.031000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:46:51.583000+00:00",
+          "train_end_utc": "2026-01-18T03:00:57.541000+00:00",
+          "valid_start_utc": "2026-01-18T03:00:57.542000+00:00",
+          "valid_end_utc": "2026-02-04T18:55:13.285000+00:00",
+          "test_start_utc": "2026-02-04T18:55:13.286000+00:00",
+          "test_end_utc": "2026-02-22T10:49:29.029000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:46:51.583000+00:00",
+          "train_end_utc": "2026-01-26T22:58:05.413000+00:00",
+          "valid_start_utc": "2026-01-26T22:58:05.414000+00:00",
+          "valid_end_utc": "2026-02-09T04:53:47.221000+00:00",
+          "test_start_utc": "2026-02-09T04:53:47.222000+00:00",
+          "test_end_utc": "2026-02-22T10:49:29.029000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-FLOCK",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 113957,
+      "from_utc": "2025-09-12T11:59:55.573000+00:00",
+      "to_utc": "2026-02-22T11:15:59.620000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_FLOCK_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-09-12T11:59:55.573000+00:00",
+          "train_end_utc": "2026-01-12T17:26:58.608000+00:00",
+          "valid_start_utc": "2026-01-12T17:26:58.609000+00:00",
+          "valid_end_utc": "2026-02-02T02:21:29.113000+00:00",
+          "test_start_utc": "2026-02-02T02:21:29.114000+00:00",
+          "test_end_utc": "2026-02-22T11:15:59.618000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-09-12T11:59:55.573000+00:00",
+          "train_end_utc": "2026-01-20T21:00:46.810000+00:00",
+          "valid_start_utc": "2026-01-20T21:00:46.811000+00:00",
+          "valid_end_utc": "2026-02-06T04:08:23.214000+00:00",
+          "test_start_utc": "2026-02-06T04:08:23.215000+00:00",
+          "test_end_utc": "2026-02-22T11:15:59.618000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-09-12T11:59:55.573000+00:00",
+          "train_end_utc": "2026-01-29T00:34:35.012000+00:00",
+          "valid_start_utc": "2026-01-29T00:34:35.013000+00:00",
+          "valid_end_utc": "2026-02-10T05:55:17.315000+00:00",
+          "test_start_utc": "2026-02-10T05:55:17.316000+00:00",
+          "test_end_utc": "2026-02-22T11:15:59.618000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-BIRB",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 16210,
+      "from_utc": "2026-02-06T19:59:57.331000+00:00",
+      "to_utc": "2026-02-22T11:03:36.021000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_BIRB_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2026-02-06T19:59:57.331000+00:00",
+          "train_end_utc": "2026-02-18T13:17:41.348000+00:00",
+          "valid_start_utc": "2026-02-18T13:17:41.349000+00:00",
+          "valid_end_utc": "2026-02-20T12:10:38.684000+00:00",
+          "test_start_utc": "2026-02-20T12:10:38.685000+00:00",
+          "test_end_utc": "2026-02-22T11:03:36.020000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2026-02-06T19:59:57.331000+00:00",
+          "train_end_utc": "2026-02-19T08:02:52.283000+00:00",
+          "valid_start_utc": "2026-02-19T08:02:52.284000+00:00",
+          "valid_end_utc": "2026-02-20T21:33:14.152000+00:00",
+          "test_start_utc": "2026-02-20T21:33:14.153000+00:00",
+          "test_end_utc": "2026-02-22T11:03:36.021000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2026-02-06T19:59:57.331000+00:00",
+          "train_end_utc": "2026-02-20T02:48:03.217000+00:00",
+          "valid_start_utc": "2026-02-20T02:48:03.218000+00:00",
+          "valid_end_utc": "2026-02-21T06:55:49.618000+00:00",
+          "test_start_utc": "2026-02-21T06:55:49.619000+00:00",
+          "test_end_utc": "2026-02-22T11:03:36.019000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-ETC",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 205595,
+      "from_utc": "2025-08-29T19:59:55.637000+00:00",
+      "to_utc": "2026-02-22T11:12:59.137000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_ETC_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:59:55.637000+00:00",
+          "train_end_utc": "2026-01-09T07:24:43.262000+00:00",
+          "valid_start_utc": "2026-01-09T07:24:43.263000+00:00",
+          "valid_end_utc": "2026-01-31T09:18:51.199000+00:00",
+          "test_start_utc": "2026-01-31T09:18:51.200000+00:00",
+          "test_end_utc": "2026-02-22T11:12:59.136000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:59:55.637000+00:00",
+          "train_end_utc": "2026-01-18T03:22:22.437000+00:00",
+          "valid_start_utc": "2026-01-18T03:22:22.438000+00:00",
+          "valid_end_utc": "2026-02-04T19:17:40.787000+00:00",
+          "test_start_utc": "2026-02-04T19:17:40.788000+00:00",
+          "test_end_utc": "2026-02-22T11:12:59.137000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:59:55.637000+00:00",
+          "train_end_utc": "2026-01-26T23:20:01.612000+00:00",
+          "valid_start_utc": "2026-01-26T23:20:01.613000+00:00",
+          "valid_end_utc": "2026-02-09T05:16:30.374000+00:00",
+          "test_start_utc": "2026-02-09T05:16:30.375000+00:00",
+          "test_end_utc": "2026-02-22T11:12:59.136000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-ATH",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 161803,
+      "from_utc": "2025-08-29T19:51:06.033000+00:00",
+      "to_utc": "2026-02-22T10:46:44.636000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_ATH_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:51:06.033000+00:00",
+          "train_end_utc": "2026-01-09T07:02:49.985000+00:00",
+          "valid_start_utc": "2026-01-09T07:02:49.986000+00:00",
+          "valid_end_utc": "2026-01-31T08:54:47.310000+00:00",
+          "test_start_utc": "2026-01-31T08:54:47.311000+00:00",
+          "test_end_utc": "2026-02-22T10:46:44.635000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:51:06.033000+00:00",
+          "train_end_utc": "2026-01-18T02:59:36.915000+00:00",
+          "valid_start_utc": "2026-01-18T02:59:36.916000+00:00",
+          "valid_end_utc": "2026-02-04T18:53:10.775000+00:00",
+          "test_start_utc": "2026-02-04T18:53:10.776000+00:00",
+          "test_end_utc": "2026-02-22T10:46:44.635000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:51:06.033000+00:00",
+          "train_end_utc": "2026-01-26T22:56:23.845000+00:00",
+          "valid_start_utc": "2026-01-26T22:56:23.846000+00:00",
+          "valid_end_utc": "2026-02-09T04:51:34.240000+00:00",
+          "test_start_utc": "2026-02-09T04:51:34.241000+00:00",
+          "test_end_utc": "2026-02-22T10:46:44.635000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-HBAR",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 190780,
+      "from_utc": "2025-08-29T19:59:55.302000+00:00",
+      "to_utc": "2026-02-22T10:59:55.782000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_HBAR_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:59:55.302000+00:00",
+          "train_end_utc": "2026-01-09T07:14:55.662000+00:00",
+          "valid_start_utc": "2026-01-09T07:14:55.663000+00:00",
+          "valid_end_utc": "2026-01-31T09:07:25.722000+00:00",
+          "test_start_utc": "2026-01-31T09:07:25.723000+00:00",
+          "test_end_utc": "2026-02-22T10:59:55.782000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:59:55.302000+00:00",
+          "train_end_utc": "2026-01-18T03:11:55.686000+00:00",
+          "valid_start_utc": "2026-01-18T03:11:55.687000+00:00",
+          "valid_end_utc": "2026-02-04T19:05:55.734000+00:00",
+          "test_start_utc": "2026-02-04T19:05:55.735000+00:00",
+          "test_end_utc": "2026-02-22T10:59:55.782000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:59:55.302000+00:00",
+          "train_end_utc": "2026-01-26T23:08:55.710000+00:00",
+          "valid_start_utc": "2026-01-26T23:08:55.711000+00:00",
+          "valid_end_utc": "2026-02-09T05:04:25.746000+00:00",
+          "test_start_utc": "2026-02-09T05:04:25.747000+00:00",
+          "test_end_utc": "2026-02-22T10:59:55.782000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-DOOD",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 125220,
+      "from_utc": "2025-10-10T15:59:59.464000+00:00",
+      "to_utc": "2026-02-22T09:43:53.836000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_DOOD_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-10-10T15:59:59.464000+00:00",
+          "train_end_utc": "2026-01-19T17:17:55.243000+00:00",
+          "valid_start_utc": "2026-01-19T17:17:55.244000+00:00",
+          "valid_end_utc": "2026-02-05T13:30:54.539000+00:00",
+          "test_start_utc": "2026-02-05T13:30:54.540000+00:00",
+          "test_end_utc": "2026-02-22T09:43:53.835000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-10-10T15:59:59.464000+00:00",
+          "train_end_utc": "2026-01-26T10:59:06.961000+00:00",
+          "valid_start_utc": "2026-01-26T10:59:06.962000+00:00",
+          "valid_end_utc": "2026-02-08T22:21:30.398000+00:00",
+          "test_start_utc": "2026-02-08T22:21:30.399000+00:00",
+          "test_end_utc": "2026-02-22T09:43:53.835000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-10-10T15:59:59.464000+00:00",
+          "train_end_utc": "2026-02-02T04:40:18.680000+00:00",
+          "valid_start_utc": "2026-02-02T04:40:18.681000+00:00",
+          "valid_end_utc": "2026-02-12T07:12:06.257000+00:00",
+          "test_start_utc": "2026-02-12T07:12:06.258000+00:00",
+          "test_end_utc": "2026-02-22T09:43:53.834000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-ARK",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 106284,
+      "from_utc": "2025-08-29T19:59:50.879000+00:00",
+      "to_utc": "2026-02-22T09:44:19.838000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_ARK_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:59:50.879000+00:00",
+          "train_end_utc": "2026-01-09T06:18:12.598000+00:00",
+          "valid_start_utc": "2026-01-09T06:18:12.599000+00:00",
+          "valid_end_utc": "2026-01-31T08:01:16.217000+00:00",
+          "test_start_utc": "2026-01-31T08:01:16.218000+00:00",
+          "test_end_utc": "2026-02-22T09:44:19.836000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:59:50.879000+00:00",
+          "train_end_utc": "2026-01-18T02:11:26.046000+00:00",
+          "valid_start_utc": "2026-01-18T02:11:26.047000+00:00",
+          "valid_end_utc": "2026-02-04T17:57:52.941000+00:00",
+          "test_start_utc": "2026-02-04T17:57:52.942000+00:00",
+          "test_end_utc": "2026-02-22T09:44:19.836000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:59:50.879000+00:00",
+          "train_end_utc": "2026-01-26T22:04:39.494000+00:00",
+          "valid_start_utc": "2026-01-26T22:04:39.495000+00:00",
+          "valid_end_utc": "2026-02-09T03:54:29.665000+00:00",
+          "test_start_utc": "2026-02-09T03:54:29.666000+00:00",
+          "test_end_utc": "2026-02-22T09:44:19.836000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-LSK",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 116867,
+      "from_utc": "2025-08-29T19:48:44.480000+00:00",
+      "to_utc": "2026-02-22T10:21:13.228000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v3_full_label_tp1H20_20260301\\prob_features_KRW_LSK_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2025-08-29T19:48:44.480000+00:00",
+          "train_end_utc": "2026-01-09T06:43:06.041000+00:00",
+          "valid_start_utc": "2026-01-09T06:43:06.042000+00:00",
+          "valid_end_utc": "2026-01-31T08:32:09.634000+00:00",
+          "test_start_utc": "2026-01-31T08:32:09.635000+00:00",
+          "test_end_utc": "2026-02-22T10:21:13.227000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2025-08-29T19:48:44.480000+00:00",
+          "train_end_utc": "2026-01-18T02:38:43.478000+00:00",
+          "valid_start_utc": "2026-01-18T02:38:43.479000+00:00",
+          "valid_end_utc": "2026-02-04T18:29:58.352000+00:00",
+          "test_start_utc": "2026-02-04T18:29:58.353000+00:00",
+          "test_end_utc": "2026-02-22T10:21:13.226000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2025-08-29T19:48:44.480000+00:00",
+          "train_end_utc": "2026-01-26T22:34:20.915000+00:00",
+          "valid_start_utc": "2026-01-26T22:34:20.916000+00:00",
+          "valid_end_utc": "2026-02-09T04:27:47.071000+00:00",
+          "test_start_utc": "2026-02-09T04:27:47.072000+00:00",
+          "test_end_utc": "2026-02-22T10:21:13.227000+00:00"
+        }
+      ]
+    }
+  ]
+}

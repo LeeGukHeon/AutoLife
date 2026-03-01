@@ -77,6 +77,8 @@ public:
             double profit_loss_krw = 0.0;
             double profit_loss_pct = 0.0;
             double fee_paid_krw = 0.0;
+            double initial_stop_loss_distance_pct = 0.0;
+            double initial_take_profit_distance_pct = 0.0;
             double signal_filter = 0.0;
             double signal_strength = 0.0;
             double liquidity_score = 0.0;
@@ -101,6 +103,8 @@ public:
             std::string strategy_exit_mode_effective = "enforce";
             int strategy_exit_triggered_count = 0;
             int strategy_exit_observe_only_suppressed_count = 0;
+            int strategy_exit_executed_count = 0;
+            int strategy_exit_clamp_applied_count = 0;
             std::map<std::string, int> strategy_exit_triggered_by_market;
             std::map<std::string, int> strategy_exit_triggered_by_regime;
             struct StrategyExitTriggerSample {
@@ -112,6 +116,18 @@ public:
                 std::string reason_code;
             };
             std::vector<StrategyExitTriggerSample> strategy_exit_trigger_samples;
+            struct StrategyExitClampSample {
+                long long ts_ms = 0;
+                std::string market;
+                std::string regime;
+                double stop_loss_price = 0.0;
+                double exit_price_before_clamp = 0.0;
+                double exit_price_after_clamp = 0.0;
+                double pnl_before_clamp = 0.0;
+                double pnl_after_clamp = 0.0;
+                std::string reason_code;
+            };
+            std::vector<StrategyExitClampSample> strategy_exit_clamp_samples;
             int no_best_signal = 0;
             int blocked_pattern_gate = 0;
             int blocked_rr_rebalance = 0;
@@ -173,6 +189,29 @@ public:
             int adaptive_partial_ratio_samples = 0;
             double adaptive_partial_ratio_sum = 0.0;
             std::array<int, 5> adaptive_partial_ratio_histogram{{0, 0, 0, 0, 0}};
+            int be_move_attempt_count = 0;
+            int be_move_applied_count = 0;
+            int be_move_skipped_due_to_delay_count = 0;
+            int stop_loss_after_partial_tp_count = 0;
+            int stop_loss_before_partial_tp_count = 0;
+            int be_after_partial_tp_delay_sec = 0;
+            int stop_loss_trigger_count = 0;
+            double stop_loss_pnl_sum_krw = 0.0;
+            double stop_loss_avg_pnl_krw = 0.0;
+            int partial_tp_exit_count = 0;
+            int take_profit_full_count = 0;
+            double take_profit_full_pnl_sum_krw = 0.0;
+            double take_profit_full_avg_pnl_krw = 0.0;
+            double tp_hit_rate = 0.0;
+            int trending_trade_count = 0;
+            double trending_holding_minutes_sum = 0.0;
+            double avg_holding_minutes_trending = 0.0;
+            int stop_loss_distance_samples_trending = 0;
+            double stop_loss_distance_sum_pct_trending = 0.0;
+            double avg_stop_loss_distance_pct_trending = 0.0;
+            int take_profit_distance_samples_trending = 0;
+            double take_profit_distance_sum_pct_trending = 0.0;
+            double avg_take_profit_distance_pct_trending = 0.0;
         };
         struct Phase4CorrelationNearCapSample {
             std::string market;
@@ -261,8 +300,17 @@ public:
             std::string liquidity_bucket;
             double expected_edge_after_cost_pct = 0.0;
             double expected_edge_tail_after_cost_pct = 0.0;
+            double expected_edge_calibrated_raw_bps = 0.0;
+            double expected_edge_calibrated_corrected_bps = 0.0;
             double margin = 0.0;
+            double implied_win = 0.0;
+            double prob_confidence_raw = 0.0;
             double prob_confidence = 0.0;
+            std::string prob_model_backend = "sgd";
+            bool lgbm_ev_affine_enabled = false;
+            bool lgbm_ev_affine_applied = false;
+            double lgbm_ev_affine_scale = 1.0;
+            double lgbm_ev_affine_shift = 0.0;
             double ev_confidence = 0.0;
             double signal_strength = 0.0;
             double liquidity_score = 0.0;
@@ -380,6 +428,13 @@ private:
     int adaptive_partial_ratio_samples_ = 0;
     double adaptive_partial_ratio_sum_ = 0.0;
     std::array<int, 5> adaptive_partial_ratio_histogram_{{0, 0, 0, 0, 0}};
+    int be_move_attempt_count_ = 0;
+    int be_move_applied_count_ = 0;
+    int be_move_skipped_due_to_delay_count_ = 0;
+    int stop_loss_after_partial_tp_count_ = 0;
+    int stop_loss_before_partial_tp_count_ = 0;
+    int be_after_partial_tp_delay_sec_ = 0;
+    std::map<std::string, long long> pending_be_after_partial_due_ms_;
     int strategyless_position_checks_ = 0;
     int strategyless_runtime_archetype_checks_ = 0;
     int strategyless_risk_exit_signals_ = 0;

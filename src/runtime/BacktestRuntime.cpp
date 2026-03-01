@@ -285,6 +285,9 @@ using autolife::common::runtime_diag::liquidityBucket;
 struct ProbabilisticRuntimeSnapshot {
     bool enabled = false;
     bool applied = false;
+    std::string prob_model_backend = "sgd";
+    double prob_h1_raw = 0.5;
+    double prob_h5_raw = 0.5;
     double prob_h1_calibrated = 0.5;
     double prob_h5_calibrated = 0.5;
     double prob_h1_mean = 0.5;
@@ -296,6 +299,8 @@ struct ProbabilisticRuntimeSnapshot {
     double expected_edge_raw_pct = 0.0;
     double expected_edge_calibrated_pct = 0.0;
     double expected_edge_calibrated_bps = 0.0;
+    double expected_edge_calibrated_raw_bps = 0.0;
+    double expected_edge_calibrated_corrected_bps = 0.0;
     double expected_edge_pct = 0.0;
     std::string edge_semantics = "net";
     bool root_cost_model_enabled_configured = false;
@@ -322,6 +327,11 @@ struct ProbabilisticRuntimeSnapshot {
     bool phase3_regime_entry_disable_enabled = false;
     bool phase3_disable_ranging_entry = false;
     std::string phase3_strategy_exit_mode = "enforce";
+    double phase3_tp_distance_trending_multiplier = 1.0;
+    bool lgbm_ev_affine_enabled = false;
+    bool lgbm_ev_affine_applied = false;
+    double lgbm_ev_affine_scale = 1.0;
+    double lgbm_ev_affine_shift = 0.0;
     std::map<std::string, bool> phase3_regime_entry_disable;
     bool phase4_portfolio_allocator_enabled = false;
     bool phase4_correlation_control_enabled = false;
@@ -354,6 +364,8 @@ struct ProbabilisticRuntimeSnapshot {
         phase3_foundation_structure_gate_policy{};
     autolife::analytics::ProbabilisticRuntimeModel::Phase3BearReboundGuardPolicy
         phase3_bear_rebound_guard_policy{};
+    autolife::analytics::ProbabilisticRuntimeModel::Phase3StopLossRiskPolicy
+        phase3_stop_loss_risk_policy{};
     double online_margin_bias = 0.0;
     double online_strength_gain = 1.0;
     autolife::common::probabilistic_regime::State regime_state =
@@ -515,6 +527,9 @@ void appendPhase4CandidateArtifact(
         item["expected_edge_calibrated_bps"] = signal.phase3.expected_edge_calibrated_bps;
         item["expected_edge_used_for_gate_bps"] = signal.phase3.expected_edge_used_for_gate_bps;
         item["margin"] = signal.probabilistic_h5_margin;
+        item["implied_win"] = signal.phase3.implied_win_runtime;
+        item["prob_confidence_raw"] = snapshot.prob_h5_raw;
+        item["prob_confidence_calibrated"] = signal.probabilistic_h5_calibrated;
         item["prob_confidence"] = signal.probabilistic_h5_calibrated;
         item["ev_confidence"] = signal.phase3.ev_confidence;
         item["regime"] = marketRegimeLabel(signal.market_regime);
@@ -538,6 +553,7 @@ void appendPhase4CandidateArtifact(
             {"phase3_frontier_enabled", signal.phase3.frontier_enabled},
             {"phase3_cost_mode", signal.phase3.cost_mode},
             {"edge_regressor_used", signal.phase3.edge_regressor_used},
+            {"prob_model_backend", signal.phase3.prob_model_backend},
             {"edge_semantics", signal.phase3.edge_semantics},
             {"root_cost_model_enabled_configured", signal.phase3.root_cost_model_enabled_configured},
             {"phase3_cost_model_enabled_configured", signal.phase3.phase3_cost_model_enabled_configured},
@@ -961,6 +977,9 @@ bool inferProbabilisticRuntimeSnapshot(
     }
 
     out_snapshot.applied = true;
+    out_snapshot.prob_model_backend = model.probModelBackend();
+    out_snapshot.prob_h1_raw = std::clamp(inference.prob_h1_raw, 0.0, 1.0);
+    out_snapshot.prob_h5_raw = std::clamp(inference.prob_h5_raw, 0.0, 1.0);
     out_snapshot.prob_h1_calibrated = std::clamp(inference.prob_h1_calibrated, 0.0, 1.0);
     out_snapshot.prob_h5_calibrated = std::clamp(inference.prob_h5_calibrated, 0.0, 1.0);
     out_snapshot.prob_h1_mean = std::clamp(inference.prob_h1_mean, 0.0, 1.0);
@@ -975,6 +994,9 @@ bool inferProbabilisticRuntimeSnapshot(
         0.05
     );
     out_snapshot.expected_edge_calibrated_bps = inference.expected_edge_calibrated_bps;
+    out_snapshot.expected_edge_calibrated_raw_bps = inference.expected_edge_calibrated_raw_bps;
+    out_snapshot.expected_edge_calibrated_corrected_bps =
+        inference.expected_edge_calibrated_corrected_bps;
     out_snapshot.expected_edge_pct = std::clamp(inference.expected_edge_pct, -0.05, 0.05);
     out_snapshot.edge_semantics = inference.edge_semantics;
     out_snapshot.root_cost_model_enabled_configured = inference.root_cost_model_enabled_configured;
@@ -1016,9 +1038,16 @@ bool inferProbabilisticRuntimeSnapshot(
     out_snapshot.phase3_liq_vol_gate_policy = phase3_policy.liq_vol_gate;
     out_snapshot.phase3_foundation_structure_gate_policy = phase3_policy.foundation_structure_gate;
     out_snapshot.phase3_bear_rebound_guard_policy = phase3_policy.bear_rebound_guard;
+    out_snapshot.phase3_stop_loss_risk_policy = phase3_policy.risk;
     out_snapshot.phase3_regime_entry_disable_enabled = phase3_policy.regime_entry_disable_enabled;
     out_snapshot.phase3_disable_ranging_entry = phase3_policy.disable_ranging_entry;
     out_snapshot.phase3_strategy_exit_mode = phase3_policy.exit.strategy_exit_mode;
+    out_snapshot.phase3_tp_distance_trending_multiplier =
+        phase3_policy.exit.tp_distance_trending_multiplier;
+    out_snapshot.lgbm_ev_affine_enabled = inference.lgbm_ev_affine_enabled;
+    out_snapshot.lgbm_ev_affine_applied = inference.lgbm_ev_affine_applied;
+    out_snapshot.lgbm_ev_affine_scale = inference.lgbm_ev_affine_scale;
+    out_snapshot.lgbm_ev_affine_shift = inference.lgbm_ev_affine_shift;
     out_snapshot.phase3_regime_entry_disable.clear();
     for (const auto& kv : phase3_policy.regime_entry_disable) {
         out_snapshot.phase3_regime_entry_disable[kv.first] = kv.second;
@@ -1143,6 +1172,7 @@ bool applyProbabilisticRuntimeAdjustment(
     signal.phase3.diagnostics_v2_enabled = snapshot.phase3_diagnostics_v2_enabled;
     signal.phase3.edge_regressor_used = snapshot.edge_regressor_used;
     signal.phase3.ev_calibration_applied = snapshot.ev_calibration_applied;
+    signal.phase3.prob_model_backend = snapshot.prob_model_backend;
     signal.phase3.ev_confidence = snapshot.ev_confidence;
     signal.phase3.edge_semantics = snapshot.edge_semantics;
     signal.phase3.root_cost_model_enabled_configured = snapshot.root_cost_model_enabled_configured;
@@ -1155,6 +1185,11 @@ bool applyProbabilisticRuntimeAdjustment(
     signal.phase3.expected_edge_raw_pct = snapshot.expected_edge_raw_pct;
     signal.phase3.expected_edge_calibrated_pct = snapshot.expected_edge_calibrated_pct;
     signal.phase3.expected_edge_calibrated_bps = snapshot.expected_edge_calibrated_bps;
+    signal.phase3.expected_edge_calibrated_raw_bps = snapshot.expected_edge_calibrated_raw_bps;
+    signal.phase3.lgbm_ev_affine_enabled = snapshot.lgbm_ev_affine_enabled;
+    signal.phase3.lgbm_ev_affine_applied = snapshot.lgbm_ev_affine_applied;
+    signal.phase3.lgbm_ev_affine_scale = snapshot.lgbm_ev_affine_scale;
+    signal.phase3.lgbm_ev_affine_shift = snapshot.lgbm_ev_affine_shift;
     signal.phase3.cost_entry_pct = snapshot.cost_entry_pct;
     signal.phase3.cost_exit_pct = snapshot.cost_exit_pct;
     signal.phase3.cost_tail_pct = snapshot.cost_tail_pct;
@@ -1561,8 +1596,12 @@ void applyProbabilisticPrimaryDecisionProfile(
         1.0
     );
 
+    const bool is_lgbm_backend = snapshot.prob_model_backend == "lgbm";
+    const double implied_win_base = is_lgbm_backend
+        ? prob
+        : (prob + (margin * pick(policy.implied_win_margin_weight, defaults.implied_win_margin_weight)));
     const double implied_win = std::clamp(
-        prob + (margin * pick(policy.implied_win_margin_weight, defaults.implied_win_margin_weight)) +
+        implied_win_base +
             ((prob - threshold) *
              pick(policy.implied_win_threshold_gap_weight, defaults.implied_win_threshold_gap_weight)),
         hostile_regime
@@ -1570,6 +1609,7 @@ void applyProbabilisticPrimaryDecisionProfile(
             : pick(policy.implied_win_min_calm, defaults.implied_win_min_calm),
         pick(policy.implied_win_max, defaults.implied_win_max)
     );
+    signal.phase3.implied_win_runtime = implied_win;
 
     if (signal.entry_price > 0.0 &&
         signal.stop_loss > 0.0 &&
@@ -1709,6 +1749,10 @@ void applyProbabilisticPrimaryDecisionProfile(
                 ? pick(policy.rr_max_hostile, defaults.rr_max_hostile)
                 : pick(policy.rr_max_calm, defaults.rr_max_calm)
         );
+        if (signal.market_regime == autolife::analytics::MarketRegime::TRENDING_UP ||
+            signal.market_regime == autolife::analytics::MarketRegime::TRENDING_DOWN) {
+            rr_target *= std::clamp(snapshot.phase3_tp_distance_trending_multiplier, 0.0, 10.0);
+        }
         signal.stop_loss = signal.entry_price * (1.0 - blended_risk_pct);
         signal.take_profit_2 = signal.entry_price * (1.0 + (blended_risk_pct * rr_target));
         signal.take_profit_1 = signal.entry_price * (1.0 + (blended_risk_pct * std::max(
@@ -2204,6 +2248,13 @@ void BacktestEngine::init(const Config& config) {
     adaptive_partial_ratio_samples_ = 0;
     adaptive_partial_ratio_sum_ = 0.0;
     adaptive_partial_ratio_histogram_ = {0, 0, 0, 0, 0};
+    be_move_attempt_count_ = 0;
+    be_move_applied_count_ = 0;
+    be_move_skipped_due_to_delay_count_ = 0;
+    stop_loss_after_partial_tp_count_ = 0;
+    stop_loss_before_partial_tp_count_ = 0;
+    be_after_partial_tp_delay_sec_ = 0;
+    pending_be_after_partial_due_ms_.clear();
     strategyless_position_checks_ = 0;
     strategyless_runtime_archetype_checks_ = 0;
     strategyless_risk_exit_signals_ = 0;
@@ -2240,9 +2291,11 @@ void BacktestEngine::init(const Config& config) {
             probabilistic_runtime_model_.loadFromFile(bundle_path.string(), &error_message);
         if (probabilistic_runtime_model_loaded_) {
             LOG_INFO(
-                "Backtest probabilistic runtime bundle loaded: path={}, features={}",
+                "Backtest probabilistic runtime bundle loaded: path={}, features={}, backend={}, model_sha256={}",
                 bundle_path.string(),
-                probabilistic_runtime_model_.featureColumns().size()
+                probabilistic_runtime_model_.featureColumns().size(),
+                probabilistic_runtime_model_.probModelBackend(),
+                probabilistic_runtime_model_.lgbmModelSha256()
             );
         } else {
             LOG_WARN(
@@ -2543,6 +2596,7 @@ void BacktestEngine::run() {
                 eod_order.strategy_name = pos.strategy_name;
                 executeOrder(eod_order, forced_exit);
                 risk_manager_->exitPosition(pos.market, forced_exit, "BacktestEOD");
+                pending_be_after_partial_due_ms_.erase(pos.market);
                 notifyStrategyClosed(pos, forced_exit);
                 forced_closes++;
             }
@@ -2604,7 +2658,21 @@ void BacktestEngine::processCandle(const Candle& candle) {
     const std::string strategy_exit_mode_effective =
         probabilistic_runtime_model_.phase3Policy().exit.strategy_exit_mode;
     const bool strategy_exit_observe_only = strategy_exit_mode_effective == "observe_only";
+    const bool strategy_exit_clamp_to_stop = strategy_exit_mode_effective == "clamp_to_stop";
+    const bool strategy_exit_disabled = strategy_exit_mode_effective == "disabled";
+    const int be_after_partial_tp_delay_sec = std::max(
+        0,
+        probabilistic_runtime_model_.phase3Policy().exit.be_after_partial_tp_delay_sec
+    );
+    be_after_partial_tp_delay_sec_ = be_after_partial_tp_delay_sec;
     entry_funnel_.strategy_exit_mode_effective = strategy_exit_mode_effective;
+    auto computeNetPnlAtExit = [&](const risk::Position& closed_position, double exit_price) {
+        const double fee_rate = Config::getInstance().getFeeRate();
+        const double exit_value = exit_price * closed_position.quantity;
+        const double entry_fee = closed_position.invested_amount * fee_rate;
+        const double exit_fee = exit_value * fee_rate;
+        return exit_value - closed_position.invested_amount - entry_fee - exit_fee;
+    };
     auto recordStrategyExitTrigger = [&](const risk::Position& position, const char* reason_code) {
         entry_funnel_.strategy_exit_triggered_count++;
         entry_funnel_.strategy_exit_triggered_by_market[position.market]++;
@@ -2625,6 +2693,42 @@ void BacktestEngine::processCandle(const Candle& candle) {
             entry_funnel_.strategy_exit_trigger_samples.push_back(std::move(sample));
         }
     };
+    auto scheduleOrApplyBreakevenAfterPartial = [&](const std::string& market, long long trigger_ts_ms) {
+        if (!risk_manager_ || market.empty()) {
+            return;
+        }
+        be_move_attempt_count_++;
+        if (be_after_partial_tp_delay_sec <= 0) {
+            risk_manager_->moveStopToBreakeven(market);
+            be_move_applied_count_++;
+            pending_be_after_partial_due_ms_.erase(market);
+            return;
+        }
+        const long long delay_ms = static_cast<long long>(be_after_partial_tp_delay_sec) * 1000LL;
+        pending_be_after_partial_due_ms_[market] = trigger_ts_ms + delay_ms;
+        be_move_skipped_due_to_delay_count_++;
+    };
+    auto flushPendingBreakevenAfterPartial = [&](long long now_ts_ms) {
+        if (!risk_manager_ || pending_be_after_partial_due_ms_.empty()) {
+            return;
+        }
+        std::vector<std::string> ready_markets;
+        ready_markets.reserve(pending_be_after_partial_due_ms_.size());
+        for (const auto& kv : pending_be_after_partial_due_ms_) {
+            if (now_ts_ms >= kv.second) {
+                ready_markets.push_back(kv.first);
+            }
+        }
+        for (const auto& market : ready_markets) {
+            pending_be_after_partial_due_ms_.erase(market);
+            if (risk_manager_->getPosition(market) == nullptr) {
+                continue;
+            }
+            risk_manager_->moveStopToBreakeven(market);
+            be_move_applied_count_++;
+        }
+    };
+    flushPendingBreakevenAfterPartial(toMsTimestamp(candle.timestamp));
     
     // 2. Market/Regime Analysis
     auto regime = regime_detector_->analyzeRegime(current_candles_);
@@ -2800,6 +2904,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
             dd_order.strategy_name = position->strategy_name;
             executeOrder(dd_order, forced_exit);
             risk_manager_->exitPosition(market_name_, forced_exit, "MaxDrawdown");
+            pending_be_after_partial_due_ms_.erase(market_name_);
             notifyStrategyClosed(closed_position, forced_exit);
             position = nullptr;
         }
@@ -2851,6 +2956,11 @@ void BacktestEngine::processCandle(const Candle& candle) {
             }
 
             if (stop_touched) {
+                if (position->half_closed) {
+                    stop_loss_after_partial_tp_count_++;
+                } else {
+                    stop_loss_before_partial_tp_count_++;
+                }
                 const risk::Position closed_position = *position;
                 const auto stop_slippage = computeDynamicSlippageThresholds(
                     engine_config_,
@@ -2875,6 +2985,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 sl_order.strategy_name = position->strategy_name;
                 executeOrder(sl_order, stop_fill);
                 risk_manager_->exitPosition(market_name_, stop_fill, "StopLoss");
+                pending_be_after_partial_due_ms_.erase(market_name_);
                 notifyStrategyClosed(closed_position, stop_fill);
                 position = nullptr;
             } else {
@@ -2921,11 +3032,15 @@ void BacktestEngine::processCandle(const Candle& candle) {
                             tp_full_order.strategy_name = position->strategy_name;
                             executeOrder(tp_full_order, tp1_fill);
                             risk_manager_->exitPosition(market_name_, tp1_fill, "TakeProfitFullDueToMinOrder");
+                            pending_be_after_partial_due_ms_.erase(market_name_);
                             notifyStrategyClosed(closed_position, tp1_fill);
                             position = nullptr;
                         } else {
                             risk_manager_->setHalfClosed(market_name_, true);
-                            risk_manager_->moveStopToBreakeven(market_name_);
+                            scheduleOrApplyBreakevenAfterPartial(
+                                market_name_,
+                                toMsTimestamp(candle.timestamp)
+                            );
                             position = risk_manager_->getPosition(market_name_);
                         }
                     } else {
@@ -2939,7 +3054,10 @@ void BacktestEngine::processCandle(const Candle& candle) {
 
                         if (risk_manager_->applyPartialSellFill(market_name_, tp1_fill, partial_qty, "TakeProfit1")) {
                             risk_manager_->setHalfClosed(market_name_, true);
-                            risk_manager_->moveStopToBreakeven(market_name_);
+                            scheduleOrApplyBreakevenAfterPartial(
+                                market_name_,
+                                toMsTimestamp(candle.timestamp)
+                            );
                         } else {
                             LOG_WARN("Backtest TP1 accounting failed: {} qty {:.8f} @ {:.0f}",
                                      market_name_, partial_qty, tp1_fill);
@@ -2975,6 +3093,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
                         tp2_order.strategy_name = position->strategy_name;
                         executeOrder(tp2_order, tp2_fill);
                         risk_manager_->exitPosition(market_name_, tp2_fill, "TakeProfit2");
+                        pending_be_after_partial_due_ms_.erase(market_name_);
                         notifyStrategyClosed(closed_position, tp2_fill);
                         position = nullptr;
                     } else if (should_exit || risk_manager_exit) {
@@ -2982,10 +3101,11 @@ void BacktestEngine::processCandle(const Candle& candle) {
                             ? (risk_manager_exit ? "strategy_and_risk_manager" : "strategy_should_exit")
                             : "risk_manager_should_exit";
                         recordStrategyExitTrigger(*position, reason_code);
-                        if (strategy_exit_observe_only) {
+                        if (strategy_exit_observe_only || strategy_exit_disabled) {
                             entry_funnel_.strategy_exit_observe_only_suppressed_count++;
                             LOG_INFO(
-                                "Backtest strategy_exit observe_only suppress: market={} reason={} hold_sec={:.1f}",
+                                "Backtest strategy_exit {} suppress: market={} reason={} hold_sec={:.1f}",
+                                strategy_exit_disabled ? "disabled" : "observe_only",
                                 market_name_,
                                 reason_code,
                                 std::max(
@@ -2995,6 +3115,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
                                 )
                             );
                         } else {
+                            entry_funnel_.strategy_exit_executed_count++;
                             const risk::Position closed_position = *position;
                             const auto strategy_exit_slippage = computeDynamicSlippageThresholds(
                                 engine_config_,
@@ -3010,18 +3131,46 @@ void BacktestEngine::processCandle(const Candle& candle) {
                                 exitSlippagePct(engine_config_),
                                 strategy_exit_slippage.max_slippage_pct
                             );
+                            const double stop_loss_price = position->stop_loss;
+                            const double exit_price_before_clamp =
+                                current_price * (1.0 - strategy_exit_fill_slippage);
+                            double exit_price_after_clamp = exit_price_before_clamp;
+                            if (strategy_exit_clamp_to_stop &&
+                                std::isfinite(stop_loss_price) &&
+                                stop_loss_price > 0.0 &&
+                                exit_price_after_clamp < stop_loss_price) {
+                                exit_price_after_clamp = stop_loss_price;
+                                entry_funnel_.strategy_exit_clamp_applied_count++;
+                            }
+                            if (strategy_exit_clamp_to_stop &&
+                                entry_funnel_.strategy_exit_clamp_samples.size() < 10) {
+                                Result::EntryFunnelSummary::StrategyExitClampSample sample;
+                                sample.ts_ms = toMsTimestamp(candle.timestamp);
+                                sample.market = position->market;
+                                sample.regime = marketRegimeLabel(position->market_regime);
+                                sample.stop_loss_price = stop_loss_price;
+                                sample.exit_price_before_clamp = exit_price_before_clamp;
+                                sample.exit_price_after_clamp = exit_price_after_clamp;
+                                sample.pnl_before_clamp =
+                                    computeNetPnlAtExit(closed_position, exit_price_before_clamp);
+                                sample.pnl_after_clamp =
+                                    computeNetPnlAtExit(closed_position, exit_price_after_clamp);
+                                sample.reason_code = reason_code;
+                                entry_funnel_.strategy_exit_clamp_samples.push_back(std::move(sample));
+                            }
                             // Execute Sell
                             Order order;
                             order.market = market_name_;
                             order.side = OrderSide::SELL;
                             order.volume = position->quantity;
-                            order.price = current_price * (1.0 - strategy_exit_fill_slippage);
+                            order.price = exit_price_after_clamp;
                             order.strategy_name = position->strategy_name;
                             executeOrder(order, order.price);
                             const std::string exit_reason = risk_manager_exit
                                 ? "RiskManagerExit"
                                 : "StrategyExit";
                             risk_manager_->exitPosition(market_name_, order.price, exit_reason);
+                            pending_be_after_partial_due_ms_.erase(market_name_);
                             notifyStrategyClosed(closed_position, order.price);
                             position = nullptr;
                         }
@@ -3143,6 +3292,10 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 probabilistic_snapshot.phase3_bear_rebound_guard_policy.low_conf_action;
             metrics.bear_rebound_guard_policy.static_threshold =
                 probabilistic_snapshot.phase3_bear_rebound_guard_policy.static_threshold;
+            metrics.stop_loss_risk_policy.enabled =
+                probabilistic_snapshot.phase3_stop_loss_risk_policy.enabled;
+            metrics.stop_loss_risk_policy.stop_loss_trending_multiplier =
+                probabilistic_snapshot.phase3_stop_loss_risk_policy.stop_loss_trending_multiplier;
             signals = strategy_manager_->collectSignals(
                 market_name_,
                 metrics,
@@ -4267,8 +4420,19 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 sample.liquidity_bucket = liquidityBucket(signal.liquidity_score);
                 sample.expected_edge_after_cost_pct = signal.expected_value;
                 sample.expected_edge_tail_after_cost_pct = signal.expected_value;
+                sample.expected_edge_calibrated_raw_bps =
+                    signal.phase3.expected_edge_calibrated_raw_bps;
+                sample.expected_edge_calibrated_corrected_bps =
+                    signal.phase3.expected_edge_calibrated_bps;
                 sample.margin = signal.probabilistic_h5_margin;
+                sample.implied_win = signal.phase3.implied_win_runtime;
+                sample.prob_confidence_raw = probabilistic_snapshot.prob_h5_raw;
                 sample.prob_confidence = signal.probabilistic_h5_calibrated;
+                sample.prob_model_backend = signal.phase3.prob_model_backend;
+                sample.lgbm_ev_affine_enabled = signal.phase3.lgbm_ev_affine_enabled;
+                sample.lgbm_ev_affine_applied = signal.phase3.lgbm_ev_affine_applied;
+                sample.lgbm_ev_affine_scale = signal.phase3.lgbm_ev_affine_scale;
+                sample.lgbm_ev_affine_shift = signal.phase3.lgbm_ev_affine_shift;
                 sample.ev_confidence = signal.phase3.ev_confidence;
                 sample.signal_strength = signal.strength;
                 sample.liquidity_score = signal.liquidity_score;
@@ -4602,6 +4766,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
                                     // Backtest holding-time logic must be candle-clock based.
                                     entered_position->entry_time = toMsTimestamp(candle.timestamp);
                                 }
+                                pending_be_after_partial_due_ms_.erase(market_name_);
                                 const double risk_pct = (best_signal.entry_price - best_signal.stop_loss) / std::max(1e-9, best_signal.entry_price);
                                 const double rr = (risk_pct > 1e-9) ? (reward_pct / risk_pct) : 0.0;
                                 risk_manager_->setPositionSignalInfo(
@@ -4817,6 +4982,17 @@ BacktestEngine::Result BacktestEngine::getResult() const {
     double gross_loss_abs = 0.0;
     double total_holding_minutes = 0.0;
     double total_fees = 0.0;
+    int stop_loss_trigger_count = 0;
+    double stop_loss_pnl_sum_krw = 0.0;
+    int partial_tp_exit_count = 0;
+    int take_profit_full_count = 0;
+    double take_profit_full_pnl_sum_krw = 0.0;
+    int trending_trade_count = 0;
+    double trending_holding_minutes_sum = 0.0;
+    int stop_loss_distance_samples_trending = 0;
+    double stop_loss_distance_sum_pct_trending = 0.0;
+    int take_profit_distance_samples_trending = 0;
+    double take_profit_distance_sum_pct_trending = 0.0;
     std::map<std::string, int> exit_reason_counts;
     std::map<std::string, Result::StrategySummary> strategy_map;
     struct PatternAgg {
@@ -4843,6 +5019,36 @@ BacktestEngine::Result BacktestEngine::getResult() const {
             }
             const std::string reason = trade.exit_reason.empty() ? "unknown" : trade.exit_reason;
             exit_reason_counts[reason]++;
+            if (reason == "StopLoss") {
+                stop_loss_trigger_count++;
+                stop_loss_pnl_sum_krw += trade.profit_loss;
+            } else if (reason == "TakeProfit1") {
+                partial_tp_exit_count++;
+            } else if (reason == "TakeProfit2" || reason == "TakeProfitFullDueToMinOrder") {
+                take_profit_full_count++;
+                take_profit_full_pnl_sum_krw += trade.profit_loss;
+            }
+
+            if (trade.market_regime == analytics::MarketRegime::TRENDING_UP ||
+                trade.market_regime == analytics::MarketRegime::TRENDING_DOWN) {
+                trending_trade_count++;
+                if (trade.exit_time > trade.entry_time) {
+                    trending_holding_minutes_sum +=
+                        static_cast<double>(trade.exit_time - trade.entry_time) / 60000.0;
+                }
+                if (std::isfinite(trade.initial_stop_loss_distance_pct) &&
+                    trade.initial_stop_loss_distance_pct > 0.0) {
+                    stop_loss_distance_samples_trending++;
+                    stop_loss_distance_sum_pct_trending +=
+                        trade.initial_stop_loss_distance_pct;
+                }
+                if (std::isfinite(trade.initial_take_profit_distance_pct) &&
+                    trade.initial_take_profit_distance_pct > 0.0) {
+                    take_profit_distance_samples_trending++;
+                    take_profit_distance_sum_pct_trending +=
+                        trade.initial_take_profit_distance_pct;
+                }
+            }
 
             if (trade.profit_loss > 0.0) {
                 ++wins;
@@ -4904,6 +5110,8 @@ BacktestEngine::Result BacktestEngine::getResult() const {
             sample.entry_price = trade.entry_price;
             sample.exit_price = trade.exit_price;
             sample.quantity = trade.quantity;
+            sample.initial_stop_loss_distance_pct = trade.initial_stop_loss_distance_pct;
+            sample.initial_take_profit_distance_pct = trade.initial_take_profit_distance_pct;
             sample.holding_minutes = (trade.exit_time > trade.entry_time)
                 ? (static_cast<double>(trade.exit_time - trade.entry_time) / 60000.0)
                 : 0.0;
@@ -5104,6 +5312,57 @@ BacktestEngine::Result BacktestEngine::getResult() const {
     result.post_entry_risk_telemetry.adaptive_partial_ratio_samples = adaptive_partial_ratio_samples_;
     result.post_entry_risk_telemetry.adaptive_partial_ratio_sum = adaptive_partial_ratio_sum_;
     result.post_entry_risk_telemetry.adaptive_partial_ratio_histogram = adaptive_partial_ratio_histogram_;
+    result.post_entry_risk_telemetry.be_move_attempt_count = be_move_attempt_count_;
+    result.post_entry_risk_telemetry.be_move_applied_count = be_move_applied_count_;
+    result.post_entry_risk_telemetry.be_move_skipped_due_to_delay_count =
+        be_move_skipped_due_to_delay_count_;
+    result.post_entry_risk_telemetry.stop_loss_after_partial_tp_count =
+        stop_loss_after_partial_tp_count_;
+    result.post_entry_risk_telemetry.stop_loss_before_partial_tp_count =
+        stop_loss_before_partial_tp_count_;
+    result.post_entry_risk_telemetry.be_after_partial_tp_delay_sec =
+        be_after_partial_tp_delay_sec_;
+    result.post_entry_risk_telemetry.stop_loss_trigger_count = stop_loss_trigger_count;
+    result.post_entry_risk_telemetry.stop_loss_pnl_sum_krw = stop_loss_pnl_sum_krw;
+    result.post_entry_risk_telemetry.stop_loss_avg_pnl_krw =
+        (stop_loss_trigger_count > 0)
+            ? (stop_loss_pnl_sum_krw / static_cast<double>(stop_loss_trigger_count))
+            : 0.0;
+    result.post_entry_risk_telemetry.partial_tp_exit_count = partial_tp_exit_count;
+    result.post_entry_risk_telemetry.take_profit_full_count = take_profit_full_count;
+    result.post_entry_risk_telemetry.take_profit_full_pnl_sum_krw = take_profit_full_pnl_sum_krw;
+    result.post_entry_risk_telemetry.take_profit_full_avg_pnl_krw =
+        (take_profit_full_count > 0)
+            ? (take_profit_full_pnl_sum_krw / static_cast<double>(take_profit_full_count))
+            : 0.0;
+    result.post_entry_risk_telemetry.tp_hit_rate =
+        (closed_trades > 0)
+            ? (static_cast<double>(take_profit_full_count) / static_cast<double>(closed_trades))
+            : 0.0;
+    result.post_entry_risk_telemetry.trending_trade_count = trending_trade_count;
+    result.post_entry_risk_telemetry.trending_holding_minutes_sum = trending_holding_minutes_sum;
+    result.post_entry_risk_telemetry.avg_holding_minutes_trending =
+        (trending_trade_count > 0)
+            ? (trending_holding_minutes_sum / static_cast<double>(trending_trade_count))
+            : 0.0;
+    result.post_entry_risk_telemetry.stop_loss_distance_samples_trending =
+        stop_loss_distance_samples_trending;
+    result.post_entry_risk_telemetry.stop_loss_distance_sum_pct_trending =
+        stop_loss_distance_sum_pct_trending;
+    result.post_entry_risk_telemetry.avg_stop_loss_distance_pct_trending =
+        (stop_loss_distance_samples_trending > 0)
+            ? (stop_loss_distance_sum_pct_trending /
+               static_cast<double>(stop_loss_distance_samples_trending))
+            : 0.0;
+    result.post_entry_risk_telemetry.take_profit_distance_samples_trending =
+        take_profit_distance_samples_trending;
+    result.post_entry_risk_telemetry.take_profit_distance_sum_pct_trending =
+        take_profit_distance_sum_pct_trending;
+    result.post_entry_risk_telemetry.avg_take_profit_distance_pct_trending =
+        (take_profit_distance_samples_trending > 0)
+            ? (take_profit_distance_sum_pct_trending /
+               static_cast<double>(take_profit_distance_samples_trending))
+            : 0.0;
     result.strategyless_position_checks = strategyless_position_checks_;
     result.strategyless_runtime_archetype_checks = strategyless_runtime_archetype_checks_;
     result.strategyless_risk_exit_signals = strategyless_risk_exit_signals_;

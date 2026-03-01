@@ -1,0 +1,51 @@
+{
+  "dataset_name": "backtest_fresh_5d",
+  "created_at_kst": "2026-03-01T13:06:09.077119+09:00",
+  "window_days": 5,
+  "start_ts_ms": 1771858800000,
+  "end_ts_ms": 1772290800000,
+  "markets": [
+    "KRW-BTC",
+    "KRW-ETH",
+    "KRW-XRP",
+    "KRW-SOL",
+    "KRW-DOGE",
+    "KRW-ADA"
+  ],
+  "granularity": "1m",
+  "schema": [
+    "ts_ms",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "source": "upbit_ohlcv",
+  "hashes": {
+    "KRW-BTC": {
+      "rows": 7201,
+      "sha256": "ce6514dbdb70922dbb435b5c35e829653d809bcf29da180756bacfc6650560bd"
+    },
+    "KRW-ETH": {
+      "rows": 7200,
+      "sha256": "58e8422f9a90463d674a8334e560031909c44d52263eab92f55a3004498e5f39"
+    },
+    "KRW-XRP": {
+      "rows": 7200,
+      "sha256": "46fa8bfbf217c24e9fcfd0569e09e00c3254b9bdab84ca6e74a2ba0cf8c3eb2e"
+    },
+    "KRW-SOL": {
+      "rows": 7197,
+      "sha256": "8b5374a93e38bb923f979ec2094559a4e534850465dbdf28dc459ad3a14cb229"
+    },
+    "KRW-DOGE": {
+      "rows": 7059,
+      "sha256": "13567cab5b8cc43ceaab2ac2b33e2788c49468d875654c70e50a5658ebd1f98b"
+    },
+    "KRW-ADA": {
+      "rows": 6632,
+      "sha256": "a57beede456ed7353a9071c70f1ded2d062c2507201f4b8833028367dd17335b"
+    }
+  }
+}

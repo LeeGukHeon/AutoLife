@@ -28,6 +28,8 @@ struct Position {
     
     // ?먯젅/?듭젅媛
     double stop_loss;
+    double initial_stop_loss_distance_pct;
+    double initial_take_profit_distance_pct;
     double take_profit_1;       // 1李??듭젅 (50%)
     double take_profit_2;       // 2李??듭젅 (100%)
     bool half_closed;           // 1李??듭젅 ?꾨즺 ?щ?
@@ -65,7 +67,7 @@ struct Position {
         : entry_price(0), current_price(0), quantity(0)
         , invested_amount(0), entry_time(0)
         , unrealized_pnl(0), unrealized_pnl_pct(0)
-        , stop_loss(0), take_profit_1(0), take_profit_2(0)
+        , stop_loss(0), initial_stop_loss_distance_pct(0.0), initial_take_profit_distance_pct(0.0), take_profit_1(0), take_profit_2(0)
         , half_closed(false), highest_price(0)
         , breakeven_trigger(0), trailing_start(0)
         , pending_order_time(0), pending_order_price(0)
@@ -87,6 +89,8 @@ struct TradeHistory {
     std::string market;
     double entry_price;
     double exit_price;
+    double initial_stop_loss_distance_pct;
+    double initial_take_profit_distance_pct;
     double quantity;
     double profit_loss;
     double profit_loss_pct;
@@ -112,7 +116,7 @@ struct TradeHistory {
     double probabilistic_h5_margin;
     
     TradeHistory()
-        : entry_price(0), exit_price(0), quantity(0)
+        : entry_price(0), exit_price(0), initial_stop_loss_distance_pct(0.0), initial_take_profit_distance_pct(0.0), quantity(0)
         , profit_loss(0), profit_loss_pct(0), fee_paid(0)
         , entry_time(0), exit_time(0)
         , signal_filter(0.5), signal_strength(0.0)

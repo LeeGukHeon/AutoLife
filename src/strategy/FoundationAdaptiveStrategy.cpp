@@ -1306,6 +1306,15 @@ Signal FoundationAdaptiveStrategy::generateSignal(
             std::max(0.0, engine_cfg.foundation_signal_context_hostile_uptrend_reward_max)
         );
     }
+    if (metrics.stop_loss_risk_policy.enabled &&
+        (regime.regime == analytics::MarketRegime::TRENDING_UP ||
+         regime.regime == analytics::MarketRegime::TRENDING_DOWN)) {
+        risk_pct *= std::clamp(
+            metrics.stop_loss_risk_policy.stop_loss_trending_multiplier,
+            0.0,
+            10.0
+        );
+    }
     const double mtf_centered = mtf_confirmation.score - 0.50;
     risk_pct *= std::clamp(
         1.0 - (mtf_centered * engine_cfg.foundation_signal_mtf_risk_scale),

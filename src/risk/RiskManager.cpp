@@ -331,6 +331,13 @@ void RiskManager::enterPosition(
     pos.invested_amount = base_invested;  // [???쒓낯?? ??筌뚯슜鍮??룸챷?????ш낄猷??????癲ル슓堉곤쭗?ㅒ? ?????? ?怨뚮옓??????⑤베毓??
     pos.entry_time = getCurrentTimestamp();
     pos.stop_loss = stop_loss;
+    pos.initial_stop_loss_distance_pct = (entry_price > 0.0 && stop_loss > 0.0 && stop_loss < entry_price)
+        ? std::clamp((entry_price - stop_loss) / entry_price, 0.0, 1.0)
+        : 0.0;
+    pos.initial_take_profit_distance_pct =
+        (entry_price > 0.0 && take_profit_2 > entry_price)
+            ? std::clamp((take_profit_2 - entry_price) / entry_price, 0.0, 10.0)
+            : 0.0;
     pos.take_profit_1 = take_profit_1;
     pos.take_profit_2 = take_profit_2;
     pos.strategy_name = strategy_name;
@@ -565,6 +572,8 @@ bool RiskManager::applyPartialSellFill(
     trade.market = pos.market;
     trade.entry_price = pos.entry_price;
     trade.exit_price = exit_price;
+    trade.initial_stop_loss_distance_pct = pos.initial_stop_loss_distance_pct;
+    trade.initial_take_profit_distance_pct = pos.initial_take_profit_distance_pct;
     trade.quantity = qty;
     trade.entry_time = pos.entry_time;
     trade.exit_time = getCurrentTimestamp();
@@ -1589,6 +1598,8 @@ void RiskManager::recordTrade(
     trade.market = pos.market;
     trade.entry_price = pos.entry_price;
     trade.exit_price = exit_price;
+    trade.initial_stop_loss_distance_pct = pos.initial_stop_loss_distance_pct;
+    trade.initial_take_profit_distance_pct = pos.initial_take_profit_distance_pct;
     trade.quantity = pos.quantity;
     trade.entry_time = pos.entry_time;
     trade.exit_time = getCurrentTimestamp();
@@ -1688,4 +1699,3 @@ void RiskManager::updateCapital(double amount_change) {
 
 } // namespace risk
 } // namespace autolife
-

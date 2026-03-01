@@ -1,0 +1,27 @@
+{
+  "risk_pct_policy": {
+    "RANGING": {
+      "mult": 1.15,
+      "floor_pct": 0.35,
+      "cap_pct": 1.4
+    },
+    "TRENDING_UP": {
+      "mult": 1.15,
+      "floor_pct": 0.35,
+      "cap_pct": 1.4
+    },
+    "TRENDING_DOWN": {
+      "mult": 1.15,
+      "floor_pct": 0.35,
+      "cap_pct": 1.4
+    },
+    "DEFAULT": {
+      "mult": 1.15,
+      "floor_pct": 0.35,
+      "cap_pct": 1.4
+    }
+  },
+  "tp1_rr": 0.5,
+  "horizon_bars": 20,
+  "label_cost_bps": 12.0
+}

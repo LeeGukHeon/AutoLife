@@ -38,6 +38,10 @@ struct CoinMetrics {
         std::string low_conf_action = "hold";
         double static_threshold = 1.0;
     };
+    struct StopLossRiskPolicy {
+        bool enabled = false;
+        double stop_loss_trending_multiplier = 1.0;
+    };
     std::string market;                  // 마켓 코드
     double current_price;                 // 현재가
     double volume_24h;                    // 24시간 거래량
@@ -52,6 +56,10 @@ struct CoinMetrics {
     double volatility;                    // 변동성
     double liquidity_score;               // 유동성 점수
     double composite_score;               // 종합 점수 (0-100)
+    double model_margin_score;            // probabilistic margin (p_h5_calibrated - threshold_h5)
+    double model_prob_h5_calibrated;      // cached probability for diagnostics
+    double model_selection_threshold_h5;  // cached threshold for diagnostics
+    bool model_margin_valid;              // true when model_margin_score is available
     OrderbookSnapshot orderbook_snapshot; // 주문서 스냅샷
     nlohmann::json orderbook_units;       // 주문서 유닛 캐시
 
@@ -61,12 +69,15 @@ struct CoinMetrics {
     LiquidityVolumeGatePolicy liq_vol_gate_policy;
     FoundationStructureGatePolicy foundation_structure_gate_policy;
     BearReboundGuardPolicy bear_rebound_guard_policy;
+    StopLossRiskPolicy stop_loss_risk_policy;
     
     CoinMetrics() : current_price(0), volume_24h(0), volume_surge_ratio(1.0),
                     price_change_rate(0), price_momentum(0), 
                     order_book_imbalance(0), buy_pressure(0), sell_pressure(0),
                     buy_wall_count(0), sell_wall_count(0),
-                    volatility(0), liquidity_score(0), composite_score(0) {}
+                    volatility(0), liquidity_score(0), composite_score(0),
+                    model_margin_score(0.0), model_prob_h5_calibrated(0.5),
+                    model_selection_threshold_h5(0.5), model_margin_valid(false) {}
 };
 
 // 매수/매도벽 정보

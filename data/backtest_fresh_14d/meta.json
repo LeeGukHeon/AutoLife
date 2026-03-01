@@ -1,0 +1,204 @@
+{
+  "dataset_name": "backtest_fresh_14d",
+  "created_at_kst": "2026-03-01T13:42:51.932800+09:00",
+  "window_days": 14,
+  "eval_start_ts_ms": 1771081200000,
+  "eval_end_ts_ms": 1772290800000,
+  "collect_start_ts_ms": 1770044400000,
+  "collect_end_ts_ms": 1772290800000,
+  "collect_prewarm_hours": 168,
+  "max_tf_margin_hours": 120,
+  "markets": [
+    "KRW-BTC",
+    "KRW-ETH",
+    "KRW-XRP",
+    "KRW-SOL",
+    "KRW-DOGE",
+    "KRW-ADA"
+  ],
+  "granularity": "1m+companions",
+  "schema": [
+    "ts_ms",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "source": "upbit_ohlcv",
+  "hashes": {
+    "KRW-BTC": {
+      "1m": {
+        "rows": 35978,
+        "sha256": "d0061d6a4d023be2f6454b8ab4db930016214a5f554c6600181a5eacd5465100",
+        "rows_before_eval_start": 16408
+      },
+      "5m": {
+        "rows": 7488,
+        "sha256": "a4e08300f8bf8a7d2e2ae28bb81f9042bcfc9ebeb6d8fec3b476732ffd3c97c6",
+        "rows_before_eval_start": 3456
+      },
+      "15m": {
+        "rows": 2496,
+        "sha256": "3dac948bf565b464fb67d2e9e2fec625987e03976dff55301ff88d31fedd2f8e",
+        "rows_before_eval_start": 1152
+      },
+      "60m": {
+        "rows": 624,
+        "sha256": "3f1d5de1dc2bbf49d5a2561a31c2d1450de29b273a90d926adb47e6d8f25e553",
+        "rows_before_eval_start": 288
+      },
+      "240m": {
+        "rows": 157,
+        "sha256": "2ebba5dc5de32d0a6007799109f7e63d836bebf6aeefa0de7a318cfe82f6e6e7",
+        "rows_before_eval_start": 73
+      }
+    },
+    "KRW-ETH": {
+      "1m": {
+        "rows": 36369,
+        "sha256": "279341d44eb38db299c019c736574f3935dfe45a0dbd3e3f15622f9d6760928b",
+        "rows_before_eval_start": 16678
+      },
+      "5m": {
+        "rows": 7488,
+        "sha256": "3cf111ffa3db8419c3ba8f8d7875da8397359f3eaf44ed255938f7eed1619f57",
+        "rows_before_eval_start": 3456
+      },
+      "15m": {
+        "rows": 2496,
+        "sha256": "098ce9826df17e1b565c2156f7ce6701f590a6869e423a151ea55c1134836b73",
+        "rows_before_eval_start": 1152
+      },
+      "60m": {
+        "rows": 624,
+        "sha256": "18ccf0434725b0fcd63543d91ef231042478142e6be99cb114a85564def37e30",
+        "rows_before_eval_start": 288
+      },
+      "240m": {
+        "rows": 157,
+        "sha256": "e03e0b239b6e89ccf3cfde91029f8b5e68f58a14034a546ad6760ecf20471c79",
+        "rows_before_eval_start": 73
+      }
+    },
+    "KRW-XRP": {
+      "1m": {
+        "rows": 35796,
+        "sha256": "3b4a55f283fcc9e6f55207b0af334ece97efaecfdc13154bd04f84d73760f882",
+        "rows_before_eval_start": 16396
+      },
+      "5m": {
+        "rows": 7488,
+        "sha256": "b165bdc99f4ab2ad2d17b6f28af8982bdb80c51310c2fc258dafc7336a877baa",
+        "rows_before_eval_start": 3456
+      },
+      "15m": {
+        "rows": 2496,
+        "sha256": "3760e537fea3c8d87718b2640eb061d96f7e7a0956638ada4cbac9eec4db71bd",
+        "rows_before_eval_start": 1152
+      },
+      "60m": {
+        "rows": 624,
+        "sha256": "55314a92754feb7a67c1e002c8032caedf860d726480ff1bd4afcc7a0ff882ac",
+        "rows_before_eval_start": 288
+      },
+      "240m": {
+        "rows": 157,
+        "sha256": "d3273ce27176e514a7dc3e1e4cceb61777e18aa227a8d29d1cfc6841ff501fb4",
+        "rows_before_eval_start": 73
+      }
+    },
+    "KRW-SOL": {
+      "1m": {
+        "rows": 36947,
+        "sha256": "a70c9d2efb36eb6a8b3a14e1b3d2aa15db9cdda4bb9764e552f520d26d3f41c0",
+        "rows_before_eval_start": 16988
+      },
+      "5m": {
+        "rows": 7488,
+        "sha256": "a78acbcac71e78c81f4b3a88cc9b02933c11efc5388faaa6a5b95e9d289c1f74",
+        "rows_before_eval_start": 3456
+      },
+      "15m": {
+        "rows": 2496,
+        "sha256": "dae5cb26a1582da6ae70ca08733e56fb5a482921e45fd617fa2d46237adf57df",
+        "rows_before_eval_start": 1152
+      },
+      "60m": {
+        "rows": 624,
+        "sha256": "1a1bc2223f8141f9fb5ca4298106ca6e8a495b7aa3472bdea32c1c8af6e85708",
+        "rows_before_eval_start": 288
+      },
+      "240m": {
+        "rows": 157,
+        "sha256": "74059fcf23861ae0df818736dd6c4fe85703e05c66a1f5526b1f3a569e280bdd",
+        "rows_before_eval_start": 73
+      }
+    },
+    "KRW-DOGE": {
+      "1m": {
+        "rows": 36326,
+        "sha256": "1df86117b5d4e1b6751329d9be5ef0ba197708a909ac4281ebd0934833376ceb",
+        "rows_before_eval_start": 16826
+      },
+      "5m": {
+        "rows": 7488,
+        "sha256": "c78eafd3c9814c5baf0b0a445026ed605dd1e7b7ddce04ceeed427522e7e4bcd",
+        "rows_before_eval_start": 3456
+      },
+      "15m": {
+        "rows": 2496,
+        "sha256": "d3d57b7b9d161e7b2294d9bc47ff44babe54edc8e9dbdfa84a59e15098ca63ad",
+        "rows_before_eval_start": 1152
+      },
+      "60m": {
+        "rows": 624,
+        "sha256": "7bf0ddcf31be577d6643c91812b74a0b35c431e8632e02dc23df3dc6b8a029df",
+        "rows_before_eval_start": 288
+      },
+      "240m": {
+        "rows": 157,
+        "sha256": "9270fe1075e23eccae8f174030f9b10c9f544a458bd739519aa99ce14f5374bd",
+        "rows_before_eval_start": 73
+      }
+    },
+    "KRW-ADA": {
+      "1m": {
+        "rows": 33839,
+        "sha256": "6cd5071c181574aa27c17aa26dee549ced04865ce81c330bba4d3a700c83fdd0",
+        "rows_before_eval_start": 15823
+      },
+      "5m": {
+        "rows": 7477,
+        "sha256": "ca7010686a440b448c8363d371484d52ff6af7ddd8f2983412277ce85599a908",
+        "rows_before_eval_start": 3451
+      },
+      "15m": {
+        "rows": 2496,
+        "sha256": "435259ca041bf41f66c5a619e89b8e0a9a3330ac94ce06697ee9f1e1adaab894",
+        "rows_before_eval_start": 1152
+      },
+      "60m": {
+        "rows": 624,
+        "sha256": "378c28ad1cfe9f064fd54727ae395afe5dc2da3c657a933829bd05bcf93433b7",
+        "rows_before_eval_start": 288
+      },
+      "240m": {
+        "rows": 157,
+        "sha256": "ad92d4937bfa5651761ea52b9ac4919f22e36ce7f3eaf5352f788b16e943c70d",
+        "rows_before_eval_start": 73
+      }
+    }
+  },
+  "runtime_alias": {
+    "enabled": true,
+    "pattern": "upbit_<MARKET_TOKEN>_<TF>m_fresh14.csv",
+    "tfs": [
+      "1m",
+      "5m",
+      "15m",
+      "60m",
+      "240m"
+    ]
+  }
+}

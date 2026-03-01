@@ -12,7 +12,7 @@ import re
 import subprocess
 import sys
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from _script_common import verification_lock
 
@@ -474,6 +474,28 @@ def load_supported_markets_from_runtime_bundle(bundle_path: pathlib.Path) -> Dic
     edge_semantics = str(payload.get("edge_semantics", "net")).strip().lower()
     if edge_semantics not in ("net", "gross"):
         edge_semantics = "net"
+    prob_model_backend = str(payload.get("prob_model_backend", "sgd")).strip().lower()
+    if prob_model_backend not in ("sgd", "lgbm"):
+        prob_model_backend = "sgd"
+    lgbm_model_path = str(payload.get("lgbm_model_path", "")).strip()
+    lgbm_model_sha256 = str(payload.get("lgbm_model_sha256", "")).strip().lower()
+    lgbm_h5_calibration = payload.get("lgbm_h5_calibration", {})
+    if not isinstance(lgbm_h5_calibration, dict):
+        lgbm_h5_calibration = {}
+    lgbm_h5_calibration_a = to_float(lgbm_h5_calibration.get("a", float("nan")))
+    lgbm_h5_calibration_b = to_float(lgbm_h5_calibration.get("b", float("nan")))
+    has_lgbm_platt = math.isfinite(lgbm_h5_calibration_a) and math.isfinite(lgbm_h5_calibration_b)
+    lgbm_calibration_mode = "platt" if has_lgbm_platt else "off"
+    lgbm_ev_affine = payload.get("lgbm_ev_affine", {})
+    if not isinstance(lgbm_ev_affine, dict):
+        lgbm_ev_affine = {}
+    lgbm_ev_affine_enabled = bool(lgbm_ev_affine.get("enabled", False))
+    lgbm_ev_affine_scale = to_float(lgbm_ev_affine.get("scale", 1.0))
+    lgbm_ev_affine_shift = to_float(lgbm_ev_affine.get("shift", 0.0))
+    if not math.isfinite(lgbm_ev_affine_scale):
+        lgbm_ev_affine_scale = 1.0
+    if not math.isfinite(lgbm_ev_affine_shift):
+        lgbm_ev_affine_shift = 0.0
     root_cost_model = payload.get("cost_model", {})
     if not isinstance(root_cost_model, dict):
         root_cost_model = {}
@@ -491,6 +513,19 @@ def load_supported_markets_from_runtime_bundle(bundle_path: pathlib.Path) -> Dic
         "global_fallback_enabled": bool(global_fallback_enabled),
         "export_mode": str(payload.get("export_mode", "")).strip(),
         "edge_semantics": edge_semantics,
+        "prob_model_backend": prob_model_backend,
+        "lgbm_model_path": lgbm_model_path,
+        "lgbm_model_sha256": lgbm_model_sha256,
+        "lgbm_calibration_mode": lgbm_calibration_mode,
+        "lgbm_h5_calibration": {
+            "a": float(lgbm_h5_calibration_a) if has_lgbm_platt else None,
+            "b": float(lgbm_h5_calibration_b) if has_lgbm_platt else None,
+        },
+        "lgbm_ev_affine": {
+            "enabled": lgbm_ev_affine_enabled,
+            "scale": float(lgbm_ev_affine_scale),
+            "shift": float(lgbm_ev_affine_shift),
+        },
         "root_cost_model_enabled_configured": bool(root_cost_model.get("enabled", False)),
         "phase3_cost_model_enabled_configured": bool(phase3_cost_model.get("enabled", False)),
         "phase4_market_cluster_map": extract_phase4_market_cluster_map(payload),
@@ -748,6 +783,7 @@ def build_phase4_off_on_comparison(
                 result = run_backtest(
                     exe_path=exe_path,
                     dataset_path=dataset_path,
+                    config_path=config_path,
                     require_higher_tf_companions=bool(require_higher_tf_companions),
                     disable_adaptive_state_io=bool(disable_adaptive_state_io),
                 )
@@ -902,6 +938,7 @@ def parse_backtest_json(proc: subprocess.CompletedProcess) -> Dict[str, Any]:
 def run_backtest(
     exe_path: pathlib.Path,
     dataset_path: pathlib.Path,
+    config_path: pathlib.Path,
     require_higher_tf_companions: bool,
     disable_adaptive_state_io: bool,
     evaluation_start_ts: Optional[int] = None,
@@ -909,7 +946,14 @@ def run_backtest(
     cumulative_start_ts: Optional[int] = None,
     cumulative_end_ts: Optional[int] = None,
 ) -> Dict[str, Any]:
-    cmd = [str(exe_path), "--backtest", str(dataset_path), "--json"]
+    cmd = [
+        str(exe_path),
+        "--backtest",
+        str(dataset_path),
+        "--json",
+        "--config-path",
+        str(config_path),
+    ]
     if require_higher_tf_companions and is_upbit_primary_1m_dataset(dataset_path):
         cmd.append("--require-higher-tf-companions")
     env = os.environ.copy()
@@ -1368,6 +1412,14 @@ def load_entry_stage_funnel_range_stats(
         "order_block_rounds_in_range": 0,
         "order_block_reason_counts_in_range": {},
         "top_order_block_reasons_in_range": [],
+        "no_signal_generated_in_range": 0,
+        "no_signal_reason_counts_in_range": {},
+        "top_no_signal_reasons_in_range": [],
+        "no_signal_reason_event_rows_in_range": 0,
+        "no_signal_reason_event_rows_total": 0,
+        "no_signal_reason_event_rows_with_ts_total": 0,
+        "no_signal_reason_event_rows_missing_ts_total": 0,
+        "no_signal_reason_timestamp_coverage_total": 0.0,
         "ts_min_total": None,
         "ts_max_total": None,
         "ts_min_in_range": None,
@@ -1384,7 +1436,21 @@ def load_entry_stage_funnel_range_stats(
             or reason_key in {"reject_expected_edge_negative_count", "reject_expected_edge_negative"}
         )
 
+    def _is_no_signal_reason(reason: str) -> bool:
+        reason_key = str(reason).strip().lower()
+        if not reason_key or reason_key == "no_signal_generated":
+            return False
+        return bool(
+            reason_key.startswith("foundation_no_signal_")
+            or reason_key.startswith("no_signal_")
+            or reason_key.startswith("probabilistic_")
+        )
+
     block_reason_counts: Dict[str, int] = {}
+    no_signal_reason_counts: Dict[str, int] = {}
+    no_signal_event_rows_total = 0
+    no_signal_event_rows_with_ts_total = 0
+    no_signal_event_rows_missing_ts_total = 0
     try:
         with artifact_path.open("r", encoding="utf-8", errors="ignore") as fp:
             for raw_line in fp:
@@ -1407,6 +1473,30 @@ def load_entry_stage_funnel_range_stats(
                         out["ts_min_total"] = int(ts_value)
                     if out["ts_max_total"] is None or ts_value > int(out["ts_max_total"]):
                         out["ts_max_total"] = int(ts_value)
+                reason_counts = payload.get("reject_reason_counts", {})
+                if not isinstance(reason_counts, dict):
+                    reason_counts = {}
+
+                has_no_signal_reason = False
+                for reason, value in reason_counts.items():
+                    reason_key = str(reason).strip()
+                    if not reason_key:
+                        continue
+                    count = max(0, to_int(value))
+                    if count <= 0:
+                        continue
+                    if str(reason_key).strip().lower() == "no_signal_generated":
+                        has_no_signal_reason = True
+                        continue
+                    if _is_no_signal_reason(reason_key):
+                        has_no_signal_reason = True
+                if has_no_signal_reason:
+                    no_signal_event_rows_total += 1
+                    if ts_value > 0:
+                        no_signal_event_rows_with_ts_total += 1
+                    else:
+                        no_signal_event_rows_missing_ts_total += 1
+
                 in_range = bool(enabled and ts_value > 0 and start <= ts_value <= end)
                 if not in_range:
                     continue
@@ -1435,6 +1525,31 @@ def load_entry_stage_funnel_range_stats(
                     out["ts_min_in_range"] = int(ts_value)
                 if out["ts_max_in_range"] is None or ts_value > int(out["ts_max_in_range"]):
                     out["ts_max_in_range"] = int(ts_value)
+
+                no_signal_count_in_row = 0
+                for reason, value in reason_counts.items():
+                    reason_key = str(reason).strip()
+                    if not reason_key:
+                        continue
+                    count = max(0, to_int(value))
+                    if count <= 0:
+                        continue
+                    reason_key_lc = str(reason_key).strip().lower()
+                    if reason_key_lc == "no_signal_generated":
+                        no_signal_count_in_row += count
+                        out["no_signal_generated_in_range"] = int(
+                            out["no_signal_generated_in_range"]
+                        ) + int(count)
+                        continue
+                    if _is_no_signal_reason(reason_key):
+                        no_signal_count_in_row += count
+                        no_signal_reason_counts[reason_key] = (
+                            no_signal_reason_counts.get(reason_key, 0) + int(count)
+                        )
+                if no_signal_count_in_row > 0:
+                    out["no_signal_reason_event_rows_in_range"] = int(
+                        out["no_signal_reason_event_rows_in_range"]
+                    ) + 1
 
                 ev_consistency = payload.get("ev_consistency", {})
                 if isinstance(ev_consistency, dict):
@@ -1469,15 +1584,13 @@ def load_entry_stage_funnel_range_stats(
                 )
                 if stage_after_portfolio > 0 and orders_submitted <= 0:
                     out["order_block_rounds_in_range"] = int(out["order_block_rounds_in_range"]) + 1
-                    reason_counts = payload.get("reject_reason_counts", {})
-                    if isinstance(reason_counts, dict):
-                        for reason, value in reason_counts.items():
-                            reason_key = str(reason).strip()
-                            if not reason_key or not _is_order_block_reason(reason_key):
-                                continue
-                            block_reason_counts[reason_key] = block_reason_counts.get(
-                                reason_key, 0
-                            ) + max(0, to_int(value))
+                    for reason, value in reason_counts.items():
+                        reason_key = str(reason).strip()
+                        if not reason_key or not _is_order_block_reason(reason_key):
+                            continue
+                        block_reason_counts[reason_key] = block_reason_counts.get(
+                            reason_key, 0
+                        ) + max(0, to_int(value))
     except Exception:
         out["reason"] = "entry_stage_funnel_log_parse_failed"
         return out
@@ -1493,6 +1606,26 @@ def load_entry_stage_funnel_range_stats(
         ],
         key=lambda item: (-int(item["count"]), str(item["reason"])),
     )[:3]
+    out["no_signal_reason_counts_in_range"] = {
+        str(k): int(v) for k, v in no_signal_reason_counts.items() if int(v) > 0
+    }
+    out["top_no_signal_reasons_in_range"] = sorted(
+        [
+            {"reason": str(k), "count": int(v)}
+            for k, v in no_signal_reason_counts.items()
+            if int(v) > 0
+        ],
+        key=lambda item: (-int(item["count"]), str(item["reason"])),
+    )[:8]
+    out["no_signal_reason_event_rows_total"] = int(max(0, no_signal_event_rows_total))
+    out["no_signal_reason_event_rows_with_ts_total"] = int(max(0, no_signal_event_rows_with_ts_total))
+    out["no_signal_reason_event_rows_missing_ts_total"] = int(
+        max(0, no_signal_event_rows_missing_ts_total)
+    )
+    out["no_signal_reason_timestamp_coverage_total"] = round(
+        float(no_signal_event_rows_with_ts_total) / float(max(1, no_signal_event_rows_total)),
+        6,
+    ) if no_signal_event_rows_total > 0 else 0.0
     ev_samples = max(0, to_int(out.get("ev_samples_in_range", 0)))
     if ev_samples > 0:
         out["ev_at_manager_pass_avg_in_range"] = (
@@ -3581,11 +3714,13 @@ def resolve_core_dataset_paths(
 
 def run_core_window_direct_report(
     exe_path: pathlib.Path,
+    config_path: pathlib.Path,
     dataset_paths: List[pathlib.Path],
     require_higher_tf_companions: bool,
     disable_adaptive_state_io: bool,
     phase4_market_cluster_map: Dict[str, str],
     risk_adjusted_score_policy: Dict[str, Any],
+    bundle_meta: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     rows: List[Dict[str, Any]] = []
     dataset_diagnostics: List[Dict[str, Any]] = []
@@ -3594,6 +3729,7 @@ def run_core_window_direct_report(
         result = run_backtest(
             exe_path=exe_path,
             dataset_path=dataset_path,
+            config_path=config_path,
             require_higher_tf_companions=bool(require_higher_tf_companions),
             disable_adaptive_state_io=bool(disable_adaptive_state_io),
         )
@@ -3603,6 +3739,7 @@ def run_core_window_direct_report(
                 dataset_name=dataset_path.name,
                 backtest_result=result,
                 phase4_market_cluster_map=phase4_market_cluster_map,
+                bundle_meta=bundle_meta if isinstance(bundle_meta, dict) else {},
             )
         )
         adaptive_dataset_profiles.append(
@@ -5116,6 +5253,351 @@ def build_stage_d_v1_effect_summary(
             ),
         },
         "per_dataset": per_dataset_rows,
+    }
+
+
+def build_stage_g7_ev_affine_debug(
+    *,
+    dataset_diagnostics: List[Dict[str, Any]],
+    split_filter_context: Dict[str, Any],
+    rows: List[Dict[str, Any]],
+    aggregate_diagnostics: Dict[str, Any],
+    bundle_meta: Dict[str, Any],
+) -> Dict[str, Any]:
+    per_dataset: List[Dict[str, Any]] = []
+    raw_weighted_sum = 0.0
+    corrected_weighted_sum = 0.0
+    weighted_count = 0
+    raw_median_weighted_sum = 0.0
+    corrected_median_weighted_sum = 0.0
+    raw_p95_weighted_sum = 0.0
+    corrected_p95_weighted_sum = 0.0
+    affine_applied_weighted_sum = 0.0
+    affine_enabled_weighted_sum = 0.0
+    sample_rows: List[Dict[str, Any]] = []
+
+    for item in dataset_diagnostics:
+        if not isinstance(item, dict):
+            continue
+        dataset_name = str(item.get("dataset", "")).strip()
+        telemetry = item.get("lgbm_ev_affine_telemetry", {})
+        if not isinstance(telemetry, dict):
+            telemetry = {}
+        raw_dist = telemetry.get("raw_edge_bps_distribution", {})
+        if not isinstance(raw_dist, dict):
+            raw_dist = {}
+        corrected_dist = telemetry.get("corrected_edge_bps_distribution", {})
+        if not isinstance(corrected_dist, dict):
+            corrected_dist = {}
+        count = max(0, to_int(raw_dist.get("count", 0)))
+        raw_mean = to_float(raw_dist.get("mean", float("nan")))
+        raw_median = to_float(raw_dist.get("median", float("nan")))
+        raw_p95 = to_float(raw_dist.get("p95", float("nan")))
+        corrected_mean = to_float(corrected_dist.get("mean", float("nan")))
+        corrected_median = to_float(corrected_dist.get("median", float("nan")))
+        corrected_p95 = to_float(corrected_dist.get("p95", float("nan")))
+        affine_applied_ratio = to_float(telemetry.get("affine_applied_ratio", float("nan")))
+        affine_enabled_ratio = to_float(telemetry.get("affine_enabled_ratio", float("nan")))
+
+        if count > 0:
+            if math.isfinite(raw_mean):
+                raw_weighted_sum += raw_mean * float(count)
+            if math.isfinite(corrected_mean):
+                corrected_weighted_sum += corrected_mean * float(count)
+            if math.isfinite(raw_median):
+                raw_median_weighted_sum += raw_median * float(count)
+            if math.isfinite(corrected_median):
+                corrected_median_weighted_sum += corrected_median * float(count)
+            if math.isfinite(raw_p95):
+                raw_p95_weighted_sum += raw_p95 * float(count)
+            if math.isfinite(corrected_p95):
+                corrected_p95_weighted_sum += corrected_p95 * float(count)
+            if math.isfinite(affine_applied_ratio):
+                affine_applied_weighted_sum += affine_applied_ratio * float(count)
+            if math.isfinite(affine_enabled_ratio):
+                affine_enabled_weighted_sum += affine_enabled_ratio * float(count)
+            weighted_count += count
+
+        samples = telemetry.get("raw_to_corrected_samples", [])
+        if isinstance(samples, list):
+            for row in samples[:4]:
+                if not isinstance(row, dict):
+                    continue
+                sample_rows.append(
+                    {
+                        "dataset": dataset_name,
+                        "decision_time": max(0, to_int(row.get("decision_time", 0))),
+                        "market": str(row.get("market", "")).strip(),
+                        "raw_bps": round(to_float(row.get("raw_bps", 0.0)), 8),
+                        "corrected_bps": round(to_float(row.get("corrected_bps", 0.0)), 8),
+                        "delta_bps": round(to_float(row.get("delta_bps", 0.0)), 8),
+                        "affine_applied": bool(row.get("affine_applied", False)),
+                    }
+                )
+
+        per_dataset.append(
+            {
+                "dataset": dataset_name,
+                "paired_sample_count": count,
+                "raw_edge_bps": {
+                    "mean": round(raw_mean, 10) if math.isfinite(raw_mean) else None,
+                    "median": round(raw_median, 10) if math.isfinite(raw_median) else None,
+                    "p95": round(raw_p95, 10) if math.isfinite(raw_p95) else None,
+                },
+                "corrected_edge_bps": {
+                    "mean": round(corrected_mean, 10) if math.isfinite(corrected_mean) else None,
+                    "median": round(corrected_median, 10) if math.isfinite(corrected_median) else None,
+                    "p95": round(corrected_p95, 10) if math.isfinite(corrected_p95) else None,
+                },
+                "affine_applied_ratio": (
+                    round(affine_applied_ratio, 6) if math.isfinite(affine_applied_ratio) else None
+                ),
+                "affine_enabled_ratio": (
+                    round(affine_enabled_ratio, 6) if math.isfinite(affine_enabled_ratio) else None
+                ),
+                "affine_params_observed": (
+                    telemetry.get("affine_params_observed", [])
+                    if isinstance(telemetry.get("affine_params_observed", []), list)
+                    else []
+                ),
+            }
+        )
+
+    per_dataset.sort(key=lambda x: str(x.get("dataset", "")))
+
+    split_context = split_filter_context if isinstance(split_filter_context, dict) else {}
+    aggregate = aggregate_diagnostics if isinstance(aggregate_diagnostics, dict) else {}
+    post_entry = aggregate.get("post_entry_risk_telemetry", {})
+    if not isinstance(post_entry, dict):
+        post_entry = {}
+    stop_loss_count = max(0, to_int(post_entry.get("stop_loss_trigger_count", 0)))
+    partial_tp_count = max(0, to_int(post_entry.get("partial_tp_exit_count", 0)))
+    tp_full_count = max(0, to_int(post_entry.get("take_profit_full_count", 0)))
+    exit_denom = max(1, stop_loss_count + partial_tp_count + tp_full_count)
+
+    weighted_denom = max(1, weighted_count)
+    bundle_affine = (
+        bundle_meta.get("lgbm_ev_affine", {})
+        if isinstance(bundle_meta, dict)
+        else {}
+    )
+    if not isinstance(bundle_affine, dict):
+        bundle_affine = {}
+
+    return {
+        "generated_at": __import__("datetime").datetime.now().astimezone().isoformat(),
+        "backend": str(bundle_meta.get("prob_model_backend", "unknown")).strip().lower()
+        if isinstance(bundle_meta, dict)
+        else "unknown",
+        "bundle_affine": {
+            "enabled": bool(bundle_affine.get("enabled", False)),
+            "scale": round(to_float(bundle_affine.get("scale", 1.0)), 10),
+            "shift": round(to_float(bundle_affine.get("shift", 0.0)), 10),
+        },
+        "split": {
+            "split_name": str(split_context.get("split_name", "")).strip(),
+            "split_applied": bool(split_context.get("split_applied", False)),
+            "execution_range_used": (
+                split_context.get("execution_range_used", [])
+                if isinstance(split_context.get("execution_range_used", []), list)
+                else []
+            ),
+            "evaluation_range_effective": (
+                split_context.get("evaluation_range_effective", [])
+                if isinstance(split_context.get("evaluation_range_effective", []), list)
+                else []
+            ),
+            "total_trades_core_effective": int(
+                max(0, to_int(split_context.get("total_trades_core_effective", 0)))
+            ),
+            "orders_filled_core_effective": int(
+                max(0, to_int(split_context.get("orders_filled_core_effective", 0)))
+            ),
+        },
+        "performance": {
+            "avg_expectancy_krw": round(
+                to_float(
+                    (
+                        (sum(to_float(x.get("expectancy_krw", 0.0)) for x in rows) / float(max(1, len(rows))))
+                        if isinstance(rows, list) and rows
+                        else 0.0
+                    )
+                ),
+                6,
+            ),
+            "avg_profit_factor": round(
+                to_float(
+                    (
+                        (sum(to_float(x.get("profit_factor", 0.0)) for x in rows) / float(max(1, len(rows))))
+                        if isinstance(rows, list) and rows
+                        else 0.0
+                    )
+                ),
+                6,
+            ),
+            "stop_loss_ratio": round(float(stop_loss_count) / float(exit_denom), 6),
+            "partial_tp_ratio": round(float(partial_tp_count) / float(exit_denom), 6),
+            "tp_full_ratio": round(float(tp_full_count) / float(exit_denom), 6),
+        },
+        "edge_bps_summary_weighted": {
+            "paired_sample_count_total": int(weighted_count),
+            "raw_mean": round(raw_weighted_sum / float(weighted_denom), 10),
+            "raw_median_approx": round(raw_median_weighted_sum / float(weighted_denom), 10),
+            "raw_p95_approx": round(raw_p95_weighted_sum / float(weighted_denom), 10),
+            "corrected_mean": round(corrected_weighted_sum / float(weighted_denom), 10),
+            "corrected_median_approx": round(corrected_median_weighted_sum / float(weighted_denom), 10),
+            "corrected_p95_approx": round(corrected_p95_weighted_sum / float(weighted_denom), 10),
+            "affine_applied_ratio": round(affine_applied_weighted_sum / float(weighted_denom), 6),
+            "affine_enabled_ratio": round(affine_enabled_weighted_sum / float(weighted_denom), 6),
+        },
+        "per_dataset": per_dataset,
+        "sample_raw_to_corrected": sample_rows[:20],
+    }
+
+
+def build_stage_g8_backend_provenance_report(
+    *,
+    dataset_diagnostics: List[Dict[str, Any]],
+    bundle_meta: Dict[str, Any],
+    split_filter_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    per_dataset: List[Dict[str, Any]] = []
+    effective_counts: Dict[str, int] = {}
+    p_raw_mean_sum = 0.0
+    p_raw_std_sum = 0.0
+    p_raw_p95_sum = 0.0
+    p_cal_mean_sum = 0.0
+    p_cal_std_sum = 0.0
+    p_cal_p95_sum = 0.0
+    margin_mean_sum = 0.0
+    margin_std_sum = 0.0
+    margin_p95_sum = 0.0
+    weighted_count = 0
+
+    for item in dataset_diagnostics:
+        if not isinstance(item, dict):
+            continue
+        dataset_name = str(item.get("dataset", "")).strip()
+        prov = item.get("backend_provenance", {})
+        if not isinstance(prov, dict):
+            prov = {}
+        backend_effective = str(prov.get("prob_model_backend_effective", "unknown")).strip().lower() or "unknown"
+        effective_counts[backend_effective] = effective_counts.get(backend_effective, 0) + 1
+        prob = prov.get("probability_distribution", {})
+        if not isinstance(prob, dict):
+            prob = {}
+        margin = prov.get("margin_distribution", {})
+        if not isinstance(margin, dict):
+            margin = {}
+        tele = item.get("probability_calibration_telemetry", {})
+        if not isinstance(tele, dict):
+            tele = {}
+        count = max(0, to_int(tele.get("paired_sample_count", 0)))
+        if count > 0:
+            p_raw_mean_sum += to_float(prob.get("p_raw_mean", 0.0)) * count
+            p_raw_std_sum += to_float(prob.get("p_raw_std", 0.0)) * count
+            p_raw_p95_sum += to_float(prob.get("p_raw_p95", 0.0)) * count
+            p_cal_mean_sum += to_float(prob.get("p_cal_mean", 0.0)) * count
+            p_cal_std_sum += to_float(prob.get("p_cal_std", 0.0)) * count
+            p_cal_p95_sum += to_float(prob.get("p_cal_p95", 0.0)) * count
+            margin_mean_sum += to_float(margin.get("mean", 0.0)) * count
+            margin_std_sum += to_float(margin.get("std", 0.0)) * count
+            margin_p95_sum += to_float(margin.get("p95", 0.0)) * count
+            weighted_count += count
+
+        per_dataset.append(
+            {
+                "dataset": dataset_name,
+                "prob_model_backend_effective": backend_effective,
+                "prob_model_backend_counts": (
+                    prov.get("prob_model_backend_counts", {})
+                    if isinstance(prov.get("prob_model_backend_counts", {}), dict)
+                    else {}
+                ),
+                "lgbm_model_path": str(prov.get("lgbm_model_path", "")).strip(),
+                "lgbm_model_sha256": str(prov.get("lgbm_model_sha256", "")).strip().lower(),
+                "calibration_mode": str(prov.get("calibration_mode", "off")).strip().lower() or "off",
+                "calibration_params": (
+                    prov.get("calibration_params", {})
+                    if isinstance(prov.get("calibration_params", {}), dict)
+                    else {"a": None, "b": None}
+                ),
+                "ev_affine": (
+                    prov.get("ev_affine", {})
+                    if isinstance(prov.get("ev_affine", {}), dict)
+                    else {"enabled": False, "scale": 1.0, "shift": 0.0}
+                ),
+                "probability_distribution": prob,
+                "margin_distribution": margin,
+            }
+        )
+
+    per_dataset.sort(key=lambda x: str(x.get("dataset", "")))
+    dominant_backend = "unknown"
+    if effective_counts:
+        dominant_backend = sorted(
+            effective_counts.items(),
+            key=lambda item: (-int(item[1]), str(item[0])),
+        )[0][0]
+    w = max(1, weighted_count)
+
+    split_context = split_filter_context if isinstance(split_filter_context, dict) else {}
+    bundle = bundle_meta if isinstance(bundle_meta, dict) else {}
+    bundle_lgbm_cal = bundle.get("lgbm_h5_calibration", {})
+    if not isinstance(bundle_lgbm_cal, dict):
+        bundle_lgbm_cal = {}
+    bundle_ev_affine = bundle.get("lgbm_ev_affine", {})
+    if not isinstance(bundle_ev_affine, dict):
+        bundle_ev_affine = {}
+
+    return {
+        "generated_at": __import__("datetime").datetime.now().astimezone().isoformat(),
+        "runtime_bundle_path": str(bundle.get("bundle_path", "")),
+        "prob_model_backend_configured": str(bundle.get("prob_model_backend", "unknown")).strip().lower(),
+        "prob_model_backend_effective_counts": {
+            str(k): int(v) for k, v in sorted(effective_counts.items(), key=lambda x: str(x[0]))
+        },
+        "prob_model_backend_effective_dominant": str(dominant_backend),
+        "lgbm_model_path": str(bundle.get("lgbm_model_path", "")).strip(),
+        "lgbm_model_sha256": str(bundle.get("lgbm_model_sha256", "")).strip().lower(),
+        "calibration_mode": str(bundle.get("lgbm_calibration_mode", "off")).strip().lower(),
+        "calibration_params": {
+            "a": bundle_lgbm_cal.get("a", None),
+            "b": bundle_lgbm_cal.get("b", None),
+        },
+        "ev_affine": {
+            "enabled": bool(bundle_ev_affine.get("enabled", False)),
+            "scale": round(to_float(bundle_ev_affine.get("scale", 1.0)), 10),
+            "shift": round(to_float(bundle_ev_affine.get("shift", 0.0)), 10),
+        },
+        "weighted_probability_distribution": {
+            "sample_count": int(weighted_count),
+            "p_raw_mean": round(p_raw_mean_sum / float(w), 10),
+            "p_raw_std": round(p_raw_std_sum / float(w), 10),
+            "p_raw_p95": round(p_raw_p95_sum / float(w), 10),
+            "p_cal_mean": round(p_cal_mean_sum / float(w), 10),
+            "p_cal_std": round(p_cal_std_sum / float(w), 10),
+            "p_cal_p95": round(p_cal_p95_sum / float(w), 10),
+        },
+        "weighted_margin_distribution": {
+            "sample_count": int(weighted_count),
+            "mean": round(margin_mean_sum / float(w), 10),
+            "std": round(margin_std_sum / float(w), 10),
+            "p95": round(margin_p95_sum / float(w), 10),
+        },
+        "split": {
+            "split_name": str(split_context.get("split_name", "")).strip(),
+            "split_applied": bool(split_context.get("split_applied", False)),
+            "evaluation_range_effective": (
+                split_context.get("evaluation_range_effective", [])
+                if isinstance(split_context.get("evaluation_range_effective", []), list)
+                else []
+            ),
+            "total_trades_core_effective": int(
+                max(0, to_int(split_context.get("total_trades_core_effective", 0)))
+            ),
+        },
+        "per_dataset": per_dataset,
     }
 
 
@@ -6649,10 +7131,298 @@ def build_top_loss_trade_samples(trade_history_samples: Any, limit: int = 8) -> 
     return rows[: max(0, int(limit))]
 
 
+def build_probability_calibration_telemetry(
+    backtest_result: Dict[str, Any],
+    *,
+    sample_limit: int = 20,
+) -> Dict[str, Any]:
+    raw_samples = backtest_result.get("phase4_candidate_snapshot_samples", [])
+    if not isinstance(raw_samples, list) or not raw_samples:
+        return {
+            "enabled": False,
+            "source": "phase4_candidate_snapshot_samples",
+            "snapshot_sample_total": 0,
+            "paired_sample_count": 0,
+            "p_raw_distribution": {"count": 0},
+            "p_cal_distribution": {"count": 0},
+            "implied_win_distribution": {"count": 0},
+            "margin_distribution": {"count": 0},
+            "ev_bps_distribution": {"count": 0},
+            "gt_0_5_ratio": {"raw": None, "cal": None},
+            "raw_to_cal_samples": [],
+        }
+
+    rows: List[Dict[str, Any]] = []
+    backend_counts: Dict[str, int] = {}
+    for item in raw_samples:
+        if not isinstance(item, dict):
+            continue
+        backend = str(item.get("prob_model_backend", "")).strip().lower() or "unknown"
+        backend_counts[backend] = backend_counts.get(backend, 0) + 1
+        p_raw = to_float(item.get("prob_confidence_raw", float("nan")))
+        p_cal = to_float(
+            item.get(
+                "prob_confidence_calibrated",
+                item.get("prob_confidence", float("nan")),
+            )
+        )
+        if not (math.isfinite(p_raw) and math.isfinite(p_cal)):
+            continue
+        p_raw = max(0.0, min(1.0, float(p_raw)))
+        p_cal = max(0.0, min(1.0, float(p_cal)))
+        implied_win = to_float(item.get("implied_win", float("nan")))
+        margin = to_float(item.get("margin", float("nan")))
+        ev_pct = to_float(item.get("expected_edge_after_cost_pct", float("nan")))
+        rows.append(
+            {
+                "decision_time": max(0, to_int(item.get("decision_time", 0))),
+                "market": str(item.get("market", item.get("market_id", ""))).strip(),
+                "strategy_name": str(item.get("strategy_name", "")).strip(),
+                "backend": backend,
+                "p_raw": p_raw,
+                "p_cal": p_cal,
+                "delta": p_cal - p_raw,
+                "implied_win": implied_win,
+                "margin": margin,
+                "ev_bps": (ev_pct * 10000.0) if math.isfinite(ev_pct) else float("nan"),
+            }
+        )
+
+    if not rows:
+        return {
+            "enabled": False,
+            "source": "phase4_candidate_snapshot_samples",
+            "snapshot_sample_total": int(len(raw_samples)),
+            "paired_sample_count": 0,
+            "p_raw_distribution": {"count": 0},
+            "p_cal_distribution": {"count": 0},
+            "implied_win_distribution": {"count": 0},
+            "margin_distribution": {"count": 0},
+            "ev_bps_distribution": {"count": 0},
+            "gt_0_5_ratio": {"raw": None, "cal": None},
+            "raw_to_cal_samples": [],
+        }
+
+    raw_values = [float(x["p_raw"]) for x in rows]
+    cal_values = [float(x["p_cal"]) for x in rows]
+    implied_values = [float(x["implied_win"]) for x in rows if math.isfinite(to_float(x.get("implied_win", float("nan"))))]
+    margin_values = [float(x["margin"]) for x in rows if math.isfinite(to_float(x.get("margin", float("nan"))))]
+    ev_bps_values = [float(x["ev_bps"]) for x in rows if math.isfinite(to_float(x.get("ev_bps", float("nan"))))]
+
+    def _dist(values: List[float]) -> Dict[str, Any]:
+        if not values:
+            return {"count": 0}
+        n = len(values)
+        mean_v = float(sum(values)) / float(n)
+        var_v = float(sum((v - mean_v) * (v - mean_v) for v in values)) / float(n)
+        return {
+            "count": int(n),
+            "mean": round(mean_v, 10),
+            "std": round(math.sqrt(max(0.0, var_v)), 10),
+            "p95": round(quantile(values, 0.95), 10),
+            "p99": round(quantile(values, 0.99), 10),
+            "min": round(min(values), 10),
+            "max": round(max(values), 10),
+        }
+
+    rows.sort(
+        key=lambda item: (
+            int(item.get("decision_time", 0)),
+            str(item.get("market", "")),
+            str(item.get("strategy_name", "")),
+        )
+    )
+    sample_cap = max(1, int(sample_limit))
+    sample_rows = rows[:sample_cap]
+    backend_effective = "unknown"
+    if backend_counts:
+        backend_effective = sorted(
+            backend_counts.items(),
+            key=lambda item: (-int(item[1]), str(item[0])),
+        )[0][0]
+
+    return {
+        "enabled": True,
+        "source": "phase4_candidate_snapshot_samples",
+        "snapshot_sample_total": int(len(raw_samples)),
+        "paired_sample_count": int(len(rows)),
+        "prob_model_backend_counts": {
+            str(k): int(max(0, to_int(v))) for k, v in sorted(backend_counts.items(), key=lambda x: str(x[0]))
+        },
+        "prob_model_backend_effective": str(backend_effective),
+        "p_raw_distribution": _dist(raw_values),
+        "p_cal_distribution": _dist(cal_values),
+        "implied_win_distribution": _dist(implied_values),
+        "margin_distribution": _dist(margin_values),
+        "ev_bps_distribution": _dist(ev_bps_values),
+        "gt_0_5_ratio": {
+            "raw": round(
+                float(sum(1 for v in raw_values if v > 0.5)) / float(max(1, len(raw_values))),
+                6,
+            ),
+            "cal": round(
+                float(sum(1 for v in cal_values if v > 0.5)) / float(max(1, len(cal_values))),
+                6,
+            ),
+        },
+        "raw_to_cal_samples": [
+            {
+                "decision_time": int(row["decision_time"]),
+                "market": row["market"],
+                "strategy_name": row["strategy_name"],
+                "backend": row["backend"],
+                "p_raw": round(float(row["p_raw"]), 8),
+                "p_cal": round(float(row["p_cal"]), 8),
+                "delta": round(float(row["delta"]), 8),
+            }
+            for row in sample_rows
+        ],
+    }
+
+
+def build_lgbm_ev_affine_telemetry(
+    backtest_result: Dict[str, Any],
+    *,
+    sample_limit: int = 20,
+) -> Dict[str, Any]:
+    raw_samples = backtest_result.get("phase4_candidate_snapshot_samples", [])
+    if not isinstance(raw_samples, list) or not raw_samples:
+        return {
+            "enabled": False,
+            "source": "phase4_candidate_snapshot_samples",
+            "snapshot_sample_total": 0,
+            "paired_sample_count": 0,
+            "raw_edge_bps_distribution": {"count": 0},
+            "corrected_edge_bps_distribution": {"count": 0},
+            "affine_applied_ratio": None,
+            "affine_enabled_ratio": None,
+            "affine_params_observed": [],
+            "raw_to_corrected_samples": [],
+        }
+
+    rows: List[Dict[str, Any]] = []
+    for item in raw_samples:
+        if not isinstance(item, dict):
+            continue
+        raw_bps = to_float(item.get("expected_edge_calibrated_raw_bps", float("nan")))
+        corrected_bps = to_float(
+            item.get(
+                "expected_edge_calibrated_corrected_bps",
+                item.get("expected_edge_calibrated_bps", float("nan")),
+            )
+        )
+        if not (math.isfinite(raw_bps) and math.isfinite(corrected_bps)):
+            continue
+        affine_enabled = bool(item.get("lgbm_ev_affine_enabled", False))
+        affine_applied = bool(item.get("lgbm_ev_affine_applied", False))
+        scale = to_float(item.get("lgbm_ev_affine_scale", float("nan")))
+        shift = to_float(item.get("lgbm_ev_affine_shift", float("nan")))
+        rows.append(
+            {
+                "decision_time": max(0, to_int(item.get("decision_time", 0))),
+                "market": str(item.get("market", item.get("market_id", ""))).strip(),
+                "strategy_name": str(item.get("strategy_name", "")).strip(),
+                "raw_bps": float(raw_bps),
+                "corrected_bps": float(corrected_bps),
+                "delta_bps": float(corrected_bps - raw_bps),
+                "affine_enabled": affine_enabled,
+                "affine_applied": affine_applied,
+                "scale": scale if math.isfinite(scale) else None,
+                "shift": shift if math.isfinite(shift) else None,
+            }
+        )
+
+    if not rows:
+        return {
+            "enabled": False,
+            "source": "phase4_candidate_snapshot_samples",
+            "snapshot_sample_total": int(len(raw_samples)),
+            "paired_sample_count": 0,
+            "raw_edge_bps_distribution": {"count": 0},
+            "corrected_edge_bps_distribution": {"count": 0},
+            "affine_applied_ratio": None,
+            "affine_enabled_ratio": None,
+            "affine_params_observed": [],
+            "raw_to_corrected_samples": [],
+        }
+
+    def _dist(values: List[float]) -> Dict[str, Any]:
+        if not values:
+            return {"count": 0}
+        n = len(values)
+        mean_v = float(sum(values)) / float(n)
+        var_v = float(sum((v - mean_v) * (v - mean_v) for v in values)) / float(n)
+        return {
+            "count": int(n),
+            "mean": round(mean_v, 10),
+            "median": round(quantile(values, 0.50), 10),
+            "p95": round(quantile(values, 0.95), 10),
+            "std": round(math.sqrt(max(0.0, var_v)), 10),
+            "min": round(min(values), 10),
+            "max": round(max(values), 10),
+        }
+
+    raw_values = [float(x["raw_bps"]) for x in rows]
+    corrected_values = [float(x["corrected_bps"]) for x in rows]
+    applied_count = sum(1 for x in rows if bool(x.get("affine_applied", False)))
+    enabled_count = sum(1 for x in rows if bool(x.get("affine_enabled", False)))
+    n_rows = max(1, len(rows))
+
+    param_set: Dict[Tuple[float, float], int] = {}
+    for x in rows:
+        scale = x.get("scale", None)
+        shift = x.get("shift", None)
+        if scale is None or shift is None:
+            continue
+        key = (round(float(scale), 10), round(float(shift), 10))
+        param_set[key] = param_set.get(key, 0) + 1
+    param_rows = [
+        {"scale": k[0], "shift": k[1], "count": int(v)}
+        for k, v in sorted(param_set.items(), key=lambda item: (-item[1], item[0][0], item[0][1]))
+    ]
+
+    rows.sort(
+        key=lambda item: (
+            int(item.get("decision_time", 0)),
+            str(item.get("market", "")),
+            str(item.get("strategy_name", "")),
+        )
+    )
+    sample_rows = rows[: max(1, int(sample_limit))]
+
+    return {
+        "enabled": True,
+        "source": "phase4_candidate_snapshot_samples",
+        "snapshot_sample_total": int(len(raw_samples)),
+        "paired_sample_count": int(len(rows)),
+        "raw_edge_bps_distribution": _dist(raw_values),
+        "corrected_edge_bps_distribution": _dist(corrected_values),
+        "affine_applied_ratio": round(float(applied_count) / float(n_rows), 6),
+        "affine_enabled_ratio": round(float(enabled_count) / float(n_rows), 6),
+        "affine_params_observed": param_rows,
+        "raw_to_corrected_samples": [
+            {
+                "decision_time": int(row["decision_time"]),
+                "market": row["market"],
+                "strategy_name": row["strategy_name"],
+                "raw_bps": round(float(row["raw_bps"]), 8),
+                "corrected_bps": round(float(row["corrected_bps"]), 8),
+                "delta_bps": round(float(row["delta_bps"]), 8),
+                "affine_enabled": bool(row["affine_enabled"]),
+                "affine_applied": bool(row["affine_applied"]),
+                "scale": row["scale"],
+                "shift": row["shift"],
+            }
+            for row in sample_rows
+        ],
+    }
+
+
 def build_dataset_diagnostics(
     dataset_name: str,
     backtest_result: Dict[str, Any],
     phase4_market_cluster_map: Dict[str, str],
+    bundle_meta: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     entry_funnel = backtest_result.get("entry_funnel", {})
     if not isinstance(entry_funnel, dict):
@@ -6698,6 +7468,94 @@ def build_dataset_diagnostics(
     blocked_min_order_or_capital = max(0, to_int(entry_funnel.get("blocked_min_order_or_capital", 0)))
     blocked_order_sizing = max(0, to_int(entry_funnel.get("blocked_order_sizing", 0)))
     entries_executed = max(0, to_int(entry_funnel.get("entries_executed", 0)))
+    strategy_exit_mode_effective = str(entry_funnel.get("strategy_exit_mode_effective", "")).strip()
+    if not strategy_exit_mode_effective:
+        strategy_exit_mode_effective = "enforce"
+    strategy_exit_triggered_count = max(
+        0, to_int(entry_funnel.get("strategy_exit_triggered_count", 0))
+    )
+    strategy_exit_observe_only_suppressed_count = max(
+        0, to_int(entry_funnel.get("strategy_exit_observe_only_suppressed_count", 0))
+    )
+    strategy_exit_executed_count = max(
+        0, to_int(entry_funnel.get("strategy_exit_executed_count", 0))
+    )
+    strategy_exit_clamp_applied_count = max(
+        0, to_int(entry_funnel.get("strategy_exit_clamp_applied_count", 0))
+    )
+    raw_strategy_exit_triggered_by_market = entry_funnel.get(
+        "strategy_exit_triggered_by_market",
+        {},
+    )
+    strategy_exit_triggered_by_market: Dict[str, int] = {}
+    if isinstance(raw_strategy_exit_triggered_by_market, dict):
+        for key, value in raw_strategy_exit_triggered_by_market.items():
+            market_key = str(key).strip()
+            if not market_key:
+                continue
+            strategy_exit_triggered_by_market[market_key] = max(0, to_int(value))
+    raw_strategy_exit_triggered_by_regime = entry_funnel.get(
+        "strategy_exit_triggered_by_regime",
+        {},
+    )
+    strategy_exit_triggered_by_regime: Dict[str, int] = {}
+    if isinstance(raw_strategy_exit_triggered_by_regime, dict):
+        for key, value in raw_strategy_exit_triggered_by_regime.items():
+            regime_key = str(key).strip()
+            if not regime_key:
+                continue
+            strategy_exit_triggered_by_regime[regime_key] = max(0, to_int(value))
+    raw_strategy_exit_trigger_samples = entry_funnel.get("strategy_exit_trigger_samples", [])
+    strategy_exit_trigger_samples: List[Dict[str, Any]] = []
+    if isinstance(raw_strategy_exit_trigger_samples, list):
+        for raw in raw_strategy_exit_trigger_samples:
+            if not isinstance(raw, dict):
+                continue
+            strategy_exit_trigger_samples.append(
+                {
+                    "ts_ms": to_int(raw.get("ts_ms", 0)),
+                    "market": str(raw.get("market", "")).strip(),
+                    "regime": str(raw.get("regime", "")).strip(),
+                    "unrealized_pnl_at_trigger": round(
+                        to_float(raw.get("unrealized_pnl_at_trigger", 0.0)),
+                        6,
+                    ),
+                    "holding_time_seconds": round(
+                        to_float(raw.get("holding_time_seconds", 0.0)),
+                        4,
+                    ),
+                    "reason_code": str(raw.get("reason_code", "")).strip(),
+                }
+            )
+            if len(strategy_exit_trigger_samples) >= 10:
+                break
+    raw_strategy_exit_clamp_samples = entry_funnel.get("strategy_exit_clamp_samples", [])
+    strategy_exit_clamp_samples: List[Dict[str, Any]] = []
+    if isinstance(raw_strategy_exit_clamp_samples, list):
+        for raw in raw_strategy_exit_clamp_samples:
+            if not isinstance(raw, dict):
+                continue
+            strategy_exit_clamp_samples.append(
+                {
+                    "ts_ms": to_int(raw.get("ts_ms", 0)),
+                    "market": str(raw.get("market", "")).strip(),
+                    "regime": str(raw.get("regime", "")).strip(),
+                    "stop_loss_price": round(to_float(raw.get("stop_loss_price", 0.0)), 8),
+                    "exit_price_before_clamp": round(
+                        to_float(raw.get("exit_price_before_clamp", 0.0)),
+                        8,
+                    ),
+                    "exit_price_after_clamp": round(
+                        to_float(raw.get("exit_price_after_clamp", 0.0)),
+                        8,
+                    ),
+                    "pnl_before_clamp": round(to_float(raw.get("pnl_before_clamp", 0.0)), 6),
+                    "pnl_after_clamp": round(to_float(raw.get("pnl_after_clamp", 0.0)), 6),
+                    "reason_code": str(raw.get("reason_code", "")).strip(),
+                }
+            )
+            if len(strategy_exit_clamp_samples) >= 10:
+                break
     shadow_rounds = max(0, to_int(shadow_funnel_raw.get("rounds", 0)))
     shadow_primary_generated_signals = max(
         0, to_int(shadow_funnel_raw.get("primary_generated_signals", 0))
@@ -6832,6 +7690,9 @@ def build_dataset_diagnostics(
     }
 
     reason_counts = normalized_reason_counts(backtest_result.get("entry_rejection_reason_counts", {}))
+    split_stage_eval_stats = backtest_result.get("split_stage_funnel_eval_stats", {})
+    if not isinstance(split_stage_eval_stats, dict):
+        split_stage_eval_stats = {}
     phase3_diag = build_phase3_diagnostics_v2(reason_counts)
     phase4_diag = build_phase4_portfolio_diagnostics(
         backtest_result,
@@ -6845,6 +7706,9 @@ def build_dataset_diagnostics(
         reason_counts,
         ["foundation_no_signal_", "no_signal_", "probabilistic_"],
         exclude_exact=["no_signal_generated"],
+    )
+    no_signal_reason_counts_core_effective = normalized_reason_counts(
+        split_stage_eval_stats.get("no_signal_reason_counts_in_range", {})
     )
     manager_prefilter_reason_counts = filter_reason_counts_by_prefix(
         reason_counts,
@@ -6874,6 +7738,38 @@ def build_dataset_diagnostics(
     )
     primary_candidate_component_name, primary_candidate_component_count = ordered_candidate_components[0]
     top_no_signal_reason_rows = top_reason_rows(no_signal_reason_counts, limit=8)
+    top_no_signal_reason_rows_core_effective = top_reason_rows(
+        no_signal_reason_counts_core_effective,
+        limit=8,
+    )
+    no_signal_reason_timestamp_evidence_core_effective = {
+        "source": "entry_stage_funnel_backtest_jsonl",
+        "enabled": bool(split_stage_eval_stats.get("enabled", False)),
+        "range_start_ts": int(split_stage_eval_stats.get("start_ts", 0)),
+        "range_end_ts": int(split_stage_eval_stats.get("end_ts", 0)),
+        "event_rows_in_range": int(
+            max(0, to_int(split_stage_eval_stats.get("no_signal_reason_event_rows_in_range", 0)))
+        ),
+        "event_rows_total": int(
+            max(0, to_int(split_stage_eval_stats.get("no_signal_reason_event_rows_total", 0)))
+        ),
+        "event_rows_with_ts_total": int(
+            max(
+                0,
+                to_int(split_stage_eval_stats.get("no_signal_reason_event_rows_with_ts_total", 0)),
+            )
+        ),
+        "event_rows_missing_ts_total": int(
+            max(
+                0,
+                to_int(split_stage_eval_stats.get("no_signal_reason_event_rows_missing_ts_total", 0)),
+            )
+        ),
+        "timestamp_coverage_total": round(
+            to_float(split_stage_eval_stats.get("no_signal_reason_timestamp_coverage_total", 0.0)),
+            6,
+        ),
+    }
     top_manager_prefilter_reason_rows = top_reason_rows(manager_prefilter_reason_counts, limit=8)
     top_policy_prefilter_reason_rows = top_reason_rows(policy_prefilter_reason_counts, limit=8)
     ab_playbook_rows = build_candidate_generation_ab_playbook(
@@ -6891,6 +7787,105 @@ def build_dataset_diagnostics(
         backtest_result.get("phase3_pass_ev_samples", []),
         sample_cap=5000,
     )
+    probability_calibration_telemetry = build_probability_calibration_telemetry(
+        backtest_result,
+        sample_limit=20,
+    )
+    lgbm_ev_affine_telemetry = build_lgbm_ev_affine_telemetry(
+        backtest_result,
+        sample_limit=20,
+    )
+    bundle = bundle_meta if isinstance(bundle_meta, dict) else {}
+    configured_backend = str(bundle.get("prob_model_backend", "unknown")).strip().lower() or "unknown"
+    backend_effective = str(
+        probability_calibration_telemetry.get("prob_model_backend_effective", "unknown")
+    ).strip().lower() or "unknown"
+    prob_backend_counts = (
+        probability_calibration_telemetry.get("prob_model_backend_counts", {})
+        if isinstance(probability_calibration_telemetry.get("prob_model_backend_counts", {}), dict)
+        else {}
+    )
+    lgbm_model_path = str(bundle.get("lgbm_model_path", "")).strip()
+    lgbm_model_sha256 = str(bundle.get("lgbm_model_sha256", "")).strip().lower()
+    lgbm_calibration_mode = str(bundle.get("lgbm_calibration_mode", "off")).strip().lower() or "off"
+    lgbm_h5_calibration = (
+        bundle.get("lgbm_h5_calibration", {})
+        if isinstance(bundle.get("lgbm_h5_calibration", {}), dict)
+        else {}
+    )
+    lgbm_calibration_a = lgbm_h5_calibration.get("a", None)
+    lgbm_calibration_b = lgbm_h5_calibration.get("b", None)
+    lgbm_ev_affine_cfg = (
+        bundle.get("lgbm_ev_affine", {})
+        if isinstance(bundle.get("lgbm_ev_affine", {}), dict)
+        else {}
+    )
+    p_raw_dist = (
+        probability_calibration_telemetry.get("p_raw_distribution", {})
+        if isinstance(probability_calibration_telemetry.get("p_raw_distribution", {}), dict)
+        else {}
+    )
+    p_cal_dist = (
+        probability_calibration_telemetry.get("p_cal_distribution", {})
+        if isinstance(probability_calibration_telemetry.get("p_cal_distribution", {}), dict)
+        else {}
+    )
+    margin_dist = (
+        probability_calibration_telemetry.get("margin_distribution", {})
+        if isinstance(probability_calibration_telemetry.get("margin_distribution", {}), dict)
+        else {}
+    )
+    backend_provenance = {
+        "prob_model_backend_configured": configured_backend,
+        "prob_model_backend_effective": backend_effective,
+        "prob_model_backend_counts": {
+            str(k): int(max(0, to_int(v)))
+            for k, v in sorted(prob_backend_counts.items(), key=lambda x: str(x[0]))
+        },
+        "lgbm_model_path": lgbm_model_path if backend_effective == "lgbm" else "",
+        "lgbm_model_sha256": lgbm_model_sha256 if backend_effective == "lgbm" else "",
+        "calibration_mode": lgbm_calibration_mode if backend_effective == "lgbm" else "off",
+        "calibration_params": {
+            "a": (
+                round(to_float(lgbm_calibration_a), 12)
+                if (backend_effective == "lgbm" and lgbm_calibration_a is not None)
+                else None
+            ),
+            "b": (
+                round(to_float(lgbm_calibration_b), 12)
+                if (backend_effective == "lgbm" and lgbm_calibration_b is not None)
+                else None
+            ),
+        },
+        "ev_affine": {
+            "enabled": bool(lgbm_ev_affine_cfg.get("enabled", False))
+            if backend_effective == "lgbm"
+            else False,
+            "scale": (
+                round(to_float(lgbm_ev_affine_cfg.get("scale", 1.0)), 10)
+                if backend_effective == "lgbm"
+                else 1.0
+            ),
+            "shift": (
+                round(to_float(lgbm_ev_affine_cfg.get("shift", 0.0)), 10)
+                if backend_effective == "lgbm"
+                else 0.0
+            ),
+        },
+        "probability_distribution": {
+            "p_raw_mean": round(to_float(p_raw_dist.get("mean", 0.0)), 10),
+            "p_raw_std": round(to_float(p_raw_dist.get("std", 0.0)), 10),
+            "p_raw_p95": round(to_float(p_raw_dist.get("p95", 0.0)), 10),
+            "p_cal_mean": round(to_float(p_cal_dist.get("mean", 0.0)), 10),
+            "p_cal_std": round(to_float(p_cal_dist.get("std", 0.0)), 10),
+            "p_cal_p95": round(to_float(p_cal_dist.get("p95", 0.0)), 10),
+        },
+        "margin_distribution": {
+            "mean": round(to_float(margin_dist.get("mean", 0.0)), 10),
+            "std": round(to_float(margin_dist.get("std", 0.0)), 10),
+            "p95": round(to_float(margin_dist.get("p95", 0.0)), 10),
+        },
+    }
     top_loss_trade_samples = build_top_loss_trade_samples(
         backtest_result.get("trade_history_samples", []),
         limit=10,
@@ -6920,12 +7915,24 @@ def build_dataset_diagnostics(
                 "count": int(primary_candidate_component_count),
                 "share": round(float(primary_candidate_component_count) / candidate_denom, 4),
             },
+            "no_signal_reason_counts_execution_scope": no_signal_reason_counts,
+            "no_signal_reason_counts_core_effective": no_signal_reason_counts_core_effective,
             "no_signal_reason_counts": no_signal_reason_counts,
             "manager_prefilter_reason_counts": manager_prefilter_reason_counts,
             "policy_prefilter_reason_counts": policy_prefilter_reason_counts,
+            "top_no_signal_reasons_execution_scope": top_no_signal_reason_rows,
+            "top_no_signal_reasons_core_effective": top_no_signal_reason_rows_core_effective,
             "top_no_signal_reasons": top_no_signal_reason_rows,
             "top_manager_prefilter_reasons": top_manager_prefilter_reason_rows,
             "top_policy_prefilter_reasons": top_policy_prefilter_reason_rows,
+            "execution_no_signal_top3": top_reason_rows(no_signal_reason_counts, limit=3),
+            "core_no_signal_top3": top_reason_rows(
+                no_signal_reason_counts_core_effective,
+                limit=3,
+            ),
+            "no_signal_reason_timestamp_evidence_core_effective": (
+                no_signal_reason_timestamp_evidence_core_effective
+            ),
             "shadow_policy_supply_lift_absolute": int(
                 shadow_shadow_after_policy_filter - shadow_primary_after_policy_filter
             ),
@@ -6944,8 +7951,25 @@ def build_dataset_diagnostics(
         "strategy_collection": strategy_collection_diag,
         "post_entry_risk_telemetry": post_entry_telemetry,
         "phase3_pass_ev_distribution": phase3_pass_ev_distribution,
+        "probability_calibration_telemetry": probability_calibration_telemetry,
+        "lgbm_ev_affine_telemetry": lgbm_ev_affine_telemetry,
+        "backend_provenance": backend_provenance,
         "phase3_diagnostics_v2": phase3_diag,
         "phase4_portfolio_diagnostics": phase4_diag,
+        "strategy_exit": {
+            "mode_effective": strategy_exit_mode_effective,
+            "strategy_exit_triggered_count": int(strategy_exit_triggered_count),
+            "strategy_exit_would_trigger_count": int(strategy_exit_triggered_count),
+            "strategy_exit_observe_only_suppressed_count": int(
+                strategy_exit_observe_only_suppressed_count
+            ),
+            "strategy_exit_executed_count": int(strategy_exit_executed_count),
+            "strategy_exit_clamp_applied_count": int(strategy_exit_clamp_applied_count),
+            "strategy_exit_triggered_by_market": strategy_exit_triggered_by_market,
+            "strategy_exit_triggered_by_regime": strategy_exit_triggered_by_regime,
+            "strategy_exit_would_trigger_samples": strategy_exit_trigger_samples,
+            "strategy_exit_clamp_samples": strategy_exit_clamp_samples,
+        },
         "regime_entry_disable": {
             "enabled": regime_entry_disable_enabled,
             "disabled_regimes": disabled_regimes,
@@ -7014,12 +8038,32 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         "no_best_signal": 0,
     }
     aggregate_no_signal_reasons: Dict[str, int] = {}
+    aggregate_no_signal_reasons_core_effective: Dict[str, int] = {}
     aggregate_manager_prefilter_reasons: Dict[str, int] = {}
     aggregate_policy_prefilter_reasons: Dict[str, int] = {}
+    aggregate_no_signal_timestamp_evidence_core_effective: Dict[str, Any] = {
+        "source": "entry_stage_funnel_backtest_jsonl",
+        "dataset_count_with_evidence": 0,
+        "event_rows_in_range": 0,
+        "event_rows_total": 0,
+        "event_rows_with_ts_total": 0,
+        "event_rows_missing_ts_total": 0,
+    }
     aggregate_post_entry_telemetry: Dict[str, Any] = {
         "adaptive_stop_updates": 0,
         "adaptive_tp_recalibration_updates": 0,
         "adaptive_partial_ratio_samples": 0,
+        "stop_loss_trigger_count": 0,
+        "stop_loss_pnl_sum_krw": 0.0,
+        "partial_tp_exit_count": 0,
+        "take_profit_full_count": 0,
+        "take_profit_full_pnl_sum_krw": 0.0,
+        "trending_trade_count": 0,
+        "trending_holding_minutes_sum": 0.0,
+        "stop_loss_distance_samples_trending": 0,
+        "stop_loss_distance_sum_pct_trending": 0.0,
+        "take_profit_distance_samples_trending": 0,
+        "take_profit_distance_sum_pct_trending": 0.0,
         "adaptive_partial_ratio_histogram": {
             "0.35_0.44": 0,
             "0.45_0.54": 0,
@@ -7107,6 +8151,17 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
     aggregate_disabled_regimes = set()
     aggregate_reject_regime_entry_disabled_count = 0
     aggregate_reject_regime_entry_disabled_by_regime: Dict[str, int] = {}
+    aggregate_strategy_exit: Dict[str, Any] = {
+        "mode_votes": {},
+        "strategy_exit_triggered_count": 0,
+        "strategy_exit_observe_only_suppressed_count": 0,
+        "strategy_exit_executed_count": 0,
+        "strategy_exit_clamp_applied_count": 0,
+        "strategy_exit_triggered_by_market": {},
+        "strategy_exit_triggered_by_regime": {},
+        "strategy_exit_would_trigger_samples": [],
+        "strategy_exit_clamp_samples": [],
+    }
     aggregate_ranging_shadow: Dict[str, Any] = {
         "shadow_count_total": 0,
         "shadow_count_by_regime": {},
@@ -7157,6 +8212,111 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
                     aggregate_reject_regime_entry_disabled_by_regime[regime_key] = (
                         aggregate_reject_regime_entry_disabled_by_regime.get(regime_key, 0)
                         + max(0, to_int(v))
+                    )
+        strategy_exit = item.get("strategy_exit", {})
+        if isinstance(strategy_exit, dict):
+            mode_effective = str(strategy_exit.get("mode_effective", "")).strip() or "enforce"
+            aggregate_strategy_exit["mode_votes"][mode_effective] = (
+                aggregate_strategy_exit["mode_votes"].get(mode_effective, 0) + 1
+            )
+            aggregate_strategy_exit["strategy_exit_triggered_count"] += max(
+                0,
+                to_int(strategy_exit.get("strategy_exit_triggered_count", 0)),
+            )
+            aggregate_strategy_exit["strategy_exit_observe_only_suppressed_count"] += max(
+                0,
+                to_int(strategy_exit.get("strategy_exit_observe_only_suppressed_count", 0)),
+            )
+            aggregate_strategy_exit["strategy_exit_executed_count"] += max(
+                0,
+                to_int(strategy_exit.get("strategy_exit_executed_count", 0)),
+            )
+            aggregate_strategy_exit["strategy_exit_clamp_applied_count"] += max(
+                0,
+                to_int(strategy_exit.get("strategy_exit_clamp_applied_count", 0)),
+            )
+            by_market = strategy_exit.get("strategy_exit_triggered_by_market", {})
+            if isinstance(by_market, dict):
+                for k, v in by_market.items():
+                    market_key = str(k).strip()
+                    if not market_key:
+                        continue
+                    aggregate_strategy_exit["strategy_exit_triggered_by_market"][market_key] = (
+                        aggregate_strategy_exit["strategy_exit_triggered_by_market"].get(
+                            market_key,
+                            0,
+                        )
+                        + max(0, to_int(v))
+                    )
+            by_regime = strategy_exit.get("strategy_exit_triggered_by_regime", {})
+            if isinstance(by_regime, dict):
+                for k, v in by_regime.items():
+                    regime_key = str(k).strip()
+                    if not regime_key:
+                        continue
+                    aggregate_strategy_exit["strategy_exit_triggered_by_regime"][regime_key] = (
+                        aggregate_strategy_exit["strategy_exit_triggered_by_regime"].get(
+                            regime_key,
+                            0,
+                        )
+                        + max(0, to_int(v))
+                    )
+            trigger_samples = strategy_exit.get("strategy_exit_would_trigger_samples", [])
+            if isinstance(trigger_samples, list):
+                for sample in trigger_samples:
+                    if not isinstance(sample, dict):
+                        continue
+                    if len(aggregate_strategy_exit["strategy_exit_would_trigger_samples"]) >= 10:
+                        break
+                    aggregate_strategy_exit["strategy_exit_would_trigger_samples"].append(
+                        {
+                            "dataset": str(item.get("dataset", "")).strip(),
+                            "ts_ms": to_int(sample.get("ts_ms", 0)),
+                            "market": str(sample.get("market", "")).strip(),
+                            "regime": str(sample.get("regime", "")).strip(),
+                            "unrealized_pnl_at_trigger": round(
+                                to_float(sample.get("unrealized_pnl_at_trigger", 0.0)),
+                                6,
+                            ),
+                            "holding_time_seconds": round(
+                                to_float(sample.get("holding_time_seconds", 0.0)),
+                                4,
+                            ),
+                            "reason_code": str(sample.get("reason_code", "")).strip(),
+                        }
+                    )
+            samples = strategy_exit.get("strategy_exit_clamp_samples", [])
+            if isinstance(samples, list):
+                for sample in samples:
+                    if not isinstance(sample, dict):
+                        continue
+                    if len(aggregate_strategy_exit["strategy_exit_clamp_samples"]) >= 10:
+                        break
+                    aggregate_strategy_exit["strategy_exit_clamp_samples"].append(
+                        {
+                            "dataset": str(item.get("dataset", "")).strip(),
+                            "ts_ms": to_int(sample.get("ts_ms", 0)),
+                            "market": str(sample.get("market", "")).strip(),
+                            "regime": str(sample.get("regime", "")).strip(),
+                            "stop_loss_price": round(to_float(sample.get("stop_loss_price", 0.0)), 8),
+                            "exit_price_before_clamp": round(
+                                to_float(sample.get("exit_price_before_clamp", 0.0)),
+                                8,
+                            ),
+                            "exit_price_after_clamp": round(
+                                to_float(sample.get("exit_price_after_clamp", 0.0)),
+                                8,
+                            ),
+                            "pnl_before_clamp": round(
+                                to_float(sample.get("pnl_before_clamp", 0.0)),
+                                6,
+                            ),
+                            "pnl_after_clamp": round(
+                                to_float(sample.get("pnl_after_clamp", 0.0)),
+                                6,
+                            ),
+                            "reason_code": str(sample.get("reason_code", "")).strip(),
+                        }
                     )
         ranging_shadow = item.get("ranging_shadow", {})
         if isinstance(ranging_shadow, dict):
@@ -7486,6 +8646,47 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
                         continue
                     aggregate_no_signal_reasons[rk] = aggregate_no_signal_reasons.get(rk, 0) + max(0, to_int(v))
 
+            core_no_signal_reasons = candidate_breakdown.get(
+                "no_signal_reason_counts_core_effective",
+                {},
+            )
+            if isinstance(core_no_signal_reasons, dict):
+                for k, v in core_no_signal_reasons.items():
+                    rk = str(k).strip()
+                    if not rk:
+                        continue
+                    aggregate_no_signal_reasons_core_effective[rk] = (
+                        aggregate_no_signal_reasons_core_effective.get(rk, 0)
+                        + max(0, to_int(v))
+                    )
+
+            core_no_signal_ts_evidence = candidate_breakdown.get(
+                "no_signal_reason_timestamp_evidence_core_effective",
+                {},
+            )
+            if isinstance(core_no_signal_ts_evidence, dict):
+                aggregate_no_signal_timestamp_evidence_core_effective[
+                    "dataset_count_with_evidence"
+                ] += 1
+                aggregate_no_signal_timestamp_evidence_core_effective[
+                    "event_rows_in_range"
+                ] += max(0, to_int(core_no_signal_ts_evidence.get("event_rows_in_range", 0)))
+                aggregate_no_signal_timestamp_evidence_core_effective[
+                    "event_rows_total"
+                ] += max(0, to_int(core_no_signal_ts_evidence.get("event_rows_total", 0)))
+                aggregate_no_signal_timestamp_evidence_core_effective[
+                    "event_rows_with_ts_total"
+                ] += max(
+                    0,
+                    to_int(core_no_signal_ts_evidence.get("event_rows_with_ts_total", 0)),
+                )
+                aggregate_no_signal_timestamp_evidence_core_effective[
+                    "event_rows_missing_ts_total"
+                ] += max(
+                    0,
+                    to_int(core_no_signal_ts_evidence.get("event_rows_missing_ts_total", 0)),
+                )
+
             manager_reasons = candidate_breakdown.get("manager_prefilter_reason_counts", {})
             if isinstance(manager_reasons, dict):
                 for k, v in manager_reasons.items():
@@ -7518,6 +8719,50 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
             aggregate_post_entry_telemetry["adaptive_partial_ratio_samples"] += max(
                 0,
                 to_int(post_entry_telemetry.get("adaptive_partial_ratio_samples", 0)),
+            )
+            aggregate_post_entry_telemetry["stop_loss_trigger_count"] += max(
+                0,
+                to_int(post_entry_telemetry.get("stop_loss_trigger_count", 0)),
+            )
+            aggregate_post_entry_telemetry["stop_loss_pnl_sum_krw"] += to_float(
+                post_entry_telemetry.get("stop_loss_pnl_sum_krw", 0.0)
+            )
+            aggregate_post_entry_telemetry["partial_tp_exit_count"] += max(
+                0,
+                to_int(post_entry_telemetry.get("partial_tp_exit_count", 0)),
+            )
+            aggregate_post_entry_telemetry["take_profit_full_count"] += max(
+                0,
+                to_int(post_entry_telemetry.get("take_profit_full_count", 0)),
+            )
+            aggregate_post_entry_telemetry["take_profit_full_pnl_sum_krw"] += to_float(
+                post_entry_telemetry.get("take_profit_full_pnl_sum_krw", 0.0)
+            )
+            aggregate_post_entry_telemetry["trending_trade_count"] += max(
+                0,
+                to_int(post_entry_telemetry.get("trending_trade_count", 0)),
+            )
+            aggregate_post_entry_telemetry["trending_holding_minutes_sum"] += max(
+                0.0,
+                to_float(post_entry_telemetry.get("trending_holding_minutes_sum", 0.0)),
+            )
+            aggregate_post_entry_telemetry["stop_loss_distance_samples_trending"] += max(
+                0,
+                to_int(post_entry_telemetry.get("stop_loss_distance_samples_trending", 0)),
+            )
+            aggregate_post_entry_telemetry["stop_loss_distance_sum_pct_trending"] += max(
+                0.0,
+                to_float(post_entry_telemetry.get("stop_loss_distance_sum_pct_trending", 0.0)),
+            )
+            aggregate_post_entry_telemetry["take_profit_distance_samples_trending"] += max(
+                0,
+                to_int(post_entry_telemetry.get("take_profit_distance_samples_trending", 0)),
+            )
+            aggregate_post_entry_telemetry["take_profit_distance_sum_pct_trending"] += max(
+                0.0,
+                to_float(
+                    post_entry_telemetry.get("take_profit_distance_sum_pct_trending", 0.0)
+                ),
             )
             histogram = post_entry_telemetry.get("adaptive_partial_ratio_histogram", {})
             if isinstance(histogram, dict):
@@ -7681,6 +8926,10 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         ),
     }
     aggregate_top_no_signal_reasons = top_reason_rows(aggregate_no_signal_reasons, limit=10)
+    aggregate_top_no_signal_reasons_core_effective = top_reason_rows(
+        aggregate_no_signal_reasons_core_effective,
+        limit=10,
+    )
     aggregate_top_manager_prefilter_reasons = top_reason_rows(
         aggregate_manager_prefilter_reasons,
         limit=10,
@@ -7693,6 +8942,36 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         component_shares=aggregate_candidate_component_shares,
         top_no_signal_reasons=aggregate_top_no_signal_reasons,
         top_manager_prefilter_reasons=aggregate_top_manager_prefilter_reasons,
+    )
+    _core_ts_total = max(
+        0,
+        to_int(
+            aggregate_no_signal_timestamp_evidence_core_effective.get(
+                "event_rows_total",
+                0,
+            )
+        ),
+    )
+    aggregate_no_signal_timestamp_evidence_core_effective[
+        "timestamp_coverage_total"
+    ] = (
+        round(
+            float(
+                max(
+                    0,
+                    to_int(
+                        aggregate_no_signal_timestamp_evidence_core_effective.get(
+                            "event_rows_with_ts_total",
+                            0,
+                        )
+                    ),
+                )
+            )
+            / float(max(1, _core_ts_total)),
+            6,
+        )
+        if _core_ts_total > 0
+        else 0.0
     )
 
     def build_phase3_aggregate_rows(
@@ -7846,6 +9125,12 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
             aggregate_phase4_corr_unit_votes.items(),
             key=lambda item: (-int(item[1]), str(item[0])),
         )[0][0]
+    strategy_exit_mode_effective = "enforce"
+    if aggregate_strategy_exit["mode_votes"]:
+        strategy_exit_mode_effective = sorted(
+            aggregate_strategy_exit["mode_votes"].items(),
+            key=lambda item: (-int(item[1]), str(item[0])),
+        )[0][0]
     aggregate_corr_penalty_avg = (
         aggregate_phase4_corr_penalty_weighted_sum
         / float(aggregate_phase4_corr_penalty_applied_count)
@@ -7982,6 +9267,83 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         },
         "top3_bottlenecks": phase4_reject_rows[:3],
     }
+    aggregate_stop_loss_trigger_count = max(
+        0,
+        to_int(aggregate_post_entry_telemetry.get("stop_loss_trigger_count", 0)),
+    )
+    aggregate_post_entry_telemetry["stop_loss_avg_pnl_krw"] = (
+        round(
+            to_float(aggregate_post_entry_telemetry.get("stop_loss_pnl_sum_krw", 0.0))
+            / float(aggregate_stop_loss_trigger_count),
+            6,
+        )
+        if aggregate_stop_loss_trigger_count > 0
+        else 0.0
+    )
+    aggregate_take_profit_full_count = max(
+        0,
+        to_int(aggregate_post_entry_telemetry.get("take_profit_full_count", 0)),
+    )
+    aggregate_post_entry_telemetry["take_profit_full_avg_pnl_krw"] = (
+        round(
+            to_float(aggregate_post_entry_telemetry.get("take_profit_full_pnl_sum_krw", 0.0))
+            / float(aggregate_take_profit_full_count),
+            6,
+        )
+        if aggregate_take_profit_full_count > 0
+        else 0.0
+    )
+    aggregate_trending_trade_count = max(
+        0,
+        to_int(aggregate_post_entry_telemetry.get("trending_trade_count", 0)),
+    )
+    aggregate_post_entry_telemetry["avg_holding_minutes_trending"] = (
+        round(
+            to_float(aggregate_post_entry_telemetry.get("trending_holding_minutes_sum", 0.0))
+            / float(aggregate_trending_trade_count),
+            6,
+        )
+        if aggregate_trending_trade_count > 0
+        else 0.0
+    )
+    aggregate_stop_loss_distance_samples_trending = max(
+        0,
+        to_int(aggregate_post_entry_telemetry.get("stop_loss_distance_samples_trending", 0)),
+    )
+    aggregate_post_entry_telemetry["avg_stop_loss_distance_pct_trending"] = (
+        round(
+            to_float(aggregate_post_entry_telemetry.get("stop_loss_distance_sum_pct_trending", 0.0))
+            / float(aggregate_stop_loss_distance_samples_trending),
+            8,
+        )
+        if aggregate_stop_loss_distance_samples_trending > 0
+        else 0.0
+    )
+    aggregate_take_profit_distance_samples_trending = max(
+        0,
+        to_int(aggregate_post_entry_telemetry.get("take_profit_distance_samples_trending", 0)),
+    )
+    aggregate_post_entry_telemetry["avg_take_profit_distance_pct_trending"] = (
+        round(
+            to_float(
+                aggregate_post_entry_telemetry.get("take_profit_distance_sum_pct_trending", 0.0)
+            )
+            / float(aggregate_take_profit_distance_samples_trending),
+            8,
+        )
+        if aggregate_take_profit_distance_samples_trending > 0
+        else 0.0
+    )
+    aggregate_total_exit_count = (
+        aggregate_stop_loss_trigger_count
+        + max(0, to_int(aggregate_post_entry_telemetry.get("partial_tp_exit_count", 0)))
+        + aggregate_take_profit_full_count
+    )
+    aggregate_post_entry_telemetry["tp_hit_rate"] = (
+        round(float(aggregate_take_profit_full_count) / float(aggregate_total_exit_count), 6)
+        if aggregate_total_exit_count > 0
+        else 0.0
+    )
 
     return {
         "dataset_count": len(dataset_diagnostics),
@@ -8006,7 +9368,19 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
                     4,
                 ),
             },
+            "no_signal_reason_counts_execution_scope": aggregate_no_signal_reasons,
+            "no_signal_reason_counts_core_effective": aggregate_no_signal_reasons_core_effective,
+            "top_no_signal_reasons_execution_scope": aggregate_top_no_signal_reasons,
+            "top_no_signal_reasons_core_effective": aggregate_top_no_signal_reasons_core_effective,
             "top_no_signal_reasons": aggregate_top_no_signal_reasons,
+            "execution_no_signal_top3": top_reason_rows(aggregate_no_signal_reasons, limit=3),
+            "core_no_signal_top3": top_reason_rows(
+                aggregate_no_signal_reasons_core_effective,
+                limit=3,
+            ),
+            "no_signal_reason_timestamp_evidence_core_effective": (
+                aggregate_no_signal_timestamp_evidence_core_effective
+            ),
             "top_manager_prefilter_reasons": aggregate_top_manager_prefilter_reasons,
             "top_policy_prefilter_reasons": aggregate_top_policy_prefilter_reasons,
             "ab_playbook_candidates": aggregate_ab_playbook,
@@ -8029,6 +9403,43 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         },
         "phase3_diagnostics_v2": aggregate_phase3_diag,
         "phase4_portfolio_diagnostics": aggregate_phase4_diag,
+        "strategy_exit": {
+            "mode_effective": strategy_exit_mode_effective,
+            "mode_votes": aggregate_strategy_exit["mode_votes"],
+            "strategy_exit_triggered_count": int(
+                aggregate_strategy_exit["strategy_exit_triggered_count"]
+            ),
+            "strategy_exit_would_trigger_count": int(
+                aggregate_strategy_exit["strategy_exit_triggered_count"]
+            ),
+            "strategy_exit_observe_only_suppressed_count": int(
+                aggregate_strategy_exit["strategy_exit_observe_only_suppressed_count"]
+            ),
+            "strategy_exit_executed_count": int(
+                aggregate_strategy_exit["strategy_exit_executed_count"]
+            ),
+            "strategy_exit_clamp_applied_count": int(
+                aggregate_strategy_exit["strategy_exit_clamp_applied_count"]
+            ),
+            "strategy_exit_triggered_by_market": {
+                str(k): int(max(0, to_int(v)))
+                for k, v in sorted(
+                    aggregate_strategy_exit["strategy_exit_triggered_by_market"].items(),
+                    key=lambda item: str(item[0]),
+                )
+            },
+            "strategy_exit_triggered_by_regime": {
+                str(k): int(max(0, to_int(v)))
+                for k, v in sorted(
+                    aggregate_strategy_exit["strategy_exit_triggered_by_regime"].items(),
+                    key=lambda item: str(item[0]),
+                )
+            },
+            "strategy_exit_would_trigger_samples": aggregate_strategy_exit[
+                "strategy_exit_would_trigger_samples"
+            ],
+            "strategy_exit_clamp_samples": aggregate_strategy_exit["strategy_exit_clamp_samples"],
+        },
         "regime_entry_disable": {
             "enabled": bool(aggregate_regime_entry_disable_enabled),
             "disabled_regimes": sorted(list(aggregate_disabled_regimes)),
@@ -8045,6 +9456,124 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         },
         "ranging_shadow": aggregate_ranging_shadow_summary,
         "shadow_funnel": aggregate_shadow_summary,
+    }
+
+
+def build_core_no_signal_summary(
+    aggregate_diagnostics: Dict[str, Any],
+    dataset_diagnostics: List[Dict[str, Any]],
+    split_filter_context: Dict[str, Any],
+    split_name: str,
+) -> Dict[str, Any]:
+    agg_candidate = aggregate_diagnostics.get("candidate_generation_analysis", {})
+    if not isinstance(agg_candidate, dict):
+        agg_candidate = {}
+
+    execution_no_signal_top3 = agg_candidate.get("execution_no_signal_top3", [])
+    if not isinstance(execution_no_signal_top3, list):
+        execution_no_signal_top3 = []
+    core_no_signal_top3 = agg_candidate.get("core_no_signal_top3", [])
+    if not isinstance(core_no_signal_top3, list):
+        core_no_signal_top3 = []
+
+    execution_no_signal_counts = normalized_reason_counts(
+        agg_candidate.get("no_signal_reason_counts_execution_scope", {})
+    )
+    core_no_signal_counts = normalized_reason_counts(
+        agg_candidate.get("no_signal_reason_counts_core_effective", {})
+    )
+    ts_evidence = agg_candidate.get("no_signal_reason_timestamp_evidence_core_effective", {})
+    if not isinstance(ts_evidence, dict):
+        ts_evidence = {}
+
+    per_dataset_rows: List[Dict[str, Any]] = []
+    for row in dataset_diagnostics:
+        if not isinstance(row, dict):
+            continue
+        candidate_breakdown = row.get("candidate_generation_breakdown", {})
+        if not isinstance(candidate_breakdown, dict):
+            candidate_breakdown = {}
+        execution_counts_ds = normalized_reason_counts(
+            candidate_breakdown.get("no_signal_reason_counts_execution_scope", {})
+            or candidate_breakdown.get("no_signal_reason_counts", {})
+        )
+        core_counts_ds = normalized_reason_counts(
+            candidate_breakdown.get("no_signal_reason_counts_core_effective", {})
+        )
+        per_dataset_rows.append(
+            {
+                "dataset": str(row.get("dataset", "")).strip(),
+                "execution_no_signal_top3": top_reason_rows(execution_counts_ds, limit=3),
+                "core_no_signal_top3": top_reason_rows(core_counts_ds, limit=3),
+                "execution_probabilistic_feature_build_failed": int(
+                    execution_counts_ds.get("probabilistic_feature_build_failed", 0)
+                ),
+                "core_probabilistic_feature_build_failed": int(
+                    core_counts_ds.get("probabilistic_feature_build_failed", 0)
+                ),
+            }
+        )
+
+    core_top1_reason = ""
+    if core_no_signal_top3 and isinstance(core_no_signal_top3[0], dict):
+        core_top1_reason = str(core_no_signal_top3[0].get("reason", "")).strip()
+
+    return {
+        "generated_at": __import__("datetime").datetime.now().astimezone().isoformat(),
+        "split_name": str(split_name).strip(),
+        "evaluation_range_effective": (
+            split_filter_context.get("evaluation_range_effective", [])
+            if isinstance(split_filter_context, dict)
+            else []
+        ),
+        "execution_range_used": (
+            split_filter_context.get("execution_range_used", [])
+            if isinstance(split_filter_context, dict)
+            else []
+        ),
+        "aggregate": {
+            "execution_no_signal_top3": execution_no_signal_top3[:3],
+            "core_no_signal_top3": core_no_signal_top3[:3],
+            "execution_no_signal_reason_counts": execution_no_signal_counts,
+            "core_no_signal_reason_counts": core_no_signal_counts,
+            "execution_probabilistic_feature_build_failed": int(
+                execution_no_signal_counts.get("probabilistic_feature_build_failed", 0)
+            ),
+            "core_probabilistic_feature_build_failed": int(
+                core_no_signal_counts.get("probabilistic_feature_build_failed", 0)
+            ),
+            "timestamp_evidence_core_effective": ts_evidence,
+            "candidate_total_core_effective": int(
+                split_filter_context.get("candidate_total_core_effective", 0)
+                if isinstance(split_filter_context, dict)
+                else 0
+            ),
+            "total_trades_core_effective": int(
+                split_filter_context.get("total_trades_core_effective", 0)
+                if isinstance(split_filter_context, dict)
+                else 0
+            ),
+        },
+        "per_dataset": per_dataset_rows,
+        "summary": {
+            "core_feature_build_failed_dominant": bool(
+                str(core_top1_reason).strip().lower() == "probabilistic_feature_build_failed"
+            ),
+            "core_has_candidates_or_trades": bool(
+                int(
+                    split_filter_context.get("candidate_total_core_effective", 0)
+                    if isinstance(split_filter_context, dict)
+                    else 0
+                )
+                > 0
+                or int(
+                    split_filter_context.get("total_trades_core_effective", 0)
+                    if isinstance(split_filter_context, dict)
+                    else 0
+                )
+                > 0
+            ),
+        },
     }
 
 
@@ -8208,6 +9737,90 @@ def parse_post_entry_risk_telemetry(backtest_result: Dict[str, Any]) -> Dict[str
             0.0,
             to_float(telemetry.get("adaptive_partial_ratio_avg", 0.0)),
         ),
+        "be_move_attempt_count": max(
+            0,
+            to_int(telemetry.get("be_move_attempt_count", 0)),
+        ),
+        "be_move_applied_count": max(
+            0,
+            to_int(telemetry.get("be_move_applied_count", 0)),
+        ),
+        "be_move_skipped_due_to_delay_count": max(
+            0,
+            to_int(telemetry.get("be_move_skipped_due_to_delay_count", 0)),
+        ),
+        "stop_loss_after_partial_tp_count": max(
+            0,
+            to_int(telemetry.get("stop_loss_after_partial_tp_count", 0)),
+        ),
+        "stop_loss_before_partial_tp_count": max(
+            0,
+            to_int(telemetry.get("stop_loss_before_partial_tp_count", 0)),
+        ),
+        "be_after_partial_tp_delay_sec": max(
+            0,
+            to_int(telemetry.get("be_after_partial_tp_delay_sec", 0)),
+        ),
+        "stop_loss_trigger_count": max(
+            0,
+            to_int(telemetry.get("stop_loss_trigger_count", 0)),
+        ),
+        "stop_loss_pnl_sum_krw": to_float(telemetry.get("stop_loss_pnl_sum_krw", 0.0)),
+        "stop_loss_avg_pnl_krw": to_float(telemetry.get("stop_loss_avg_pnl_krw", 0.0)),
+        "partial_tp_exit_count": max(
+            0,
+            to_int(telemetry.get("partial_tp_exit_count", 0)),
+        ),
+        "take_profit_full_count": max(
+            0,
+            to_int(telemetry.get("take_profit_full_count", 0)),
+        ),
+        "take_profit_full_pnl_sum_krw": to_float(
+            telemetry.get("take_profit_full_pnl_sum_krw", 0.0)
+        ),
+        "take_profit_full_avg_pnl_krw": to_float(
+            telemetry.get("take_profit_full_avg_pnl_krw", 0.0)
+        ),
+        "tp_hit_rate": max(
+            0.0,
+            to_float(telemetry.get("tp_hit_rate", 0.0)),
+        ),
+        "trending_trade_count": max(
+            0,
+            to_int(telemetry.get("trending_trade_count", 0)),
+        ),
+        "trending_holding_minutes_sum": max(
+            0.0,
+            to_float(telemetry.get("trending_holding_minutes_sum", 0.0)),
+        ),
+        "avg_holding_minutes_trending": max(
+            0.0,
+            to_float(telemetry.get("avg_holding_minutes_trending", 0.0)),
+        ),
+        "stop_loss_distance_samples_trending": max(
+            0,
+            to_int(telemetry.get("stop_loss_distance_samples_trending", 0)),
+        ),
+        "stop_loss_distance_sum_pct_trending": max(
+            0.0,
+            to_float(telemetry.get("stop_loss_distance_sum_pct_trending", 0.0)),
+        ),
+        "avg_stop_loss_distance_pct_trending": max(
+            0.0,
+            to_float(telemetry.get("avg_stop_loss_distance_pct_trending", 0.0)),
+        ),
+        "take_profit_distance_samples_trending": max(
+            0,
+            to_int(telemetry.get("take_profit_distance_samples_trending", 0)),
+        ),
+        "take_profit_distance_sum_pct_trending": max(
+            0.0,
+            to_float(telemetry.get("take_profit_distance_sum_pct_trending", 0.0)),
+        ),
+        "avg_take_profit_distance_pct_trending": max(
+            0.0,
+            to_float(telemetry.get("avg_take_profit_distance_pct_trending", 0.0)),
+        ),
         "adaptive_partial_ratio_histogram": histogram,
     }
 
@@ -8337,6 +9950,12 @@ def aggregate_adaptive_validation(dataset_profiles: List[Dict[str, Any]]) -> Dic
             "avg_adaptive_tp_recalibration_updates": 0.0,
             "avg_adaptive_partial_ratio_samples": 0.0,
             "avg_adaptive_partial_ratio": 0.0,
+            "avg_be_move_attempt_count": 0.0,
+            "avg_be_move_applied_count": 0.0,
+            "avg_be_move_skipped_due_to_delay_count": 0.0,
+            "avg_stop_loss_after_partial_tp_count": 0.0,
+            "avg_stop_loss_before_partial_tp_count": 0.0,
+            "be_after_partial_tp_delay_sec_mode": 0,
             "adaptive_partial_ratio_histogram": {
                 "0.35_0.44": 0,
                 "0.45_0.54": 0,
@@ -8389,6 +10008,23 @@ def aggregate_adaptive_validation(dataset_profiles: List[Dict[str, Any]]) -> Dic
     tp_recalibration_updates = []
     partial_ratio_samples = []
     partial_ratio_weighted_sum = 0.0
+    be_move_attempt_counts = []
+    be_move_applied_counts = []
+    be_move_skipped_counts = []
+    stop_loss_after_partial_tp_counts = []
+    stop_loss_before_partial_tp_counts = []
+    stop_loss_trigger_counts = []
+    stop_loss_pnl_sum_values = []
+    stop_loss_avg_pnl_values = []
+    partial_tp_exit_counts = []
+    take_profit_full_counts = []
+    take_profit_full_pnl_sum_values = []
+    take_profit_full_avg_pnl_values = []
+    tp_hit_rate_values = []
+    trending_holding_avg_values = []
+    avg_stop_loss_distance_pct_trending_values = []
+    avg_take_profit_distance_pct_trending_values = []
+    be_delay_secs = []
     partial_ratio_histogram = {
         "0.35_0.44": 0,
         "0.45_0.54": 0,
@@ -8429,6 +10065,51 @@ def aggregate_adaptive_validation(dataset_profiles: List[Dict[str, Any]]) -> Dic
         tp_recalibration_updates.append(tp_recalibration_count)
         partial_ratio_samples.append(ratio_samples)
         partial_ratio_weighted_sum += ratio_avg * ratio_samples
+        be_move_attempt_counts.append(max(0.0, to_float(telemetry.get("be_move_attempt_count", 0.0))))
+        be_move_applied_counts.append(max(0.0, to_float(telemetry.get("be_move_applied_count", 0.0))))
+        be_move_skipped_counts.append(
+            max(0.0, to_float(telemetry.get("be_move_skipped_due_to_delay_count", 0.0)))
+        )
+        stop_loss_after_partial_tp_counts.append(
+            max(0.0, to_float(telemetry.get("stop_loss_after_partial_tp_count", 0.0)))
+        )
+        stop_loss_before_partial_tp_counts.append(
+            max(0.0, to_float(telemetry.get("stop_loss_before_partial_tp_count", 0.0)))
+        )
+        stop_loss_trigger_counts.append(
+            max(0.0, to_float(telemetry.get("stop_loss_trigger_count", 0.0)))
+        )
+        stop_loss_pnl_sum_values.append(
+            to_float(telemetry.get("stop_loss_pnl_sum_krw", 0.0))
+        )
+        stop_loss_avg_pnl_values.append(
+            to_float(telemetry.get("stop_loss_avg_pnl_krw", 0.0))
+        )
+        partial_tp_exit_counts.append(
+            max(0.0, to_float(telemetry.get("partial_tp_exit_count", 0.0)))
+        )
+        take_profit_full_counts.append(
+            max(0.0, to_float(telemetry.get("take_profit_full_count", 0.0)))
+        )
+        take_profit_full_pnl_sum_values.append(
+            to_float(telemetry.get("take_profit_full_pnl_sum_krw", 0.0))
+        )
+        take_profit_full_avg_pnl_values.append(
+            to_float(telemetry.get("take_profit_full_avg_pnl_krw", 0.0))
+        )
+        tp_hit_rate_values.append(
+            max(0.0, to_float(telemetry.get("tp_hit_rate", 0.0)))
+        )
+        trending_holding_avg_values.append(
+            max(0.0, to_float(telemetry.get("avg_holding_minutes_trending", 0.0)))
+        )
+        avg_stop_loss_distance_pct_trending_values.append(
+            max(0.0, to_float(telemetry.get("avg_stop_loss_distance_pct_trending", 0.0)))
+        )
+        avg_take_profit_distance_pct_trending_values.append(
+            max(0.0, to_float(telemetry.get("avg_take_profit_distance_pct_trending", 0.0)))
+        )
+        be_delay_secs.append(max(0, to_int(telemetry.get("be_after_partial_tp_delay_sec", 0))))
 
         hist = telemetry.get("adaptive_partial_ratio_histogram", {})
         if isinstance(hist, dict):
@@ -8532,6 +10213,14 @@ def aggregate_adaptive_validation(dataset_profiles: List[Dict[str, Any]]) -> Dic
     if tail_metric_ess <= 0.0:
         tail_metric_ess = float(tail_metric_sample_size)
 
+    be_delay_mode = 0
+    if be_delay_secs:
+        freq: Dict[int, int] = {}
+        for value in be_delay_secs:
+            key = max(0, int(value))
+            freq[key] = freq.get(key, 0) + 1
+        be_delay_mode = sorted(freq.items(), key=lambda item: (-item[1], item[0]))[0][0]
+
     return {
         "dataset_count": len(dataset_profiles),
         "avg_risk_adjusted_score": round(safe_avg(scores), 4),
@@ -8557,6 +10246,33 @@ def aggregate_adaptive_validation(dataset_profiles: List[Dict[str, Any]]) -> Dic
         "avg_adaptive_tp_recalibration_updates": round(safe_avg(tp_recalibration_updates), 4),
         "avg_adaptive_partial_ratio_samples": round(safe_avg(partial_ratio_samples), 4),
         "avg_adaptive_partial_ratio": round(avg_adaptive_partial_ratio, 4),
+        "avg_be_move_attempt_count": round(safe_avg(be_move_attempt_counts), 4),
+        "avg_be_move_applied_count": round(safe_avg(be_move_applied_counts), 4),
+        "avg_be_move_skipped_due_to_delay_count": round(safe_avg(be_move_skipped_counts), 4),
+        "avg_stop_loss_after_partial_tp_count": round(
+            safe_avg(stop_loss_after_partial_tp_counts), 4
+        ),
+        "avg_stop_loss_before_partial_tp_count": round(
+            safe_avg(stop_loss_before_partial_tp_counts), 4
+        ),
+        "avg_stop_loss_trigger_count": round(safe_avg(stop_loss_trigger_counts), 4),
+        "avg_stop_loss_pnl_sum_krw": round(safe_avg(stop_loss_pnl_sum_values), 4),
+        "avg_stop_loss_avg_pnl_krw": round(safe_avg(stop_loss_avg_pnl_values), 4),
+        "avg_partial_tp_exit_count": round(safe_avg(partial_tp_exit_counts), 4),
+        "avg_take_profit_full_count": round(safe_avg(take_profit_full_counts), 4),
+        "avg_take_profit_full_pnl_sum_krw": round(safe_avg(take_profit_full_pnl_sum_values), 4),
+        "avg_take_profit_full_avg_pnl_krw": round(safe_avg(take_profit_full_avg_pnl_values), 4),
+        "avg_tp_hit_rate": round(safe_avg(tp_hit_rate_values), 6),
+        "avg_holding_minutes_trending": round(safe_avg(trending_holding_avg_values), 4),
+        "avg_stop_loss_distance_pct_trending": round(
+            safe_avg(avg_stop_loss_distance_pct_trending_values),
+            8,
+        ),
+        "avg_take_profit_distance_pct_trending": round(
+            safe_avg(avg_take_profit_distance_pct_trending_values),
+            8,
+        ),
+        "be_after_partial_tp_delay_sec_mode": int(be_delay_mode),
         "adaptive_partial_ratio_histogram": partial_ratio_histogram,
         "avg_risk_adjusted_score_components": {
             "expectancy_term": round(safe_avg(score_expectancy_terms), 4),
@@ -9168,6 +10884,24 @@ def main(argv=None) -> int:
         default=r".\build\Release\logs\stageD_v1_effect_summary.json",
         help="Output JSON path for Stage D v1 effect summary (real trades + shadow).",
     )
+    parser.add_argument(
+        "--core-no-signal-summary-json",
+        default=r".\build\Release\logs\fresh14_core_no_signal_summary.json",
+        help=(
+            "Output JSON path for execution-vs-core no-signal reason dual-scope summary "
+            "(Fresh14 follow-up diagnostic)."
+        ),
+    )
+    parser.add_argument(
+        "--stage-g7-ev-affine-debug-json",
+        default=r".\build\Release\logs\stageG7_ev_affine_debug.json",
+        help="Output JSON path for Stage G7 LGBM EV affine telemetry/debug summary.",
+    )
+    parser.add_argument(
+        "--stage-g8-backend-provenance-json",
+        default=r".\build\Release\logs\stageG8_backend_provenance_report.json",
+        help="Output JSON path for Stage G8 backend/model provenance summary.",
+    )
     args = parser.parse_args(argv)
 
     exe_path = resolve_path(args.exe_path, "Executable")
@@ -9254,6 +10988,21 @@ def main(argv=None) -> int:
     stage_d_v1_effect_summary_json = resolve_path(
         args.stage_d_v1_effect_summary_json,
         "Stage D v1 effect summary json",
+        must_exist=False,
+    )
+    core_no_signal_summary_json = resolve_path(
+        args.core_no_signal_summary_json,
+        "Core no-signal summary json",
+        must_exist=False,
+    )
+    stage_g7_ev_affine_debug_json = resolve_path(
+        args.stage_g7_ev_affine_debug_json,
+        "Stage G7 EV affine debug json",
+        must_exist=False,
+    )
+    stage_g8_backend_provenance_json = resolve_path(
+        args.stage_g8_backend_provenance_json,
+        "Stage G8 backend provenance json",
         must_exist=False,
     )
     core_zero_diagnosis_json = resolve_path(
@@ -9441,6 +11190,7 @@ def main(argv=None) -> int:
             result = run_backtest(
                 exe_path=exe_path,
                 dataset_path=dataset_path,
+                config_path=config_path,
                 require_higher_tf_companions=bool(args.require_higher_tf_companions),
                 disable_adaptive_state_io=not bool(args.enable_adaptive_state_io),
                 evaluation_start_ts=eval_start_ts,
@@ -9744,6 +11494,7 @@ def main(argv=None) -> int:
                     dataset_name=dataset_path.name,
                     backtest_result=result,
                     phase4_market_cluster_map=phase4_market_cluster_map,
+                    bundle_meta=bundle_meta if isinstance(bundle_meta, dict) else {},
                 )
             )
             adaptive_dataset_profiles.append(
@@ -9783,11 +11534,13 @@ def main(argv=None) -> int:
             if bool(core_paths_info.get("available", False)):
                 core_window_direct_report = run_core_window_direct_report(
                     exe_path=exe_path,
+                    config_path=config_path,
                     dataset_paths=list(core_paths_info.get("dataset_paths", [])),
                     require_higher_tf_companions=bool(args.require_higher_tf_companions),
                     disable_adaptive_state_io=not bool(args.enable_adaptive_state_io),
                     phase4_market_cluster_map=phase4_market_cluster_map,
                     risk_adjusted_score_policy=risk_adjusted_score_policy,
+                    bundle_meta=bundle_meta if isinstance(bundle_meta, dict) else {},
                 )
                 core_window_direct_report["split_name"] = split_name_for_core
                 core_window_direct_report["core_dir"] = str(core_paths_info.get("core_dir", ""))
@@ -10267,6 +12020,15 @@ def main(argv=None) -> int:
     }
     threshold_gate_pass = all(bool(x) for x in gate.values())
     aggregate_diagnostics = aggregate_dataset_diagnostics(dataset_diagnostics)
+    core_no_signal_summary = build_core_no_signal_summary(
+        aggregate_diagnostics=aggregate_diagnostics,
+        dataset_diagnostics=dataset_diagnostics,
+        split_filter_context=split_filter_context if isinstance(split_filter_context, dict) else {},
+        split_name=str(args.split_name).strip(),
+    )
+    ensure_parent(core_no_signal_summary_json)
+    with core_no_signal_summary_json.open("w", encoding="utf-8", newline="\n") as fp:
+        json.dump(core_no_signal_summary, fp, ensure_ascii=False, indent=4)
     if isinstance(split_filter_context, dict):
         split_filter_context["candidate_total_execution"] = int(
             nested_get(
@@ -10667,6 +12429,25 @@ def main(argv=None) -> int:
     with stage_d_v1_effect_summary_json.open("w", encoding="utf-8", newline="\n") as fp:
         json.dump(stage_d_v1_effect_summary, fp, ensure_ascii=False, indent=4)
 
+    stage_g7_ev_affine_debug = build_stage_g7_ev_affine_debug(
+        dataset_diagnostics=dataset_diagnostics,
+        split_filter_context=split_filter_context if isinstance(split_filter_context, dict) else {},
+        rows=rows,
+        aggregate_diagnostics=aggregate_diagnostics,
+        bundle_meta=bundle_meta if isinstance(bundle_meta, dict) else {},
+    )
+    ensure_parent(stage_g7_ev_affine_debug_json)
+    with stage_g7_ev_affine_debug_json.open("w", encoding="utf-8", newline="\n") as fp:
+        json.dump(stage_g7_ev_affine_debug, fp, ensure_ascii=False, indent=4)
+    stage_g8_backend_provenance = build_stage_g8_backend_provenance_report(
+        dataset_diagnostics=dataset_diagnostics,
+        bundle_meta=bundle_meta if isinstance(bundle_meta, dict) else {},
+        split_filter_context=split_filter_context if isinstance(split_filter_context, dict) else {},
+    )
+    ensure_parent(stage_g8_backend_provenance_json)
+    with stage_g8_backend_provenance_json.open("w", encoding="utf-8", newline="\n") as fp:
+        json.dump(stage_g8_backend_provenance, fp, ensure_ascii=False, indent=4)
+
     report = {
         "mode": "verification_adaptive",
         "validation_profile": str(args.validation_profile),
@@ -10751,6 +12532,9 @@ def main(argv=None) -> int:
             "semantics_lock_report": semantics_lock_report,
             "ranging_shadow_run_meta": ranging_shadow_run_meta,
             "stage_d_v1_effect_summary": stage_d_v1_effect_summary,
+            "stage_g7_ev_affine_debug": stage_g7_ev_affine_debug,
+            "stage_g8_backend_provenance": stage_g8_backend_provenance,
+            "core_no_signal_summary": core_no_signal_summary,
         },
         "split_filter": split_filter_context,
         "split_eval_profiles": split_eval_profiles,
@@ -10784,6 +12568,9 @@ def main(argv=None) -> int:
             "ranging_shadow_signals_jsonl": str(ranging_shadow_signals_jsonl),
             "ranging_shadow_run_meta_json": str(ranging_shadow_run_meta_json),
             "stage_d_v1_effect_summary_json": str(stage_d_v1_effect_summary_json),
+            "stage_g7_ev_affine_debug_json": str(stage_g7_ev_affine_debug_json),
+            "stage_g8_backend_provenance_json": str(stage_g8_backend_provenance_json),
+            "core_no_signal_summary_json": str(core_no_signal_summary_json),
             "core_zero_diagnosis_json": str(core_zero_diagnosis_json),
         },
     }
@@ -11035,6 +12822,16 @@ def main(argv=None) -> int:
         f"phase3_cost_eff_true={semantics_runtime.get('phase3_cost_model_enabled_effective_true_count', 0)} "
         f"cost_bps_mean={semantics_cost.get('mean_bps', 0.0)} "
         f"cost_bps_max={semantics_cost.get('max_bps', 0.0)}"
+    )
+    print(
+        "[Verification] backend_provenance "
+        f"backend_cfg={stage_g8_backend_provenance.get('prob_model_backend_configured', 'unknown')} "
+        f"backend_effective={stage_g8_backend_provenance.get('prob_model_backend_effective_dominant', 'unknown')} "
+        f"lgbm_sha={stage_g8_backend_provenance.get('lgbm_model_sha256', '')} "
+        f"cal_mode={stage_g8_backend_provenance.get('calibration_mode', 'off')} "
+        f"ev_affine={stage_g8_backend_provenance.get('ev_affine', {}).get('enabled', False)} "
+        f"scale={stage_g8_backend_provenance.get('ev_affine', {}).get('scale', 1.0)} "
+        f"shift={stage_g8_backend_provenance.get('ev_affine', {}).get('shift', 0.0)}"
     )
     stage_d_shadow = (
         stage_d_v1_effect_summary.get("ranging_shadow", {})

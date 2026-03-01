@@ -6,7 +6,7 @@ import pathlib
 import re
 from collections import deque
 from datetime import datetime, timezone
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 from _script_common import dump_json, ensure_parent_directory, load_json_or_none, resolve_repo_path
 from probabilistic_cost_model import DEFAULT_COST_MODEL_CONFIG, resolve_label_cost_bps
@@ -15,6 +15,17 @@ from probabilistic_cost_model import DEFAULT_COST_MODEL_CONFIG, resolve_label_co
 ANCHOR_TF = 1
 CONTEXT_TFS = (5, 15, 60, 240)
 MARKET_FILE_RE = re.compile(r"^upbit_([A-Z0-9_]+)_1m_full\.csv$")
+DEFAULT_LABEL_TP1_POLICY = {
+    "risk_pct_policy": {
+        "RANGING": {"mult": 1.15, "floor_pct": 0.35, "cap_pct": 1.40},
+        "TRENDING_UP": {"mult": 1.15, "floor_pct": 0.35, "cap_pct": 1.40},
+        "TRENDING_DOWN": {"mult": 1.15, "floor_pct": 0.35, "cap_pct": 1.40},
+        "DEFAULT": {"mult": 1.15, "floor_pct": 0.35, "cap_pct": 1.40},
+    },
+    "tp1_rr": 0.50,
+    "horizon_bars": 20,
+    "label_cost_bps": 12.0,
+}
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -115,6 +126,16 @@ def parse_args(argv=None) -> argparse.Namespace:
         "--universe-file",
         default="",
         help="Optional runtime universe JSON. Applies strict/skip rules for missing 1m anchors.",
+    )
+    parser.add_argument(
+        "--label-policy-json",
+        default=r".\scripts\label_policies\label_tp1_policy.json",
+        help="Stage G2 label policy json (TP1 hit label semantics).",
+    )
+    parser.add_argument(
+        "--stageg2-label-report-json",
+        default=r".\build\Release\logs\stageG2_label_report.json",
+        help="Optional Stage G2 label diagnostics output path.",
     )
     return parser.parse_args(argv)
 
@@ -360,6 +381,212 @@ def sign3(value: float) -> int:
     return 0
 
 
+def normalize_regime(sign60: int, sign240: int) -> str:
+    if int(sign60) > 0 and int(sign240) > 0:
+        return "TRENDING_UP"
+    if int(sign60) < 0 and int(sign240) < 0:
+        return "TRENDING_DOWN"
+    return "RANGING"
+
+
+def _safe_policy_entry(raw: object, default: Dict[str, float]) -> Dict[str, float]:
+    entry = raw if isinstance(raw, dict) else {}
+    return {
+        "mult": float(entry.get("mult", default["mult"])),
+        "floor_pct": float(entry.get("floor_pct", default["floor_pct"])),
+        "cap_pct": float(entry.get("cap_pct", default["cap_pct"])),
+    }
+
+
+def load_label_tp1_policy(policy_path: pathlib.Path) -> Dict[str, object]:
+    payload = load_json_or_none(policy_path)
+    if not isinstance(payload, dict):
+        payload = {}
+    default = DEFAULT_LABEL_TP1_POLICY
+    default_risk = dict(default["risk_pct_policy"]["DEFAULT"])
+    payload_risk = payload.get("risk_pct_policy", {})
+    if not isinstance(payload_risk, dict):
+        payload_risk = {}
+    policy = {
+        "risk_pct_policy": {
+            "RANGING": _safe_policy_entry(payload_risk.get("RANGING"), default_risk),
+            "TRENDING_UP": _safe_policy_entry(payload_risk.get("TRENDING_UP"), default_risk),
+            "TRENDING_DOWN": _safe_policy_entry(payload_risk.get("TRENDING_DOWN"), default_risk),
+            "DEFAULT": _safe_policy_entry(payload_risk.get("DEFAULT"), default_risk),
+        },
+        "tp1_rr": float(payload.get("tp1_rr", default["tp1_rr"])),
+        "horizon_bars": max(1, int(payload.get("horizon_bars", default["horizon_bars"]))),
+        "label_cost_bps": float(payload.get("label_cost_bps", default["label_cost_bps"])),
+        "policy_source_json": str(policy_path),
+        "policy_source_exists": bool(policy_path.exists()),
+    }
+    return policy
+
+
+def compute_tp1_risk_and_target(
+    *,
+    atr_pct_fraction: float,
+    entry_price: float,
+    regime_name: str,
+    label_tp1_policy: Dict[str, object],
+) -> Tuple[float, float, float]:
+    risk_table = label_tp1_policy.get("risk_pct_policy", {})
+    if not isinstance(risk_table, dict):
+        risk_table = {}
+    default_cfg = risk_table.get("DEFAULT", DEFAULT_LABEL_TP1_POLICY["risk_pct_policy"]["DEFAULT"])
+    if not isinstance(default_cfg, dict):
+        default_cfg = DEFAULT_LABEL_TP1_POLICY["risk_pct_policy"]["DEFAULT"]
+    cfg = risk_table.get(str(regime_name), default_cfg)
+    if not isinstance(cfg, dict):
+        cfg = default_cfg
+
+    atr_pct_percent = float(atr_pct_fraction) * 100.0
+    mult = float(cfg.get("mult", default_cfg.get("mult", 1.15)))
+    floor_pct = float(cfg.get("floor_pct", default_cfg.get("floor_pct", 0.35)))
+    cap_pct = float(cfg.get("cap_pct", default_cfg.get("cap_pct", 1.40)))
+    risk_pct_raw = atr_pct_percent * mult
+    risk_pct = min(cap_pct, max(floor_pct, risk_pct_raw))
+    tp1_rr = float(label_tp1_policy.get("tp1_rr", DEFAULT_LABEL_TP1_POLICY["tp1_rr"]))
+    tp1_pct = (risk_pct / 100.0) * tp1_rr
+    target_price = float(entry_price) * (1.0 + tp1_pct)
+    return float(risk_pct), float(tp1_pct), float(target_price)
+
+
+def build_stageg2_label_report(
+    *,
+    manifest_payload: Dict[str, object],
+    report_json_path: pathlib.Path,
+) -> None:
+    jobs = manifest_payload.get("jobs", [])
+    if not isinstance(jobs, list):
+        jobs = []
+    dropped_due_to_future_window = 0
+    csv_paths: List[pathlib.Path] = []
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        out_path = str(job.get("output_path", "")).strip()
+        if out_path:
+            csv_paths.append(pathlib.Path(out_path))
+        dropped_due_to_future_window += int(job.get("dropped_due_to_future_window", 0) or 0)
+
+    total_rows = 0
+    usable_rows = 0
+    positive_rows = 0
+    risk_values: List[float] = []
+    tp1_values: List[float] = []
+    by_market: Dict[str, Dict[str, int]] = {}
+    by_regime: Dict[str, Dict[str, int]] = {}
+    for csv_path in csv_paths:
+        if not csv_path.exists():
+            continue
+        with csv_path.open("r", encoding="utf-8", errors="ignore", newline="") as fh:
+            reader = csv.DictReader(fh)
+            for row in reader:
+                total_rows += 1
+                market = str(row.get("market", "")).strip() or "UNKNOWN"
+                label_raw = str(row.get("label_tp1_hit_h20m", "")).strip()
+                if not label_raw:
+                    # Backward-compat for pre-rename datasets.
+                    label_raw = str(row.get("label_tp1_hit_h5m", "")).strip()
+                risk_raw = str(row.get("label_tp1_risk_pct", "")).strip()
+                tp1_raw = str(row.get("label_tp1_pct", "")).strip()
+                try:
+                    sign60_raw = float(row.get("regime_trend_60_sign", 0) or 0)
+                except Exception:
+                    sign60_raw = 0.0
+                try:
+                    sign240_raw = float(row.get("regime_trend_240_sign", 0) or 0)
+                except Exception:
+                    sign240_raw = 0.0
+                sign60 = sign3(sign60_raw)
+                sign240 = sign3(sign240_raw)
+                regime = normalize_regime(sign60, sign240)
+                try:
+                    label_value = int(float(label_raw))
+                except Exception:
+                    continue
+                if label_value not in (0, 1):
+                    continue
+                usable_rows += 1
+                if label_value == 1:
+                    positive_rows += 1
+                market_stat = by_market.setdefault(market, {"total": 0, "positive": 0})
+                market_stat["total"] += 1
+                market_stat["positive"] += int(label_value == 1)
+                regime_stat = by_regime.setdefault(regime, {"total": 0, "positive": 0})
+                regime_stat["total"] += 1
+                regime_stat["positive"] += int(label_value == 1)
+                try:
+                    rv = float(risk_raw)
+                    if math.isfinite(rv):
+                        risk_values.append(rv)
+                except Exception:
+                    pass
+                try:
+                    tv = float(tp1_raw)
+                    if math.isfinite(tv):
+                        tp1_values.append(tv)
+                except Exception:
+                    pass
+
+    def _quantiles(values: List[float]) -> Dict[str, float]:
+        if not values:
+            return {"p10": math.nan, "p50": math.nan, "p90": math.nan, "mean": math.nan}
+        arr = sorted(float(v) for v in values)
+        n = len(arr)
+        def _at(q: float) -> float:
+            idx = int(round((n - 1) * q))
+            idx = max(0, min(n - 1, idx))
+            return float(arr[idx])
+        return {
+            "p10": _at(0.10),
+            "p50": _at(0.50),
+            "p90": _at(0.90),
+            "mean": float(sum(arr) / float(n)),
+        }
+
+    by_market_rows = []
+    for market, stat in sorted(by_market.items()):
+        total = int(stat["total"])
+        positive = int(stat["positive"])
+        by_market_rows.append(
+            {
+                "market": market,
+                "sample_count": total,
+                "positive_count": positive,
+                "positive_ratio": (float(positive) / float(total)) if total > 0 else math.nan,
+            }
+        )
+    by_regime_rows = []
+    for regime, stat in sorted(by_regime.items()):
+        total = int(stat["total"])
+        positive = int(stat["positive"])
+        by_regime_rows.append(
+            {
+                "regime": regime,
+                "sample_count": total,
+                "positive_count": positive,
+                "positive_ratio": (float(positive) / float(total)) if total > 0 else math.nan,
+            }
+        )
+
+    payload = {
+        "generated_at_utc": utc_now_iso(),
+        "status": "pass",
+        "target_column": "label_tp1_hit_h20m",
+        "dataset_rows": int(total_rows),
+        "usable_label_rows": int(usable_rows),
+        "dropped_due_to_future_window": int(dropped_due_to_future_window),
+        "positive_ratio": (float(positive_rows) / float(usable_rows)) if usable_rows > 0 else math.nan,
+        "by_market_positive_ratio": by_market_rows,
+        "by_regime_positive_ratio": by_regime_rows,
+        "risk_pct_distribution": _quantiles(risk_values),
+        "tp1_pct_distribution": _quantiles(tp1_values),
+    }
+    dump_json(report_json_path, payload)
+
+
 def to_iso(ts_ms: int) -> str:
     return datetime.fromtimestamp(float(ts_ms) / 1000.0, tz=timezone.utc).isoformat()
 
@@ -450,6 +677,7 @@ def build_market_dataset(
     sample_lookback_minutes: int,
     roundtrip_cost_bps: float,
     cost_model_config: Dict[str, object],
+    label_tp1_policy: Dict[str, object],
     skip_existing: bool,
 ) -> Dict[str, object]:
     safe_market = market_to_safe(market)
@@ -514,6 +742,7 @@ def build_market_dataset(
             "from_utc": to_iso(int(anchor_ts[0])),
             "to_utc": to_iso(int(anchor_ts[-1])),
             "output_size_bytes": out_path.stat().st_size,
+            "dropped_due_to_future_window": 0,
         }
 
     fieldnames = [
@@ -549,6 +778,10 @@ def build_market_dataset(
             "regime_vol_60_atr_pct",
             "label_up_h1",
             "label_up_h5",
+            "label_tp1_hit_h20m",
+            "label_tp1_hit_h5m",
+            "label_tp1_risk_pct",
+            "label_tp1_pct",
             "label_edge_bps_h5",
         ]
     )
@@ -562,9 +795,11 @@ def build_market_dataset(
             ]
         )
 
+    tp1_horizon_bars = max(1, int(label_tp1_policy.get("horizon_bars", DEFAULT_LABEL_TP1_POLICY["horizon_bars"])))
     max_h = max(
         int(label_h1),
         int(label_h5),
+        int(tp1_horizon_bars),
         int(triple_barrier_horizon) if bool(enable_triple_barrier_labels) else 0,
     )
     written = 0
@@ -579,6 +814,7 @@ def build_market_dataset(
     sampling_metric_min = math.inf
     sampling_metric_max = -math.inf
     sampling_state: Dict[str, object] = {}
+    dropped_due_to_future_window = 0
 
     tf_ptrs = {tf: -1 for tf in CONTEXT_TFS}
     close_win = deque()
@@ -622,7 +858,8 @@ def build_market_dataset(
                 notional_sum -= notional_win.popleft()
 
             if i + max_h >= len(anchor_ts):
-                break
+                dropped_due_to_future_window += 1
+                continue
 
             if i < 30 or len(close_win) < 20:
                 skipped_warmup += 1
@@ -702,14 +939,31 @@ def build_market_dataset(
 
             regime_ret_60 = ctx_values[60]["ret_12"]
             regime_ret_240 = ctx_values[240]["ret_12"]
-            row["regime_trend_60_sign"] = sign3(regime_ret_60)
-            row["regime_trend_240_sign"] = sign3(regime_ret_240)
+            regime_sign_60 = sign3(regime_ret_60)
+            regime_sign_240 = sign3(regime_ret_240)
+            row["regime_trend_60_sign"] = regime_sign_60
+            row["regime_trend_240_sign"] = regime_sign_240
             row["regime_vol_60_atr_pct"] = round6(ctx_values[60]["atr_pct_14"])
+            regime_name = normalize_regime(regime_sign_60, regime_sign_240)
 
             close_h1 = float(anchor_close[i + int(label_h1)])
             close_h5 = float(anchor_close[i + int(label_h5)])
             row["label_up_h1"] = 1 if close_h1 > c else 0
             row["label_up_h5"] = 1 if close_h5 > c else 0
+            risk_pct, tp1_pct, tp1_target_price = compute_tp1_risk_and_target(
+                atr_pct_fraction=float(atr14[i]) / c if c > 0.0 else math.nan,
+                entry_price=c,
+                regime_name=regime_name,
+                label_tp1_policy=label_tp1_policy,
+            )
+            future_high_window = anchor_high[i + 1 : i + 1 + int(tp1_horizon_bars)]
+            max_future_high = max(float(x) for x in future_high_window) if future_high_window else math.nan
+            label_tp1_hit = 1 if (math.isfinite(max_future_high) and max_future_high >= tp1_target_price) else 0
+            row["label_tp1_hit_h20m"] = int(label_tp1_hit)
+            # Deprecated alias kept for backward compatibility; values are identical.
+            row["label_tp1_hit_h5m"] = int(label_tp1_hit)
+            row["label_tp1_risk_pct"] = round6(risk_pct)
+            row["label_tp1_pct"] = round6(tp1_pct)
             gross_bps_h5 = ((close_h5 / c) - 1.0) * 10000.0 if c > 0.0 else math.nan
             row_cost_bps = resolve_label_cost_bps(
                 roundtrip_cost_bps=float(roundtrip_cost_bps),
@@ -795,6 +1049,7 @@ def build_market_dataset(
         "sampling_metric_min": round6(sampling_metric_min) if math.isfinite(sampling_metric_min) else math.nan,
         "sampling_metric_max": round6(sampling_metric_max) if math.isfinite(sampling_metric_max) else math.nan,
         "sampling_metric_mean": round6(sampling_metric_mean),
+        "dropped_due_to_future_window": int(dropped_due_to_future_window),
         "from_utc": to_iso(from_ts),
         "to_utc": to_iso(to_ts),
         "output_size_bytes": out_path.stat().st_size if out_path.exists() else 0,
@@ -837,6 +1092,17 @@ def main(argv=None) -> int:
         flush=True,
     )
     print(f"[BuildProbFeatures] pipeline_version={pipeline_version}", flush=True)
+    label_policy_path = resolve_repo_path(str(args.label_policy_json).strip())
+    label_tp1_policy = load_label_tp1_policy(label_policy_path)
+    print(
+        "[BuildProbFeatures] label_tp1_policy "
+        f"horizon_bars={label_tp1_policy.get('horizon_bars')} "
+        f"tp1_rr={label_tp1_policy.get('tp1_rr')} "
+        "target_column=label_tp1_hit_h20m "
+        "deprecated_alias=label_tp1_hit_h5m "
+        f"policy_path={label_policy_path}",
+        flush=True,
+    )
 
     cost_model_config = {
         "enabled": bool(args.enable_conditional_cost_model),
@@ -930,6 +1196,7 @@ def main(argv=None) -> int:
                         "sampling_metric_min": math.nan,
                         "sampling_metric_max": math.nan,
                         "sampling_metric_mean": math.nan,
+                        "dropped_due_to_future_window": 0,
                         "from_utc": "",
                         "to_utc": "",
                         "output_size_bytes": 0,
@@ -956,6 +1223,7 @@ def main(argv=None) -> int:
                 sample_lookback_minutes=sample_lookback_minutes,
                 roundtrip_cost_bps=float(args.roundtrip_cost_bps),
                 cost_model_config=cost_model_config,
+                label_tp1_policy=label_tp1_policy,
                 skip_existing=bool(args.skip_existing),
             )
             jobs.append(job)
@@ -1012,6 +1280,10 @@ def main(argv=None) -> int:
         "cost_model": cost_model_config,
         "label_h1": int(args.label_h1),
         "label_h5": int(args.label_h5),
+        "label_tp1_target_column": "label_tp1_hit_h20m",
+        "label_tp1_deprecated_alias_column": "label_tp1_hit_h5m",
+        "label_tp1_policy": label_tp1_policy,
+        "label_tp1_policy_json": str(label_policy_path),
         "enable_triple_barrier_labels": bool(args.enable_triple_barrier_labels),
         "triple_barrier_horizon": int(args.triple_barrier_horizon),
         "triple_barrier_take_profit_bps": float(args.triple_barrier_take_profit_bps),
@@ -1040,6 +1312,12 @@ def main(argv=None) -> int:
     payload["feature_contract_version"] = "v2_draft"
     dump_json(summary_json, payload)
     dump_json(manifest_json, payload)
+    stageg2_label_report_json = resolve_repo_path(str(args.stageg2_label_report_json).strip())
+    if str(args.stageg2_label_report_json).strip():
+        build_stageg2_label_report(
+            manifest_payload=payload,
+            report_json_path=stageg2_label_report_json,
+        )
 
     print("[BuildProbFeatures] Completed", flush=True)
     print(f"summary={summary_json}", flush=True)
@@ -1050,6 +1328,8 @@ def main(argv=None) -> int:
     print(f"warning_count={len(warnings)}", flush=True)
     print(f"total_feature_rows={total_rows}", flush=True)
     print(f"total_output_bytes={total_bytes}", flush=True)
+    if str(args.stageg2_label_report_json).strip():
+        print(f"stageg2_label_report={stageg2_label_report_json}", flush=True)
     return 0 if not failed else 2
 
 

@@ -374,6 +374,14 @@ private:
         std::string strategy_exit_mode_effective = "enforce";
         long long strategy_exit_triggered_count = 0;
         long long strategy_exit_observe_only_suppressed_count = 0;
+        long long strategy_exit_executed_count = 0;
+        long long strategy_exit_clamp_applied_count = 0;
+        int be_after_partial_tp_delay_sec = 0;
+        long long be_move_attempt_count = 0;
+        long long be_move_applied_count = 0;
+        long long be_move_skipped_due_to_delay_count = 0;
+        long long stop_loss_after_partial_tp_count = 0;
+        long long stop_loss_before_partial_tp_count = 0;
         std::map<std::string, long long> strategy_exit_triggered_by_market;
         std::map<std::string, long long> strategy_exit_triggered_by_regime;
         struct StrategyExitTriggerSample {
@@ -385,12 +393,34 @@ private:
             std::string reason_code;
         };
         std::vector<StrategyExitTriggerSample> strategy_exit_trigger_samples;
+        struct StrategyExitClampSample {
+            long long ts_ms = 0;
+            std::string market;
+            std::string regime;
+            double stop_loss_price = 0.0;
+            double exit_price_before_clamp = 0.0;
+            double exit_price_after_clamp = 0.0;
+            double pnl_before_clamp = 0.0;
+            double pnl_after_clamp = 0.0;
+            std::string reason_code;
+        };
+        std::vector<StrategyExitClampSample> strategy_exit_clamp_samples;
         long long markets_with_selected_candidate = 0;
         long long generated_signal_candidates = 0;
         long long selected_signal_candidates = 0;
         long long selection_call_count = 0;
         long long selection_scored_candidate_count = 0;
         long long selection_hint_adjusted_candidate_count = 0;
+        std::string top20_sort_mode = "composite_score";
+        long long top20_candidates = 0;
+        long long top20_margin_valid_count = 0;
+        double top20_margin_mean = 0.0;
+        double top20_margin_std = 0.0;
+        double top20_margin_p10 = 0.0;
+        double top20_margin_p50 = 0.0;
+        double top20_margin_p90 = 0.0;
+        double top20_composite_mean = 0.0;
+        double top20_composite_std = 0.0;
         long long phase4_candidates_total = 0;
         long long phase4_selected_total = 0;
         long long phase4_rejected_by_budget = 0;
@@ -430,6 +460,7 @@ private:
     std::map<std::string, bool> open_position_skip_latch_;
     std::map<std::string, double> recent_best_ask_by_market_;
     std::map<std::string, long long> recent_best_ask_timestamp_by_market_;
+    std::map<std::string, long long> pending_be_after_partial_due_ms_;
     int live_warmup_scans_completed_ = 0;
     bool live_warmup_done_ = false;
     std::chrono::steady_clock::time_point last_live_mtf_capture_time_{};

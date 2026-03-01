@@ -285,7 +285,12 @@ double computeCalibratedExpectedEdgePct(const strategy::Signal& signal, const en
         signal.probabilistic_h5_calibrated > 0.0) {
         const double prob = std::clamp(signal.probabilistic_h5_calibrated, 0.0, 1.0);
         const double margin = std::clamp(signal.probabilistic_h5_margin, -1.0, 1.0);
-        win_prob = std::clamp(prob + (margin * 0.35), 0.12, 0.88);
+        const std::string backend = normalizeStrategyToken(signal.phase3.prob_model_backend);
+        if (backend == "lgbm") {
+            win_prob = std::clamp(prob, 0.12, 0.88);
+        } else {
+            win_prob = std::clamp(prob + (margin * 0.35), 0.12, 0.88);
+        }
     } else {
         if (std::isfinite(signal.expected_value) && std::abs(signal.expected_value) > 1e-9) {
             const double implied_win_from_edge =

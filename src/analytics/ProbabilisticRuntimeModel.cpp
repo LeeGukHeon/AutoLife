@@ -1,14 +1,20 @@
 #include "analytics/ProbabilisticRuntimeModel.h"
+#include "common/Logger.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <limits>
 #include <numeric>
+#include <sstream>
 #include <string_view>
 
 #include <nlohmann/json.hpp>
+#include <openssl/sha.h>
 
 namespace autolife {
 namespace analytics {
@@ -43,6 +49,324 @@ double calibrateProb(double p, double a, double b) {
     const double p_clip = clipProb(p);
     const double logit = std::log(p_clip / (1.0 - p_clip));
     return clipProb(sigmoid((a * logit) + b));
+}
+
+std::string trimCopy(const std::string& value) {
+    std::size_t begin = 0;
+    while (begin < value.size() && std::isspace(static_cast<unsigned char>(value[begin])) != 0) {
+        ++begin;
+    }
+    std::size_t end = value.size();
+    while (end > begin && std::isspace(static_cast<unsigned char>(value[end - 1])) != 0) {
+        --end;
+    }
+    return value.substr(begin, end - begin);
+}
+
+bool splitKeyValueLine(const std::string& line, std::string& out_key, std::string& out_value) {
+    const auto pos = line.find('=');
+    if (pos == std::string::npos) {
+        return false;
+    }
+    out_key = trimCopy(line.substr(0, pos));
+    out_value = trimCopy(line.substr(pos + 1));
+    return !out_key.empty();
+}
+
+bool parseIntList(const std::string& text, std::vector<int>& out_values) {
+    out_values.clear();
+    std::istringstream iss(text);
+    std::string token;
+    while (iss >> token) {
+        try {
+            const int value = std::stoi(token);
+            out_values.push_back(value);
+        } catch (...) {
+            return false;
+        }
+    }
+    return !out_values.empty();
+}
+
+bool parseDoubleList(const std::string& text, std::vector<double>& out_values) {
+    out_values.clear();
+    std::istringstream iss(text);
+    std::string token;
+    while (iss >> token) {
+        try {
+            const double value = std::stod(token);
+            out_values.push_back(value);
+        } catch (...) {
+            return false;
+        }
+    }
+    return !out_values.empty();
+}
+
+std::string sha256HexOfFile(const std::string& path) {
+    std::ifstream ifs(path, std::ios::binary);
+    if (!ifs.is_open()) {
+        return {};
+    }
+    SHA256_CTX ctx;
+    if (SHA256_Init(&ctx) != 1) {
+        return {};
+    }
+    std::array<char, 64 * 1024> buffer{};
+    while (ifs.good()) {
+        ifs.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const std::streamsize read_size = ifs.gcount();
+        if (read_size <= 0) {
+            break;
+        }
+        if (SHA256_Update(&ctx, buffer.data(), static_cast<std::size_t>(read_size)) != 1) {
+            return {};
+        }
+    }
+    std::array<unsigned char, SHA256_DIGEST_LENGTH> digest{};
+    if (SHA256_Final(digest.data(), &ctx) != 1) {
+        return {};
+    }
+    std::ostringstream oss;
+    oss << std::hex << std::setfill('0');
+    for (unsigned char b : digest) {
+        oss << std::setw(2) << static_cast<int>(b);
+    }
+    return oss.str();
+}
+
+bool parseLightGbmTextModel(
+    const std::string& model_path,
+    std::size_t feature_count,
+    ProbabilisticRuntimeModel::LgbmModel& out_model,
+    std::string* error_message
+) {
+    out_model = ProbabilisticRuntimeModel::LgbmModel{};
+    std::ifstream ifs(model_path);
+    if (!ifs.is_open()) {
+        if (error_message != nullptr) {
+            *error_message = "lgbm_model_open_failed";
+        }
+        return false;
+    }
+
+    ProbabilisticRuntimeModel::LgbmTree* active_tree = nullptr;
+    std::string line;
+    while (std::getline(ifs, line)) {
+        const std::string trimmed = trimCopy(line);
+        if (trimmed.empty()) {
+            continue;
+        }
+        if (trimmed.rfind("Tree=", 0) == 0) {
+            out_model.trees.emplace_back();
+            active_tree = &out_model.trees.back();
+            continue;
+        }
+
+        std::string key;
+        std::string value;
+        if (!splitKeyValueLine(trimmed, key, value)) {
+            continue;
+        }
+
+        if (active_tree == nullptr) {
+            if (key == "max_feature_idx") {
+                try {
+                    out_model.max_feature_idx = std::stoi(value);
+                } catch (...) {
+                    out_model.max_feature_idx = -1;
+                }
+                continue;
+            }
+            if (key == "average_output") {
+                out_model.average_output = (value == "1" || value == "true" || value == "True");
+                continue;
+            }
+            if (key == "objective") {
+                const auto pos = value.find("sigmoid:");
+                if (pos != std::string::npos) {
+                    const std::string suffix = trimCopy(value.substr(pos + 8));
+                    try {
+                        const double parsed = std::stod(suffix);
+                        if (std::isfinite(parsed) && parsed > 0.0) {
+                            out_model.sigmoid = parsed;
+                        }
+                    } catch (...) {
+                    }
+                }
+                continue;
+            }
+            continue;
+        }
+
+        if (key == "split_feature") {
+            if (!parseIntList(value, active_tree->split_feature)) {
+                if (error_message != nullptr) {
+                    *error_message = "lgbm_split_feature_parse_failed";
+                }
+                return false;
+            }
+            continue;
+        }
+        if (key == "threshold") {
+            if (!parseDoubleList(value, active_tree->threshold)) {
+                if (error_message != nullptr) {
+                    *error_message = "lgbm_threshold_parse_failed";
+                }
+                return false;
+            }
+            continue;
+        }
+        if (key == "decision_type") {
+            if (!parseIntList(value, active_tree->decision_type)) {
+                if (error_message != nullptr) {
+                    *error_message = "lgbm_decision_type_parse_failed";
+                }
+                return false;
+            }
+            continue;
+        }
+        if (key == "left_child") {
+            if (!parseIntList(value, active_tree->left_child)) {
+                if (error_message != nullptr) {
+                    *error_message = "lgbm_left_child_parse_failed";
+                }
+                return false;
+            }
+            continue;
+        }
+        if (key == "right_child") {
+            if (!parseIntList(value, active_tree->right_child)) {
+                if (error_message != nullptr) {
+                    *error_message = "lgbm_right_child_parse_failed";
+                }
+                return false;
+            }
+            continue;
+        }
+        if (key == "leaf_value") {
+            if (!parseDoubleList(value, active_tree->leaf_value)) {
+                if (error_message != nullptr) {
+                    *error_message = "lgbm_leaf_value_parse_failed";
+                }
+                return false;
+            }
+            continue;
+        }
+        if (key == "shrinkage") {
+            try {
+                active_tree->shrinkage = std::stod(value);
+            } catch (...) {
+                active_tree->shrinkage = 1.0;
+            }
+            if (!std::isfinite(active_tree->shrinkage)) {
+                active_tree->shrinkage = 1.0;
+            }
+            continue;
+        }
+    }
+
+    if (out_model.trees.empty()) {
+        if (error_message != nullptr) {
+            *error_message = "lgbm_model_has_no_trees";
+        }
+        return false;
+    }
+
+    if (out_model.max_feature_idx >= 0 &&
+        static_cast<std::size_t>(out_model.max_feature_idx + 1) > feature_count) {
+        if (error_message != nullptr) {
+            *error_message = "lgbm_model_feature_count_mismatch";
+        }
+        return false;
+    }
+
+    for (const auto& tree : out_model.trees) {
+        const std::size_t split_count = tree.split_feature.size();
+        if (split_count == 0U) {
+            if (tree.leaf_value.empty()) {
+                if (error_message != nullptr) {
+                    *error_message = "lgbm_tree_leaf_missing";
+                }
+                return false;
+            }
+            continue;
+        }
+        if (tree.threshold.size() != split_count ||
+            tree.left_child.size() != split_count ||
+            tree.right_child.size() != split_count) {
+            if (error_message != nullptr) {
+                *error_message = "lgbm_tree_split_array_mismatch";
+            }
+            return false;
+        }
+        if (!tree.decision_type.empty() && tree.decision_type.size() != split_count) {
+            if (error_message != nullptr) {
+                *error_message = "lgbm_tree_decision_type_mismatch";
+            }
+            return false;
+        }
+        if (tree.leaf_value.empty()) {
+            if (error_message != nullptr) {
+                *error_message = "lgbm_tree_leaf_missing";
+            }
+            return false;
+        }
+    }
+
+    return true;
+}
+
+double inferLightGbmProb(
+    const ProbabilisticRuntimeModel::LgbmModel& model,
+    const std::vector<double>& transformed_features
+) {
+    double raw_score = 0.0;
+    for (const auto& tree : model.trees) {
+        if (tree.split_feature.empty()) {
+            if (!tree.leaf_value.empty()) {
+                raw_score += (tree.shrinkage * tree.leaf_value.front());
+            }
+            continue;
+        }
+        int node_index = 0;
+        constexpr int kMaxDepthGuard = 8192;
+        int guard = 0;
+        while (guard < kMaxDepthGuard) {
+            ++guard;
+            if (node_index < 0 ||
+                static_cast<std::size_t>(node_index) >= tree.split_feature.size()) {
+                break;
+            }
+            const int feature_index = tree.split_feature[static_cast<std::size_t>(node_index)];
+            const double threshold = tree.threshold[static_cast<std::size_t>(node_index)];
+            double feature_value = 0.0;
+            bool feature_valid = false;
+            if (feature_index >= 0 &&
+                static_cast<std::size_t>(feature_index) < transformed_features.size()) {
+                feature_value = transformed_features[static_cast<std::size_t>(feature_index)];
+                feature_valid = std::isfinite(feature_value);
+            }
+            // Numeric split path: for missing feature values, default to left branch.
+            const bool go_left = (!feature_valid) || (feature_value <= threshold);
+            const int next = go_left
+                                 ? tree.left_child[static_cast<std::size_t>(node_index)]
+                                 : tree.right_child[static_cast<std::size_t>(node_index)];
+            if (next < 0) {
+                const int leaf_index = (-next) - 1;
+                if (leaf_index >= 0 &&
+                    static_cast<std::size_t>(leaf_index) < tree.leaf_value.size()) {
+                    raw_score += (tree.shrinkage * tree.leaf_value[static_cast<std::size_t>(leaf_index)]);
+                }
+                break;
+            }
+            node_index = next;
+        }
+    }
+    if (model.average_output && !model.trees.empty()) {
+        raw_score /= static_cast<double>(model.trees.size());
+    }
+    return clipProb(sigmoid(raw_score * model.sigmoid));
 }
 
 bool parseHead(const nlohmann::json& node, ProbabilisticRuntimeModel::LinearHead& out, bool with_threshold) {
@@ -621,6 +945,14 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
     phase4_policy_ = Phase4Policy{};
     runtime_semantics_state_ = RuntimeSemanticsState{};
     ev_calibration_buckets_.clear();
+    prob_model_backend_ = "sgd";
+    lgbm_model_path_resolved_.clear();
+    lgbm_model_sha256_expected_.clear();
+    lgbm_model_sha256_loaded_.clear();
+    lgbm_model_loaded_ = false;
+    lgbm_h5_calib_a_ = 1.0;
+    lgbm_h5_calib_b_ = 0.0;
+    lgbm_model_ = LgbmModel{};
 
     std::ifstream in(path, std::ios::binary);
     if (!in.is_open()) {
@@ -666,6 +998,44 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
             *error_message = "feature_columns_empty";
         }
         return false;
+    }
+
+    {
+        lgbm_ev_affine_enabled_ = false;
+        lgbm_ev_affine_scale_ = 1.0;
+        lgbm_ev_affine_shift_ = 0.0;
+        std::string backend = lowerCopy(root.value("prob_model_backend", std::string("sgd")));
+        if (backend != "lgbm") {
+            backend = "sgd";
+        }
+        prob_model_backend_ = backend;
+        if (backend == "lgbm") {
+            lgbm_model_sha256_expected_ =
+                lowerCopy(trimCopy(root.value("lgbm_model_sha256", std::string{})));
+            const auto lgbm_calib_node = root.value("lgbm_h5_calibration", nlohmann::json::object());
+            if (lgbm_calib_node.is_object()) {
+                const double a = lgbm_calib_node.value("a", 1.0);
+                const double b = lgbm_calib_node.value("b", 0.0);
+                if (std::isfinite(a)) {
+                    lgbm_h5_calib_a_ = a;
+                }
+                if (std::isfinite(b)) {
+                    lgbm_h5_calib_b_ = b;
+                }
+            }
+        }
+        const auto lgbm_ev_affine_node = root.value("lgbm_ev_affine", nlohmann::json::object());
+        if (lgbm_ev_affine_node.is_object()) {
+            lgbm_ev_affine_enabled_ = lgbm_ev_affine_node.value("enabled", false);
+            const double scale = lgbm_ev_affine_node.value("scale", 1.0);
+            const double shift = lgbm_ev_affine_node.value("shift", 0.0);
+            if (std::isfinite(scale) && std::fabs(scale) <= 1000.0) {
+                lgbm_ev_affine_scale_ = scale;
+            }
+            if (std::isfinite(shift) && std::fabs(shift) <= 100000.0) {
+                lgbm_ev_affine_shift_ = shift;
+            }
+        }
     }
 
     std::string edge_semantics = lowerCopy(root.value("edge_semantics", std::string("net")));
@@ -720,6 +1090,7 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         phase3_root.value("foundation_structure_gate", nlohmann::json::object());
     const auto phase3_bear_rebound_guard_node =
         phase3_root.value("bear_rebound_guard", nlohmann::json::object());
+    const auto phase3_risk_node = phase3_root.value("risk", nlohmann::json::object());
     const auto phase3_exit_node = phase3_root.value("exit", nlohmann::json::object());
     const auto phase3_regime_entry_disable_node =
         phase3_root.value("regime_entry_disable", nlohmann::json::object());
@@ -843,15 +1214,42 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         }
     }
 
+    phase3_policy_.risk = Phase3StopLossRiskPolicy{};
+    {
+        const bool enabled = phase3_risk_node.value("enabled", false);
+        phase3_policy_.risk.enabled = enabled;
+        phase3_policy_.risk.stop_loss_trending_multiplier = parseCostParam(
+            phase3_risk_node,
+            "stop_loss_trending_multiplier",
+            1.0,
+            0.0,
+            10.0
+        );
+    }
+
     phase3_policy_.exit = Phase3ExitPolicy{};
     {
         std::string strategy_exit_mode = lowerCopy(
             phase3_exit_node.value("strategy_exit_mode", std::string("enforce"))
         );
-        if (strategy_exit_mode != "observe_only") {
+        if (strategy_exit_mode != "observe_only" &&
+            strategy_exit_mode != "clamp_to_stop" &&
+            strategy_exit_mode != "disabled") {
             strategy_exit_mode = "enforce";
         }
         phase3_policy_.exit.strategy_exit_mode = strategy_exit_mode;
+        phase3_policy_.exit.be_after_partial_tp_delay_sec = std::clamp(
+            phase3_exit_node.value("be_after_partial_tp_delay_sec", 0),
+            0,
+            24 * 3600
+        );
+        phase3_policy_.exit.tp_distance_trending_multiplier = parseCostParam(
+            phase3_exit_node,
+            "tp_distance_trending_multiplier",
+            1.0,
+            0.0,
+            10.0
+        );
     }
 
     phase3_policy_.disable_ranging_entry = phase3_root.value("disable_ranging_entry", false);
@@ -3498,7 +3896,70 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         }
     }
 
+    if (prob_model_backend_ == "lgbm") {
+        std::string lgbm_model_path = trimCopy(root.value("lgbm_model_path", std::string{}));
+        if (lgbm_model_path.empty()) {
+            if (error_message != nullptr) {
+                *error_message = "lgbm_backend_missing_model_path";
+            }
+            return false;
+        }
+        std::filesystem::path model_path_value = std::filesystem::path(lgbm_model_path);
+        if (!model_path_value.is_absolute()) {
+            std::filesystem::path bundle_path_value = std::filesystem::path(path);
+            model_path_value = bundle_path_value.parent_path() / model_path_value;
+        }
+        model_path_value = model_path_value.lexically_normal();
+        lgbm_model_path_resolved_ = model_path_value.string();
+
+        std::string lgbm_parse_error;
+        if (!parseLightGbmTextModel(
+                lgbm_model_path_resolved_,
+                feature_columns_.size(),
+                lgbm_model_,
+                &lgbm_parse_error)) {
+            if (error_message != nullptr) {
+                *error_message = lgbm_parse_error.empty() ? "lgbm_model_parse_failed" : lgbm_parse_error;
+            }
+            return false;
+        }
+        lgbm_model_sha256_loaded_ = lowerCopy(sha256HexOfFile(lgbm_model_path_resolved_));
+        if (!lgbm_model_sha256_expected_.empty() && !lgbm_model_sha256_loaded_.empty() &&
+            lgbm_model_sha256_loaded_ != lgbm_model_sha256_expected_) {
+            if (error_message != nullptr) {
+                *error_message = "lgbm_model_sha256_mismatch";
+            }
+            return false;
+        }
+        lgbm_model_loaded_ = true;
+    }
+
     loaded_ = has_default_entry_ || !markets_.empty();
+    if (loaded_) {
+        const bool lgbm_backend = (prob_model_backend_ == "lgbm");
+        const std::string calibration_mode = lgbm_backend ? "platt" : "off";
+        LOG_INFO(
+            "probabilistic_runtime_provenance "
+            "prob_model_backend_effective={} "
+            "lgbm_model_path={} "
+            "lgbm_model_sha256={} "
+            "calibration_mode={} "
+            "calibration_a={} "
+            "calibration_b={} "
+            "ev_affine_enabled={} "
+            "ev_affine_scale={} "
+            "ev_affine_shift={}",
+            prob_model_backend_,
+            lgbm_backend ? lgbm_model_path_resolved_ : std::string(""),
+            lgbm_backend ? lgbm_model_sha256_loaded_ : std::string(""),
+            calibration_mode,
+            lgbm_backend ? lgbm_h5_calib_a_ : 0.0,
+            lgbm_backend ? lgbm_h5_calib_b_ : 0.0,
+            lgbm_backend && lgbm_ev_affine_enabled_,
+            lgbm_ev_affine_scale_,
+            lgbm_ev_affine_shift_
+        );
+    }
     if (!loaded_ && error_message != nullptr) {
         *error_message = "no_valid_model_entries";
     }
@@ -3538,17 +3999,28 @@ bool ProbabilisticRuntimeModel::infer(
         return false;
     }
 
-    const double h1_raw_primary = clipProb(sigmoid(linearScore(entry->h1.coef, entry->h1.intercept, transformed_features)));
-    const double h5_raw_primary = clipProb(sigmoid(linearScore(entry->h5.coef, entry->h5.intercept, transformed_features)));
+    const double h1_raw_primary =
+        clipProb(sigmoid(linearScore(entry->h1.coef, entry->h1.intercept, transformed_features)));
+    double h5_raw_primary =
+        clipProb(sigmoid(linearScore(entry->h5.coef, entry->h5.intercept, transformed_features)));
     const double h1_cal_primary = calibrateProb(h1_raw_primary, entry->h1.calib_a, entry->h1.calib_b);
-    const double h5_cal_primary = calibrateProb(h5_raw_primary, entry->h5.calib_a, entry->h5.calib_b);
+    if (prob_model_backend_ == "lgbm") {
+        if (!lgbm_model_loaded_) {
+            return false;
+        }
+        h5_raw_primary = inferLightGbmProb(lgbm_model_, transformed_features);
+    }
+    const double h5_cal_primary =
+        (prob_model_backend_ == "lgbm")
+            ? calibrateProb(h5_raw_primary, lgbm_h5_calib_a_, lgbm_h5_calib_b_)
+            : calibrateProb(h5_raw_primary, entry->h5.calib_a, entry->h5.calib_b);
 
     double h1_mean = h1_cal_primary;
     double h5_mean = h5_cal_primary;
     double h1_std = 0.0;
     double h5_std = 0.0;
     int ensemble_member_count = 1;
-    if (entry->ensemble_members.size() >= 2) {
+    if (prob_model_backend_ != "lgbm" && entry->ensemble_members.size() >= 2) {
         std::vector<double> h1_probs;
         std::vector<double> h5_probs;
         h1_probs.reserve(entry->ensemble_members.size());
@@ -3628,15 +4100,33 @@ bool ProbabilisticRuntimeModel::infer(
         cost_model_,
         transformed_features
     );
-    double expected_edge_calibrated_bps = calibration.calibrated_bps;
-    if (!std::isfinite(expected_edge_calibrated_bps)) {
-        expected_edge_calibrated_bps = expected_edge_raw_bps;
+    double expected_edge_calibrated_raw_bps = calibration.calibrated_bps;
+    if (!std::isfinite(expected_edge_calibrated_raw_bps)) {
+        expected_edge_calibrated_raw_bps = expected_edge_raw_bps;
+    }
+    bool lgbm_ev_affine_applied = false;
+    double expected_edge_calibrated_bps = expected_edge_calibrated_raw_bps;
+    const bool lgbm_ev_affine_enabled_effective =
+        (prob_model_backend_ == "lgbm") && lgbm_ev_affine_enabled_;
+    if (lgbm_ev_affine_enabled_effective) {
+        const double corrected =
+            (expected_edge_calibrated_raw_bps * lgbm_ev_affine_scale_) + lgbm_ev_affine_shift_;
+        if (std::isfinite(corrected)) {
+            expected_edge_calibrated_bps = corrected;
+            lgbm_ev_affine_applied = true;
+        }
     }
     expected_edge_calibrated_bps = std::clamp(expected_edge_calibrated_bps, -5000.0, 5000.0);
+    out.expected_edge_calibrated_raw_bps = expected_edge_calibrated_raw_bps;
     out.expected_edge_calibrated_bps = expected_edge_calibrated_bps;
+    out.expected_edge_calibrated_corrected_bps = expected_edge_calibrated_bps;
     out.expected_edge_before_cost_bps = expected_edge_calibrated_bps;
     out.ev_calibration_applied = calibration.applied;
     out.ev_confidence = std::clamp(calibration.confidence, 0.0, 1.0);
+    out.lgbm_ev_affine_enabled = lgbm_ev_affine_enabled_effective;
+    out.lgbm_ev_affine_applied = lgbm_ev_affine_applied;
+    out.lgbm_ev_affine_scale = lgbm_ev_affine_scale_;
+    out.lgbm_ev_affine_shift = lgbm_ev_affine_shift_;
 
     const RuntimeCostBreakdown cost_breakdown = estimateRuntimeCostBreakdown(
         cost_model_,

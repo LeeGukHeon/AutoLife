@@ -1,4 +1,4 @@
-# Strict Gate Runbook (Roadmap Locked, 2026-02-27)
+﻿# Strict Gate Runbook (Roadmap Locked, 2026-02-27)
 
 ## Purpose
 - This document is the operational single source of truth for Stage B to Stage F execution.
@@ -29,8 +29,12 @@
 - Stage C v2 lock:
   - `phase3.regime_entry_disable.RANGING=true`
   - non-RANGING regimes remain `false`
-- Stage F3 lock:
-  - `phase3.exit.strategy_exit_mode="observe_only"`
+- Stage F10 lock:
+  - `phase3.exit.strategy_exit_mode="disabled"`
+  - `phase3.exit.be_after_partial_tp_delay_sec=120`
+  - `phase3.exit.tp_distance_trending_multiplier=1.10` (TRENDING_UP/DOWN only, Stage F10)
+  - `phase3.risk.enabled=true`
+  - `phase3.risk.stop_loss_trending_multiplier=1.15` (F8 baseline restored in F10)
 
 ### Backtest
 - Split manifest: `build/Release/logs/time_split_manifest_r21_prefix.json`
@@ -38,6 +42,75 @@
 - Prewarm: `168h`
 - Execution/evaluation split: `execution_range = prewarm + core`, `evaluation_range = core`
 - `split_applied=true` is mandatory with report evidence.
+
+### Backtest Dataset Lock (Regression + Fresh)
+- Purpose:
+  - Keep `data/backtest_real` as immutable regression baseline.
+  - Generate separate fresh datasets for drift checks.
+  - Always run `Regression -> Fresh` in the same config/bundle and compare directional consistency.
+- Dataset tiers:
+  - Regression (immutable): `data/backtest_real`
+  - Fresh primary (immutable snapshot): `data/backtest_fresh_14d`
+  - Fresh auxiliary (hotfix-only): `data/backtest_fresh_5d`
+- Folder layout (fixed):
+  - `data/backtest_real/KRW-*/ohlcv_1m.csv`
+  - `data/backtest_fresh_14d/meta.json`
+  - `data/backtest_fresh_14d/KRW-*/ohlcv_1m.csv`
+  - `data/backtest_fresh_5d/meta.json`
+  - `data/backtest_fresh_5d/KRW-*/ohlcv_1m.csv`
+- Market set lock:
+  - Fresh must use the same market list as regression.
+  - Default set: `KRW-BTC, KRW-ETH, KRW-XRP, KRW-SOL, KRW-DOGE, KRW-ADA`.
+  - Changing market set invalidates regression-vs-fresh comparability.
+- File format lock:
+  - Filename: `ohlcv_1m.csv` per market directory.
+  - Required columns: `ts_ms, open, high, low, close, volume`.
+  - Timestamp unit: milliseconds (`ts_ms`), not seconds.
+  - Ordering: `ts_ms` ascending, no duplicate `ts_ms` (if duplicated, keep the latest one).
+  - Missing candles are not synthesized (no forward-fill insertion).
+- Fresh generation window lock:
+  - Anchor time is KST midnight at generation date.
+  - `end_ts = today(KST) 00:00:00`.
+  - `start_ts = end_ts - window_days` (`14d` or `5d`).
+  - After generation, snapshot folder is immutable for reproducibility.
+- Fresh metadata (`meta.json`) is mandatory:
+  - Required keys: `dataset_name, created_at_kst, window_days, start_ts_ms, end_ts_ms, markets, granularity, schema, source, hashes`.
+  - `hashes` must include per-market `rows` and `sha256`.
+  - Example schema:
+```json
+{
+  "dataset_name": "backtest_fresh_14d",
+  "created_at_kst": "2026-02-28T00:05:00+09:00",
+  "window_days": 14,
+  "start_ts_ms": 1769990400000,
+  "end_ts_ms": 1771200000000,
+  "markets": ["KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL", "KRW-DOGE", "KRW-ADA"],
+  "granularity": "1m",
+  "schema": ["ts_ms", "open", "high", "low", "close", "volume"],
+  "source": "upbit_ohlcv",
+  "hashes": {
+    "KRW-BTC": {"rows": 20160, "sha256": "<...>"},
+    "KRW-ETH": {"rows": 20160, "sha256": "<...>"}
+  }
+}
+```
+- Hash/version lock:
+  - If any market hash changes, treat as a new snapshot.
+  - Use a new folder name when needed, for example `backtest_fresh_14d_YYYYMMDD`.
+- Split and eval lock (common):
+  - Keep split manifest `time_split_manifest_r21_prefix.json`.
+  - Keep `prewarm=168h`, `execution_range=prewarm+core`, `evaluation_range=core`.
+  - If fresh core is too short and causes zero trades, extend only core evaluation window. Do not tune policy/threshold for this.
+- Fixed execution order:
+  - Run 1: Regression (`data/backtest_real`).
+  - Run 2: Fresh (`data/backtest_fresh_14d`) with identical bundle/config.
+  - Compare directionality of `expectancy/PF`. Opposite direction must be recorded as drift/overfit warning.
+- Prohibited operations:
+  - Never overwrite `data/backtest_real`.
+  - Never refresh fresh dataset in place for every run.
+  - Never change market set between regression and fresh.
+  - Never change timestamp unit.
+  - Never insert missing candles via forward fill.
 
 ### Safety
 - `allow_live_orders=false`
@@ -54,7 +127,7 @@
 - Commit hash is excluded from hard lock.
 - Code version is managed by `HEAD at run time + runbook snapshot`.
 - Commit hash is recorded only in experiment logs/artifacts.
-- Current semantic code tag: `CODE_VERSION: StageF3_strategy_exit_observe_only`
+- Current semantic code tag: `CODE_VERSION: StageF10_tp_distance_trending_1p10_sl_restore_1p15`
 - Optional tracking:
   - semantic code tag (for example, `CODE_VERSION: StageB_semantics_lock`)
   - `git describe --tags` in logs (not a hard-lock condition)
@@ -105,7 +178,17 @@
 - Stage E: Paper 24-72h promotion and Live readiness (after strict parity fix).
 - Stage F: Entry/exit structure deep-dive and single-axis exit hardening.
 
-Current focus (2026-02-28): Stage F3 (`strategy_exit observe_only`, telemetry evidence required).
+Current focus (2026-03-01): Stage F10 (`TRENDING TP distance multiplier 1.10`, stop-loss multiplier restored to 1.15 baseline).
+
+## Stage F10 Work Log (2026-03-01)
+- Baseline restore (hard-lock recovery): `phase3.risk.stop_loss_trending_multiplier 1.25 -> 1.15`.
+- Single-axis experiment: `phase3.exit.tp_distance_trending_multiplier 1.00 -> 1.10`.
+- Validation + Quarantine rerun with same Stage F8 output format; comparison baseline remains Stage F8.
+
+## Stage F9 Work Log (2026-03-01)
+- Single-axis change only: `phase3.risk.stop_loss_trending_multiplier 1.15 -> 1.25`.
+- No change to entry/EV/gates/partial/trailing/BE/strategy_exit/semantics policies.
+- Validation + Quarantine rerun required with same F8 artifact format, compared against F8.
 
 ## 4) Stage A Recheck (Already Implemented)
 - A1 split real separation applied in `run_verification` main loop.
@@ -360,3 +443,4 @@ Use the same report template every round:
 ### Step 5) Live Promotion (After Step 4 Pass Only)
 - Promotion sequence: `10% -> 30% -> 100%`, minimum `24h` stability each.
 - Keep Stage E policy lock (`RANGING OFF + shadow ON`) unchanged during promotion.
+

@@ -183,6 +183,11 @@ struct Signal {
         bool diagnostics_v2_enabled = false;
         bool edge_regressor_used = false;
         bool ev_calibration_applied = false;
+        std::string prob_model_backend = "sgd";
+        bool lgbm_ev_affine_enabled = false;
+        bool lgbm_ev_affine_applied = false;
+        double lgbm_ev_affine_scale = 1.0;
+        double lgbm_ev_affine_shift = 0.0;
         std::string edge_semantics = "net";
         bool root_cost_model_enabled_configured = false;
         bool phase3_cost_model_enabled_configured = false;
@@ -193,6 +198,7 @@ struct Signal {
         std::string edge_semantics_guard_action = "none";
         double ev_confidence = 1.0;
         double expected_edge_raw_pct = 0.0;
+        double expected_edge_calibrated_raw_bps = 0.0;
         double expected_edge_calibrated_pct = 0.0;
         double expected_edge_calibrated_bps = 0.0;
         double expected_edge_used_for_gate_bps = 0.0;
@@ -236,6 +242,7 @@ struct Signal {
         double frontier_k_margin_scale = 1.0;
         double frontier_k_uncertainty = 0.0;
         double frontier_k_cost_tail = 0.0;
+        double implied_win_runtime = 0.5;
         double required_ev_offset = 0.0;
         double required_ev_offset_trending_add = 0.0;
         double frontier_min_required_ev = -0.0002;

@@ -1,0 +1,219 @@
+{
+  "generated_at_utc": "2026-03-01T06:21:00.931907+00:00",
+  "source_manifest_json": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v2_label_tp1H20_gate4_20260301\\feature_dataset_manifest.json",
+  "source_manifest_kind": "feature",
+  "source_manifest_version": "prob_features_v2_draft",
+  "cost_model": {
+    "enabled": false,
+    "fee_floor_bps": 6.0,
+    "volatility_weight": 3.0,
+    "range_weight": 1.5,
+    "liquidity_weight": 2.5,
+    "volatility_norm_bps": 50.0,
+    "range_norm_bps": 80.0,
+    "liquidity_ref_ratio": 1.0,
+    "liquidity_penalty_cap": 8.0,
+    "cost_cap_bps": 200.0
+  },
+  "split_policy": {
+    "mode": "walk_forward_time_ordered",
+    "train_ratio": 0.7,
+    "valid_ratio": 0.15,
+    "test_ratio": 0.15,
+    "walk_forward_folds": 3,
+    "random_split_allowed": false
+  },
+  "dataset_count": 5,
+  "datasets": [
+    {
+      "market": "KRW-BTC",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 60000,
+      "from_utc": "2024-02-19T03:13:59.750000+00:00",
+      "to_utc": "2024-03-31T23:55:59.987000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v2_label_tp1H20_gate4_20260301\\prob_features_KRW_BTC_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2024-02-19T03:13:59.750000+00:00",
+          "train_end_utc": "2024-03-21T12:45:29.927000+00:00",
+          "valid_start_utc": "2024-03-21T12:45:29.928000+00:00",
+          "valid_end_utc": "2024-03-26T18:20:44.956000+00:00",
+          "test_start_utc": "2024-03-26T18:20:44.957000+00:00",
+          "test_end_utc": "2024-03-31T23:55:59.985000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2024-02-19T03:13:59.750000+00:00",
+          "train_end_utc": "2024-03-23T14:59:35.939000+00:00",
+          "valid_start_utc": "2024-03-23T14:59:35.940000+00:00",
+          "valid_end_utc": "2024-03-27T19:27:47.962000+00:00",
+          "test_start_utc": "2024-03-27T19:27:47.963000+00:00",
+          "test_end_utc": "2024-03-31T23:55:59.985000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2024-02-19T03:13:59.750000+00:00",
+          "train_end_utc": "2024-03-25T17:13:41.951000+00:00",
+          "valid_start_utc": "2024-03-25T17:13:41.952000+00:00",
+          "valid_end_utc": "2024-03-28T20:34:50.968000+00:00",
+          "test_start_utc": "2024-03-28T20:34:50.969000+00:00",
+          "test_end_utc": "2024-03-31T23:55:59.985000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-ETH",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 60000,
+      "from_utc": "2024-02-18T08:57:59.970000+00:00",
+      "to_utc": "2024-03-31T01:13:58.995000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v2_label_tp1H20_gate4_20260301\\prob_features_KRW_ETH_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2024-02-18T08:57:59.970000+00:00",
+          "train_end_utc": "2024-03-20T15:09:59.238000+00:00",
+          "valid_start_utc": "2024-03-20T15:09:59.239000+00:00",
+          "valid_end_utc": "2024-03-25T20:11:59.116000+00:00",
+          "test_start_utc": "2024-03-25T20:11:59.117000+00:00",
+          "test_end_utc": "2024-03-31T01:13:58.994000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2024-02-18T08:57:59.970000+00:00",
+          "train_end_utc": "2024-03-22T17:10:47.190000+00:00",
+          "valid_start_utc": "2024-03-22T17:10:47.191000+00:00",
+          "valid_end_utc": "2024-03-26T21:12:23.092000+00:00",
+          "test_start_utc": "2024-03-26T21:12:23.093000+00:00",
+          "test_end_utc": "2024-03-31T01:13:58.994000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2024-02-18T08:57:59.970000+00:00",
+          "train_end_utc": "2024-03-24T19:11:35.141000+00:00",
+          "valid_start_utc": "2024-03-24T19:11:35.142000+00:00",
+          "valid_end_utc": "2024-03-27T22:12:47.067000+00:00",
+          "test_start_utc": "2024-03-27T22:12:47.068000+00:00",
+          "test_end_utc": "2024-03-31T01:13:58.993000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-XRP",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 60000,
+      "from_utc": "2024-02-19T01:22:58.314000+00:00",
+      "to_utc": "2024-03-31T22:04:58.894000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v2_label_tp1H20_gate4_20260301\\prob_features_KRW_XRP_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2024-02-19T01:22:58.314000+00:00",
+          "train_end_utc": "2024-03-21T10:54:28.749000+00:00",
+          "valid_start_utc": "2024-03-21T10:54:28.750000+00:00",
+          "valid_end_utc": "2024-03-26T16:29:43.821000+00:00",
+          "test_start_utc": "2024-03-26T16:29:43.822000+00:00",
+          "test_end_utc": "2024-03-31T22:04:58.893000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2024-02-19T01:22:58.314000+00:00",
+          "train_end_utc": "2024-03-23T13:08:34.778000+00:00",
+          "valid_start_utc": "2024-03-23T13:08:34.779000+00:00",
+          "valid_end_utc": "2024-03-27T17:36:46.836000+00:00",
+          "test_start_utc": "2024-03-27T17:36:46.837000+00:00",
+          "test_end_utc": "2024-03-31T22:04:58.894000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2024-02-19T01:22:58.314000+00:00",
+          "train_end_utc": "2024-03-25T15:22:40.807000+00:00",
+          "valid_start_utc": "2024-03-25T15:22:40.808000+00:00",
+          "valid_end_utc": "2024-03-28T18:43:49.850000+00:00",
+          "test_start_utc": "2024-03-28T18:43:49.851000+00:00",
+          "test_end_utc": "2024-03-31T22:04:58.893000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-SOL",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 60000,
+      "from_utc": "2024-02-18T05:32:52.265000+00:00",
+      "to_utc": "2024-03-30T22:23:58.569000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v2_label_tp1H20_gate4_20260301\\prob_features_KRW_SOL_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2024-02-18T05:32:52.265000+00:00",
+          "train_end_utc": "2024-03-20T12:11:11.993000+00:00",
+          "valid_start_utc": "2024-03-20T12:11:11.994000+00:00",
+          "valid_end_utc": "2024-03-25T17:17:35.281000+00:00",
+          "test_start_utc": "2024-03-25T17:17:35.282000+00:00",
+          "test_end_utc": "2024-03-30T22:23:58.569000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2024-02-18T05:32:52.265000+00:00",
+          "train_end_utc": "2024-03-22T14:13:45.308000+00:00",
+          "valid_start_utc": "2024-03-22T14:13:45.309000+00:00",
+          "valid_end_utc": "2024-03-26T18:18:51.938000+00:00",
+          "test_start_utc": "2024-03-26T18:18:51.939000+00:00",
+          "test_end_utc": "2024-03-30T22:23:58.568000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2024-02-18T05:32:52.265000+00:00",
+          "train_end_utc": "2024-03-24T16:16:18.623000+00:00",
+          "valid_start_utc": "2024-03-24T16:16:18.624000+00:00",
+          "valid_end_utc": "2024-03-27T19:20:08.595000+00:00",
+          "test_start_utc": "2024-03-27T19:20:08.596000+00:00",
+          "test_end_utc": "2024-03-30T22:23:58.567000+00:00"
+        }
+      ]
+    },
+    {
+      "market": "KRW-DOGE",
+      "dataset_kind": "feature",
+      "unit_min": 1,
+      "rows": 60000,
+      "from_utc": "2024-02-12T20:19:45.980000+00:00",
+      "to_utc": "2024-03-25T19:55:59.732000+00:00",
+      "output_path": "D:\\MyApps\\AutoLife\\data\\model_input\\probabilistic_features_v2_label_tp1H20_gate4_20260301\\prob_features_KRW_DOGE_1m_v2_draft.csv",
+      "folds": [
+        {
+          "fold_id": 1,
+          "train_start_utc": "2024-02-12T20:19:45.980000+00:00",
+          "train_end_utc": "2024-03-15T08:01:56.294000+00:00",
+          "valid_start_utc": "2024-03-15T08:01:56.295000+00:00",
+          "valid_end_utc": "2024-03-20T13:58:58.013000+00:00",
+          "test_start_utc": "2024-03-20T13:58:58.014000+00:00",
+          "test_end_utc": "2024-03-25T19:55:59.732000+00:00"
+        },
+        {
+          "fold_id": 2,
+          "train_start_utc": "2024-02-12T20:19:45.980000+00:00",
+          "train_end_utc": "2024-03-17T10:24:44.981000+00:00",
+          "valid_start_utc": "2024-03-17T10:24:44.982000+00:00",
+          "valid_end_utc": "2024-03-21T15:10:22.356000+00:00",
+          "test_start_utc": "2024-03-21T15:10:22.357000+00:00",
+          "test_end_utc": "2024-03-25T19:55:59.731000+00:00"
+        },
+        {
+          "fold_id": 3,
+          "train_start_utc": "2024-02-12T20:19:45.980000+00:00",
+          "train_end_utc": "2024-03-19T12:47:33.669000+00:00",
+          "valid_start_utc": "2024-03-19T12:47:33.670000+00:00",
+          "valid_end_utc": "2024-03-22T16:21:46.700000+00:00",
+          "test_start_utc": "2024-03-22T16:21:46.701000+00:00",
+          "test_end_utc": "2024-03-25T19:55:59.731000+00:00"
+        }
+      ]
+    }
+  ]
+}

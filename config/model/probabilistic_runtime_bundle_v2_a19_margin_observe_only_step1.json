@@ -304,7 +304,13 @@
       "min_update_interval_sec": 3600
     },
     "exit": {
-      "strategy_exit_mode": "observe_only"
+      "strategy_exit_mode": "disabled",
+      "be_after_partial_tp_delay_sec": 120,
+      "tp_distance_trending_multiplier": 1.1
+    },
+    "risk": {
+      "enabled": true,
+      "stop_loss_trending_multiplier": 1.15
     },
     "execution_guard": {
       "liq_vol_gate": {
@@ -938,5 +944,19 @@
     ],
     "created_at": "2026-02-26T09:01:26.286828+00:00",
     "mode": "a15_strict_parity_handling_single_axis"
+  },
+  "prob_model_backend": "lgbm",
+  "lgbm_model_path": "lgbm_tp1H20_123.txt",
+  "lgbm_model_sha256": "14fb0a4dd94bcf469ad96172a678e959db6054efbaae1aa0c6bc2a091da33ebc",
+  "lgbm_h5_calibration": {
+    "a": 1.0668105438846582,
+    "b": -0.11956464437649253
+  },
+  "lgbm_selected_fold_id": 1,
+  "lgbm_training_summary_json": "D:\\MyApps\\AutoLife\\build\\Release\\logs\\train_summary_global_label_tp1H20_123_platt_fold1.json",
+  "lgbm_ev_affine": {
+    "enabled": true,
+    "scale": 0.0765,
+    "shift": 0.0
   }
 }

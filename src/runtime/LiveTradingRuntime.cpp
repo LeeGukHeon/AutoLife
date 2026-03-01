@@ -137,6 +137,9 @@ void recordLiveExecutionLifecycle(
 struct ProbabilisticRuntimeSnapshot {
     bool enabled = false;
     bool applied = false;
+    std::string prob_model_backend = "sgd";
+    double prob_h1_raw = 0.5;
+    double prob_h5_raw = 0.5;
     double prob_h1_calibrated = 0.5;
     double prob_h5_calibrated = 0.5;
     double prob_h1_mean = 0.5;
@@ -146,8 +149,10 @@ struct ProbabilisticRuntimeSnapshot {
     double threshold_h5 = 0.6;
     double margin_h5 = 0.0;
     double expected_edge_raw_pct = 0.0;
+    double expected_edge_calibrated_raw_bps = 0.0;
     double expected_edge_calibrated_pct = 0.0;
     double expected_edge_calibrated_bps = 0.0;
+    double expected_edge_calibrated_corrected_bps = 0.0;
     double expected_edge_pct = 0.0;
     std::string edge_semantics = "net";
     bool root_cost_model_enabled_configured = false;
@@ -160,6 +165,10 @@ struct ProbabilisticRuntimeSnapshot {
     double ev_confidence = 1.0;
     bool edge_regressor_used = false;
     bool ev_calibration_applied = false;
+    bool lgbm_ev_affine_enabled = false;
+    bool lgbm_ev_affine_applied = false;
+    double lgbm_ev_affine_scale = 1.0;
+    double lgbm_ev_affine_shift = 0.0;
     double cost_entry_pct = 0.0;
     double cost_exit_pct = 0.0;
     double cost_tail_pct = 0.0;
@@ -174,6 +183,7 @@ struct ProbabilisticRuntimeSnapshot {
     bool phase3_regime_entry_disable_enabled = false;
     bool phase3_disable_ranging_entry = false;
     std::string phase3_strategy_exit_mode = "enforce";
+    double phase3_tp_distance_trending_multiplier = 1.0;
     std::map<std::string, bool> phase3_regime_entry_disable;
     bool phase4_portfolio_allocator_enabled = false;
     bool phase4_correlation_control_enabled = false;
@@ -206,6 +216,8 @@ struct ProbabilisticRuntimeSnapshot {
         phase3_foundation_structure_gate_policy{};
     autolife::analytics::ProbabilisticRuntimeModel::Phase3BearReboundGuardPolicy
         phase3_bear_rebound_guard_policy{};
+    autolife::analytics::ProbabilisticRuntimeModel::Phase3StopLossRiskPolicy
+        phase3_stop_loss_risk_policy{};
     double online_margin_bias = 0.0;
     double online_strength_gain = 1.0;
     autolife::common::probabilistic_regime::State regime_state =
@@ -291,6 +303,9 @@ void appendPhase4CandidateArtifactLive(
         item["expected_edge_calibrated_bps"] = signal.phase3.expected_edge_calibrated_bps;
         item["expected_edge_used_for_gate_bps"] = signal.phase3.expected_edge_used_for_gate_bps;
         item["margin"] = signal.probabilistic_h5_margin;
+        item["implied_win"] = signal.phase3.implied_win_runtime;
+        item["prob_confidence_raw"] = snapshot.prob_h5_raw;
+        item["prob_confidence_calibrated"] = signal.probabilistic_h5_calibrated;
         item["prob_confidence"] = signal.probabilistic_h5_calibrated;
         item["ev_confidence"] = signal.phase3.ev_confidence;
         item["regime"] = regimeToString(signal.market_regime);
@@ -314,6 +329,7 @@ void appendPhase4CandidateArtifactLive(
             {"phase3_frontier_enabled", signal.phase3.frontier_enabled},
             {"phase3_cost_mode", signal.phase3.cost_mode},
             {"edge_regressor_used", signal.phase3.edge_regressor_used},
+            {"prob_model_backend", signal.phase3.prob_model_backend},
             {"edge_semantics", signal.phase3.edge_semantics},
             {"root_cost_model_enabled_configured", signal.phase3.root_cost_model_enabled_configured},
             {"phase3_cost_model_enabled_configured", signal.phase3.phase3_cost_model_enabled_configured},
@@ -596,6 +612,9 @@ bool inferProbabilisticRuntimeSnapshot(
     }
 
     out_snapshot.applied = true;
+    out_snapshot.prob_model_backend = model.probModelBackend();
+    out_snapshot.prob_h1_raw = std::clamp(inference.prob_h1_raw, 0.0, 1.0);
+    out_snapshot.prob_h5_raw = std::clamp(inference.prob_h5_raw, 0.0, 1.0);
     out_snapshot.prob_h1_calibrated = std::clamp(inference.prob_h1_calibrated, 0.0, 1.0);
     out_snapshot.prob_h5_calibrated = std::clamp(inference.prob_h5_calibrated, 0.0, 1.0);
     out_snapshot.prob_h1_mean = std::clamp(inference.prob_h1_mean, 0.0, 1.0);
@@ -604,12 +623,14 @@ bool inferProbabilisticRuntimeSnapshot(
     out_snapshot.ensemble_member_count = std::max(1, inference.ensemble_member_count);
     out_snapshot.threshold_h5 = std::clamp(inference.selection_threshold_h5, 0.0, 1.0);
     out_snapshot.expected_edge_raw_pct = std::clamp(inference.expected_edge_raw_bps / 10000.0, -0.05, 0.05);
+    out_snapshot.expected_edge_calibrated_raw_bps = inference.expected_edge_calibrated_raw_bps;
     out_snapshot.expected_edge_calibrated_pct = std::clamp(
         inference.expected_edge_calibrated_bps / 10000.0,
         -0.05,
         0.05
     );
     out_snapshot.expected_edge_calibrated_bps = inference.expected_edge_calibrated_bps;
+    out_snapshot.expected_edge_calibrated_corrected_bps = inference.expected_edge_calibrated_corrected_bps;
     out_snapshot.expected_edge_pct = std::clamp(inference.expected_edge_pct, -0.05, 0.05);
     out_snapshot.edge_semantics = inference.edge_semantics;
     out_snapshot.root_cost_model_enabled_configured = inference.root_cost_model_enabled_configured;
@@ -622,6 +643,10 @@ bool inferProbabilisticRuntimeSnapshot(
     out_snapshot.ev_confidence = std::clamp(inference.ev_confidence, 0.0, 1.0);
     out_snapshot.edge_regressor_used = inference.edge_regressor_used;
     out_snapshot.ev_calibration_applied = inference.ev_calibration_applied;
+    out_snapshot.lgbm_ev_affine_enabled = inference.lgbm_ev_affine_enabled;
+    out_snapshot.lgbm_ev_affine_applied = inference.lgbm_ev_affine_applied;
+    out_snapshot.lgbm_ev_affine_scale = inference.lgbm_ev_affine_scale;
+    out_snapshot.lgbm_ev_affine_shift = inference.lgbm_ev_affine_shift;
     out_snapshot.cost_entry_pct = std::clamp(inference.entry_cost_bps_estimate / 10000.0, 0.0, 0.10);
     out_snapshot.cost_exit_pct = std::clamp(inference.exit_cost_bps_estimate / 10000.0, 0.0, 0.10);
     out_snapshot.cost_tail_pct = std::clamp(inference.tail_cost_bps_estimate / 10000.0, 0.0, 0.10);
@@ -638,6 +663,8 @@ bool inferProbabilisticRuntimeSnapshot(
     out_snapshot.phase3_regime_entry_disable_enabled = phase3_policy.regime_entry_disable_enabled;
     out_snapshot.phase3_disable_ranging_entry = phase3_policy.disable_ranging_entry;
     out_snapshot.phase3_strategy_exit_mode = phase3_policy.exit.strategy_exit_mode;
+    out_snapshot.phase3_tp_distance_trending_multiplier =
+        phase3_policy.exit.tp_distance_trending_multiplier;
     out_snapshot.phase3_regime_entry_disable.clear();
     for (const auto& kv : phase3_policy.regime_entry_disable) {
         out_snapshot.phase3_regime_entry_disable[kv.first] = kv.second;
@@ -658,6 +685,7 @@ bool inferProbabilisticRuntimeSnapshot(
     out_snapshot.phase3_liq_vol_gate_policy = phase3_policy.liq_vol_gate;
     out_snapshot.phase3_foundation_structure_gate_policy = phase3_policy.foundation_structure_gate;
     out_snapshot.phase3_bear_rebound_guard_policy = phase3_policy.bear_rebound_guard;
+    out_snapshot.phase3_stop_loss_risk_policy = phase3_policy.risk;
     out_snapshot.phase4_portfolio_allocator_policy = phase4_policy.portfolio_allocator;
     out_snapshot.phase4_risk_budget_policy = phase4_policy.risk_budget;
     out_snapshot.phase4_drawdown_governor_policy = phase4_policy.drawdown_governor;
@@ -778,6 +806,7 @@ bool applyProbabilisticRuntimeAdjustment(
     signal.phase3.diagnostics_v2_enabled = snapshot.phase3_diagnostics_v2_enabled;
     signal.phase3.edge_regressor_used = snapshot.edge_regressor_used;
     signal.phase3.ev_calibration_applied = snapshot.ev_calibration_applied;
+    signal.phase3.prob_model_backend = snapshot.prob_model_backend;
     signal.phase3.ev_confidence = snapshot.ev_confidence;
     signal.phase3.edge_semantics = snapshot.edge_semantics;
     signal.phase3.root_cost_model_enabled_configured = snapshot.root_cost_model_enabled_configured;
@@ -788,8 +817,13 @@ bool applyProbabilisticRuntimeAdjustment(
     signal.phase3.edge_semantics_guard_forced_off = snapshot.edge_semantics_guard_forced_off;
     signal.phase3.edge_semantics_guard_action = snapshot.edge_semantics_guard_action;
     signal.phase3.expected_edge_raw_pct = snapshot.expected_edge_raw_pct;
+    signal.phase3.expected_edge_calibrated_raw_bps = snapshot.expected_edge_calibrated_raw_bps;
     signal.phase3.expected_edge_calibrated_pct = snapshot.expected_edge_calibrated_pct;
     signal.phase3.expected_edge_calibrated_bps = snapshot.expected_edge_calibrated_bps;
+    signal.phase3.lgbm_ev_affine_enabled = snapshot.lgbm_ev_affine_enabled;
+    signal.phase3.lgbm_ev_affine_applied = snapshot.lgbm_ev_affine_applied;
+    signal.phase3.lgbm_ev_affine_scale = snapshot.lgbm_ev_affine_scale;
+    signal.phase3.lgbm_ev_affine_shift = snapshot.lgbm_ev_affine_shift;
     signal.phase3.cost_entry_pct = snapshot.cost_entry_pct;
     signal.phase3.cost_exit_pct = snapshot.cost_exit_pct;
     signal.phase3.cost_tail_pct = snapshot.cost_tail_pct;
@@ -1202,8 +1236,12 @@ void applyProbabilisticPrimaryDecisionProfile(
         1.0
     );
 
+    const bool is_lgbm_backend = snapshot.prob_model_backend == "lgbm";
+    const double implied_win_base = is_lgbm_backend
+        ? prob
+        : (prob + (margin * pick(policy.implied_win_margin_weight, defaults.implied_win_margin_weight)));
     const double implied_win = std::clamp(
-        prob + (margin * pick(policy.implied_win_margin_weight, defaults.implied_win_margin_weight)) +
+        implied_win_base +
             ((prob - threshold) *
              pick(policy.implied_win_threshold_gap_weight, defaults.implied_win_threshold_gap_weight)),
         hostile_regime
@@ -1211,6 +1249,7 @@ void applyProbabilisticPrimaryDecisionProfile(
             : pick(policy.implied_win_min_calm, defaults.implied_win_min_calm),
         pick(policy.implied_win_max, defaults.implied_win_max)
     );
+    signal.phase3.implied_win_runtime = implied_win;
 
     if (signal.entry_price > 0.0 &&
         signal.stop_loss > 0.0 &&
@@ -1350,6 +1389,10 @@ void applyProbabilisticPrimaryDecisionProfile(
                 ? pick(policy.rr_max_hostile, defaults.rr_max_hostile)
                 : pick(policy.rr_max_calm, defaults.rr_max_calm)
         );
+        if (signal.market_regime == autolife::analytics::MarketRegime::TRENDING_UP ||
+            signal.market_regime == autolife::analytics::MarketRegime::TRENDING_DOWN) {
+            rr_target *= std::clamp(snapshot.phase3_tp_distance_trending_multiplier, 0.0, 10.0);
+        }
         signal.stop_loss = signal.entry_price * (1.0 - blended_risk_pct);
         signal.take_profit_2 = signal.entry_price * (1.0 + (blended_risk_pct * rr_target));
         signal.take_profit_1 = signal.entry_price * (1.0 + (blended_risk_pct * std::max(
@@ -2360,9 +2403,11 @@ TradingEngine::TradingEngine(
             probabilistic_runtime_model_.loadFromFile(bundle_path.string(), &error_message);
         if (probabilistic_runtime_model_loaded_) {
             LOG_INFO(
-                "Probabilistic runtime bundle loaded: path={}, features={}, markets={}",
+                "Probabilistic runtime bundle loaded: path={}, features={}, backend={}, model_sha256={}, markets={}",
                 bundle_path.string(),
                 probabilistic_runtime_model_.featureColumns().size(),
+                probabilistic_runtime_model_.probModelBackend(),
+                probabilistic_runtime_model_.lgbmModelSha256(),
                 "runtime-ready"
             );
         } else {
@@ -2389,6 +2434,7 @@ bool TradingEngine::start() {
     LOG_INFO("AutoLife trading engine start requested");
     LOG_INFO("========================================");
     live_signal_funnel_ = LiveSignalFunnelTelemetry{};
+    pending_be_after_partial_due_ms_.clear();
     live_warmup_scans_completed_ = 0;
     live_warmup_done_ = !config_.enable_live_cache_warmup;
     resetPhase4CandidateArtifactLive();
@@ -2716,11 +2762,6 @@ void TradingEngine::scanMarkets() {
         return;
     }
 
-    std::sort(scanned_markets_.begin(), scanned_markets_.end(),
-        [](const analytics::CoinMetrics& a, const analytics::CoinMetrics& b) {
-            return a.composite_score > b.composite_score;
-        });
-
     std::vector<analytics::CoinMetrics> filtered;
     const auto scan_prefilter_thresholds = computeLiveScanPrefilterThresholds(
         config_,
@@ -2747,16 +2788,144 @@ void TradingEngine::scanMarkets() {
         filtered.push_back(coin);
     }
 
+    for (auto& coin : filtered) {
+        coin.model_margin_valid = false;
+        coin.model_margin_score = 0.0;
+        coin.model_prob_h5_calibrated = 0.5;
+        coin.model_selection_threshold_h5 = 0.5;
+
+        analytics::CoinMetrics signal_metrics = coin;
+        if (signal_metrics.candles_by_tf.find("1m") == signal_metrics.candles_by_tf.end() &&
+            !signal_metrics.candles.empty()) {
+            signal_metrics.candles_by_tf["1m"] = signal_metrics.candles;
+        }
+        ensureParityCompanionTimeframes(signal_metrics);
+        if (config_.use_confirmed_candle_only_for_signals) {
+            dropTrailingUnconfirmedCandles(
+                signal_metrics.candles_by_tf,
+                getCurrentTimestampMs()
+            );
+        }
+        common::trimCandlesByPolicy(signal_metrics.candles_by_tf);
+        auto tf_1m_it = signal_metrics.candles_by_tf.find("1m");
+        if (tf_1m_it != signal_metrics.candles_by_tf.end()) {
+            signal_metrics.candles = tf_1m_it->second;
+        }
+
+        const auto data_window_check = common::checkLiveEquivalentWindow(signal_metrics.candles_by_tf);
+        if (!data_window_check.pass || signal_metrics.candles.empty()) {
+            continue;
+        }
+
+        auto regime = regime_detector_->analyzeRegime(signal_metrics.candles);
+        ProbabilisticRuntimeSnapshot snapshot;
+        std::string probabilistic_prefilter_reason;
+        inferProbabilisticRuntimeSnapshot(
+            probabilistic_runtime_model_,
+            config_,
+            signal_metrics,
+            signal_metrics.market,
+            regime.regime,
+            snapshot,
+            &probabilistic_prefilter_reason
+        );
+        if (snapshot.applied && std::isfinite(snapshot.margin_h5)) {
+            coin.model_margin_valid = true;
+            coin.model_margin_score = std::clamp(snapshot.margin_h5, -1.0, 1.0);
+            coin.model_prob_h5_calibrated = std::clamp(snapshot.prob_h5_calibrated, 0.0, 1.0);
+            coin.model_selection_threshold_h5 = std::clamp(snapshot.threshold_h5, 0.0, 1.0);
+        }
+    }
+
+    std::stable_sort(
+        filtered.begin(),
+        filtered.end(),
+        [](const analytics::CoinMetrics& a, const analytics::CoinMetrics& b) {
+            if (a.model_margin_valid != b.model_margin_valid) {
+                return a.model_margin_valid && !b.model_margin_valid;
+            }
+            if (a.model_margin_valid && b.model_margin_valid &&
+                std::abs(a.model_margin_score - b.model_margin_score) > 1e-12) {
+                return a.model_margin_score > b.model_margin_score;
+            }
+            return a.composite_score > b.composite_score;
+        }
+    );
+
     if (filtered.size() > 20) {
         filtered.resize(20);
     }
 
     scanned_markets_ = filtered;
+    live_signal_funnel_.top20_sort_mode = "model_margin";
+    live_signal_funnel_.top20_candidates = static_cast<long long>(scanned_markets_.size());
+    std::vector<double> margin_values;
+    std::vector<double> composite_values;
+    margin_values.reserve(scanned_markets_.size());
+    composite_values.reserve(scanned_markets_.size());
+    for (const auto& coin : scanned_markets_) {
+        composite_values.push_back(coin.composite_score);
+        if (coin.model_margin_valid && std::isfinite(coin.model_margin_score)) {
+            margin_values.push_back(coin.model_margin_score);
+        }
+    }
+    live_signal_funnel_.top20_margin_valid_count = static_cast<long long>(margin_values.size());
+    const auto compute_mean = [](const std::vector<double>& values) {
+        if (values.empty()) {
+            return 0.0;
+        }
+        double sum = 0.0;
+        for (double v : values) {
+            sum += v;
+        }
+        return sum / static_cast<double>(values.size());
+    };
+    const auto compute_std = [&](const std::vector<double>& values, double mean) {
+        if (values.size() <= 1) {
+            return 0.0;
+        }
+        double var_sum = 0.0;
+        for (double v : values) {
+            const double d = v - mean;
+            var_sum += d * d;
+        }
+        return std::sqrt(var_sum / static_cast<double>(values.size()));
+    };
+    const auto compute_quantile = [](std::vector<double> values, double q) {
+        if (values.empty()) {
+            return 0.0;
+        }
+        std::sort(values.begin(), values.end());
+        const double clamped_q = std::clamp(q, 0.0, 1.0);
+        const std::size_t idx = static_cast<std::size_t>(
+            std::llround(clamped_q * static_cast<double>(values.size() - 1))
+        );
+        return values[std::min(idx, values.size() - 1)];
+    };
+    live_signal_funnel_.top20_margin_mean = compute_mean(margin_values);
+    live_signal_funnel_.top20_margin_std =
+        compute_std(margin_values, live_signal_funnel_.top20_margin_mean);
+    live_signal_funnel_.top20_margin_p10 = compute_quantile(margin_values, 0.10);
+    live_signal_funnel_.top20_margin_p50 = compute_quantile(margin_values, 0.50);
+    live_signal_funnel_.top20_margin_p90 = compute_quantile(margin_values, 0.90);
+    live_signal_funnel_.top20_composite_mean = compute_mean(composite_values);
+    live_signal_funnel_.top20_composite_std =
+        compute_std(composite_values, live_signal_funnel_.top20_composite_mean);
+
     LOG_INFO("Scan prefilter(dynamic): min_vol={:.0f}, max_spread={:.3f}%, min_ask_notional={:.0f}, hostility={:.3f}",
              scan_prefilter_thresholds.min_volume_krw,
              scan_prefilter_thresholds.max_spread_pct * 100.0,
              scan_prefilter_thresholds.min_ask_notional_krw,
              market_hostility_ewma_);
+    LOG_INFO(
+        "Top20 sort(model_margin): candidates={}, margin_valid={}, margin_mean={:+.4f}, p10={:+.4f}, p50={:+.4f}, p90={:+.4f}",
+        static_cast<int>(live_signal_funnel_.top20_candidates),
+        static_cast<int>(live_signal_funnel_.top20_margin_valid_count),
+        live_signal_funnel_.top20_margin_mean,
+        live_signal_funnel_.top20_margin_p10,
+        live_signal_funnel_.top20_margin_p50,
+        live_signal_funnel_.top20_margin_p90
+    );
 
     const long long now_ms = getCurrentTimestampMs();
     for (const auto& coin : scanned_markets_) {
@@ -3102,6 +3271,10 @@ void TradingEngine::generateSignals() {
                 probabilistic_snapshot.phase3_bear_rebound_guard_policy.low_conf_action;
             signal_metrics.bear_rebound_guard_policy.static_threshold =
                 probabilistic_snapshot.phase3_bear_rebound_guard_policy.static_threshold;
+            signal_metrics.stop_loss_risk_policy.enabled =
+                probabilistic_snapshot.phase3_stop_loss_risk_policy.enabled;
+            signal_metrics.stop_loss_risk_policy.stop_loss_trending_multiplier =
+                probabilistic_snapshot.phase3_stop_loss_risk_policy.stop_loss_trending_multiplier;
             auto signals = strategy_manager_->collectSignals(
                 signal_metrics.market,
                 signal_metrics,
@@ -3896,6 +4069,20 @@ void TradingEngine::flushLiveSignalFunnelTaxonomyReport(
             {"reason_code", sample.reason_code},
         });
     }
+    nlohmann::json strategy_exit_clamp_samples = nlohmann::json::array();
+    for (const auto& sample : snapshot.strategy_exit_clamp_samples) {
+        strategy_exit_clamp_samples.push_back({
+            {"ts_ms", sample.ts_ms},
+            {"market", sample.market},
+            {"regime", sample.regime},
+            {"stop_loss_price", sample.stop_loss_price},
+            {"exit_price_before_clamp", sample.exit_price_before_clamp},
+            {"exit_price_after_clamp", sample.exit_price_after_clamp},
+            {"pnl_before_clamp", sample.pnl_before_clamp},
+            {"pnl_after_clamp", sample.pnl_after_clamp},
+            {"reason_code", sample.reason_code},
+        });
+    }
 
     nlohmann::json report;
     report["updated_at_ms"] = getCurrentTimestampMs();
@@ -3968,11 +4155,24 @@ void TradingEngine::flushLiveSignalFunnelTaxonomyReport(
     report["strategy_exit"] = {
         {"mode_effective", snapshot.strategy_exit_mode_effective},
         {"strategy_exit_triggered_count", snapshot.strategy_exit_triggered_count},
+        {"strategy_exit_would_trigger_count", snapshot.strategy_exit_triggered_count},
         {"strategy_exit_observe_only_suppressed_count",
          snapshot.strategy_exit_observe_only_suppressed_count},
+        {"strategy_exit_executed_count", snapshot.strategy_exit_executed_count},
+        {"strategy_exit_clamp_applied_count", snapshot.strategy_exit_clamp_applied_count},
         {"strategy_exit_triggered_by_market", snapshot.strategy_exit_triggered_by_market},
         {"strategy_exit_triggered_by_regime", snapshot.strategy_exit_triggered_by_regime},
         {"strategy_exit_trigger_samples", strategy_exit_trigger_samples},
+        {"strategy_exit_would_trigger_samples", strategy_exit_trigger_samples},
+        {"strategy_exit_clamp_samples", strategy_exit_clamp_samples},
+    };
+    report["be_after_partial_tp"] = {
+        {"delay_sec", snapshot.be_after_partial_tp_delay_sec},
+        {"be_move_attempt_count", snapshot.be_move_attempt_count},
+        {"be_move_applied_count", snapshot.be_move_applied_count},
+        {"be_move_skipped_due_to_delay_count", snapshot.be_move_skipped_due_to_delay_count},
+        {"stop_loss_after_partial_tp_count", snapshot.stop_loss_after_partial_tp_count},
+        {"stop_loss_before_partial_tp_count", snapshot.stop_loss_before_partial_tp_count},
     };
     report["markets_with_selected_candidate"] = snapshot.markets_with_selected_candidate;
     report["generated_signal_candidates"] = snapshot.generated_signal_candidates;
@@ -3983,6 +4183,20 @@ void TradingEngine::flushLiveSignalFunnelTaxonomyReport(
     report["selection_hint_adjusted_ratio"] = selection_hint_adjusted_ratio;
     report["selection_hint_adjustment_counts"] = snapshot.selection_hint_adjustment_counts;
     report["selection_hint_total_adjustments"] = total_hint_adjustments;
+    report["top20_sort_mode"] = snapshot.top20_sort_mode;
+    report["top20_candidates"] = snapshot.top20_candidates;
+    report["top20_margin_stats"] = {
+        {"valid_count", snapshot.top20_margin_valid_count},
+        {"mean", snapshot.top20_margin_mean},
+        {"std", snapshot.top20_margin_std},
+        {"p10", snapshot.top20_margin_p10},
+        {"p50", snapshot.top20_margin_p50},
+        {"p90", snapshot.top20_margin_p90},
+    };
+    report["top20_composite_stats"] = {
+        {"mean", snapshot.top20_composite_mean},
+        {"std", snapshot.top20_composite_std},
+    };
     report["top_selection_hint_adjustments"] =
         buildTopNamedCounts(sorted_cumulative_hint_adjustments, 8, "adjustment");
     report["phase4_portfolio_diagnostics"] = {
@@ -5336,7 +5550,35 @@ void TradingEngine::monitorPositions() {
     const auto& phase3_policy = probabilistic_runtime_model_.phase3Policy();
     const bool strategy_exit_observe_only =
         phase3_policy.exit.strategy_exit_mode == "observe_only";
+    const bool strategy_exit_clamp_to_stop =
+        phase3_policy.exit.strategy_exit_mode == "clamp_to_stop";
+    const bool strategy_exit_disabled =
+        phase3_policy.exit.strategy_exit_mode == "disabled";
+    const int be_after_partial_tp_delay_sec = std::max(
+        0,
+        phase3_policy.exit.be_after_partial_tp_delay_sec
+    );
     live_signal_funnel_.strategy_exit_mode_effective = phase3_policy.exit.strategy_exit_mode;
+    live_signal_funnel_.be_after_partial_tp_delay_sec = be_after_partial_tp_delay_sec;
+
+    const long long now_ms_for_pending = getCurrentTimestampMs();
+    if (!pending_be_after_partial_due_ms_.empty() && risk_manager_) {
+        std::vector<std::string> ready_markets;
+        ready_markets.reserve(pending_be_after_partial_due_ms_.size());
+        for (const auto& kv : pending_be_after_partial_due_ms_) {
+            if (now_ms_for_pending >= kv.second) {
+                ready_markets.push_back(kv.first);
+            }
+        }
+        for (const auto& market : ready_markets) {
+            pending_be_after_partial_due_ms_.erase(market);
+            if (risk_manager_->getPosition(market) == nullptr) {
+                continue;
+            }
+            risk_manager_->moveStopToBreakeven(market);
+            live_signal_funnel_.be_move_applied_count++;
+        }
+    }
 
     // 1. ????????좎럡?썹땟戮녹???좎럩?????좎?留????????????좎럥諭??????????????좎럥??????????좎럡??????????????????좎럥큔??????????????좎럥큔????????좎럥釉뜹뜝???좎뜾異?에?吏?????좎럩肉???????????????????????됰Ŧ?????????耀붾굝?????????좎떊?곷퉲????좎럥?????????
     auto positions = risk_manager_->getAllPositions();
@@ -5350,6 +5592,7 @@ void TradingEngine::monitorPositions() {
                 continue;
             }
             executeSellOrder(pos.market, pos, "max_drawdown", price);
+            pending_be_after_partial_due_ms_.erase(pos.market);
         }
         return;
     }
@@ -5448,6 +5691,35 @@ void TradingEngine::monitorPositions() {
         const double holding_time_seconds = (now_ms - updated_pos->entry_time) / 1000.0;
         bool strategy_exit_trigger_recorded = false;
         bool strategy_exit_suppressed_this_loop = false;
+        auto clamp_strategy_exit_price = [&](double requested_exit_price, const char* reason_code) {
+            if (!strategy_exit_clamp_to_stop) {
+                return requested_exit_price;
+            }
+            double exit_price_after_clamp = requested_exit_price;
+            const double stop_loss_price = updated_pos->stop_loss;
+            if (std::isfinite(stop_loss_price) &&
+                stop_loss_price > 0.0 &&
+                exit_price_after_clamp < stop_loss_price) {
+                exit_price_after_clamp = stop_loss_price;
+                live_signal_funnel_.strategy_exit_clamp_applied_count++;
+            }
+            if (live_signal_funnel_.strategy_exit_clamp_samples.size() < 10) {
+                LiveSignalFunnelTelemetry::StrategyExitClampSample sample;
+                sample.ts_ms = now_ms;
+                sample.market = pos.market;
+                sample.regime = regimeToString(updated_pos->market_regime);
+                sample.stop_loss_price = stop_loss_price;
+                sample.exit_price_before_clamp = requested_exit_price;
+                sample.exit_price_after_clamp = exit_price_after_clamp;
+                sample.pnl_before_clamp =
+                    (requested_exit_price - updated_pos->entry_price) * updated_pos->quantity;
+                sample.pnl_after_clamp =
+                    (exit_price_after_clamp - updated_pos->entry_price) * updated_pos->quantity;
+                sample.reason_code = reason_code == nullptr ? std::string() : std::string(reason_code);
+                live_signal_funnel_.strategy_exit_clamp_samples.push_back(std::move(sample));
+            }
+            return exit_price_after_clamp;
+        };
         auto record_strategy_exit_trigger = [&](const char* reason_code) {
             if (strategy_exit_trigger_recorded) {
                 return;
@@ -5478,18 +5750,26 @@ void TradingEngine::monitorPositions() {
             if (strategy->shouldExit(pos.market, updated_pos->entry_price, current_price, holding_time_seconds)) {
                 LOG_INFO("??????熬곣뫖利닷뜝??좎룞?쇿뜝????????????????????????黎앸럽?????沃섃넄??????? {} (??????熬곣뫖利닷뜝??좎룞?쇿뜝?? {})", pos.market, updated_pos->strategy_name);
                 record_strategy_exit_trigger("strategy_should_exit");
-                if (strategy_exit_observe_only) {
+                if (strategy_exit_observe_only || strategy_exit_disabled) {
                     strategy_exit_suppressed_this_loop = true;
                     live_signal_funnel_.strategy_exit_observe_only_suppressed_count++;
                     LOG_INFO(
-                        "{} strategy_exit observe_only suppress: strategy={} holding_sec={:.1f} unrealized_pnl={:+.0f}",
+                        "{} strategy_exit {} suppress: strategy={} holding_sec={:.1f} unrealized_pnl={:+.0f}",
                         pos.market,
+                        strategy_exit_disabled ? "disabled" : "observe_only",
                         updated_pos->strategy_name,
                         holding_time_seconds,
                         updated_pos->unrealized_pnl
                     );
                 } else {
-                    executeSellOrder(pos.market, *updated_pos, "strategy_exit", current_price);
+                    double strategy_exit_price = current_price;
+                    if (strategy_exit_clamp_to_stop) {
+                        strategy_exit_price =
+                            clamp_strategy_exit_price(current_price, "strategy_should_exit");
+                    }
+                    live_signal_funnel_.strategy_exit_executed_count++;
+                    executeSellOrder(pos.market, *updated_pos, "strategy_exit", strategy_exit_price);
+                    pending_be_after_partial_due_ms_.erase(pos.market);
                     continue;
                 }
             }
@@ -5509,6 +5789,11 @@ void TradingEngine::monitorPositions() {
             // ???????? ????????
             if (current_price <= updated_pos->stop_loss) {
                 reason = "stop_loss";
+                if (updated_pos->half_closed) {
+                    live_signal_funnel_.stop_loss_after_partial_tp_count++;
+                } else {
+                    live_signal_funnel_.stop_loss_before_partial_tp_count++;
+                }
                 LOG_INFO("???????????????????????黎앸럽?????沃섃넄???????(???????좎럥?℡뜝???좎룞??????{:+.2f}%)", updated_pos->unrealized_pnl_pct * 100.0);
             } else if (current_price >= updated_pos->take_profit_2) {
                 reason = "take_profit";
@@ -5517,20 +5802,35 @@ void TradingEngine::monitorPositions() {
                 reason = "strategy_exit"; // ????????좎럡?썹땟戮녹???좎럩?????좎?留?????????????????????⑥ъ８???????????좎럡萸?????(TS ??
             }
             
-            if (reason == "strategy_exit" && strategy_exit_observe_only) {
+            if (reason == "strategy_exit" && (strategy_exit_observe_only || strategy_exit_disabled)) {
                 if (!strategy_exit_suppressed_this_loop) {
                     record_strategy_exit_trigger("risk_manager_should_exit");
                     live_signal_funnel_.strategy_exit_observe_only_suppressed_count++;
                 }
                 LOG_INFO(
-                    "{} strategy_exit observe_only suppress (risk_manager): holding_sec={:.1f} unrealized_pnl={:+.0f}",
+                    "{} strategy_exit {} suppress (risk_manager): holding_sec={:.1f} unrealized_pnl={:+.0f}",
                     pos.market,
+                    strategy_exit_disabled ? "disabled" : "observe_only",
                     holding_time_seconds,
                     updated_pos->unrealized_pnl
                 );
                 continue;
             }
-            executeSellOrder(pos.market, *updated_pos, reason, current_price);
+            double strategy_exit_price = current_price;
+            if (reason == "strategy_exit") {
+                if (strategy_exit_clamp_to_stop) {
+                    strategy_exit_price =
+                        clamp_strategy_exit_price(current_price, "risk_manager_should_exit");
+                }
+                live_signal_funnel_.strategy_exit_executed_count++;
+            }
+            executeSellOrder(
+                pos.market,
+                *updated_pos,
+                reason,
+                reason == "strategy_exit" ? strategy_exit_price : current_price
+            );
+            pending_be_after_partial_due_ms_.erase(pos.market);
         }
     }
 
@@ -5787,6 +6087,7 @@ bool TradingEngine::executeSellOrder(
         realized_qty = position.quantity;
         // ????????좎럡?썹땟戮녹???좎럩?????좎?留????????좎럥큔???????????????????????????????븍툖??????(?????????????좎럡?썹땟戮녹???좎럩?????좎?留??????
         risk_manager_->exitPosition(market, executed_price, reason);
+        pending_be_after_partial_due_ms_.erase(market);
         nlohmann::json close_payload;
         close_payload["exit_price"] = executed_price;
         close_payload["quantity"] = realized_qty;
@@ -5860,6 +6161,28 @@ bool TradingEngine::executePartialSell(const std::string& market, const risk::Po
         return false;
     }
     
+    const int be_after_partial_tp_delay_sec = std::max(
+        0,
+        probabilistic_runtime_model_.phase3Policy().exit.be_after_partial_tp_delay_sec
+    );
+    live_signal_funnel_.be_after_partial_tp_delay_sec = be_after_partial_tp_delay_sec;
+    auto schedule_or_apply_be_after_partial = [&](long long trigger_ts_ms) {
+        if (!risk_manager_) {
+            return;
+        }
+        live_signal_funnel_.be_move_attempt_count++;
+        if (be_after_partial_tp_delay_sec <= 0) {
+            risk_manager_->moveStopToBreakeven(market);
+            pending_be_after_partial_due_ms_.erase(market);
+            live_signal_funnel_.be_move_applied_count++;
+            return;
+        }
+        const long long due_ts =
+            trigger_ts_ms + (static_cast<long long>(be_after_partial_tp_delay_sec) * 1000LL);
+        pending_be_after_partial_due_ms_[market] = due_ts;
+        live_signal_funnel_.be_move_skipped_due_to_delay_count++;
+    };
+
     // Adaptive partial cadence: shared with backtest runtime.
     const double partial_ratio = std::clamp(
         risk_manager_->getAdaptivePartialExitRatio(market),
@@ -5897,7 +6220,7 @@ bool TradingEngine::executePartialSell(const std::string& market, const risk::Po
         // Both partial/full are below minimum. Keep position but arm protective state.
         if (risk_manager_) {
             risk_manager_->setHalfClosed(market, true);
-            risk_manager_->moveStopToBreakeven(market);
+            schedule_or_apply_be_after_partial(getCurrentTimestampMs());
         }
         nlohmann::json reduce_payload;
         reduce_payload["exit_price"] = current_price;
@@ -5951,7 +6274,7 @@ bool TradingEngine::executePartialSell(const std::string& market, const risk::Po
             return false;
         }
         risk_manager_->setHalfClosed(market, true);
-        risk_manager_->moveStopToBreakeven(market);
+        schedule_or_apply_be_after_partial(getCurrentTimestampMs());
         return true;
     };
     auto record_partial_execution = [&](double fill_price, double fill_qty, const std::string& source, const std::string& order_id_hint) {

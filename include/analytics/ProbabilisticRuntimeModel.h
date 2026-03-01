@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -20,7 +21,9 @@ struct ProbabilisticInference {
     int ensemble_member_count = 1;
     double selection_threshold_h5 = 0.6;
     double expected_edge_raw_bps = 0.0;
+    double expected_edge_calibrated_raw_bps = 0.0;
     double expected_edge_calibrated_bps = 0.0;
+    double expected_edge_calibrated_corrected_bps = 0.0;
     double expected_edge_before_cost_bps = 0.0;
     double entry_cost_bps_estimate = 0.0;
     double exit_cost_bps_estimate = 0.0;
@@ -40,6 +43,10 @@ struct ProbabilisticInference {
     double ev_confidence = 1.0;
     bool edge_regressor_used = false;
     bool ev_calibration_applied = false;
+    bool lgbm_ev_affine_enabled = false;
+    bool lgbm_ev_affine_applied = false;
+    double lgbm_ev_affine_scale = 1.0;
+    double lgbm_ev_affine_shift = 0.0;
     bool phase3_frontier_enabled = false;
     bool phase3_ev_calibration_enabled = false;
     bool phase3_cost_tail_enabled = false;
@@ -434,6 +441,12 @@ public:
     };
     struct Phase3ExitPolicy {
         std::string strategy_exit_mode = "enforce";
+        int be_after_partial_tp_delay_sec = 0;
+        double tp_distance_trending_multiplier = 1.0;
+    };
+    struct Phase3StopLossRiskPolicy {
+        bool enabled = false;
+        double stop_loss_trending_multiplier = 1.0;
     };
 
     struct Phase3Policy {
@@ -459,6 +472,7 @@ public:
         Phase3FoundationStructureGatePolicy foundation_structure_gate;
         Phase3BearReboundGuardPolicy bear_rebound_guard;
         Phase3ExitPolicy exit;
+        Phase3StopLossRiskPolicy risk;
     };
 
     struct Phase4Policy {
@@ -536,6 +550,9 @@ public:
     const Phase3Policy& phase3Policy() const { return phase3_policy_; }
     const Phase4Policy& phase4Policy() const { return phase4_policy_; }
     const RuntimeSemanticsState& runtimeSemanticsState() const { return runtime_semantics_state_; }
+    const std::string& probModelBackend() const { return prob_model_backend_; }
+    const std::string& lgbmModelSha256() const { return lgbm_model_sha256_loaded_; }
+    bool lgbmModelLoaded() const { return lgbm_model_loaded_; }
 
     // `transformed_features` must already match the runtime bundle transform contract.
     bool infer(
@@ -569,6 +586,23 @@ public:
         LinearHead h1;
         LinearHead h5;
         std::vector<EnsembleMember> ensemble_members;
+    };
+
+    struct LgbmTree {
+        std::vector<int> split_feature;
+        std::vector<double> threshold;
+        std::vector<int> decision_type;
+        std::vector<int> left_child;
+        std::vector<int> right_child;
+        std::vector<double> leaf_value;
+        double shrinkage = 1.0;
+    };
+
+    struct LgbmModel {
+        std::vector<LgbmTree> trees;
+        int max_feature_idx = -1;
+        bool average_output = false;
+        double sigmoid = 1.0;
     };
 
 public:
@@ -617,6 +651,17 @@ private:
     bool has_default_entry_ = false;
     bool prefer_default_entry_ = false;
     std::vector<std::string> feature_columns_;
+    std::string prob_model_backend_ = "sgd";
+    std::string lgbm_model_path_resolved_;
+    std::string lgbm_model_sha256_expected_;
+    std::string lgbm_model_sha256_loaded_;
+    bool lgbm_model_loaded_ = false;
+    double lgbm_h5_calib_a_ = 1.0;
+    double lgbm_h5_calib_b_ = 0.0;
+    bool lgbm_ev_affine_enabled_ = false;
+    double lgbm_ev_affine_scale_ = 1.0;
+    double lgbm_ev_affine_shift_ = 0.0;
+    LgbmModel lgbm_model_;
     bool loaded_ = false;
 };
 
