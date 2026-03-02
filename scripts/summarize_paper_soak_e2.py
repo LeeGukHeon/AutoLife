@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
@@ -689,7 +689,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "shadow_count_by_market": live_funnel.get("shadow_count_by_market", {}),
             },
             "liq_vol_gate_dynamic": {
-                "mode": str(liq_vol_dynamic.get("mode", "legacy_fixed")),
+                "mode": str(liq_vol_dynamic.get("mode", "static")),
                 "quantile_q": round(to_float(liq_vol_dynamic.get("quantile_q", 0.0), 0.0), 8),
                 "window_minutes": max(0, to_int(liq_vol_dynamic.get("window_minutes", 0), 0)),
                 "min_samples_required": max(
@@ -710,7 +710,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "samples": liq_samples[:10],
             },
             "foundation_structure_gate": {
-                "mode": str(structure_gate.get("mode", "legacy_fixed")),
+                "mode": str(structure_gate.get("mode", "static")),
                 "relax_delta": round(to_float(structure_gate.get("relax_delta", 0.0), 0.0), 8),
                 "observation_count": max(
                     0, to_int(structure_gate.get("observation_count", 0), 0)
@@ -744,7 +744,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 )[:10],
             },
             "bear_rebound_guard": {
-                "mode": str(bear_rebound_guard.get("mode", "legacy_fixed")),
+                "mode": str(bear_rebound_guard.get("mode", "static")),
                 "quantile_q": round(to_float(bear_rebound_guard.get("quantile_q", 0.0), 0.0), 8),
                 "window_minutes": max(0, to_int(bear_rebound_guard.get("window_minutes", 0), 0)),
                 "min_samples_required": max(
@@ -799,7 +799,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "markets_considered": to_int(live_funnel.get("markets_considered", 0), 0),
         "generated_signal_candidates": to_int(live_funnel.get("generated_signal_candidates", 0), 0),
         "selected_signal_candidates": to_int(live_funnel.get("selected_signal_candidates", 0), 0),
-        "filtered_out_by_manager": to_int(live_funnel.get("filtered_out_by_manager", 0), 0),
+        "filtered_out_by_sizing": to_int(live_funnel.get("filtered_out_by_sizing", 0), 0),
         "no_signal_generated": to_int(live_funnel.get("no_signal_generated", 0), 0),
         "rejection_reason_counts": rejection_counts,
         "top_rejections": live_funnel.get("top_rejections", []),
@@ -808,8 +808,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             "shadow_count_total": int(shadow_delta),
             "shadow_count_by_regime": live_funnel.get("shadow_count_by_regime", {}),
             "shadow_count_by_market": live_funnel.get("shadow_count_by_market", {}),
-            "shadow_would_pass_frontier_count": to_int(
-                live_funnel.get("shadow_would_pass_frontier_count", 0),
+            "shadow_would_pass_quality_selection_count": to_int(
+                live_funnel.get("shadow_would_pass_quality_selection_count", 0),
                 0,
             ),
             "shadow_would_pass_execution_guard_count": to_int(
@@ -818,7 +818,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             ),
         },
         "liq_vol_gate_dynamic": {
-            "mode": str(liq_vol_dynamic.get("mode", "legacy_fixed")),
+            "mode": str(liq_vol_dynamic.get("mode", "static")),
             "quantile_q": round(to_float(liq_vol_dynamic.get("quantile_q", 0.0), 0.0), 8),
             "window_minutes": max(0, to_int(liq_vol_dynamic.get("window_minutes", 0), 0)),
             "min_samples_required": max(
@@ -839,7 +839,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "samples": liq_samples[:10],
         },
         "foundation_structure_gate": {
-            "mode": str(structure_gate.get("mode", "legacy_fixed")),
+            "mode": str(structure_gate.get("mode", "static")),
             "relax_delta": round(to_float(structure_gate.get("relax_delta", 0.0), 0.0), 8),
             "observation_count": max(0, to_int(structure_gate.get("observation_count", 0), 0)),
             "fail_count_total": max(0, to_int(structure_gate.get("fail_count_total", 0), 0)),
@@ -869,7 +869,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             )[:10],
         },
         "bear_rebound_guard": {
-            "mode": str(bear_rebound_guard.get("mode", "legacy_fixed")),
+            "mode": str(bear_rebound_guard.get("mode", "static")),
             "quantile_q": round(to_float(bear_rebound_guard.get("quantile_q", 0.0), 0.0), 8),
             "window_minutes": max(0, to_int(bear_rebound_guard.get("window_minutes", 0), 0)),
             "min_samples_required": max(
@@ -931,7 +931,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "no_signal_generated": to_int(gate_funnel_breakdown.get("no_signal_generated", 0), 0),
             "liq_vol_gate_pass_rate": round(liq_pass_rate, 6),
             "liq_vol_gate_observation_count": liq_observation_count,
-            "liq_vol_gate_mode": str(liq_vol_dynamic.get("mode", "legacy_fixed")),
+            "liq_vol_gate_mode": str(liq_vol_dynamic.get("mode", "static")),
             "liq_vol_gate_quantile_q": round(to_float(liq_vol_dynamic.get("quantile_q", 0.0), 0.0), 8),
             "liq_vol_gate_window_minutes": max(0, to_int(liq_vol_dynamic.get("window_minutes", 0), 0)),
             "liq_vol_gate_min_samples_required": max(
@@ -953,7 +953,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 0,
             ),
             "no_signal_generated": to_int(gate_funnel_breakdown.get("no_signal_generated", 0), 0),
-            "bear_rebound_guard_mode": str(bear_rebound_guard.get("mode", "legacy_fixed")),
+            "bear_rebound_guard_mode": str(bear_rebound_guard.get("mode", "static")),
             "bear_rebound_guard_quantile_q": round(
                 to_float(bear_rebound_guard.get("quantile_q", 0.0), 0.0),
                 8,

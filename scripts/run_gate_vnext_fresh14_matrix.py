@@ -117,7 +117,7 @@ def extract_case_summary(report: Dict[str, Any], run_dir: Path) -> Dict[str, Any
             if not isinstance(gate_vnext, dict):
                 continue
             gate_version = str(
-                gate_vnext.get("gate_system_version_effective", "legacy")
+                gate_vnext.get("gate_system_version_effective", "vnext")
             ).strip().lower()
             if gate_version:
                 gate_versions[gate_version] = gate_versions.get(gate_version, 0) + 1

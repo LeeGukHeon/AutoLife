@@ -782,13 +782,6 @@ void Config::load(const std::string& path) {
             if (engine_config_.probabilistic_runtime_bundle_path.empty()) {
                 engine_config_.probabilistic_runtime_bundle_path = "config/model/probabilistic_runtime_bundle_v2.json";
             }
-            engine_config_.probabilistic_runtime_hard_gate =
-                t.value("probabilistic_runtime_hard_gate", false);
-            engine_config_.probabilistic_runtime_hard_gate_margin = std::clamp(
-                t.value("probabilistic_runtime_hard_gate_margin", -0.08),
-                -0.50,
-                0.20
-            );
             engine_config_.probabilistic_runtime_score_weight = std::clamp(
                 t.value("probabilistic_runtime_score_weight", 0.12),
                 0.0,
@@ -801,13 +794,6 @@ void Config::load(const std::string& path) {
             );
             engine_config_.probabilistic_runtime_primary_mode =
                 t.value("probabilistic_runtime_primary_mode", true);
-            engine_config_.probabilistic_runtime_scan_prefilter_enabled =
-                t.value("probabilistic_runtime_scan_prefilter_enabled", true);
-            engine_config_.probabilistic_runtime_scan_prefilter_margin = std::clamp(
-                t.value("probabilistic_runtime_scan_prefilter_margin", -0.10),
-                -0.30,
-                0.10
-            );
             engine_config_.probabilistic_runtime_strength_blend = std::clamp(
                 t.value("probabilistic_runtime_strength_blend", 0.45),
                 0.0,

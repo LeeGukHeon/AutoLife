@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "common/Types.h"
 #include "network/UpbitHttpClient.h"
@@ -31,7 +31,7 @@ namespace engine {
 
 // TradingMode and EngineConfig moved to EngineConfig.h
 
-// Trading Engine - ?꾩껜 嫄곕옒 ?쒖뒪??
+// Trading Engine - ?袁⑷퍥 椰꾧퀡????뽯뮞??
 class TradingEngine {
 public:
     TradingEngine(
@@ -41,38 +41,38 @@ public:
     
     ~TradingEngine();
     
-    // ===== ?붿쭊 ?쒖뼱 =====
+    // ===== ?遺우춭 ??뽯선 =====
     
     bool start();
     void stop();
     bool isRunning() const { return running_; }
     
-    // ===== 硫붿씤 猷⑦봽 =====
+    // ===== 筌롫뗄???룐뫂遊?=====
     
-    void run();  // 硫붿씤 嫄곕옒 猷⑦봽 (釉붾줈??
+    void run();  // 筌롫뗄??椰꾧퀡???룐뫂遊?(?됰뗀以??
     
-    // ===== ?곹깭 議고쉶 =====
+    // ===== ?怨밴묶 鈺곌퀬??=====
     
     risk::RiskManager::RiskMetrics getMetrics() const;
     std::vector<risk::Position> getPositions() const;
     std::vector<risk::TradeHistory> getTradeHistory() const;
     
-    // ===== ?섎룞 ?쒖뼱 (?뚯뒪?몄슜) =====
+    // ===== ??롫짗 ??뽯선 (???뮞?紐꾩뒠) =====
     
     void manualScan();
     void manualClosePosition(const std::string& market);
     void manualCloseAll();
     
 private:
-    // ===== 硫붿씤 ?꾨줈?몄뒪 =====
+    // ===== 筌롫뗄???袁⑥쨮?紐꾨뮞 =====
     
-    void scanMarkets();           // ?쒖옣 ?ㅼ틪
-    void generateSignals();       // 留ㅻℓ ?좏샇 ?앹꽦
-    void executeSignals();        // ?좏샇 ?ㅽ뻾
-    void monitorPositions();      // ?ъ???紐⑤땲?곕쭅
-    void updateMetrics();         // 硫뷀듃由??낅뜲?댄듃
+    void scanMarkets();           // ??뽰삢 ??쇳떔
+    void generateSignals();       // 筌띲끇???醫륁깈 ??밴쉐
+    void executeSignals();        // ?醫륁깈 ??쎈뻬
+    void monitorPositions();      // ?????筌뤴뫀??怨뺤춦
+    void updateMetrics();         // 筌롫??껆뵳???낅쑓??꾨뱜
     
-    // ===== 二쇰Ц ?ㅽ뻾 (媛쒖꽑) =====
+    // ===== 雅뚯눖揆 ??쎈뻬 (揶쏆뮇苑? =====
     
     bool executeBuyOrder(
         const std::string& market,
@@ -92,9 +92,9 @@ private:
         double current_price
     );
     
-    // [??異붽?] 二쇰Ц ?ы띁 ?⑥닔??
+    // [???곕떽?] 雅뚯눖揆 ??????λ땾??
     
-    // LIMIT 二쇰Ц?쇰줈 留ㅼ닔 (?ъ떆??濡쒖쭅 ?ы븿)
+    // LIMIT 雅뚯눖揆??곗쨮 筌띲끉??(?????嚥≪뮇彛???釉?
     struct LimitOrderResult {
         bool success;
         std::string order_uuid;
@@ -106,13 +106,13 @@ private:
     
     LimitOrderResult executeLimitBuyOrder(
         const std::string& market,
-        double entry_price,      // 吏?뺢?
-        double quantity,         // 二쇰Ц ?섎웾
-        int max_retries,         // 理쒕? ?ъ떆??
-        int retry_wait_ms        // ?ъ떆??媛꾧꺽 (ms)
+        double entry_price,      // 筌왖?類?
+        double quantity,         // 雅뚯눖揆 ??롮쎗
+        int max_retries,         // 筌ㅼ뮆? ?????
+        int retry_wait_ms        // ?????揶쏄쑨爰?(ms)
     );
     
-    // LIMIT 二쇰Ц?쇰줈 留ㅻ룄
+    // LIMIT 雅뚯눖揆??곗쨮 筌띲끇猷?
     LimitOrderResult executeLimitSellOrder(
         const std::string& market,
         double exit_price,
@@ -121,7 +121,7 @@ private:
         int retry_wait_ms
     );
     
-    // ?쒖옣媛 二쇰Ц (?대갚??
+    // ??뽰삢揶쎛 雅뚯눖揆 (??媛??
     bool executeMarketBuyOrder(
         const std::string& market,
         double quantity,
@@ -134,7 +134,7 @@ private:
         double quantity
     );
     
-    // LIMIT 二쇰Ц 理쒖쟻 媛寃?怨꾩궛 (?쒖옣 ?곹솴 諛섏쁺)
+    // LIMIT 雅뚯눖揆 筌ㅼ뮇??揶쎛野??④쑴沅?(??뽰삢 ?怨뱀넺 獄쏆꼷??
     double calculateOptimalBuyPrice(
         const std::string& market,
         double base_price,
@@ -147,13 +147,13 @@ private:
         const nlohmann::json& orderbook
     );
     
-    // 二쇰Ц ?곹깭 寃利?諛?泥닿껐 ?뺤씤
+    // 雅뚯눖揆 ?怨밴묶 野꺜筌?獄?筌ｋ떯猿??類ㅼ뵥
     struct OrderFillInfo {
-        bool is_filled;           // ?꾩쟾??泥닿껐?섏뿀?붽?
-        bool is_partially_filled; // 遺遺?泥닿껐?섏뿀?붽?
-        double filled_volume;     // 泥닿껐???섎웾
-        double avg_price;         // ?됯퇏 泥닿껐媛
-        double fee;               // ?섏닔猷?
+        bool is_filled;           // ?袁⑹읈??筌ｋ떯猿??뤿??遺?
+        bool is_partially_filled; // ?봔??筌ｋ떯猿??뤿??遺?
+        double filled_volume;     // 筌ｋ떯猿????롮쎗
+        double avg_price;         // ???뇧 筌ｋ떯猿먨첎?
+        double fee;               // ??뤿땾??
     };
     
     OrderFillInfo verifyOrderFill(
@@ -175,7 +175,7 @@ private:
         double reference_price
     ) const;
     
-    // ===== ?ы띁 ?⑥닔 =====
+    // ===== ??????λ땾 =====
     
     double getCurrentPrice(const std::string& market);
     bool hasEnoughBalance(double required_krw);
@@ -189,10 +189,10 @@ private:
                config_.live_paper_fixed_initial_capital_krw > 0.0;
     }
     void logPerformance();
-    // [異붽?] 怨꾩쥖 ?곹깭瑜?議고쉶?섏뿬 RiskManager? ?숆린??
+    // [?곕떽?] ?④쑴伊??怨밴묶??鈺곌퀬???뤿연 RiskManager?? ??녿┛??
     void syncAccountState();
 
-    // ===== ?곹깭 ???蹂듦뎄 =====
+    // ===== ?怨밴묶 ????癰귣벀??=====
     void loadState();
     void saveState();
     void runStatePersistence();
@@ -205,24 +205,24 @@ private:
         const nlohmann::json& payload
     );
     
-    // ===== [NEW] ?숈쟻 ?꾪꽣 諛??ъ????뺣? 湲곕뒫 =====
+    // ===== [NEW] ??덉읅 ?袁り숲 獄???????類? 疫꿸퀡??=====
     
-    // ?쒖옣 蹂?숈꽦??湲곕컲?쇰줈 ?꾪꽣媛믪쓣 ?숈쟻 議곗젙 (0.45~0.55)
-    // ?믪? 蹂?숈꽦 ????? ?꾪꽣媛?(??留롮? ?좏샇 ?ъ갑)
-    // ??? 蹂?숈꽦 ???믪? ?꾪꽣媛?(?덉쭏 ?믪? ?좏샇留?
+    // ??뽰삢 癰궰??덇쉐??疫꿸퀡而??곗쨮 ?袁り숲揶쏅?????덉읅 鈺곌퀣??(0.45~0.55)
+    // ?誘? 癰궰??덇쉐 ????? ?袁り숲揶?(??筌띾‘? ?醫륁깈 ??媛?
+    // ??? 癰궰??덇쉐 ???誘? ?袁り숲揶?(??됱춳 ?誘? ?醫륁깈筌?
     
-    // Win Rate >= 60%, Profit Factor >= 1.5?????ъ????뺣?
-    // 湲곌?湲??깅뒫 湲곗? ?곸슜
+    // Win Rate >= 60%, Profit Factor >= 1.5??????????類?
+    // 疫꿸퀗?疫??源낅뮟 疫꿸퀣? ?怨몄뒠
     
-    // Historical P&L ?곗씠?곗뿉??理쒖쟻 ?꾪꽣媛??숈뒿 (ML)
-    // ?댁쟾 嫄곕옒 ?깃낵?먯꽌 理쒖쟻???꾪꽣 ?꾧퀎媛??먮룞 怨꾩궛
+    // Historical P&L ?怨쀬뵠?怨쀫퓠??筌ㅼ뮇???袁り숲揶???덈뮸 (ML)
+    // ??곸읈 椰꾧퀡???源껊궢?癒?퐣 筌ㅼ뮇????袁り숲 ?袁㏉롥첎??癒?짗 ?④쑴沅?
     
-    // Prometheus 硫뷀듃由??몄텧 (?ㅼ떆媛?紐⑤땲?곕쭅??
-    // Grafana ?곕룞???꾪븳 硫뷀듃由??곗씠???앹꽦
+    // Prometheus 筌롫??껆뵳??紐꾪뀱 (??쇰뻻揶?筌뤴뫀??怨뺤춦??
+    // Grafana ?怨뺣짗???袁る립 筌롫??껆뵳??怨쀬뵠????밴쉐
     std::string exportPrometheusMetrics() const;
     
-    // [NEW] Prometheus HTTP ?쒕쾭 (硫뷀듃由??몄텧)
-    // /metrics ?붾뱶?ъ씤?몃줈 Prometheus ?뺤떇 硫뷀듃由??쒓났
+    // [NEW] Prometheus HTTP ??뺤쒔 (筌롫??껆뵳??紐꾪뀱)
+    // /metrics ?遺얜굡????紐껋쨮 Prometheus ?類ㅻ뻼 筌롫??껆뵳???볥궗
     void runPrometheusHttpServer(int port = 8080);
     void recordLiveSignalReject(const std::string& reason, long long count = 1);
     void flushLiveSignalFunnelTaxonomyReport(
@@ -231,7 +231,7 @@ private:
     ) const;
     void captureLiveMtfDatasetSnapshotIfDue();
     
-    // ===== 硫ㅻ쾭 蹂??=====
+    // ===== 筌롢끇苡?癰궰??=====
     
     EngineConfig config_;
     
@@ -252,34 +252,34 @@ private:
     std::unique_ptr<core::IEventJournal> event_journal_;
     std::unique_ptr<core::ILearningStateStore> learning_state_store_;
     
-    // ?ㅼ틪 寃곌낵
+    // ??쇳떔 野껉퀗??
     std::vector<analytics::CoinMetrics> scanned_markets_;
     std::vector<strategy::Signal> pending_signals_;
     
-    // ?ㅻ젅???쒖뼱
+    // ??살쟿????뽯선
     std::atomic<bool> running_;
     std::unique_ptr<std::thread> worker_thread_;
     std::unique_ptr<std::thread> state_persist_thread_;
     std::atomic<bool> state_persist_running_{false};
     mutable std::mutex mutex_;
     
-    // [異붽?] ?ㅼ틪 諛??숆린????대컢
+    // [?곕떽?] ??쇳떔 獄???녿┛??????而?
     std::chrono::steady_clock::time_point last_scan_time_;
     std::chrono::steady_clock::time_point last_account_sync_time_;
     
-    // ===== [NEW] ?숈쟻 ?꾪꽣 諛??ъ????뺣? 硫ㅻ쾭 =====
+    // ===== [NEW] ??덉읅 ?袁り숲 獄???????類? 筌롢끇苡?=====
     
-    // ?꾩옱 ?숈쟻 ?꾪꽣媛?(0.45~0.55 踰붿쐞)
-    // 珥덇린媛? 0.5 (以묐┰)
+    // ?袁⑹삺 ??덉읅 ?袁り숲揶?(0.45~0.55 甕곕뗄??
+    // ?λ뜃由겼첎? 0.5 (餓λ쵎??
     
-    // ?ъ????뺣? 諛곗닔 (湲곕낯 1.0, 理쒕? 2.5)
-    // Win Rate ??60%, PF ??1.5?????먮룞 利앷?
+    // ??????類? 獄쏄퀣??(疫꿸퀡??1.0, 筌ㅼ뮆? 2.5)
+    // Win Rate ??60%, PF ??1.5?????癒?짗 筌앹빓?
     
-    // ML 紐⑤뱢???꾪븳 理쒖쟻 ?꾪꽣媛??숈뒿 ?곗씠??
-    // key: ?꾪꽣媛? value: ?대떦 ?꾪꽣媛믪뿉?쒖쓽 ?밸쪧
+    // ML 筌뤴뫀諭???袁る립 筌ㅼ뮇???袁り숲揶???덈뮸 ?怨쀬뵠??
+    // key: ?袁り숲揶? value: ?????袁り숲揶쏅?肉??뽰벥 ?諛몄ぇ
     double market_hostility_ewma_ = 0.0;
     
-    // Prometheus 硫뷀듃由??꾩쟻??(硫붾え由??⑥쑉)
+    // Prometheus 筌롫??껆뵳??袁⑹읅??(筌롫뗀?덄뵳???μ몛)
     struct PrometheusMetrics {
         long long total_buy_orders = 0;
         long long total_sell_orders = 0;
@@ -295,7 +295,6 @@ private:
         long long skipped_due_to_active_order = 0;
         long long no_candle_data = 0;
         long long no_signal_generated = 0;
-        long long filtered_out_by_manager = 0;
         long long no_best_signal = 0;
         long long reject_regime_entry_disabled_count = 0;
         std::map<std::string, long long> reject_regime_entry_disabled_by_regime;
@@ -304,12 +303,10 @@ private:
         long long shadow_count_total = 0;
         std::map<std::string, long long> shadow_count_by_regime;
         std::map<std::string, long long> shadow_count_by_market;
-        long long shadow_would_pass_frontier_count = 0;
-        long long shadow_would_pass_manager_count = 0;
         long long shadow_would_pass_execution_guard_count = 0;
         long long shadow_edge_neg_count = 0;
         long long shadow_edge_pos_count = 0;
-        std::string liq_vol_gate_mode = "legacy_fixed";
+        std::string liq_vol_gate_mode = "static";
         double liq_vol_gate_quantile_q = 0.0;
         int liq_vol_gate_window_minutes = 0;
         int liq_vol_gate_min_samples_required = 0;
@@ -329,7 +326,7 @@ private:
             bool low_conf = false;
         };
         std::vector<LiqVolGateSample> liq_vol_gate_samples;
-        std::string structure_gate_mode = "legacy_fixed";
+        std::string structure_gate_mode = "static";
         double structure_gate_relax_delta = 0.0;
         long long structure_gate_observation_count = 0;
         long long structure_gate_fail_count_total = 0;
@@ -348,7 +345,7 @@ private:
             bool relax_applied = false;
         };
         std::vector<StructureGateSample> structure_gate_samples;
-        std::string bear_rebound_guard_mode = "legacy_fixed";
+        std::string bear_rebound_guard_mode = "static";
         double bear_rebound_guard_quantile_q = 0.0;
         int bear_rebound_guard_window_minutes = 0;
         int bear_rebound_guard_min_samples_required = 0;
@@ -417,20 +414,18 @@ private:
         long long gate_vnext_s2_sized_count = 0;
         long long gate_vnext_s3_exec_gate_pass = 0;
         long long gate_vnext_drop_ev_negative_count = 0;
-        std::string top20_sort_mode = "vnext_margin_rank";
+        std::string quality_sort_mode = "vnext_margin_rank";
         int quality_topk_effective = 5;
         long long candidates_before_topk = 0;
         long long candidates_after_topk = 0;
         long long selected_after_topk_count = 0;
-        long long top20_candidates = 0;
-        long long top20_margin_valid_count = 0;
-        double top20_margin_mean = 0.0;
-        double top20_margin_std = 0.0;
-        double top20_margin_p10 = 0.0;
-        double top20_margin_p50 = 0.0;
-        double top20_margin_p90 = 0.0;
-        double top20_composite_mean = 0.0;
-        double top20_composite_std = 0.0;
+        long long quality_selected_candidates = 0;
+        long long quality_margin_valid_count = 0;
+        double quality_margin_mean = 0.0;
+        double quality_margin_std = 0.0;
+        double quality_margin_p10 = 0.0;
+        double quality_margin_p50 = 0.0;
+        double quality_margin_p90 = 0.0;
         std::map<std::string, long long> selection_hint_adjustment_counts;
         std::map<std::string, long long> rejection_reason_counts;
     } live_signal_funnel_;
@@ -446,10 +441,10 @@ private:
     std::chrono::steady_clock::time_point last_live_mtf_capture_time_{};
     std::map<std::string, long long> live_mtf_capture_last_timestamp_by_file_;
     
-    // [NEW] Prometheus HTTP ?쒕쾭 愿??
-    int prometheus_server_port_ = 8080;  // HTTP ?쒕쾭 ?ы듃 (湲곕낯媛? 8080)
-    std::unique_ptr<std::thread> prometheus_http_thread_;  // HTTP ?쒕쾭 ?ㅻ젅??
-    std::atomic<bool> prometheus_server_running_ = false;  // HTTP ?쒕쾭 ?ㅽ뻾 ?곹깭
+    // [NEW] Prometheus HTTP ??뺤쒔 ?온??
+    int prometheus_server_port_ = 8080;  // HTTP ??뺤쒔 ????(疫꿸퀡??첎? 8080)
+    std::unique_ptr<std::thread> prometheus_http_thread_;  // HTTP ??뺤쒔 ??살쟿??
+    std::atomic<bool> prometheus_server_running_ = false;  // HTTP ??뺤쒔 ??쎈뻬 ?怨밴묶
 
     std::map<std::string, std::string> recovered_strategy_map_;
     std::map<std::string, double> pending_buy_reservation_by_order_id_;
@@ -473,7 +468,7 @@ private:
         double probabilistic_h5_calibrated = 0.5;
         double probabilistic_h5_threshold = 0.6;
         double probabilistic_h5_margin = 0.0;
-        // [Phase 4] ?먯젅/?듭젅/?몃젅?쇰쭅 ?곸냽??
+        // [Phase 4] ?癒?쟿/???쟿/?紐껋쟿??곗춦 ?怨몃꺗??
         double stop_loss = 0.0;
         double take_profit_1 = 0.0;
         double take_profit_2 = 0.0;
@@ -501,7 +496,7 @@ private:
     };
     std::map<std::string, PendingSignalMetadata> pending_signal_metadata_by_market_;
     
-    // ?듦퀎
+    // ????
     long long start_time_;
     int total_scans_;
     int total_signals_;

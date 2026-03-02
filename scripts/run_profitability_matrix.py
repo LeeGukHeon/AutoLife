@@ -1009,9 +1009,7 @@ def main() -> int:
             "execution": True,
         },
     ]
-    profile_aliases = {
-        "legacy_default": "baseline_default",
-    }
+    profile_aliases: Dict[str, str] = {}
     requested_profile_ids = {
         profile_aliases.get(str(x).strip(), str(x).strip())
         for x in args.profile_ids

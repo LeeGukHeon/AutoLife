@@ -64,7 +64,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         "--h5-target-column",
         dest="h5_target_column",
         default=TARGET_TP1_PRIMARY,
-        help="Primary binary target column (falls back to legacy alias if missing).",
+        help="Primary binary target column (falls back to deprecated alias if missing).",
     )
     p.add_argument("--edge-column", default="label_edge_bps_h5")
     p.add_argument("--drop-neutral-target", action="store_true", default=True)
@@ -281,7 +281,7 @@ def collect_fold_data(
     rows_total = 0
     rows_used = 0
     rows_skipped = 0
-    target_source_counts = {"primary": 0, "fallback_legacy": 0, "missing": 0}
+    target_source_counts = {"primary": 0, "fallback_static": 0, "missing": 0}
 
     for ds in datasets:
         market = str(ds.get("market", "")).strip()
@@ -302,7 +302,7 @@ def collect_fold_data(
                 target_source = "primary"
                 if (y_raw is None or str(y_raw).strip() == "") and str(h5_target_column) != TARGET_TP1_DEPRECATED_ALIAS:
                     y_raw = row.get(TARGET_TP1_DEPRECATED_ALIAS)
-                    target_source = "fallback_legacy"
+                    target_source = "fallback_static"
                 y = safe_binary_target(y_raw, drop_neutral=bool(drop_neutral_target))
                 edge = safe_float(row.get(str(edge_column)))
                 if edge is None and str(edge_column) != "label_edge_bps_h5":

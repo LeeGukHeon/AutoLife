@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "strategy/IStrategy.h"
 #include "network/UpbitHttpClient.h"
@@ -54,7 +54,7 @@ public:
         int liq_vol_gate_low_conf_triggered_count = 0;
         double liq_vol_gate_observed_sum = 0.0;
         double liq_vol_gate_threshold_sum = 0.0;
-        std::string liq_vol_gate_mode = "legacy_fixed";
+        std::string liq_vol_gate_mode = "static";
         double liq_vol_gate_quantile_q = 0.0;
         int liq_vol_gate_window_minutes = 0;
         int liq_vol_gate_min_samples_required = 0;
@@ -64,7 +64,7 @@ public:
         int structure_gate_fail_count_total = 0;
         std::map<std::string, int> structure_gate_fail_count_by_regime;
         std::map<std::string, int> structure_gate_pass_count_by_regime;
-        std::string structure_gate_mode = "legacy_fixed";
+        std::string structure_gate_mode = "static";
         double structure_gate_relax_delta = 0.0;
         double structure_gate_observed_score_sum = 0.0;
         double structure_gate_threshold_before_sum = 0.0;
@@ -76,7 +76,7 @@ public:
         int bear_rebound_low_conf_triggered_count = 0;
         std::map<std::string, int> bear_rebound_fail_count_by_regime;
         std::map<std::string, int> bear_rebound_pass_count_by_regime;
-        std::string bear_rebound_mode = "legacy_fixed";
+        std::string bear_rebound_mode = "static";
         double bear_rebound_quantile_q = 0.0;
         int bear_rebound_window_minutes = 0;
         int bear_rebound_min_samples_required = 0;

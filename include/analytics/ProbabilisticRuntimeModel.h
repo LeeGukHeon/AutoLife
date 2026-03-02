@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <cstddef>
 #include <string>
@@ -47,7 +47,6 @@ struct ProbabilisticInference {
     bool lgbm_ev_affine_applied = false;
     double lgbm_ev_affine_scale = 1.0;
     double lgbm_ev_affine_shift = 0.0;
-    bool phase3_frontier_enabled = false;
     bool phase3_ev_calibration_enabled = false;
     bool phase3_cost_tail_enabled = false;
     bool phase3_adaptive_ev_blend_enabled = false;
@@ -73,20 +72,6 @@ public:
         bool guard_violation = false;
         bool guard_forced_off = false;
         std::string guard_action = "none";
-    };
-
-    struct Phase3FrontierPolicy {
-        bool enabled = false;
-        double k_margin = 0.0;
-        double k_uncertainty = 0.0;
-        double k_cost_tail = 0.0;
-        double min_required_ev = -0.0002;
-        double max_required_ev = 0.0050;
-        double margin_floor = -1.0;
-        double ev_confidence_floor = 0.0;
-        double ev_confidence_penalty = 0.0;
-        double cost_tail_penalty = 0.0;
-        double cost_tail_reject_threshold_pct = 1.0;
     };
 
     struct Phase3EvCalibrationPolicy {
@@ -286,140 +271,13 @@ public:
         double primary_filter_nudge_blend_scale = 0.10;
     };
 
-    struct Phase3ManagerFilterPolicy {
-        bool enabled = false;
-        double base_min_strength_default = 0.40;
-        double base_min_strength_ranging = 0.43;
-        double base_min_strength_high_volatility = 0.48;
-        double base_min_strength_trending_down = 0.52;
-        double base_min_expected_value = 0.0;
-        double margin_min_ranging = 0.0;
-        std::string margin_min_ranging_mode = "enforce";
-        double scan_prefilter_margin_add_hostile = 0.015;
-        double scan_prefilter_margin_add_trending_up = -0.005;
-        double scan_prefilter_margin_clamp_min = -0.30;
-        double scan_prefilter_margin_clamp_max = 0.15;
-        double scan_prefilter_margin_with_regime_clamp_min = -0.30;
-        double scan_prefilter_margin_with_regime_clamp_max = 0.30;
-        double history_gate_min_win_rate_base = 0.50;
-        double history_gate_min_profit_factor_base = 1.10;
-        int history_gate_min_sample_trades_base = 16;
-        double history_gate_win_rate_add_trending_down = 0.03;
-        double history_gate_profit_factor_add_trending_down = 0.05;
-        double history_gate_win_rate_add_high_volatility = 0.02;
-        double history_gate_profit_factor_add_high_volatility = 0.04;
-
-        double hostile_strength_add_scale = 0.18;
-        double hostile_strength_add_cap = 0.08;
-        double hostile_ev_add_scale = 0.0008;
-        double hostile_ev_add_cap = 0.00035;
-        double hostile_pause_min_strength = 0.96;
-        double hostile_pause_min_expected_value = 0.0040;
-
-        double min_strength_floor = 0.35;
-        double min_strength_cap = 0.98;
-        double min_expected_value_floor = -0.0002;
-        double min_expected_value_cap = 0.0050;
-
-        double no_snapshot_min_strength_hostile = 0.36;
-        double no_snapshot_min_strength_calm = 0.28;
-        double no_snapshot_min_expected_value_hostile = 0.00002;
-        double no_snapshot_min_expected_value_calm = -0.00030;
-
-        double confidence_prob_shift = 0.50;
-        double confidence_prob_scale = 0.20;
-        double confidence_margin_shift = 0.01;
-        double confidence_margin_scale = 0.08;
-        double confidence_prob_weight = 0.65;
-        double confidence_margin_weight = 0.35;
-
-        double target_strength_hostile_base = 0.34;
-        double target_strength_hostile_confidence_scale = 0.08;
-        double target_strength_calm_base = 0.24;
-        double target_strength_calm_confidence_scale = 0.14;
-        double target_expected_value_hostile_base = 0.00002;
-        double target_expected_value_hostile_confidence_scale = 0.00008;
-        double target_expected_value_calm_base = -0.00035;
-        double target_expected_value_calm_confidence_scale = 0.00035;
-
-        double negative_margin_strength_add_hostile = 0.03;
-        double negative_margin_strength_add_calm = 0.02;
-        double negative_margin_expected_value_add_hostile = 0.00005;
-        double negative_margin_expected_value_add_calm = 0.00010;
-
-        double target_strength_hostile_min = 0.26;
-        double target_strength_hostile_max = 0.38;
-        double target_strength_calm_min = 0.12;
-        double target_strength_calm_max = 0.24;
-        double target_expected_value_hostile_min = -0.00010;
-        double target_expected_value_hostile_max = 0.00008;
-        double target_expected_value_calm_min = -0.00080;
-        double target_expected_value_calm_max = -0.00020;
-
-        double required_strength_cap = 0.95;
-        double core_signal_ownership_strength_relief = 0.02;
-        double core_signal_ownership_expected_value_floor = -0.00005;
-        double policy_hold_strength_add = 0.05;
-        double policy_hold_expected_value_add_core = 0.00010;
-        double policy_hold_expected_value_add_other = 0.00018;
-        double off_trend_strength_add = 0.06;
-        double off_trend_expected_value_add_core = 0.00009;
-        double off_trend_expected_value_add_other = 0.00015;
-        double hostile_regime_strength_add = 0.03;
-        double hostile_regime_expected_value_add_core = 0.00005;
-        double hostile_regime_expected_value_add_other = 0.00008;
-
-        double probabilistic_confidence_strength_relief_scale = 0.03;
-        double probabilistic_confidence_expected_value_relief_scale = 0.00010;
-        double probabilistic_confidence_prob_shift = 0.50;
-        double probabilistic_confidence_prob_scale = 0.25;
-        double probabilistic_confidence_margin_shift = 0.02;
-        double probabilistic_confidence_margin_scale = 0.12;
-        double probabilistic_confidence_prob_weight = 0.40;
-        double probabilistic_confidence_margin_weight = 0.60;
-        double probabilistic_high_confidence_threshold = 0.65;
-
-        int history_min_sample_hostile = 18;
-        int history_min_sample_calm = 36;
-        double history_severe_win_rate_shortfall = 0.08;
-        double history_severe_profit_factor_shortfall = 0.30;
-        int history_relief_max_trade_count = 52;
-        double history_relief_min_h5_calibrated = 0.48;
-        double history_relief_min_h5_margin = -0.012;
-        double history_guard_scale_base = 0.45;
-        double history_guard_scale_confidence_scale = 0.35;
-        double history_guard_scale_min_hostile = 0.18;
-        double history_guard_scale_min_calm = 0.10;
-        double history_guard_scale_max_hostile = 0.60;
-        double history_guard_scale_max_calm = 0.45;
-        double history_strength_bump_prob = 0.012;
-        double history_strength_bump_non_prob = 0.05;
-        double history_edge_bump_core_prob = 0.00002;
-        double history_edge_bump_core_non_prob = 0.00005;
-        double history_edge_bump_other_prob = 0.00003;
-        double history_edge_bump_other_non_prob = 0.00010;
-
-        double rr_guard_floor_hostile = 1.12;
-        double rr_guard_floor_calm = 1.08;
-        double rr_guard_skip_min_rr = 0.95;
-        double rr_guard_scale_base = 0.90;
-        double rr_guard_scale_confidence_scale = 0.60;
-        double rr_guard_scale_min = 0.20;
-        double rr_guard_scale_max = 0.90;
-        double rr_guard_strength_add = 0.03;
-        double rr_guard_expected_value_add_core = 0.00003;
-        double rr_guard_expected_value_add_other = 0.00006;
-        double frontier_uncertainty_prob_weight = 0.60;
-        double frontier_uncertainty_ev_weight = 0.40;
-    };
-
     struct Phase3DiagnosticsPolicy {
         bool enabled = false;
     };
 
     struct Phase3LiquidityVolumeGatePolicy {
         bool enabled = false;
-        std::string mode = "legacy_fixed";
+        std::string mode = "static";
         int window_minutes = 60;
         double quantile_q = 0.20;
         int min_samples_required = 30;
@@ -427,12 +285,12 @@ public:
     };
     struct Phase3FoundationStructureGatePolicy {
         bool enabled = false;
-        std::string mode = "legacy_fixed";
+        std::string mode = "static";
         double relax_delta = 0.0;
     };
     struct Phase3BearReboundGuardPolicy {
         bool enabled = false;
-        std::string mode = "legacy_fixed";
+        std::string mode = "static";
         int window_minutes = 60;
         double quantile_q = 0.20;
         int min_samples_required = 30;
@@ -450,7 +308,6 @@ public:
     };
 
     struct Phase3Policy {
-        bool phase3_frontier_enabled = false;
         bool phase3_ev_calibration_enabled = false;
         bool phase3_cost_tail_enabled = false;
         bool phase3_adaptive_ev_blend_enabled = false;
@@ -458,7 +315,6 @@ public:
         bool regime_entry_disable_enabled = false;
         bool disable_ranging_entry = false;
         std::unordered_map<std::string, bool> regime_entry_disable;
-        Phase3FrontierPolicy frontier;
         Phase3EvCalibrationPolicy ev_calibration;
         Phase3CostPolicy cost_model;
         Phase3AdaptiveEvBlendPolicy adaptive_ev_blend;
@@ -466,7 +322,6 @@ public:
         Phase3PrimaryMinimumPolicy primary_minimums;
         Phase3PrimaryPriorityPolicy primary_priority;
         Phase3PrimaryDecisionProfilePolicy primary_decision_profile;
-        Phase3ManagerFilterPolicy manager_filter;
         Phase3DiagnosticsPolicy diagnostics_v2;
         Phase3LiquidityVolumeGatePolicy liq_vol_gate;
         Phase3FoundationStructureGatePolicy foundation_structure_gate;

@@ -401,8 +401,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     missing_entry = 0
     missing_t5 = 0
     with_t5 = 0
-    frontier_true = 0
-    frontier_total = 0
+    quality_selection_true = 0
+    quality_selection_total = 0
     exec_true = 0
     exec_total = 0
     eval_rows: List[Dict[str, Any]] = []
@@ -423,11 +423,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                     continue
                 total_rows += 1
 
-                f = bool_or_none(payload.get("would_pass_frontier"))
+                f = bool_or_none(payload.get("would_pass_quality_selection"))
                 if f is not None:
-                    frontier_total += 1
+                    quality_selection_total += 1
                     if f:
-                        frontier_true += 1
+                        quality_selection_true += 1
                 e = bool_or_none(payload.get("would_pass_execution_guard"))
                 if e is not None:
                     exec_total += 1
@@ -488,7 +488,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                         "signal_ev": round(to_float(payload.get("signal_expected_value", 0.0)), 10),
                         "signal_strength": round(to_float(payload.get("signal_strength", 0.0)), 8),
                         "disabled_reason": str(payload.get("disabled_reason", "")).strip(),
-                        "would_pass_frontier": f,
+                        "would_pass_quality_selection": f,
                         "would_pass_manager": bool_or_none(payload.get("would_pass_manager")),
                         "would_pass_execution_guard": e,
                         "note": str(payload.get("note", "")).strip(),
@@ -518,7 +518,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         a = agg(rows)
         f_true = f_tot = e_true = e_tot = 0
         for rr in rows:
-            ff = bool_or_none(rr.get("would_pass_frontier"))
+            ff = bool_or_none(rr.get("would_pass_quality_selection"))
             if ff is not None:
                 f_tot += 1
                 if ff:
@@ -532,7 +532,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             {
                 "market": mk,
                 **a,
-                "would_pass_frontier_rate": round(float(f_true) / float(max(1, f_tot)), 6) if f_tot > 0 else None,
+                "would_pass_quality_selection_rate": round(float(f_true) / float(max(1, f_tot)), 6) if f_tot > 0 else None,
                 "would_pass_execution_guard_rate": round(float(e_true) / float(max(1, e_tot)), 6) if e_tot > 0 else None,
             }
         )
@@ -587,14 +587,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         "by_market_top": market_top,
         "by_vol_bucket_pct": by_vol_payload,
         "would_pass_summary": {
-            "shadow_would_pass_frontier_count": int(frontier_true),
-            "shadow_would_pass_frontier_rate": round(float(frontier_true) / float(max(1, frontier_total)), 6) if frontier_total > 0 else None,
+            "shadow_would_pass_quality_selection_count": int(quality_selection_true),
+            "shadow_would_pass_quality_selection_rate": round(float(quality_selection_true) / float(max(1, quality_selection_total)), 6) if quality_selection_total > 0 else None,
             "shadow_would_pass_execution_guard_count": int(exec_true),
             "shadow_would_pass_execution_guard_rate": round(float(exec_true) / float(max(1, exec_total)), 6) if exec_total > 0 else None,
             "would_pass_rate_by_market": [
                 {
                     "market": r.get("market"),
-                    "would_pass_frontier_rate": r.get("would_pass_frontier_rate"),
+                    "would_pass_quality_selection_rate": r.get("would_pass_quality_selection_rate"),
                     "would_pass_execution_guard_rate": r.get("would_pass_execution_guard_rate"),
                     "count_with_t5": r.get("count_with_t5"),
                 }
@@ -635,7 +635,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "shadow_ts", "market", "regime", "vol_bucket_pct", "source", "shadow_file",
         "entry_ts", "exit_ts", "entry_close", "exit_close", "return_bps", "shadow_edge_bps",
         "p_h5", "selection_threshold_h5", "margin", "edge_cal_bps", "edge_after_cost_bps",
-        "signal_ev", "signal_strength", "disabled_reason", "would_pass_frontier",
+        "signal_ev", "signal_strength", "disabled_reason", "would_pass_quality_selection",
         "would_pass_manager", "would_pass_execution_guard", "note",
     ]
     with rows_csv.open("w", encoding="utf-8", newline="") as fp:

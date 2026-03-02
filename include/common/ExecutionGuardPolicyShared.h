@@ -18,12 +18,6 @@ struct RealtimeEntryVetoThresholds {
     double min_orderbook_imbalance = -0.35;
 };
 
-struct LiveScanPrefilterThresholds {
-    double min_volume_krw = 5000000000.0;
-    double max_spread_pct = 0.0030;
-    double min_ask_notional_krw = 25000.0;
-};
-
 struct DynamicSlippageThresholds {
     double max_slippage_pct = 0.0030;
     double guard_slippage_pct = 0.0045;
@@ -38,12 +32,6 @@ double computeMarketHostilityScore(
     const engine::EngineConfig& cfg,
     const analytics::CoinMetrics& metrics,
     analytics::MarketRegime regime
-);
-
-LiveScanPrefilterThresholds computeLiveScanPrefilterThresholds(
-    const engine::EngineConfig& cfg,
-    const std::vector<analytics::CoinMetrics>& markets,
-    double hostility_ewma
 );
 
 RealtimeEntryVetoThresholds computeRealtimeEntryVetoThresholds(

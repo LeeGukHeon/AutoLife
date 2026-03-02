@@ -1,4 +1,4 @@
-#include "strategy/FoundationAdaptiveStrategy.h"
+﻿#include "strategy/FoundationAdaptiveStrategy.h"
 
 #include "analytics/TechnicalIndicators.h"
 #include "common/Config.h"
@@ -411,7 +411,7 @@ struct EntryGateDecision {
     bool ranging_low_flow_path = false;
     bool downtrend_low_flow_rebound_path = false;
     bool liq_vol_gate_telemetry_valid = false;
-    std::string liq_vol_gate_mode = "legacy_fixed";
+    std::string liq_vol_gate_mode = "static";
     double liq_vol_gate_observed = 0.0;
     double liq_vol_gate_threshold_dynamic = 0.0;
     int liq_vol_gate_history_count = 0;
@@ -422,7 +422,7 @@ struct EntryGateDecision {
     int liq_vol_gate_min_samples_required = 0;
     std::string liq_vol_gate_low_conf_action = "hold";
     bool structure_gate_telemetry_valid = false;
-    std::string structure_gate_mode = "legacy_fixed";
+    std::string structure_gate_mode = "static";
     double structure_gate_observed_score = 0.0;
     double structure_gate_threshold_before = 0.0;
     double structure_gate_threshold_after = 0.0;
@@ -430,7 +430,7 @@ struct EntryGateDecision {
     bool structure_gate_relax_applied = false;
     double structure_gate_relax_delta = 0.0;
     bool bear_rebound_guard_telemetry_valid = false;
-    std::string bear_rebound_guard_mode = "legacy_fixed";
+    std::string bear_rebound_guard_mode = "static";
     double bear_rebound_observed = 0.0;
     double bear_rebound_threshold_dynamic = 0.0;
     int bear_rebound_history_count = 0;
@@ -467,7 +467,7 @@ EntryGateDecision evaluateLiqVolGate(
 ) {
     EntryGateDecision out;
     out.liq_vol_gate_telemetry_valid = true;
-    out.liq_vol_gate_mode = "legacy_fixed";
+    out.liq_vol_gate_mode = "static";
     out.liq_vol_gate_threshold_dynamic = 1.0;
     out.liq_vol_gate_pass = false;
     out.liq_vol_gate_low_conf_triggered = false;
@@ -490,14 +490,14 @@ EntryGateDecision evaluateLiqVolGate(
         1.0e9
     );
 
-    const bool legacy_pass = out.liq_vol_gate_observed >= 1.0;
+    const bool static_pass = out.liq_vol_gate_observed >= 1.0;
     const auto& policy = metrics.liq_vol_gate_policy;
-    const std::string mode = policy.enabled ? policy.mode : "legacy_fixed";
+    const std::string mode = policy.enabled ? policy.mode : "static";
     const bool dynamic_mode = policy.enabled && mode == "quantile_dynamic";
     if (!dynamic_mode) {
-        out.liq_vol_gate_mode = "legacy_fixed";
-        out.liq_vol_gate_pass = legacy_pass;
-        out.pass = legacy_pass;
+        out.liq_vol_gate_mode = "static";
+        out.liq_vol_gate_pass = static_pass;
+        out.pass = static_pass;
         return out;
     }
 
@@ -511,7 +511,7 @@ EntryGateDecision evaluateLiqVolGate(
         low_conf_action.begin(),
         [](unsigned char c) { return static_cast<char>(std::tolower(c)); }
     );
-    if (low_conf_action != "fallback_legacy") {
+    if (low_conf_action != "fallback_static") {
         low_conf_action = "hold";
     }
 
@@ -537,7 +537,7 @@ EntryGateDecision evaluateLiqVolGate(
         out.liq_vol_gate_low_conf_triggered = true;
         out.liq_vol_gate_threshold_dynamic = 1.0;
         out.liq_vol_gate_pass =
-            (low_conf_action == "fallback_legacy") ? legacy_pass : false;
+            (low_conf_action == "fallback_static") ? static_pass : false;
         out.pass = out.liq_vol_gate_pass;
         return out;
     }
@@ -557,12 +557,12 @@ EntryGateDecision evaluateLiqVolGate(
 
 EntryGateDecision evaluateBearReboundGuard(
     const analytics::CoinMetrics& metrics,
-    double legacy_threshold,
+    double static_threshold,
     std::deque<std::pair<long long, double>>& history
 ) {
     EntryGateDecision out;
     out.bear_rebound_guard_telemetry_valid = true;
-    out.bear_rebound_guard_mode = "legacy_fixed";
+    out.bear_rebound_guard_mode = "static";
     out.bear_rebound_threshold_dynamic = 1.0;
     out.bear_rebound_pass = false;
     out.bear_rebound_low_conf_triggered = false;
@@ -577,14 +577,14 @@ EntryGateDecision evaluateBearReboundGuard(
         (sell > 1e-9) ? std::clamp(buy / sell, 0.0, 1.0e9) : std::clamp(buy, 0.0, 1.0e9);
 
     const auto& policy = metrics.bear_rebound_guard_policy;
-    const double static_threshold = std::max(0.0, legacy_threshold);
-    const bool legacy_pass = out.bear_rebound_observed >= static_threshold;
-    const std::string mode = policy.enabled ? policy.mode : "legacy_fixed";
+    const double static_threshold_clamped = std::max(0.0, static_threshold);
+    const bool static_pass = out.bear_rebound_observed >= static_threshold_clamped;
+    const std::string mode = policy.enabled ? policy.mode : "static";
     const bool dynamic_mode = policy.enabled && mode == "quantile_dynamic";
     if (!dynamic_mode) {
-        out.bear_rebound_guard_mode = "legacy_fixed";
-        out.bear_rebound_threshold_dynamic = static_threshold;
-        out.bear_rebound_pass = legacy_pass;
+        out.bear_rebound_guard_mode = "static";
+        out.bear_rebound_threshold_dynamic = static_threshold_clamped;
+        out.bear_rebound_pass = static_pass;
         out.pass = out.bear_rebound_pass;
         return out;
     }
@@ -599,7 +599,7 @@ EntryGateDecision evaluateBearReboundGuard(
         low_conf_action.begin(),
         [](unsigned char c) { return static_cast<char>(std::tolower(c)); }
     );
-    if (low_conf_action != "fallback_legacy") {
+    if (low_conf_action != "fallback_static") {
         low_conf_action = "hold";
     }
     out.bear_rebound_guard_mode = "quantile_dynamic";
@@ -622,9 +622,9 @@ EntryGateDecision evaluateBearReboundGuard(
 
     if (out.bear_rebound_history_count < min_samples_required) {
         out.bear_rebound_low_conf_triggered = true;
-        out.bear_rebound_threshold_dynamic = static_threshold;
+        out.bear_rebound_threshold_dynamic = static_threshold_clamped;
         out.bear_rebound_pass =
-            (low_conf_action == "fallback_legacy") ? legacy_pass : false;
+            (low_conf_action == "fallback_static") ? static_pass : false;
         out.pass = out.bear_rebound_pass;
         return out;
     }
@@ -666,7 +666,7 @@ EntryGateDecision evaluateEntryGate(
     const double structure_relax_delta =
         structure_relax_enabled ? std::clamp(structure_policy.relax_delta, 0.0, 1.0) : 0.0;
     decision.structure_gate_telemetry_valid = true;
-    decision.structure_gate_mode = structure_relax_enabled ? "trend_only_relax" : "legacy_fixed";
+    decision.structure_gate_mode = structure_relax_enabled ? "trend_only_relax" : "static";
     decision.structure_gate_observed_score = metrics.order_book_imbalance;
     decision.structure_gate_relax_applied = structure_relax_enabled;
     decision.structure_gate_relax_delta = structure_relax_delta;

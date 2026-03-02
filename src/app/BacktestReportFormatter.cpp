@@ -45,7 +45,6 @@ using StrategySummary = backtest::BacktestEngine::Result::StrategySummary;
 void printEntryFunnelSummary(const EntryFunnel& f, std::ostream& out) {
     out << "Entry funnel: rounds=" << f.entry_rounds
         << ", no_signal=" << f.no_signal_generated
-        << ", manager_drop=" << f.filtered_out_by_manager
         << ", policy_drop=" << f.filtered_out_by_policy
         << ", ev_negative_drop=" << f.reject_expected_edge_negative_count
         << ", no_best=" << f.no_best_signal

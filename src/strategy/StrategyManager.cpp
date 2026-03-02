@@ -1,4 +1,4 @@
-#include "strategy/StrategyManager.h"
+﻿#include "strategy/StrategyManager.h"
 #include "common/Logger.h"
 #include "common/Config.h"
 #include "common/RuntimeDiagnosticsShared.h"
@@ -126,7 +126,7 @@ std::vector<Signal> StrategyManager::collectSignals(
         diagnostics->liq_vol_gate_low_conf_triggered_count = 0;
         diagnostics->liq_vol_gate_observed_sum = 0.0;
         diagnostics->liq_vol_gate_threshold_sum = 0.0;
-        diagnostics->liq_vol_gate_mode = "legacy_fixed";
+        diagnostics->liq_vol_gate_mode = "static";
         diagnostics->liq_vol_gate_quantile_q = 0.0;
         diagnostics->liq_vol_gate_window_minutes = 0;
         diagnostics->liq_vol_gate_min_samples_required = 0;
@@ -140,7 +140,7 @@ std::vector<Signal> StrategyManager::collectSignals(
             metrics.foundation_structure_gate_policy.enabled &&
                     metrics.foundation_structure_gate_policy.mode == "trend_only_relax"
                 ? "trend_only_relax"
-                : "legacy_fixed";
+                : "static";
         diagnostics->structure_gate_relax_delta =
             metrics.foundation_structure_gate_policy.enabled &&
                     metrics.foundation_structure_gate_policy.mode == "trend_only_relax"
@@ -160,7 +160,7 @@ std::vector<Signal> StrategyManager::collectSignals(
             metrics.bear_rebound_guard_policy.enabled &&
                     metrics.bear_rebound_guard_policy.mode == "quantile_dynamic"
                 ? "quantile_dynamic"
-                : "legacy_fixed";
+                : "static";
         diagnostics->bear_rebound_quantile_q =
             metrics.bear_rebound_guard_policy.enabled &&
                     metrics.bear_rebound_guard_policy.mode == "quantile_dynamic"

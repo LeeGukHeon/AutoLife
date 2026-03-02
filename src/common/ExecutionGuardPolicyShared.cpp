@@ -17,18 +17,6 @@ std::string toLowerCopy(const std::string& value) {
     return out;
 }
 
-double computeQuantile(std::vector<double> values, double quantile) {
-    if (values.empty()) {
-        return 0.0;
-    }
-    quantile = std::clamp(quantile, 0.0, 1.0);
-    const size_t idx = static_cast<size_t>(
-        std::round(quantile * static_cast<double>(values.size() - 1))
-    );
-    std::nth_element(values.begin(), values.begin() + idx, values.end());
-    return values[idx];
-}
-
 } // namespace
 
 double computeHostilityTightenPressure(
@@ -98,108 +86,6 @@ double computeMarketHostilityScore(
     }
 
     return std::clamp(hostility, 0.0, 1.0);
-}
-
-LiveScanPrefilterThresholds computeLiveScanPrefilterThresholds(
-    const engine::EngineConfig& cfg,
-    const std::vector<analytics::CoinMetrics>& markets,
-    double hostility_ewma
-) {
-    LiveScanPrefilterThresholds thresholds;
-    const double base_volume = std::max(1.0, static_cast<double>(cfg.min_volume_krw));
-    const double base_spread_clamp_min = std::max(
-        0.0,
-        cfg.execution_guard_live_scan_base_spread_clamp_min
-    );
-    const double base_spread_clamp_max = std::max(
-        base_spread_clamp_min,
-        cfg.execution_guard_live_scan_base_spread_clamp_max
-    );
-    const double base_spread = std::clamp(
-        cfg.realtime_entry_veto_max_spread_pct *
-            std::max(0.0, cfg.execution_guard_live_scan_base_spread_multiplier),
-        base_spread_clamp_min,
-        base_spread_clamp_max
-    );
-    const double tighten_pressure = computeHostilityTightenPressure(cfg, hostility_ewma);
-
-    std::vector<double> volumes;
-    volumes.reserve(markets.size());
-    for (const auto& m : markets) {
-        if (m.volume_24h > 0.0 && std::isfinite(m.volume_24h)) {
-            volumes.push_back(m.volume_24h);
-        }
-    }
-
-    const double base_floor = std::max(
-        std::max(0.0, cfg.execution_guard_live_scan_base_floor_krw),
-        cfg.min_order_krw * std::max(0.0, cfg.execution_guard_live_scan_base_floor_min_order_multiplier)
-    );
-    double dynamic_min_volume =
-        base_volume *
-        (std::max(0.0, cfg.execution_guard_live_scan_volume_tighten_base) +
-         (std::max(0.0, cfg.execution_guard_live_scan_volume_tighten_scale) * tighten_pressure));
-    if (!volumes.empty()) {
-        const double median_volume = computeQuantile(
-            volumes,
-            std::clamp(cfg.execution_guard_live_scan_volume_quantile_median, 0.0, 1.0)
-        );
-        const double p70_volume = computeQuantile(
-            volumes,
-            std::clamp(cfg.execution_guard_live_scan_volume_quantile_p70, 0.0, 1.0)
-        );
-        const double universe_anchor =
-            median_volume *
-            (std::max(0.0, cfg.execution_guard_live_scan_universe_anchor_base) +
-             (std::max(0.0, cfg.execution_guard_live_scan_universe_anchor_tighten_scale) *
-              tighten_pressure));
-        dynamic_min_volume = std::max(dynamic_min_volume, universe_anchor);
-        const double dynamic_ceiling = std::max(
-            base_volume *
-                std::max(0.0, cfg.execution_guard_live_scan_dynamic_ceiling_base_volume_multiplier),
-            p70_volume *
-                std::max(0.0, cfg.execution_guard_live_scan_dynamic_ceiling_p70_multiplier)
-        );
-        dynamic_min_volume = std::min(dynamic_min_volume, dynamic_ceiling);
-    }
-    thresholds.min_volume_krw = std::max(base_floor, dynamic_min_volume);
-
-    thresholds.max_spread_pct = base_spread * (
-        1.0 -
-        (std::max(0.0, cfg.execution_guard_live_scan_spread_tighten_scale) * tighten_pressure)
-    );
-    const double final_spread_clamp_min = std::max(
-        0.0,
-        cfg.execution_guard_live_scan_final_spread_clamp_min
-    );
-    const double final_spread_clamp_max = std::max(
-        final_spread_clamp_min,
-        cfg.execution_guard_live_scan_final_spread_clamp_max
-    );
-    thresholds.max_spread_pct = std::clamp(
-        thresholds.max_spread_pct,
-        final_spread_clamp_min,
-        final_spread_clamp_max
-    );
-
-    const double ask_notional_min_multiplier = std::max(
-        0.0,
-        cfg.execution_guard_live_scan_ask_notional_min_multiplier
-    );
-    const double ask_notional_max_multiplier = std::max(
-        ask_notional_min_multiplier,
-        cfg.execution_guard_live_scan_ask_notional_max_multiplier
-    );
-    thresholds.min_ask_notional_krw = std::clamp(
-        cfg.min_order_krw *
-            (std::max(0.0, cfg.execution_guard_live_scan_ask_notional_base_multiplier) +
-             (std::max(0.0, cfg.execution_guard_live_scan_ask_notional_tighten_scale) *
-              tighten_pressure)),
-        cfg.min_order_krw * ask_notional_min_multiplier,
-        cfg.min_order_krw * ask_notional_max_multiplier
-    );
-
-    return thresholds;
 }
 
 RealtimeEntryVetoThresholds computeRealtimeEntryVetoThresholds(

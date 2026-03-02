@@ -93,7 +93,6 @@ public:
             int entry_rounds = 0;
             int skipped_due_to_open_position = 0;
             int no_signal_generated = 0;
-            int filtered_out_by_manager = 0;
             int filtered_out_by_policy = 0;
             std::string gate_system_version_effective = "vnext";
             int quality_topk_effective = 5;
@@ -158,8 +157,6 @@ public:
             int shadow_count_total = 0;
             std::map<std::string, int> shadow_count_by_regime;
             std::map<std::string, int> shadow_count_by_market;
-            int shadow_would_pass_frontier_count = 0;
-            int shadow_would_pass_manager_count = 0;
             int shadow_would_pass_execution_guard_count = 0;
             int shadow_edge_neg_count = 0;
             int shadow_edge_pos_count = 0;
@@ -167,16 +164,12 @@ public:
         struct ShadowFunnelSummary {
             int rounds = 0;
             int primary_generated_signals = 0;
-            int primary_after_manager_filter = 0;
-            int shadow_after_manager_filter = 0;
             int primary_after_policy_filter = 0;
             int shadow_after_policy_filter = 0;
             int primary_best_signal_available = 0;
             int shadow_best_signal_available = 0;
             int supply_improved_rounds = 0;
-            double manager_supply_lift_sum = 0.0;
             double policy_supply_lift_sum = 0.0;
-            double avg_manager_supply_lift = 0.0;
             double avg_policy_supply_lift = 0.0;
         };
         struct StrategySignalFunnel {

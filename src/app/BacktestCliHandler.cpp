@@ -347,7 +347,6 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
         {"entry_rounds", result.entry_funnel.entry_rounds},
         {"skipped_due_to_open_position", result.entry_funnel.skipped_due_to_open_position},
         {"no_signal_generated", result.entry_funnel.no_signal_generated},
-        {"filtered_out_by_manager", result.entry_funnel.filtered_out_by_manager},
         {"filtered_out_by_policy", result.entry_funnel.filtered_out_by_policy},
         {"gate_system_version_effective", result.entry_funnel.gate_system_version_effective},
         {"quality_topk_effective", result.entry_funnel.quality_topk_effective},
@@ -406,10 +405,6 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
         {"shadow_count_total", result.ranging_shadow.shadow_count_total},
         {"shadow_count_by_regime", result.ranging_shadow.shadow_count_by_regime},
         {"shadow_count_by_market", result.ranging_shadow.shadow_count_by_market},
-        {"shadow_would_pass_frontier_count",
-         result.ranging_shadow.shadow_would_pass_frontier_count},
-        {"shadow_would_pass_manager_count",
-         result.ranging_shadow.shadow_would_pass_manager_count},
         {"shadow_would_pass_execution_guard_count",
          result.ranging_shadow.shadow_would_pass_execution_guard_count},
         {"shadow_edge_neg_count", result.ranging_shadow.shadow_edge_neg_count},
@@ -418,16 +413,12 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
     j["shadow_funnel"] = {
         {"rounds", result.shadow_funnel.rounds},
         {"primary_generated_signals", result.shadow_funnel.primary_generated_signals},
-        {"primary_after_manager_filter", result.shadow_funnel.primary_after_manager_filter},
-        {"shadow_after_manager_filter", result.shadow_funnel.shadow_after_manager_filter},
         {"primary_after_policy_filter", result.shadow_funnel.primary_after_policy_filter},
         {"shadow_after_policy_filter", result.shadow_funnel.shadow_after_policy_filter},
         {"primary_best_signal_available", result.shadow_funnel.primary_best_signal_available},
         {"shadow_best_signal_available", result.shadow_funnel.shadow_best_signal_available},
         {"supply_improved_rounds", result.shadow_funnel.supply_improved_rounds},
-        {"manager_supply_lift_sum", result.shadow_funnel.manager_supply_lift_sum},
         {"policy_supply_lift_sum", result.shadow_funnel.policy_supply_lift_sum},
-        {"avg_manager_supply_lift", result.shadow_funnel.avg_manager_supply_lift},
         {"avg_policy_supply_lift", result.shadow_funnel.avg_policy_supply_lift}
     };
 

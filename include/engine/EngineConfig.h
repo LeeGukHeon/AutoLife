@@ -461,16 +461,12 @@ struct EngineConfig {
     // Probabilistic runtime overlay (shared in live/backtest).
     bool enable_probabilistic_runtime_model = true;
     std::string probabilistic_runtime_bundle_path = "config/model/probabilistic_runtime_bundle_v2.json";
-    bool probabilistic_runtime_hard_gate = false;
-    double probabilistic_runtime_hard_gate_margin = -0.08;
     double probabilistic_runtime_score_weight = 0.12;
     double probabilistic_runtime_expected_edge_weight = 0.00030;
     // Probabilistic-primary routing:
     // make probabilistic inference the first-class decision signal across
     // scan -> signal gating -> entry sizing.
     bool probabilistic_runtime_primary_mode = true;
-    bool probabilistic_runtime_scan_prefilter_enabled = true;
-    double probabilistic_runtime_scan_prefilter_margin = -0.10;
     double probabilistic_runtime_strength_blend = 0.45;
     // EXT-53 (default OFF): uncertainty-aware sizing from ensemble disagreement.
     bool probabilistic_uncertainty_ensemble_enabled = false;

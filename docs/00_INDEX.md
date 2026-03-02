@@ -21,7 +21,6 @@ Last updated: 2026-03-02
 - `docs/53_EXT_UNCERTAINTY_ENSEMBLE.md`: Ensemble uncertainty and confidence-aware sizing.
 - `docs/54_EXT_CONDITIONAL_COST_MODEL.md`: Variable cost model in labels/runtime edge.
 - `docs/55_EXT_REGIME_SPEC.md`: Explicit regime detector and action rules.
-- `docs/56_EXT_PHASE3_FRONTIER_EV_COST_DIAGNOSTICS.md`: Frontier-coupled gate, EV calibration, cost tail, adaptive blend, diagnostics v2.
 
 ## Optional MODE B (v2)
 - `docs/60_MODE_B_V2_RESTRUCTURE_PLAN.md`: Optional full-restructure migration plan and guardrails.

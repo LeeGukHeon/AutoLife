@@ -179,6 +179,32 @@ Last updated: 2026-03-02
     - removed backtest `frontier_filter_backtest.jsonl` artifact writer/reset path
     - removed runtime prefilter hard-margin reject branch in both Live/Backtest snapshot inference
     - removed runtime hard-margin reject branch (`probabilistic_runtime_hard_gate`) in both Live/Backtest adjustment path
+  - Additional physical deletion pass (2026-03-02, late):
+    - removed remaining legacy phase scripts/files:
+      - `scripts/build_trending_availability_audit.py` (deleted)
+      - `scripts/run_phase34_operations_tuning.py` (deleted)
+      - `docs/phase34_operations_tuning_and_validation.md` (deleted)
+    - removed legacy frontier/manager blocks from bundle exporter:
+      - `scripts/export_probabilistic_runtime_bundle.py` no longer emits `phase3.frontier` / `phase3.manager_filter`
+    - removed legacy naming from code/scripts (`legacy_fixed`, `fallback_legacy`, `filtered_out_by_manager`, `reject_frontier_fail`, etc.)
+    - updated verification vocabulary to vnext terminology (`quality_filter`, `filtered_out_by_sizing`, `would_pass_quality_selection`)
+    - full token sweep evidence generated:
+      - `build/Release/logs/gate_vnext_legacy_sweep_report.json`
+      - `include/src/scripts` counts for
+        `legacy|frontier|manager_filter|expected_value_pass|filtered_out_by_manager|probabilistic_runtime_hard_gate|probabilistic_runtime_scan_prefilter`
+        are all `0`
+  - Additional physical deletion pass (2026-03-02, final):
+    - removed live scan prefilter path (`computeLiveScanPrefilterThresholds`) from runtime path
+      - deleted `LiveScanPrefilterThresholds` interface from `ExecutionGuardPolicyShared`
+      - removed implementation in `src/common/ExecutionGuardPolicyShared.cpp`
+      - removed runtime call path from `LiveTradingRuntime::scanMarkets()`
+    - removed legacy `top20_*` naming from live telemetry/report payload
+      - replaced with `quality_*` fields (`quality_sort_mode`, `quality_selected_candidates`, `quality_margin_stats`)
+    - physically deleted remaining Phase34/frontier bundle artifacts:
+      - `config/model/probabilistic_runtime_bundle_v2_a18_frontier_relax_step1.json`
+      - `config/model/probabilistic_runtime_bundle_v2_phase34_*.json`
+    - physically deleted legacy diagnostics doc:
+      - `docs/56_EXT_PHASE3_FRONTIER_EV_COST_DIAGNOSTICS.md`
 
 - Current experiment bundles/config:
   - `config/model/EXP_RND_GATENEXT_SGD.json`

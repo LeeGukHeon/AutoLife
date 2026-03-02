@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "common/Types.h"
 #include "analytics/TechnicalIndicators.h"
@@ -11,7 +11,7 @@
 namespace autolife {
 namespace strategy {
 
-// 전략이 생성할 수 있는 기본 매매 신호 타입
+// ?꾨왂???앹꽦?????덈뒗 湲곕낯 留ㅻℓ ?좏샇 ???
 enum class SignalType {
     NONE,
     STRONG_BUY,
@@ -21,7 +21,7 @@ enum class SignalType {
     STRONG_SELL
 };
 
-// 주문 타입 정책 (지정가/시장가/폴백)
+// 二쇰Ц ????뺤콉 (吏?뺢?/?쒖옣媛/?대갚)
 enum class OrderTypePolicy {
     LIMIT,
     MARKET,
@@ -29,13 +29,13 @@ enum class OrderTypePolicy {
     LIMIT_AGGRESSIVE
 };
 
-// 주문 방향
+// 二쇰Ц 諛⑺뼢
 enum class OrderSide {
     BUY,
     SELL
 };
 
-// 주문 요청 DTO
+// 二쇰Ц ?붿껌 DTO
 struct OrderRequest {
     std::string market;
     OrderSide side;
@@ -52,7 +52,7 @@ struct OrderRequest {
     {}
 };
 
-// 주문 결과 DTO
+// 二쇰Ц 寃곌낵 DTO
 struct OrderResult {
     std::string market;
     OrderSide side;
@@ -71,7 +71,7 @@ struct OrderResult {
     {}
 };
 
-// 전략이 엔진으로 전달하는 표준 신호 객체
+// ?꾨왂???붿쭊?쇰줈 ?꾨떖?섎뒗 ?쒖? ?좏샇 媛앹껜
 struct Signal {
     struct Phase3PolicySnapshot {
         struct PrimaryPriorityPolicy {
@@ -105,78 +105,6 @@ struct Signal {
             double uptrend_bonus_prob_floor = 0.52;
         };
 
-        struct ManagerFilterPolicy {
-            bool enabled = false;
-            double margin_min_ranging = 0.0;
-            std::string margin_min_ranging_mode = "enforce";
-            double required_strength_cap = 0.95;
-            double core_signal_ownership_strength_relief = 0.02;
-            double core_signal_ownership_expected_value_floor = -0.00005;
-            double policy_hold_strength_add = 0.05;
-            double policy_hold_expected_value_add_core = 0.00010;
-            double policy_hold_expected_value_add_other = 0.00018;
-            double off_trend_strength_add = 0.06;
-            double off_trend_expected_value_add_core = 0.00009;
-            double off_trend_expected_value_add_other = 0.00015;
-            double hostile_regime_strength_add = 0.03;
-            double hostile_regime_expected_value_add_core = 0.00005;
-            double hostile_regime_expected_value_add_other = 0.00008;
-            double probabilistic_confidence_strength_relief_scale = 0.03;
-            double probabilistic_confidence_expected_value_relief_scale = 0.00010;
-            double probabilistic_confidence_prob_shift = 0.50;
-            double probabilistic_confidence_prob_scale = 0.25;
-            double probabilistic_confidence_margin_shift = 0.02;
-            double probabilistic_confidence_margin_scale = 0.12;
-            double probabilistic_confidence_prob_weight = 0.40;
-            double probabilistic_confidence_margin_weight = 0.60;
-            double probabilistic_high_confidence_threshold = 0.65;
-            double history_gate_min_win_rate_base = 0.50;
-            double history_gate_min_profit_factor_base = 1.10;
-            int history_gate_min_sample_trades_base = 16;
-            double history_gate_win_rate_add_trending_down = 0.03;
-            double history_gate_profit_factor_add_trending_down = 0.05;
-            double history_gate_win_rate_add_high_volatility = 0.02;
-            double history_gate_profit_factor_add_high_volatility = 0.04;
-            int history_min_sample_hostile = 18;
-            int history_min_sample_calm = 36;
-            double history_severe_win_rate_shortfall = 0.08;
-            double history_severe_profit_factor_shortfall = 0.30;
-            int history_relief_max_trade_count = 52;
-            double history_relief_min_h5_calibrated = 0.48;
-            double history_relief_min_h5_margin = -0.012;
-            double history_guard_scale_base = 0.45;
-            double history_guard_scale_confidence_scale = 0.35;
-            double history_guard_scale_min_hostile = 0.18;
-            double history_guard_scale_min_calm = 0.10;
-            double history_guard_scale_max_hostile = 0.60;
-            double history_guard_scale_max_calm = 0.45;
-            double history_strength_bump_prob = 0.012;
-            double history_strength_bump_non_prob = 0.05;
-            double history_edge_bump_core_prob = 0.00002;
-            double history_edge_bump_core_non_prob = 0.00005;
-            double history_edge_bump_other_prob = 0.00003;
-            double history_edge_bump_other_non_prob = 0.00010;
-            double rr_guard_floor_hostile = 1.12;
-            double rr_guard_floor_calm = 1.08;
-            double rr_guard_skip_min_rr = 0.95;
-            double rr_guard_scale_base = 0.90;
-            double rr_guard_scale_confidence_scale = 0.60;
-            double rr_guard_scale_min = 0.20;
-            double rr_guard_scale_max = 0.90;
-            double rr_guard_strength_add = 0.03;
-            double rr_guard_expected_value_add_core = 0.00003;
-            double rr_guard_expected_value_add_other = 0.00006;
-            double frontier_uncertainty_prob_weight = 0.60;
-            double frontier_uncertainty_ev_weight = 0.40;
-            double scan_prefilter_margin_add_hostile = 0.015;
-            double scan_prefilter_margin_add_trending_up = -0.005;
-            double scan_prefilter_margin_clamp_min = -0.30;
-            double scan_prefilter_margin_clamp_max = 0.15;
-            double scan_prefilter_margin_with_regime_clamp_min = -0.30;
-            double scan_prefilter_margin_with_regime_clamp_max = 0.30;
-        };
-
-        bool frontier_enabled = false;
         bool ev_calibration_enabled = false;
         bool cost_tail_enabled = false;
         bool adaptive_ev_blend_enabled = false;
@@ -208,7 +136,7 @@ struct Signal {
         double cost_used_pct = 0.0;
         double cost_used_bps_estimate = 0.0;
         bool liq_vol_gate_telemetry_valid = false;
-        std::string liq_vol_gate_mode = "legacy_fixed";
+        std::string liq_vol_gate_mode = "static";
         double liq_vol_gate_observed = 0.0;
         double liq_vol_gate_threshold_dynamic = 0.0;
         int liq_vol_gate_history_count = 0;
@@ -219,7 +147,7 @@ struct Signal {
         int liq_vol_gate_min_samples_required = 0;
         std::string liq_vol_gate_low_conf_action = "hold";
         bool structure_gate_telemetry_valid = false;
-        std::string structure_gate_mode = "legacy_fixed";
+        std::string structure_gate_mode = "static";
         double structure_gate_observed_score = 0.0;
         double structure_gate_threshold_before = 0.0;
         double structure_gate_threshold_after = 0.0;
@@ -227,7 +155,7 @@ struct Signal {
         bool structure_gate_relax_applied = false;
         double structure_gate_relax_delta = 0.0;
         bool bear_rebound_guard_telemetry_valid = false;
-        std::string bear_rebound_guard_mode = "legacy_fixed";
+        std::string bear_rebound_guard_mode = "static";
         double bear_rebound_observed = 0.0;
         double bear_rebound_threshold_dynamic = 0.0;
         int bear_rebound_history_count = 0;
@@ -238,18 +166,9 @@ struct Signal {
         int bear_rebound_min_samples_required = 0;
         std::string bear_rebound_low_conf_action = "hold";
         double adaptive_ev_blend = 0.20;
-        double frontier_k_margin = 0.0;
-        double frontier_k_margin_scale = 1.0;
-        double frontier_k_uncertainty = 0.0;
-        double frontier_k_cost_tail = 0.0;
         double implied_win_runtime = 0.5;
         double required_ev_offset = 0.0;
         double required_ev_offset_trending_add = 0.0;
-        double frontier_min_required_ev = -0.0002;
-        double frontier_max_required_ev = 0.0050;
-        double frontier_margin_floor = -1.0;
-        double frontier_ev_confidence_floor = 0.0;
-        double frontier_cost_tail_reject_threshold_pct = 1.0;
         double ev_blend_scale = 1.0;
         bool primary_minimums_enabled = false;
         double primary_min_h5_calibrated = 0.48;
@@ -257,7 +176,6 @@ struct Signal {
         double primary_min_liquidity_score = 42.0;
         double primary_min_signal_strength = 0.34;
         PrimaryPriorityPolicy primary_priority;
-        ManagerFilterPolicy manager_filter;
         std::string cost_mode = "mean_mode";
     };
 
@@ -352,7 +270,7 @@ struct Signal {
     }
 };
 
-// 전략 메타 정보
+// ?꾨왂 硫뷀? ?뺣낫
 struct StrategyInfo {
     std::string name;
     std::string description;
@@ -368,7 +286,7 @@ struct StrategyInfo {
     {}
 };
 
-// 모든 전략이 따라야 하는 공통 인터페이스
+// 紐⑤뱺 ?꾨왂???곕씪???섎뒗 怨듯넻 ?명꽣?섏씠??
 class IStrategy {
 public:
     virtual ~IStrategy() = default;

@@ -1025,7 +1025,7 @@ def run_backtest(
         start_ts=cumulative_start_ts,
         end_ts=cumulative_end_ts,
     )
-    parsed["frontier_filter_samples"] = load_frontier_filter_range_samples(
+    parsed["quality_filter_samples"] = load_quality_filter_range_samples(
         exe_dir=exe_path.parent,
         run_dir=run_dir,
         start_ts=evaluation_start_ts,
@@ -1432,7 +1432,9 @@ def load_entry_stage_funnel_range_stats(
         "entry_rounds_total": 0,
         "entry_rounds_in_range": 0,
         "candidates_total_in_range": 0,
-        "candidates_after_frontier_in_range": 0,
+        "candidates_after_quality_topk_in_range": 0,
+        "candidates_after_sizing_in_range": 0,
+        "candidates_after_quality_topk_in_range": 0,
         "candidates_after_manager_in_range": 0,
         "candidates_after_portfolio_in_range": 0,
         "orders_submitted_in_range": 0,
@@ -1538,12 +1540,36 @@ def load_entry_stage_funnel_range_stats(
                 out["candidates_total_in_range"] = int(out["candidates_total_in_range"]) + max(
                     0, to_int(stages.get("candidates_total", 0))
                 )
-                out["candidates_after_frontier_in_range"] = int(
-                    out["candidates_after_frontier_in_range"]
-                ) + max(0, to_int(stages.get("candidates_after_frontier", 0)))
+                after_quality_topk = max(
+                    0,
+                    to_int(
+                        stages.get(
+                            "candidates_after_quality_topk",
+                            stages.get("candidates_after_quality_topk", 0),
+                        )
+                    ),
+                )
+                after_sizing = max(
+                    0,
+                    to_int(
+                        stages.get(
+                            "candidates_after_sizing",
+                            stages.get("candidates_after_manager", 0),
+                        )
+                    ),
+                )
+                out["candidates_after_quality_topk_in_range"] = int(
+                    out["candidates_after_quality_topk_in_range"]
+                ) + int(after_quality_topk)
+                out["candidates_after_sizing_in_range"] = int(
+                    out["candidates_after_sizing_in_range"]
+                ) + int(after_sizing)
+                out["candidates_after_quality_topk_in_range"] = int(
+                    out["candidates_after_quality_topk_in_range"]
+                ) + int(after_quality_topk)
                 out["candidates_after_manager_in_range"] = int(
                     out["candidates_after_manager_in_range"]
-                ) + max(0, to_int(stages.get("candidates_after_manager", 0)))
+                ) + int(after_sizing)
                 out["candidates_after_portfolio_in_range"] = int(
                     out["candidates_after_portfolio_in_range"]
                 ) + max(0, to_int(stages.get("candidates_after_portfolio", 0)))
@@ -1587,7 +1613,10 @@ def load_entry_stage_funnel_range_stats(
 
                 ev_consistency = payload.get("ev_consistency", {})
                 if isinstance(ev_consistency, dict):
-                    raw_ev_manager = ev_consistency.get("ev_at_manager_pass", None)
+                    raw_ev_manager = ev_consistency.get(
+                        "ev_at_selection",
+                        ev_consistency.get("ev_at_manager_pass", None),
+                    )
                     raw_ev_order = ev_consistency.get("ev_at_order_submit_check", None)
                     try:
                         ev_manager = float(raw_ev_manager) if raw_ev_manager is not None else math.nan
@@ -1675,7 +1704,7 @@ def load_entry_stage_funnel_range_stats(
     return out
 
 
-def load_frontier_filter_range_samples(
+def load_quality_filter_range_samples(
     exe_dir: pathlib.Path,
     run_dir: Optional[pathlib.Path],
     start_ts: Optional[int],
@@ -1684,7 +1713,7 @@ def load_frontier_filter_range_samples(
     start = int(start_ts) if start_ts is not None else 0
     end = int(end_ts) if end_ts is not None else 0
     enabled = bool(start > 0 and end > 0 and end >= start)
-    artifact_path = (resolve_runtime_logs_dir(exe_dir, run_dir) / "frontier_filter_backtest.jsonl").resolve()
+    artifact_path = (resolve_runtime_logs_dir(exe_dir, run_dir) / "quality_filter_backtest.jsonl").resolve()
     out: Dict[str, Any] = {
         "enabled": enabled,
         "start_ts": int(start),
@@ -1694,12 +1723,12 @@ def load_frontier_filter_range_samples(
         "line_count_in_range": 0,
         "sample_count_total": 0,
         "sample_count_in_range": 0,
-        "frontier_enabled_count_in_range": 0,
-        "frontier_fail_count_in_range": 0,
+        "quality_filter_enabled_count_in_range": 0,
+        "quality_filter_fail_count_in_range": 0,
         "samples": [],
     }
     if not artifact_path.exists():
-        out["reason"] = "frontier_filter_log_missing"
+        out["reason"] = "quality_filter_log_missing"
         return out
     try:
         with artifact_path.open("r", encoding="utf-8", errors="ignore") as fp:
@@ -1732,9 +1761,9 @@ def load_frontier_filter_range_samples(
                         "market": str(sample.get("market", payload.get("market", ""))).strip().upper(),
                         "strategy_name": str(sample.get("strategy_name", "")).strip(),
                         "regime": str(sample.get("regime", "")).strip(),
-                        "frontier_enabled": bool(sample.get("frontier_enabled", False)),
-                        "frontier_pass": bool(sample.get("frontier_pass", False)),
-                        "expected_value_pass": bool(sample.get("expected_value_pass", False)),
+                        "quality_filter_enabled": bool(sample.get("quality_filter_enabled", False)),
+                        "quality_filter_pass": bool(sample.get("quality_filter_pass", False)),
+                        "sizing_pass": bool(sample.get("sizing_pass", False)),
                         "margin_pass": bool(sample.get("margin_pass", True)),
                         "ev_confidence_pass": bool(sample.get("ev_confidence_pass", True)),
                         "cost_tail_pass": bool(sample.get("cost_tail_pass", True)),
@@ -1752,15 +1781,15 @@ def load_frontier_filter_range_samples(
                         "cost_tail_limit": to_float(sample.get("cost_tail_limit", float("nan"))),
                         "cost_tail_slack": to_float(sample.get("cost_tail_slack", float("nan"))),
                     }
-                    if bool(row["frontier_enabled"]):
-                        out["frontier_enabled_count_in_range"] = int(
-                            out["frontier_enabled_count_in_range"]
+                    if bool(row["quality_filter_enabled"]):
+                        out["quality_filter_enabled_count_in_range"] = int(
+                            out["quality_filter_enabled_count_in_range"]
                         ) + 1
-                    if bool(row["frontier_enabled"]) and not bool(row["frontier_pass"]):
-                        out["frontier_fail_count_in_range"] = int(out["frontier_fail_count_in_range"]) + 1
+                    if bool(row["quality_filter_enabled"]) and not bool(row["quality_filter_pass"]):
+                        out["quality_filter_fail_count_in_range"] = int(out["quality_filter_fail_count_in_range"]) + 1
                     out["samples"].append(row)
     except Exception:
-        out["reason"] = "frontier_filter_log_parse_failed"
+        out["reason"] = "quality_filter_log_parse_failed"
         return out
     return out
 
@@ -4144,7 +4173,7 @@ def evaluate_risk_adjusted_score_guard(
         hard_fail = observed_score < final_limit
         return {
             "enabled": False,
-            "limit_mode": "absolute_threshold_legacy",
+            "limit_mode": "absolute_threshold_static",
             "avg_risk_adjusted_score": round(observed_score, 6),
             "lookup_limit": round(final_limit, 6),
             "dist_limit": round(final_limit, 6),
@@ -4630,7 +4659,7 @@ def build_phase3_diagnostics_v2(reason_counts: Dict[str, int]) -> Dict[str, Any]
         "reject_regime_entry_disabled_count": max(
             0, to_int(reason_counts.get("reject_regime_entry_disabled_count", 0))
         ),
-        "reject_frontier_fail": max(0, to_int(reason_counts.get("reject_frontier_fail", 0))),
+        "reject_quality_filter_fail": max(0, to_int(reason_counts.get("reject_quality_filter_fail", 0))),
         "reject_ev_confidence_low": max(0, to_int(reason_counts.get("reject_ev_confidence_low", 0))),
         "reject_cost_tail_fail": max(0, to_int(reason_counts.get("reject_cost_tail_fail", 0))),
     }
@@ -4676,7 +4705,7 @@ def build_phase3_diagnostics_v2(reason_counts: Dict[str, int]) -> Dict[str, Any]
             "reject_regime_entry_disabled_count": int(
                 counters["reject_regime_entry_disabled_count"]
             ),
-            "reject_frontier_fail": int(counters["reject_frontier_fail"]),
+            "reject_quality_filter_fail": int(counters["reject_quality_filter_fail"]),
             "reject_ev_confidence_low": int(counters["reject_ev_confidence_low"]),
             "reject_cost_tail_fail": int(counters["reject_cost_tail_fail"]),
         },
@@ -5266,8 +5295,8 @@ def build_stage_d_v1_effect_summary(
                 if isinstance(aggregate_ranging_shadow.get("shadow_count_by_market", {}), dict)
                 else {}
             ),
-            "shadow_would_pass_frontier_count": int(
-                max(0, to_int(aggregate_ranging_shadow.get("shadow_would_pass_frontier_count", 0)))
+            "shadow_would_pass_quality_selection_count": int(
+                max(0, to_int(aggregate_ranging_shadow.get("shadow_would_pass_quality_selection_count", 0)))
             ),
             "shadow_would_pass_execution_guard_count": int(
                 max(
@@ -5795,8 +5824,8 @@ def build_edge_pos_but_no_trade_breakdown(
         "filtered_by_manager_strength": max(
             0, to_int(phase3_funnel.get("reject_strength_fail", 0))
         ),
-        "filtered_by_frontier": max(
-            0, to_int(phase3_funnel.get("reject_frontier_fail", 0))
+        "filtered_by_quality_filter": max(
+            0, to_int(phase3_funnel.get("reject_quality_filter_fail", 0))
         ),
         "filtered_by_budget_phase4": max(
             0,
@@ -5813,7 +5842,7 @@ def build_edge_pos_but_no_trade_breakdown(
 
     estimated_breakdown = {
         "filtered_by_manager_strength": 0,
-        "filtered_by_frontier": 0,
+        "filtered_by_quality_filter": 0,
         "filtered_by_budget_phase4": 0,
         "execution_cap": 0,
         "other": int(edge_pos_but_no_trade),
@@ -5822,7 +5851,7 @@ def build_edge_pos_but_no_trade_breakdown(
         running = 0
         ordered_keys = [
             "filtered_by_manager_strength",
-            "filtered_by_frontier",
+            "filtered_by_quality_filter",
             "filtered_by_budget_phase4",
             "execution_cap",
         ]
@@ -5907,7 +5936,7 @@ def build_a10_2_stage_funnel_report(
         0,
         to_int(
             ctx.get(
-                "stage_candidates_after_frontier_core_effective",
+                "stage_candidates_after_quality_topk_core_effective",
                 ctx.get("candidate_total_core_effective", 0),
             )
         ),
@@ -6031,7 +6060,7 @@ def build_a10_2_stage_funnel_report(
         "evaluation_range_effective": ctx.get("evaluation_range_effective", []),
         "funnel_summary_core": {
             "S0_candidates_total_core": int(s0),
-            "S1_candidates_after_frontier_core": int(s1),
+            "S1_candidates_after_quality_topk_core": int(s1),
             "S2_candidates_after_manager_core": int(s2),
             "S3_candidates_after_portfolio_core": int(s3),
             "S4_orders_submitted_core": int(s4),
@@ -6073,7 +6102,7 @@ def build_a10_2_stage_funnel_report(
                 else (
                     "case3_portfolio_or_budget_block"
                     if s2 <= 0 or s3 <= 0
-                    else ("case4_frontier_block" if s1 <= 0 else "case0_observe")
+                    else ("case4_quality_filter_block" if s1 <= 0 else "case0_observe")
                 )
             )
         ),
@@ -6085,14 +6114,14 @@ def build_a10_2_stage_funnel_report(
     }
 
 
-def build_frontier_fail_breakdown(
-    frontier_filter_dataset_samples: List[Dict[str, Any]],
+def build_quality_filter_fail_breakdown(
+    quality_filter_dataset_samples: List[Dict[str, Any]],
     split_filter_context: Dict[str, Any],
 ) -> Dict[str, Any]:
     source_dataset_rows: List[Dict[str, Any]] = []
     samples: List[Dict[str, Any]] = []
-    if isinstance(frontier_filter_dataset_samples, list):
-        for dataset_payload in frontier_filter_dataset_samples:
+    if isinstance(quality_filter_dataset_samples, list):
+        for dataset_payload in quality_filter_dataset_samples:
             if not isinstance(dataset_payload, dict):
                 continue
             dataset_name = str(dataset_payload.get("dataset", "")).strip()
@@ -6104,13 +6133,13 @@ def build_frontier_fail_breakdown(
                     "dataset": dataset_name,
                     "line_count_in_range": max(0, to_int(dataset_payload.get("line_count_in_range", 0))),
                     "sample_count_in_range": max(0, to_int(dataset_payload.get("sample_count_in_range", 0))),
-                    "frontier_enabled_count_in_range": max(
+                    "quality_filter_enabled_count_in_range": max(
                         0,
-                        to_int(dataset_payload.get("frontier_enabled_count_in_range", 0)),
+                        to_int(dataset_payload.get("quality_filter_enabled_count_in_range", 0)),
                     ),
-                    "frontier_fail_count_in_range": max(
+                    "quality_filter_fail_count_in_range": max(
                         0,
-                        to_int(dataset_payload.get("frontier_fail_count_in_range", 0)),
+                        to_int(dataset_payload.get("quality_filter_fail_count_in_range", 0)),
                     ),
                 }
             )
@@ -6145,11 +6174,11 @@ def build_frontier_fail_breakdown(
             "slack_key": "cost_tail_slack",
             "desc": "cost_tail_term > cost_tail_limit",
         },
-        "other_frontier_fail": {
+        "other_quality_filter_fail": {
             "observed_key": "",
             "limit_key": "",
             "slack_key": "",
-            "desc": "frontier_fail_with_no_subreason_flag",
+            "desc": "quality_filter_fail_with_no_subreason_flag",
         },
     }
 
@@ -6158,20 +6187,20 @@ def build_frontier_fail_breakdown(
     limit_values: Dict[str, List[float]] = {key: [] for key in reason_specs.keys()}
     slack_values: Dict[str, List[float]] = {key: [] for key in reason_specs.keys()}
 
-    frontier_enabled_count = 0
-    frontier_fail_count = 0
+    quality_filter_enabled_count = 0
+    quality_filter_fail_count = 0
     for row in samples:
         if not isinstance(row, dict):
             continue
-        if not bool(row.get("frontier_enabled", False)):
+        if not bool(row.get("quality_filter_enabled", False)):
             continue
-        frontier_enabled_count += 1
-        if bool(row.get("frontier_pass", True)):
+        quality_filter_enabled_count += 1
+        if bool(row.get("quality_filter_pass", True)):
             continue
-        frontier_fail_count += 1
+        quality_filter_fail_count += 1
         fail_reason_count = 0
 
-        if not bool(row.get("expected_value_pass", True)):
+        if not bool(row.get("sizing_pass", True)):
             reason_key = "required_ev_fail"
             reason_counts[reason_key] += 1
             fail_reason_count += 1
@@ -6204,7 +6233,7 @@ def build_frontier_fail_breakdown(
             slack_values[reason_key].append(to_float(row.get("cost_tail_slack", float("nan"))))
 
         if fail_reason_count <= 0:
-            reason_counts["other_frontier_fail"] += 1
+            reason_counts["other_quality_filter_fail"] += 1
 
     reason_rows: List[Dict[str, Any]] = []
     for reason_key, spec in reason_specs.items():
@@ -6216,8 +6245,8 @@ def build_frontier_fail_breakdown(
                 "reason": str(reason_key),
                 "description": str(spec.get("desc", "")).strip(),
                 "count": int(count),
-                "contribution_share_vs_frontier_fail": round(
-                    float(count) / float(max(1, frontier_fail_count)),
+                "contribution_share_vs_quality_filter_fail": round(
+                    float(count) / float(max(1, quality_filter_fail_count)),
                     6,
                 ),
                 "observed_distribution": summarize_values_quantiles(observed_values.get(reason_key, [])),
@@ -6245,7 +6274,7 @@ def build_frontier_fail_breakdown(
         recommended_axis = "A18-1d"
 
     return {
-        "enabled": bool(frontier_fail_count > 0),
+        "enabled": bool(quality_filter_fail_count > 0),
         "split_name": str(
             split_filter_context.get("split_name", "")
             if isinstance(split_filter_context, dict)
@@ -6257,7 +6286,7 @@ def build_frontier_fail_breakdown(
             else []
         ),
         "source": {
-            "artifact": "logs/frontier_filter_backtest.jsonl (per-dataset run capture)",
+            "artifact": "logs/quality_filter_backtest.jsonl (per-dataset run capture)",
             "dataset_count": int(len(source_dataset_rows)),
             "line_count_in_range_total": int(
                 sum(max(0, to_int(x.get("line_count_in_range", 0))) for x in source_dataset_rows)
@@ -6267,10 +6296,10 @@ def build_frontier_fail_breakdown(
             ),
             "per_dataset": source_dataset_rows,
         },
-        "frontier_enabled_count_in_range": int(frontier_enabled_count),
-        "frontier_fail_count_in_range": int(frontier_fail_count),
-        "frontier_fail_breakdown_top3": top3,
-        "frontier_fail_breakdown_all": reason_rows,
+        "quality_filter_enabled_count_in_range": int(quality_filter_enabled_count),
+        "quality_filter_fail_count_in_range": int(quality_filter_fail_count),
+        "quality_filter_fail_breakdown_top3": top3,
+        "quality_filter_fail_breakdown_all": reason_rows,
         "recommended_single_axis_case": recommended_axis,
         "recommended_top1_reason": top1_reason,
     }
@@ -6688,7 +6717,7 @@ def build_candidate_generation_ab_playbook(
 ) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
     no_signal_share = to_float(component_shares.get("no_signal_generated_share", 0.0))
-    manager_share = to_float(component_shares.get("filtered_out_by_manager_share", 0.0))
+    manager_share = to_float(component_shares.get("filtered_out_by_sizing_share", 0.0))
     no_best_share = to_float(component_shares.get("no_best_signal_share", 0.0))
 
     if no_signal_share >= 0.60:
@@ -6709,9 +6738,9 @@ def build_candidate_generation_ab_playbook(
         items.append(
             {
                 "arm": "B_manager_prefilter",
-                "trigger": "filtered_out_by_manager share >= 0.10",
+                "trigger": "filtered_out_by_sizing share >= 0.10",
                 "focus": "manager prefilter staging",
-                "target_metric": "candidate_generation_components.filtered_out_by_manager_share",
+                "target_metric": "candidate_generation_components.filtered_out_by_sizing_share",
                 "evidence_reason": top_manager_prefilter_reasons[0]["reason"] if top_manager_prefilter_reasons else "",
                 "proposal": (
                     "Split manager prefilter into hard safety reject vs soft score queue, "
@@ -7469,11 +7498,11 @@ def build_dataset_diagnostics(
     entry_rounds = max(0, to_int(entry_funnel.get("entry_rounds", 0)))
     skipped_due_to_open_position = max(0, to_int(entry_funnel.get("skipped_due_to_open_position", 0)))
     no_signal_generated = max(0, to_int(entry_funnel.get("no_signal_generated", 0)))
-    filtered_out_by_manager = max(0, to_int(entry_funnel.get("filtered_out_by_manager", 0)))
+    filtered_out_by_sizing = max(0, to_int(entry_funnel.get("filtered_out_by_sizing", 0)))
     filtered_out_by_policy = max(0, to_int(entry_funnel.get("filtered_out_by_policy", 0)))
     gate_system_version_effective = str(
-        entry_funnel.get("gate_system_version_effective", "legacy")
-    ).strip().lower() or "legacy"
+        entry_funnel.get("gate_system_version_effective", "vnext")
+    ).strip().lower() or "vnext"
     quality_topk_effective = max(0, to_int(entry_funnel.get("quality_topk_effective", 0)))
     stage_funnel_vnext_raw = entry_funnel.get("stage_funnel_vnext", {})
     if not isinstance(stage_funnel_vnext_raw, dict):
@@ -7665,11 +7694,11 @@ def build_dataset_diagnostics(
     shadow_primary_generated_signals = max(
         0, to_int(shadow_funnel_raw.get("primary_generated_signals", 0))
     )
-    shadow_primary_after_manager_filter = max(
-        0, to_int(shadow_funnel_raw.get("primary_after_manager_filter", 0))
+    shadow_primary_after_sizing = max(
+        0, to_int(shadow_funnel_raw.get("primary_after_sizing", 0))
     )
-    shadow_shadow_after_manager_filter = max(
-        0, to_int(shadow_funnel_raw.get("shadow_after_manager_filter", 0))
+    shadow_shadow_after_sizing = max(
+        0, to_int(shadow_funnel_raw.get("shadow_after_sizing", 0))
     )
     shadow_primary_after_policy_filter = max(
         0, to_int(shadow_funnel_raw.get("primary_after_policy_filter", 0))
@@ -7727,9 +7756,9 @@ def build_dataset_diagnostics(
             if not market_key:
                 continue
             shadow_count_by_market[market_key] = max(0, to_int(value))
-    shadow_would_pass_frontier_count = max(
+    shadow_would_pass_quality_selection_count = max(
         0,
-        to_int(ranging_shadow_raw.get("shadow_would_pass_frontier_count", 0)),
+        to_int(ranging_shadow_raw.get("shadow_would_pass_quality_selection_count", 0)),
     )
     shadow_would_pass_manager_count = max(
         0,
@@ -7751,7 +7780,7 @@ def build_dataset_diagnostics(
 
     candidate_generation = (
         no_signal_generated
-        + filtered_out_by_manager
+        + filtered_out_by_sizing
         + filtered_out_by_policy
         + no_best_signal
     )
@@ -7817,7 +7846,7 @@ def build_dataset_diagnostics(
     )
     manager_prefilter_reason_counts = filter_reason_counts_by_prefix(
         reason_counts,
-        ["filtered_out_by_manager"],
+        ["filtered_out_by_sizing"],
     )
     policy_prefilter_reason_counts = filter_reason_counts_by_prefix(
         reason_counts,
@@ -7825,7 +7854,7 @@ def build_dataset_diagnostics(
     )
     candidate_components = {
         "no_signal_generated": int(no_signal_generated),
-        "filtered_out_by_manager": int(filtered_out_by_manager),
+        "filtered_out_by_sizing": int(filtered_out_by_sizing),
         "filtered_out_by_policy": int(filtered_out_by_policy),
         "no_best_signal": int(no_best_signal),
     }
@@ -7833,7 +7862,7 @@ def build_dataset_diagnostics(
     candidate_denom = float(max(1, candidate_total))
     candidate_component_shares = {
         "no_signal_generated_share": round(float(no_signal_generated) / candidate_denom, 4),
-        "filtered_out_by_manager_share": round(float(filtered_out_by_manager) / candidate_denom, 4),
+        "filtered_out_by_sizing_share": round(float(filtered_out_by_sizing) / candidate_denom, 4),
         "filtered_out_by_policy_share": round(float(filtered_out_by_policy) / candidate_denom, 4),
         "no_best_signal_share": round(float(no_best_signal) / candidate_denom, 4),
     }
@@ -8104,7 +8133,7 @@ def build_dataset_diagnostics(
                 str(k): int(max(0, to_int(v)))
                 for k, v in sorted(shadow_count_by_market.items(), key=lambda item: str(item[0]))
             },
-            "shadow_would_pass_frontier_count": int(shadow_would_pass_frontier_count),
+            "shadow_would_pass_quality_selection_count": int(shadow_would_pass_quality_selection_count),
             "shadow_would_pass_manager_count": int(shadow_would_pass_manager_count),
             "shadow_would_pass_execution_guard_count": int(
                 shadow_would_pass_execution_guard_count
@@ -8116,8 +8145,8 @@ def build_dataset_diagnostics(
         "shadow_funnel": {
             "rounds": int(shadow_rounds),
             "primary_generated_signals": int(shadow_primary_generated_signals),
-            "primary_after_manager_filter": int(shadow_primary_after_manager_filter),
-            "shadow_after_manager_filter": int(shadow_shadow_after_manager_filter),
+            "primary_after_sizing": int(shadow_primary_after_sizing),
+            "shadow_after_sizing": int(shadow_shadow_after_sizing),
             "primary_after_policy_filter": int(shadow_primary_after_policy_filter),
             "shadow_after_policy_filter": int(shadow_shadow_after_policy_filter),
             "primary_best_signal_available": int(shadow_primary_best_signal_available),
@@ -8151,7 +8180,7 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
     top_group_votes: Dict[str, int] = {}
     aggregate_candidate_components: Dict[str, int] = {
         "no_signal_generated": 0,
-        "filtered_out_by_manager": 0,
+        "filtered_out_by_sizing": 0,
         "filtered_out_by_policy": 0,
         "no_best_signal": 0,
     }
@@ -8196,8 +8225,8 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
     aggregate_shadow: Dict[str, Any] = {
         "rounds": 0,
         "primary_generated_signals": 0,
-        "primary_after_manager_filter": 0,
-        "shadow_after_manager_filter": 0,
+        "primary_after_sizing": 0,
+        "shadow_after_sizing": 0,
         "primary_after_policy_filter": 0,
         "shadow_after_policy_filter": 0,
         "primary_best_signal_available": 0,
@@ -8216,7 +8245,7 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         "reject_expected_value_fail",
         "reject_expected_edge_negative_count",
         "reject_regime_entry_disabled_count",
-        "reject_frontier_fail",
+        "reject_quality_filter_fail",
         "reject_ev_confidence_low",
         "reject_cost_tail_fail",
     ]
@@ -8284,7 +8313,7 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
         "shadow_count_total": 0,
         "shadow_count_by_regime": {},
         "shadow_count_by_market": {},
-        "shadow_would_pass_frontier_count": 0,
+        "shadow_would_pass_quality_selection_count": 0,
         "shadow_would_pass_manager_count": 0,
         "shadow_would_pass_execution_guard_count": 0,
         "shadow_edge_neg_count": 0,
@@ -8442,9 +8471,9 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
                 0,
                 to_int(ranging_shadow.get("shadow_count_total", 0)),
             )
-            aggregate_ranging_shadow["shadow_would_pass_frontier_count"] += max(
+            aggregate_ranging_shadow["shadow_would_pass_quality_selection_count"] += max(
                 0,
-                to_int(ranging_shadow.get("shadow_would_pass_frontier_count", 0)),
+                to_int(ranging_shadow.get("shadow_would_pass_quality_selection_count", 0)),
             )
             aggregate_ranging_shadow["shadow_would_pass_manager_count"] += max(
                 0,
@@ -8897,13 +8926,13 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
                 0,
                 to_int(shadow_funnel.get("primary_generated_signals", 0)),
             )
-            aggregate_shadow["primary_after_manager_filter"] += max(
+            aggregate_shadow["primary_after_sizing"] += max(
                 0,
-                to_int(shadow_funnel.get("primary_after_manager_filter", 0)),
+                to_int(shadow_funnel.get("primary_after_sizing", 0)),
             )
-            aggregate_shadow["shadow_after_manager_filter"] += max(
+            aggregate_shadow["shadow_after_sizing"] += max(
                 0,
-                to_int(shadow_funnel.get("shadow_after_manager_filter", 0)),
+                to_int(shadow_funnel.get("shadow_after_sizing", 0)),
             )
             aggregate_shadow["primary_after_policy_filter"] += max(
                 0,
@@ -8958,8 +8987,8 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
     aggregate_shadow_summary = {
         "rounds": int(aggregate_shadow["rounds"]),
         "primary_generated_signals": int(aggregate_shadow["primary_generated_signals"]),
-        "primary_after_manager_filter": int(aggregate_shadow["primary_after_manager_filter"]),
-        "shadow_after_manager_filter": int(aggregate_shadow["shadow_after_manager_filter"]),
+        "primary_after_sizing": int(aggregate_shadow["primary_after_sizing"]),
+        "shadow_after_sizing": int(aggregate_shadow["shadow_after_sizing"]),
         "primary_after_policy_filter": int(aggregate_shadow["primary_after_policy_filter"]),
         "shadow_after_policy_filter": int(aggregate_shadow["shadow_after_policy_filter"]),
         "primary_best_signal_available": int(aggregate_shadow["primary_best_signal_available"]),
@@ -9005,8 +9034,8 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
                 key=lambda item: str(item[0]),
             )
         },
-        "shadow_would_pass_frontier_count": int(
-            aggregate_ranging_shadow["shadow_would_pass_frontier_count"]
+        "shadow_would_pass_quality_selection_count": int(
+            aggregate_ranging_shadow["shadow_would_pass_quality_selection_count"]
         ),
         "shadow_would_pass_manager_count": int(
             aggregate_ranging_shadow["shadow_would_pass_manager_count"]
@@ -9030,8 +9059,8 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
             float(aggregate_candidate_components["no_signal_generated"]) / candidate_component_denom,
             4,
         ),
-        "filtered_out_by_manager_share": round(
-            float(aggregate_candidate_components["filtered_out_by_manager"]) / candidate_component_denom,
+        "filtered_out_by_sizing_share": round(
+            float(aggregate_candidate_components["filtered_out_by_sizing"]) / candidate_component_denom,
             4,
         ),
         "filtered_out_by_policy_share": round(
@@ -9141,7 +9170,7 @@ def aggregate_dataset_diagnostics(dataset_diagnostics: List[Dict[str, Any]]) -> 
             "reject_regime_entry_disabled_count": int(
                 aggregate_phase3_counters.get("reject_regime_entry_disabled_count", 0)
             ),
-            "reject_frontier_fail": int(aggregate_phase3_counters.get("reject_frontier_fail", 0)),
+            "reject_quality_filter_fail": int(aggregate_phase3_counters.get("reject_quality_filter_fail", 0)),
             "reject_ev_confidence_low": int(
                 aggregate_phase3_counters.get("reject_ev_confidence_low", 0)
             ),
@@ -10715,7 +10744,7 @@ def build_risk_adjusted_failure_decomposition(
             )
         ).strip(),
         "risk_adjusted_score_limit_mode": str(
-            risk_guard_detail.get("limit_mode", "absolute_threshold_legacy")
+            risk_guard_detail.get("limit_mode", "absolute_threshold_static")
         ).strip(),
         "min_risk_adjusted_score": round(float(min_risk_adjusted_score), 4),
         "dynamic_final_limit": round(float(dynamic_final_limit), 4),
@@ -10967,9 +10996,9 @@ def main(argv=None) -> int:
         help="Output JSON path for A10-2 core-effective stage funnel diagnostics.",
     )
     parser.add_argument(
-        "--frontier-fail-breakdown-json",
-        default=r".\build\Release\logs\frontier_fail_breakdown_quarantine.json",
-        help="Output JSON path for A18-0 frontier fail breakdown diagnostics.",
+        "--quality-filter-breakdown-json",
+        default=r".\build\Release\logs\quality_filter_fail_breakdown_quarantine.json",
+        help="Output JSON path for A18-0 quality filter breakdown diagnostics.",
     )
     parser.add_argument(
         "--a20-consistency-check-json",
@@ -11081,8 +11110,8 @@ def main(argv=None) -> int:
         "A10-2 stage funnel json",
         must_exist=False,
     )
-    frontier_fail_breakdown_json = resolve_path(
-        args.frontier_fail_breakdown_json,
+    quality_filter_fail_breakdown_json = resolve_path(
+        args.quality_filter_fail_breakdown_json,
         "Frontier fail breakdown json",
         must_exist=False,
     )
@@ -11244,7 +11273,7 @@ def main(argv=None) -> int:
     dataset_diagnostics: List[Dict[str, Any]] = []
     adaptive_dataset_profiles: List[Dict[str, Any]] = []
     vol_bucket_pct_dataset_profiles: List[Dict[str, Any]] = []
-    frontier_filter_dataset_samples: List[Dict[str, Any]] = []
+    quality_filter_dataset_samples: List[Dict[str, Any]] = []
     ranging_shadow_events_all: List[Dict[str, Any]] = []
     split_eval_profiles: List[Dict[str, Any]] = []
     phase4_off_on_comparison: Dict[str, Any] = {}
@@ -11332,24 +11361,24 @@ def main(argv=None) -> int:
                     run_dir=runtime_run_dir,
                 )
             )
-            frontier_payload = result.get("frontier_filter_samples", {})
-            if not isinstance(frontier_payload, dict):
-                frontier_payload = {}
-            frontier_payload_row = {
+            quality_payload = result.get("quality_filter_samples", {})
+            if not isinstance(quality_payload, dict):
+                quality_payload = {}
+            quality_payload_row = {
                 "dataset": str(dataset_path.name),
-                "line_count_in_range": max(0, to_int(frontier_payload.get("line_count_in_range", 0))),
-                "sample_count_in_range": max(0, to_int(frontier_payload.get("sample_count_in_range", 0))),
-                "frontier_enabled_count_in_range": max(
-                    0, to_int(frontier_payload.get("frontier_enabled_count_in_range", 0))
+                "line_count_in_range": max(0, to_int(quality_payload.get("line_count_in_range", 0))),
+                "sample_count_in_range": max(0, to_int(quality_payload.get("sample_count_in_range", 0))),
+                "quality_filter_enabled_count_in_range": max(
+                    0, to_int(quality_payload.get("quality_filter_enabled_count_in_range", 0))
                 ),
-                "frontier_fail_count_in_range": max(
-                    0, to_int(frontier_payload.get("frontier_fail_count_in_range", 0))
+                "quality_filter_fail_count_in_range": max(
+                    0, to_int(quality_payload.get("quality_filter_fail_count_in_range", 0))
                 ),
-                "samples": frontier_payload.get("samples", [])
-                if isinstance(frontier_payload.get("samples", []), list)
+                "samples": quality_payload.get("samples", [])
+                if isinstance(quality_payload.get("samples", []), list)
                 else [],
             }
-            frontier_filter_dataset_samples.append(frontier_payload_row)
+            quality_filter_dataset_samples.append(quality_payload_row)
             rows.append(build_verification_row(dataset_path.name, result))
             split_eval_stats = result.get("split_eval_stats", {})
             split_trade_eval_stats = result.get("split_trade_eval_stats", {})
@@ -11436,9 +11465,9 @@ def main(argv=None) -> int:
                         if isinstance(split_stage_eval_stats, dict)
                         else 0,
                     ),
-                    "stage_candidates_after_frontier_core_proxy": max(
+                    "stage_candidates_after_quality_topk_core_proxy": max(
                         0,
-                        to_int(split_stage_eval_stats.get("candidates_after_frontier_in_range", 0))
+                        to_int(split_stage_eval_stats.get("candidates_after_quality_topk_in_range", 0))
                         if isinstance(split_stage_eval_stats, dict)
                         else 0,
                     ),
@@ -11542,9 +11571,9 @@ def main(argv=None) -> int:
                         if isinstance(split_stage_cumulative_stats, dict)
                         else 0,
                     ),
-                    "stage_candidates_after_frontier_cumulative_proxy": max(
+                    "stage_candidates_after_quality_topk_cumulative_proxy": max(
                         0,
-                        to_int(split_stage_cumulative_stats.get("candidates_after_frontier_in_range", 0))
+                        to_int(split_stage_cumulative_stats.get("candidates_after_quality_topk_in_range", 0))
                         if isinstance(split_stage_cumulative_stats, dict)
                         else 0,
                     ),
@@ -11828,11 +11857,11 @@ def main(argv=None) -> int:
                 if isinstance(item, dict)
             )
         )
-        split_filter_context["stage_candidates_after_frontier_core_proxy"] = int(
+        split_filter_context["stage_candidates_after_quality_topk_core_proxy"] = int(
             sum(
                 max(
                     0,
-                    to_int(item.get("stage_candidates_after_frontier_core_proxy", 0)),
+                    to_int(item.get("stage_candidates_after_quality_topk_core_proxy", 0)),
                 )
                 for item in split_eval_profiles
                 if isinstance(item, dict)
@@ -11865,11 +11894,11 @@ def main(argv=None) -> int:
                 if isinstance(item, dict)
             )
         )
-        split_filter_context["stage_candidates_after_frontier_cumulative_proxy"] = int(
+        split_filter_context["stage_candidates_after_quality_topk_cumulative_proxy"] = int(
             sum(
                 max(
                     0,
-                    to_int(item.get("stage_candidates_after_frontier_cumulative_proxy", 0)),
+                    to_int(item.get("stage_candidates_after_quality_topk_cumulative_proxy", 0)),
                 )
                 for item in split_eval_profiles
                 if isinstance(item, dict)
@@ -12038,9 +12067,9 @@ def main(argv=None) -> int:
             split_filter_context["stage_candidates_total_core_effective"] = int(
                 split_filter_context.get("stage_candidates_total_cumulative_proxy", 0)
             )
-            split_filter_context["stage_candidates_after_frontier_core_effective"] = int(
+            split_filter_context["stage_candidates_after_quality_topk_core_effective"] = int(
                 split_filter_context.get(
-                    "stage_candidates_after_frontier_cumulative_proxy", 0
+                    "stage_candidates_after_quality_topk_cumulative_proxy", 0
                 )
             )
             split_filter_context["stage_candidates_after_manager_core_effective"] = int(
@@ -12108,8 +12137,8 @@ def main(argv=None) -> int:
             split_filter_context["stage_candidates_total_core_effective"] = int(
                 split_filter_context.get("stage_candidates_total_core_proxy", 0)
             )
-            split_filter_context["stage_candidates_after_frontier_core_effective"] = int(
-                split_filter_context.get("stage_candidates_after_frontier_core_proxy", 0)
+            split_filter_context["stage_candidates_after_quality_topk_core_effective"] = int(
+                split_filter_context.get("stage_candidates_after_quality_topk_core_proxy", 0)
             )
             split_filter_context["stage_candidates_after_manager_core_effective"] = int(
                 split_filter_context.get("stage_candidates_after_manager_core_proxy", 0)
@@ -12295,14 +12324,14 @@ def main(argv=None) -> int:
             ensure_ascii=False,
             indent=4,
         )
-    frontier_fail_breakdown = build_frontier_fail_breakdown(
-        frontier_filter_dataset_samples=frontier_filter_dataset_samples,
+    quality_filter_fail_breakdown = build_quality_filter_fail_breakdown(
+        quality_filter_dataset_samples=quality_filter_dataset_samples,
         split_filter_context=split_filter_context,
     )
-    ensure_parent(frontier_fail_breakdown_json)
-    with frontier_fail_breakdown_json.open("w", encoding="utf-8", newline="\n") as fp:
+    ensure_parent(quality_filter_fail_breakdown_json)
+    with quality_filter_fail_breakdown_json.open("w", encoding="utf-8", newline="\n") as fp:
         json.dump(
-            frontier_fail_breakdown,
+            quality_filter_fail_breakdown,
             fp,
             ensure_ascii=False,
             indent=4,
@@ -12654,7 +12683,7 @@ def main(argv=None) -> int:
             "edge_sign_distribution": edge_sign_distribution,
             "edge_pos_but_no_trade_breakdown": edge_pos_no_trade_breakdown,
             "a10_2_stage_funnel": a10_2_stage_funnel_report,
-            "frontier_fail_breakdown": frontier_fail_breakdown,
+            "quality_filter_fail_breakdown": quality_filter_fail_breakdown,
             "a20_consistency_check": a20_consistency_check_payload,
             "runtime_cost_semantics_debug": runtime_cost_semantics_debug,
             "semantics_lock_report": semantics_lock_report,
@@ -12690,7 +12719,7 @@ def main(argv=None) -> int:
             "edge_sign_distribution_json": str(edge_sign_distribution_json),
             "edge_pos_but_no_trade_breakdown_json": str(edge_pos_no_trade_breakdown_json),
             "a10_2_stage_funnel_json": str(a10_2_stage_funnel_json),
-            "frontier_fail_breakdown_json": str(frontier_fail_breakdown_json),
+            "quality_filter_fail_breakdown_json": str(quality_filter_fail_breakdown_json),
             "a20_consistency_check_json": str(a20_consistency_check_json),
             "runtime_cost_semantics_debug_json": str(runtime_cost_semantics_debug_json),
             "semantics_lock_report_json": str(semantics_lock_report_json),
@@ -12791,8 +12820,8 @@ def main(argv=None) -> int:
         split_protocol["stage_candidates_total_core_effective"] = int(
             split_filter_context.get("stage_candidates_total_core_effective", 0)
         )
-        split_protocol["stage_candidates_after_frontier_core_effective"] = int(
-            split_filter_context.get("stage_candidates_after_frontier_core_effective", 0)
+        split_protocol["stage_candidates_after_quality_topk_core_effective"] = int(
+            split_filter_context.get("stage_candidates_after_quality_topk_core_effective", 0)
         )
         split_protocol["stage_candidates_after_manager_core_effective"] = int(
             split_filter_context.get("stage_candidates_after_manager_core_effective", 0)
@@ -12980,7 +13009,7 @@ def main(argv=None) -> int:
     print(
         "[Verification] ranging_shadow "
         f"shadow_count_total={stage_d_shadow.get('shadow_count_total', 0)} "
-        f"would_pass_frontier={stage_d_shadow.get('shadow_would_pass_frontier_count', 0)} "
+        f"would_pass_quality_selection={stage_d_shadow.get('shadow_would_pass_quality_selection_count', 0)} "
         f"would_pass_exec_guard={stage_d_shadow.get('shadow_would_pass_execution_guard_count', 0)} "
         f"top_shadow_market={top_shadow_market or 'none'} "
         f"top_shadow_market_count={top_shadow_market_count}"
@@ -13008,7 +13037,7 @@ def main(argv=None) -> int:
     print(
         "[Verification] a10_2_stage_funnel "
         f"S0={a10_funnel_core.get('S0_candidates_total_core', 0)} "
-        f"S1={a10_funnel_core.get('S1_candidates_after_frontier_core', 0)} "
+        f"S1={a10_funnel_core.get('S1_candidates_after_quality_topk_core', 0)} "
         f"S2={a10_funnel_core.get('S2_candidates_after_manager_core', 0)} "
         f"S3={a10_funnel_core.get('S3_candidates_after_portfolio_core', 0)} "
         f"S4={a10_funnel_core.get('S4_orders_submitted_core', 0)} "
@@ -13019,24 +13048,24 @@ def main(argv=None) -> int:
         f"top_order_block={top_reason or 'none'} "
         f"case_hint={a10_2_stage_funnel_report.get('a10_3_case_hint', '')}"
     )
-    frontier_top3 = (
-        frontier_fail_breakdown.get("frontier_fail_breakdown_top3", [])
-        if isinstance(frontier_fail_breakdown, dict)
+    quality_top3 = (
+        quality_filter_fail_breakdown.get("quality_filter_fail_breakdown_top3", [])
+        if isinstance(quality_filter_fail_breakdown, dict)
         else []
     )
-    frontier_top1 = ""
-    frontier_top1_count = 0
-    if isinstance(frontier_top3, list) and frontier_top3:
-        first = frontier_top3[0]
+    quality_top1 = ""
+    quality_top1_count = 0
+    if isinstance(quality_top3, list) and quality_top3:
+        first = quality_top3[0]
         if isinstance(first, dict):
-            frontier_top1 = str(first.get("reason", "")).strip()
-            frontier_top1_count = max(0, to_int(first.get("count", 0)))
+            quality_top1 = str(first.get("reason", "")).strip()
+            quality_top1_count = max(0, to_int(first.get("count", 0)))
     print(
-        "[Verification] frontier_fail_breakdown "
-        f"frontier_fail_count={frontier_fail_breakdown.get('frontier_fail_count_in_range', 0)} "
-        f"top1={frontier_top1 or 'none'} "
-        f"top1_count={frontier_top1_count} "
-        f"recommended_case={frontier_fail_breakdown.get('recommended_single_axis_case', '')}"
+        "[Verification] quality_filter_fail_breakdown "
+        f"quality_filter_fail_count={quality_filter_fail_breakdown.get('quality_filter_fail_count_in_range', 0)} "
+        f"top1={quality_top1 or 'none'} "
+        f"top1_count={quality_top1_count} "
+        f"recommended_case={quality_filter_fail_breakdown.get('recommended_single_axis_case', '')}"
     )
     if bool(args.phase4_off_on_compare):
         phase4_compare = report.get("phase4_off_on_comparison", {})

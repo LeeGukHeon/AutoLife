@@ -77,7 +77,7 @@ struct RuntimeBundleProvenance {
     std::string resolved_bundle_path;
     std::string prob_model_backend = "unknown";
     std::string lgbm_model_sha256;
-    std::string gate_system_version = "legacy";
+    std::string gate_system_version = "vnext";
     int quality_topk = 0;
     double ev_scale_bps = 0.0;
     std::string warning;
@@ -136,9 +136,9 @@ RuntimeBundleProvenance loadRuntimeBundleProvenance(
                 lowerCopy(trimCopy(root.value("lgbm_model_sha256", std::string{})));
         }
         out.gate_system_version =
-            lowerCopy(trimCopy(root.value("gate_system_version", std::string("legacy"))));
-        if (out.gate_system_version != "legacy" && out.gate_system_version != "vnext") {
-            out.gate_system_version = "legacy";
+            lowerCopy(trimCopy(root.value("gate_system_version", std::string("vnext"))));
+        if (out.gate_system_version != "vnext") {
+            out.gate_system_version = "vnext";
         }
         if (root.contains("gate_vnext") && root["gate_vnext"].is_object()) {
             const auto& vnext = root["gate_vnext"];

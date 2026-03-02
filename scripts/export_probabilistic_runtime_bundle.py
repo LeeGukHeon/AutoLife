@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 import argparse
 import pathlib
 from datetime import datetime, timezone
@@ -29,7 +29,7 @@ def parse_args(argv=None) -> argparse.Namespace:
         help=(
             "global_only: export only global fallback(default_model), "
             "hybrid: export global fallback + per-market entries, "
-            "per_market: export legacy per-market entries only."
+            "per_market: export per-market entries only."
         ),
     )
     parser.add_argument(
@@ -83,19 +83,6 @@ def default_phase3_bundle_config() -> Dict[str, Any]:
     return {
         "disable_ranging_entry": False,
         "regime_entry_disable": {},
-        "frontier": {
-            "enabled": True,
-            "k_margin": 0.08,
-            "k_uncertainty": 0.0004,
-            "k_cost_tail": 0.2,
-            "min_required_ev": -0.0002,
-            "max_required_ev": 0.0050,
-            "margin_floor": -0.25,
-            "ev_confidence_floor": 0.10,
-            "ev_confidence_penalty": 0.0,
-            "cost_tail_penalty": 0.0,
-            "cost_tail_reject_threshold_pct": 0.03,
-        },
         "ev_calibration": {
             "enabled": True,
             "use_quantile_map": False,
@@ -163,7 +150,7 @@ def default_phase3_bundle_config() -> Dict[str, Any]:
         "execution_guard": {
             "liq_vol_gate": {
                 "enabled": False,
-                "mode": "legacy_fixed",
+                "mode": "static",
                 "window_minutes": 60,
                 "quantile_q": 0.20,
                 "min_samples_required": 30,
@@ -172,12 +159,12 @@ def default_phase3_bundle_config() -> Dict[str, Any]:
         },
         "foundation_structure_gate": {
             "enabled": False,
-            "mode": "legacy_fixed",
+            "mode": "static",
             "relax_delta": 0.0,
         },
         "bear_rebound_guard": {
             "enabled": False,
-            "mode": "legacy_fixed",
+            "mode": "static",
             "window_minutes": 60,
             "quantile_q": 0.20,
             "min_samples_required": 30,
@@ -321,119 +308,6 @@ def default_phase3_bundle_config() -> Dict[str, Any]:
             "primary_filter_nudge_base": 0.10,
             "primary_filter_nudge_blend_scale": 0.10,
         },
-        "manager_filter": {
-            "enabled": True,
-            "base_min_strength_default": 0.40,
-            "base_min_strength_ranging": 0.43,
-            "base_min_strength_high_volatility": 0.48,
-            "base_min_strength_trending_down": 0.52,
-            "base_min_expected_value": 0.0,
-            "scan_prefilter_margin_add_hostile": 0.015,
-            "scan_prefilter_margin_add_trending_up": -0.005,
-            "scan_prefilter_margin_clamp_min": -0.30,
-            "scan_prefilter_margin_clamp_max": 0.15,
-            "scan_prefilter_margin_with_regime_clamp_min": -0.30,
-            "scan_prefilter_margin_with_regime_clamp_max": 0.30,
-            "hostile_strength_add_scale": 0.18,
-            "hostile_strength_add_cap": 0.08,
-            "hostile_ev_add_scale": 0.0008,
-            "hostile_ev_add_cap": 0.00035,
-            "hostile_pause_min_strength": 0.96,
-            "hostile_pause_min_expected_value": 0.0040,
-            "min_strength_floor": 0.35,
-            "min_strength_cap": 0.98,
-            "min_expected_value_floor": -0.0002,
-            "min_expected_value_cap": 0.0050,
-            "no_snapshot_min_strength_hostile": 0.36,
-            "no_snapshot_min_strength_calm": 0.28,
-            "no_snapshot_min_expected_value_hostile": 0.00002,
-            "no_snapshot_min_expected_value_calm": -0.00030,
-            "confidence_prob_shift": 0.50,
-            "confidence_prob_scale": 0.20,
-            "confidence_margin_shift": 0.01,
-            "confidence_margin_scale": 0.08,
-            "confidence_prob_weight": 0.65,
-            "confidence_margin_weight": 0.35,
-            "target_strength_hostile_base": 0.34,
-            "target_strength_hostile_confidence_scale": 0.08,
-            "target_strength_calm_base": 0.24,
-            "target_strength_calm_confidence_scale": 0.14,
-            "target_expected_value_hostile_base": 0.00002,
-            "target_expected_value_hostile_confidence_scale": 0.00008,
-            "target_expected_value_calm_base": -0.00035,
-            "target_expected_value_calm_confidence_scale": 0.00035,
-            "negative_margin_strength_add_hostile": 0.03,
-            "negative_margin_strength_add_calm": 0.02,
-            "negative_margin_expected_value_add_hostile": 0.00005,
-            "negative_margin_expected_value_add_calm": 0.00010,
-            "target_strength_hostile_min": 0.26,
-            "target_strength_hostile_max": 0.38,
-            "target_strength_calm_min": 0.12,
-            "target_strength_calm_max": 0.24,
-            "target_expected_value_hostile_min": -0.00010,
-            "target_expected_value_hostile_max": 0.00008,
-            "target_expected_value_calm_min": -0.00080,
-            "target_expected_value_calm_max": -0.00020,
-            "required_strength_cap": 0.95,
-            "core_signal_ownership_strength_relief": 0.02,
-            "core_signal_ownership_expected_value_floor": -0.00005,
-            "policy_hold_strength_add": 0.05,
-            "policy_hold_expected_value_add_core": 0.00010,
-            "policy_hold_expected_value_add_other": 0.00018,
-            "off_trend_strength_add": 0.06,
-            "off_trend_expected_value_add_core": 0.00009,
-            "off_trend_expected_value_add_other": 0.00015,
-            "hostile_regime_strength_add": 0.03,
-            "hostile_regime_expected_value_add_core": 0.00005,
-            "hostile_regime_expected_value_add_other": 0.00008,
-            "probabilistic_confidence_strength_relief_scale": 0.03,
-            "probabilistic_confidence_expected_value_relief_scale": 0.00010,
-            "probabilistic_confidence_prob_shift": 0.50,
-            "probabilistic_confidence_prob_scale": 0.25,
-            "probabilistic_confidence_margin_shift": 0.02,
-            "probabilistic_confidence_margin_scale": 0.12,
-            "probabilistic_confidence_prob_weight": 0.40,
-            "probabilistic_confidence_margin_weight": 0.60,
-            "probabilistic_high_confidence_threshold": 0.65,
-            "history_gate_min_win_rate_base": 0.50,
-            "history_gate_min_profit_factor_base": 1.10,
-            "history_gate_min_sample_trades_base": 16,
-            "history_gate_win_rate_add_trending_down": 0.03,
-            "history_gate_profit_factor_add_trending_down": 0.05,
-            "history_gate_win_rate_add_high_volatility": 0.02,
-            "history_gate_profit_factor_add_high_volatility": 0.04,
-            "history_min_sample_hostile": 18,
-            "history_min_sample_calm": 36,
-            "history_severe_win_rate_shortfall": 0.08,
-            "history_severe_profit_factor_shortfall": 0.30,
-            "history_relief_max_trade_count": 52,
-            "history_relief_min_h5_calibrated": 0.48,
-            "history_relief_min_h5_margin": -0.012,
-            "history_guard_scale_base": 0.45,
-            "history_guard_scale_confidence_scale": 0.35,
-            "history_guard_scale_min_hostile": 0.18,
-            "history_guard_scale_min_calm": 0.10,
-            "history_guard_scale_max_hostile": 0.60,
-            "history_guard_scale_max_calm": 0.45,
-            "history_strength_bump_prob": 0.012,
-            "history_strength_bump_non_prob": 0.05,
-            "history_edge_bump_core_prob": 0.00002,
-            "history_edge_bump_core_non_prob": 0.00005,
-            "history_edge_bump_other_prob": 0.00003,
-            "history_edge_bump_other_non_prob": 0.00010,
-            "rr_guard_floor_hostile": 1.12,
-            "rr_guard_floor_calm": 1.08,
-            "rr_guard_skip_min_rr": 0.95,
-            "rr_guard_scale_base": 0.90,
-            "rr_guard_scale_confidence_scale": 0.60,
-            "rr_guard_scale_min": 0.20,
-            "rr_guard_scale_max": 0.90,
-            "rr_guard_strength_add": 0.03,
-            "rr_guard_expected_value_add_core": 0.00003,
-            "rr_guard_expected_value_add_other": 0.00006,
-            "frontier_uncertainty_prob_weight": 0.60,
-            "frontier_uncertainty_ev_weight": 0.40,
-        },
         "diagnostics_v2": {"enabled": True},
     }
 
@@ -455,7 +329,6 @@ def build_phase3_bundle_config(summary: Dict[str, Any]) -> Dict[str, Any]:
         raw = {}
     merged = merge_dicts(defaults, raw)
 
-    merged["frontier"]["enabled"] = bool(merged["frontier"].get("enabled", False))
     merged["ev_calibration"]["enabled"] = bool(merged["ev_calibration"].get("enabled", False))
     merged["cost_model"]["enabled"] = bool(merged["cost_model"].get("enabled", False))
     merged["adaptive_ev_blend"]["enabled"] = bool(merged["adaptive_ev_blend"].get("enabled", False))
@@ -466,11 +339,11 @@ def build_phase3_bundle_config(summary: Dict[str, Any]) -> Dict[str, Any]:
     liq_vol_gate = execution_guard.get("liq_vol_gate", {})
     if not isinstance(liq_vol_gate, dict):
         liq_vol_gate = {}
-    mode = str(liq_vol_gate.get("mode", "legacy_fixed")).strip().lower()
+    mode = str(liq_vol_gate.get("mode", "static")).strip().lower()
     if mode != "quantile_dynamic":
-        mode = "legacy_fixed"
+        mode = "static"
     low_conf_action = str(liq_vol_gate.get("low_conf_action", "hold")).strip().lower()
-    if low_conf_action != "fallback_legacy":
+    if low_conf_action != "fallback_static":
         low_conf_action = "hold"
     liq_vol_gate_clean = {
         "enabled": bool(liq_vol_gate.get("enabled", False) and mode == "quantile_dynamic"),
@@ -483,15 +356,15 @@ def build_phase3_bundle_config(summary: Dict[str, Any]) -> Dict[str, Any]:
         "low_conf_action": low_conf_action,
     }
     if not liq_vol_gate_clean["enabled"]:
-        liq_vol_gate_clean["mode"] = "legacy_fixed"
+        liq_vol_gate_clean["mode"] = "static"
     execution_guard["liq_vol_gate"] = liq_vol_gate_clean
     merged["execution_guard"] = execution_guard
     foundation_structure_gate = merged.get("foundation_structure_gate", {})
     if not isinstance(foundation_structure_gate, dict):
         foundation_structure_gate = {}
-    structure_mode = str(foundation_structure_gate.get("mode", "legacy_fixed")).strip().lower()
+    structure_mode = str(foundation_structure_gate.get("mode", "static")).strip().lower()
     if structure_mode != "trend_only_relax":
-        structure_mode = "legacy_fixed"
+        structure_mode = "static"
     foundation_structure_gate_clean = {
         "enabled": bool(
             foundation_structure_gate.get("enabled", False) and structure_mode == "trend_only_relax"
@@ -502,17 +375,17 @@ def build_phase3_bundle_config(summary: Dict[str, Any]) -> Dict[str, Any]:
         ),
     }
     if not foundation_structure_gate_clean["enabled"]:
-        foundation_structure_gate_clean["mode"] = "legacy_fixed"
+        foundation_structure_gate_clean["mode"] = "static"
         foundation_structure_gate_clean["relax_delta"] = 0.0
     merged["foundation_structure_gate"] = foundation_structure_gate_clean
     bear_rebound_guard = merged.get("bear_rebound_guard", {})
     if not isinstance(bear_rebound_guard, dict):
         bear_rebound_guard = {}
-    bear_mode = str(bear_rebound_guard.get("mode", "legacy_fixed")).strip().lower()
+    bear_mode = str(bear_rebound_guard.get("mode", "static")).strip().lower()
     if bear_mode != "quantile_dynamic":
-        bear_mode = "legacy_fixed"
+        bear_mode = "static"
     bear_low_conf_action = str(bear_rebound_guard.get("low_conf_action", "hold")).strip().lower()
-    if bear_low_conf_action != "fallback_legacy":
+    if bear_low_conf_action != "fallback_static":
         bear_low_conf_action = "hold"
     bear_rebound_guard_clean = {
         "enabled": bool(bear_rebound_guard.get("enabled", False) and bear_mode == "quantile_dynamic"),
@@ -536,7 +409,7 @@ def build_phase3_bundle_config(summary: Dict[str, Any]) -> Dict[str, Any]:
         ),
     }
     if not bear_rebound_guard_clean["enabled"]:
-        bear_rebound_guard_clean["mode"] = "legacy_fixed"
+        bear_rebound_guard_clean["mode"] = "static"
     merged["bear_rebound_guard"] = bear_rebound_guard_clean
     merged["diagnostics_v2"]["enabled"] = bool(merged["diagnostics_v2"].get("enabled", False))
     merged["primary_minimums"]["enabled"] = bool(merged["primary_minimums"].get("enabled", False))
@@ -544,7 +417,6 @@ def build_phase3_bundle_config(summary: Dict[str, Any]) -> Dict[str, Any]:
     merged["primary_decision_profile"]["enabled"] = bool(
         merged["primary_decision_profile"].get("enabled", False)
     )
-    merged["manager_filter"]["enabled"] = bool(merged["manager_filter"].get("enabled", False))
     merged["disable_ranging_entry"] = bool(merged.get("disable_ranging_entry", False))
     raw_regime_entry_disable = merged.get("regime_entry_disable", {})
     if not isinstance(raw_regime_entry_disable, dict):
