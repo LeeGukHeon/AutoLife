@@ -1,5 +1,6 @@
 #include "common/Config.h"
 #include "common/Logger.h"
+#include "common/PathUtils.h"
 #include "runtime/LiveTradingRuntime.h"
 #include "app/BacktestCliHandler.h"
 #include "app/BacktestInteractiveHandler.h"
@@ -10,6 +11,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <csignal>
 #include <filesystem>
 #include <fstream>
@@ -57,10 +59,27 @@ std::string parseConfigPathArg(int argc, char* argv[]) {
     return default_path;
 }
 
+std::string parseRunDirArg(int argc, char* argv[]) {
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--run-dir" && i + 1 < argc) {
+            return trimCopy(std::string(argv[++i]));
+        }
+        const std::string prefix = "--run-dir=";
+        if (arg.rfind(prefix, 0) == 0 && arg.size() > prefix.size()) {
+            return trimCopy(arg.substr(prefix.size()));
+        }
+    }
+    return "";
+}
+
 struct RuntimeBundleProvenance {
     std::string resolved_bundle_path;
     std::string prob_model_backend = "unknown";
     std::string lgbm_model_sha256;
+    std::string gate_system_version = "legacy";
+    int quality_topk = 0;
+    double ev_scale_bps = 0.0;
     std::string warning;
 };
 
@@ -116,6 +135,19 @@ RuntimeBundleProvenance loadRuntimeBundleProvenance(
             out.lgbm_model_sha256 =
                 lowerCopy(trimCopy(root.value("lgbm_model_sha256", std::string{})));
         }
+        out.gate_system_version =
+            lowerCopy(trimCopy(root.value("gate_system_version", std::string("legacy"))));
+        if (out.gate_system_version != "legacy" && out.gate_system_version != "vnext") {
+            out.gate_system_version = "legacy";
+        }
+        if (root.contains("gate_vnext") && root["gate_vnext"].is_object()) {
+            const auto& vnext = root["gate_vnext"];
+            out.quality_topk = vnext.value("quality_topk", 0);
+            out.ev_scale_bps = vnext.value("ev_scale_bps", 0.0);
+        } else {
+            out.quality_topk = root.value("quality_topk", 0);
+            out.ev_scale_bps = root.value("ev_scale_bps", 0.0);
+        }
     } catch (const std::exception& e) {
         out.warning = std::string("bundle_read_exception:") + e.what();
     } catch (...) {
@@ -123,6 +155,75 @@ RuntimeBundleProvenance loadRuntimeBundleProvenance(
     }
 
     return out;
+}
+
+void writeRunProvenanceFile(
+    const std::string& config_path,
+    const RuntimeBundleProvenance& bundle_provenance) {
+    const auto now = std::chrono::system_clock::now();
+    const long long start_ts_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()
+    ).count();
+    const auto run_dir = utils::PathUtils::getRunDir();
+    const auto provenance_path = run_dir / "run_provenance.json";
+
+    nlohmann::json payload;
+    payload["start_ts_ms"] = start_ts_ms;
+    payload["config_path"] = config_path;
+    payload["run_dir"] = run_dir.string();
+    payload["bundle_path"] = bundle_provenance.resolved_bundle_path;
+    payload["prob_model_backend"] = bundle_provenance.prob_model_backend;
+    payload["lgbm_model_sha256"] = bundle_provenance.lgbm_model_sha256;
+    payload["gate_system_version"] = bundle_provenance.gate_system_version;
+    payload["quality_topk"] = bundle_provenance.quality_topk;
+    payload["ev_scale_bps"] = bundle_provenance.ev_scale_bps;
+
+    std::ofstream out(provenance_path, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+        throw std::runtime_error("Failed to write run provenance file: " + provenance_path.string());
+    }
+    out << payload.dump(4) << "\n";
+    if (!out.good()) {
+        throw std::runtime_error("Failed to flush run provenance file: " + provenance_path.string());
+    }
+}
+
+void writeRunParamsDumpFile(
+    const std::string& config_path,
+    const RuntimeBundleProvenance& bundle_provenance) {
+    const auto now = std::chrono::system_clock::now();
+    const long long start_ts_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()
+    ).count();
+    const auto run_dir = utils::PathUtils::getRunDir();
+    const auto dump_path = run_dir / "run_params_dump.json";
+
+    nlohmann::json payload;
+    payload["start_ts_ms"] = start_ts_ms;
+    payload["config_path"] = config_path;
+    payload["run_dir"] = run_dir.string();
+    payload["bundle"] = {
+        {"path", bundle_provenance.resolved_bundle_path},
+        {"prob_model_backend", bundle_provenance.prob_model_backend},
+        {"lgbm_model_sha256", bundle_provenance.lgbm_model_sha256},
+        {"gate_system_version", bundle_provenance.gate_system_version},
+        {"quality_topk", bundle_provenance.quality_topk},
+        {"ev_scale_bps", bundle_provenance.ev_scale_bps}
+    };
+    payload["lock_notes"] = {
+        "run_dir_must_exist",
+        "backend_provenance_required",
+        "stage_funnel_s0_s5_required"
+    };
+
+    std::ofstream out(dump_path, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+        throw std::runtime_error("Failed to write run params dump: " + dump_path.string());
+    }
+    out << payload.dump(4) << "\n";
+    if (!out.good()) {
+        throw std::runtime_error("Failed to flush run params dump: " + dump_path.string());
+    }
 }
 
 }  // namespace
@@ -153,6 +254,10 @@ int main(int argc, char* argv[]) {
         SetConsoleOutputCP(CP_UTF8);
         SetConsoleCP(CP_UTF8);
 
+        const std::string run_dir_arg = parseRunDirArg(argc, argv);
+        if (!run_dir_arg.empty()) {
+            utils::PathUtils::setRunDir(run_dir_arg);
+        }
         Logger::getInstance().initialize("logs");
 
         std::cout << "\n";
@@ -167,6 +272,7 @@ int main(int argc, char* argv[]) {
         const auto bundle_provenance =
             loadRuntimeBundleProvenance(config.getEngineConfig(), config_path);
         LOG_INFO("Loaded config path: {}", config_path);
+        LOG_INFO("Run dir: {}", utils::PathUtils::getRunDir().string());
         LOG_INFO(
             "Bundle path: {}",
             bundle_provenance.resolved_bundle_path.empty()
@@ -174,12 +280,21 @@ int main(int argc, char* argv[]) {
                 : bundle_provenance.resolved_bundle_path
         );
         LOG_INFO("prob_model_backend: {}", bundle_provenance.prob_model_backend);
+        LOG_INFO("gate_system_version: {}", bundle_provenance.gate_system_version);
+        if (bundle_provenance.quality_topk > 0) {
+            LOG_INFO("quality_topk: {}", bundle_provenance.quality_topk);
+        }
+        if (bundle_provenance.ev_scale_bps > 0.0) {
+            LOG_INFO("ev_scale_bps: {:.4f}", bundle_provenance.ev_scale_bps);
+        }
         if (bundle_provenance.prob_model_backend == "lgbm") {
             LOG_INFO("lgbm_model_sha256: {}", bundle_provenance.lgbm_model_sha256);
         }
         if (!bundle_provenance.warning.empty()) {
             LOG_WARN("Runtime bundle provenance warning: {}", bundle_provenance.warning);
         }
+        writeRunProvenanceFile(config_path, bundle_provenance);
+        writeRunParamsDumpFile(config_path, bundle_provenance);
 
         {
             int cli_backtest_exit_code = 0;

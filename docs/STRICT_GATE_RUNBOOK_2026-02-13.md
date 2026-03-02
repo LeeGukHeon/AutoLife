@@ -5,6 +5,14 @@
 - Keep only the actionable roadmap content needed for repeatable execution across contexts.
 - Historical A1-A22 implementation logs are intentionally trimmed from this runbook.
 
+## Priority Override (2026-03-02)
+- From now, the top-priority execution order is locked to:
+  - `docs/RND_GATENEXT_FULL_REBUILD_2026-03-02.md`
+- Operational rule:
+  - Gate vNext rebuild is executed on RND track first (Fresh14 backtest-first).
+  - Legacy gate path is a removal target; vnext is the target single baseline.
+  - Paper is allowed only after Fresh14 pass criteria are satisfied.
+
 ## Build Path Lock (Windows)
 - Use CMake from `D:\MyApps\vcpkg` explicitly.
 - Locked CMake path:
@@ -178,7 +186,7 @@
 - Stage E: Paper 24-72h promotion and Live readiness (after strict parity fix).
 - Stage F: Entry/exit structure deep-dive and single-axis exit hardening.
 
-Current focus (2026-03-01): Stage F10 (`TRENDING TP distance multiplier 1.10`, stop-loss multiplier restored to 1.15 baseline).
+Current focus (2026-03-02): Gate vNext RND full rebuild (`docs/RND_GATENEXT_FULL_REBUILD_2026-03-02.md`) with Fresh14 backtest-first validation.
 
 ## Stage F10 Work Log (2026-03-01)
 - Baseline restore (hard-lock recovery): `phase3.risk.stop_loss_trending_multiplier 1.25 -> 1.15`.

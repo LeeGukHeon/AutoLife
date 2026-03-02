@@ -349,6 +349,18 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
         {"no_signal_generated", result.entry_funnel.no_signal_generated},
         {"filtered_out_by_manager", result.entry_funnel.filtered_out_by_manager},
         {"filtered_out_by_policy", result.entry_funnel.filtered_out_by_policy},
+        {"gate_system_version_effective", result.entry_funnel.gate_system_version_effective},
+        {"quality_topk_effective", result.entry_funnel.quality_topk_effective},
+        {"stage_funnel_vnext",
+         {
+             {"s0_snapshots_valid", result.entry_funnel.gate_vnext_s0_snapshots_valid},
+             {"s1_selected_topk", result.entry_funnel.gate_vnext_s1_selected_topk},
+             {"s2_sized_count", result.entry_funnel.gate_vnext_s2_sized_count},
+             {"s3_exec_gate_pass", result.entry_funnel.gate_vnext_s3_exec_gate_pass},
+             {"s4_submitted", result.entry_funnel.gate_vnext_s4_submitted},
+             {"s5_filled", result.entry_funnel.gate_vnext_s5_filled},
+             {"drop_ev_negative_count", result.entry_funnel.gate_vnext_drop_ev_negative_count}
+         }},
         {"reject_expected_edge_negative_count",
          result.entry_funnel.reject_expected_edge_negative_count},
         {"reject_regime_entry_disabled_count",

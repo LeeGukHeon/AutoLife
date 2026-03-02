@@ -19,6 +19,9 @@ public:
     
     // logs 디렉토리 경로
     static std::filesystem::path getLogsDir();
+    static void setRunDir(const std::string& run_dir);
+    static std::filesystem::path getRunDir();
+    static bool hasRunDirOverride();
 };
 
 } // namespace utils

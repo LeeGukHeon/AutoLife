@@ -1,8 +1,13 @@
 ﻿# Current Chapter
 
-Last updated: 2026-02-21
+Last updated: 2026-03-02
 Chapter ID: `CH-01`
 Title: `Probabilistic Hybrid Foundation`
+
+## Current Top Priority (Locked)
+- Immediate priority is moved to Gate vNext RND rebuild:
+  - `docs/RND_GATENEXT_FULL_REBUILD_2026-03-02.md`
+- Execution order is fixed as Fresh14 backtest-first, Paper last.
 
 ## Objective
 - Validation/tuning 중심 운영에서 확률형 학습 기반 구조로 전환.

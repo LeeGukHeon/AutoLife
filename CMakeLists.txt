@@ -57,10 +57,10 @@ set(LIB_SOURCES
     src/analytics/ProbabilisticRuntimeModel.cpp
     src/analytics/ProbabilisticRuntimeFeatures.cpp
     src/strategy/StrategyManager.cpp
-    src/strategy/FoundationRiskPipeline.cpp
     src/strategy/FoundationAdaptiveStrategy.cpp
     src/risk/RiskManager.cpp
     src/runtime/LiveTradingRuntime.cpp
+    src/gate_vnext/GateVNext.cpp
     src/engine/AdaptivePolicyController.cpp
     src/engine/PerformanceStore.cpp
     src/execution/ExecutionPlaneAdapter.cpp

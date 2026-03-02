@@ -15,12 +15,12 @@
 #include "common/MarketDataWindowPolicy.h"
 #include "common/TickSizeHelper.h"  // [Phase 3] ???????????? ???????????좎럡萸????????됰Ŧ??????????????
 #include "common/RuntimeDiagnosticsShared.h"
-#include "common/Phase4PortfolioAllocator.h"
 #include "common/SignalPolicyShared.h"
 #include "common/StrategyEdgeStatsShared.h"
 #include "common/ExecutionGuardPolicyShared.h"
 #include "common/ProbabilisticRegimeSpec.h"
 #include "execution/ExecutionUpdateSchema.h"
+#include "gate_vnext/GateVNext.h"
 #include <chrono>
 #include <thread>
 #include <algorithm>
@@ -33,6 +33,8 @@
 #include <map>
 #include <cmath>
 #include <set>
+#include <unordered_map>
+#include <unordered_set>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -185,22 +187,6 @@ struct ProbabilisticRuntimeSnapshot {
     std::string phase3_strategy_exit_mode = "enforce";
     double phase3_tp_distance_trending_multiplier = 1.0;
     std::map<std::string, bool> phase3_regime_entry_disable;
-    bool phase4_portfolio_allocator_enabled = false;
-    bool phase4_correlation_control_enabled = false;
-    bool phase4_risk_budget_enabled = false;
-    bool phase4_drawdown_governor_enabled = false;
-    bool phase4_execution_aware_sizing_enabled = false;
-    bool phase4_portfolio_diagnostics_enabled = false;
-    autolife::analytics::ProbabilisticRuntimeModel::Phase4Policy::PortfolioAllocatorPolicy
-        phase4_portfolio_allocator_policy{};
-    autolife::analytics::ProbabilisticRuntimeModel::Phase4Policy::RiskBudgetPolicy
-        phase4_risk_budget_policy{};
-    autolife::analytics::ProbabilisticRuntimeModel::Phase4Policy::DrawdownGovernorPolicy
-        phase4_drawdown_governor_policy{};
-    autolife::analytics::ProbabilisticRuntimeModel::Phase4Policy::CorrelationControlPolicy
-        phase4_correlation_control_policy{};
-    autolife::analytics::ProbabilisticRuntimeModel::Phase4Policy::ExecutionAwareSizingPolicy
-        phase4_execution_aware_sizing_policy{};
     autolife::analytics::ProbabilisticRuntimeModel::Phase3FrontierPolicy phase3_frontier_policy{};
     autolife::analytics::ProbabilisticRuntimeModel::Phase3AdaptiveEvBlendPolicy phase3_blend_policy{};
     autolife::analytics::ProbabilisticRuntimeModel::Phase3OperationsControlPolicy
@@ -229,127 +215,6 @@ struct ProbabilisticRuntimeSnapshot {
     double regime_size_multiplier = 1.0;
     bool regime_block_new_entries = false;
 };
-
-std::filesystem::path phase4CandidateArtifactPathLive() {
-    return autolife::utils::PathUtils::resolveRelativePath("logs/phase4_portfolio_candidates_live.jsonl");
-}
-
-void resetPhase4CandidateArtifactLive() {
-    const auto path = phase4CandidateArtifactPathLive();
-    std::filesystem::create_directories(path.parent_path());
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-}
-
-void appendPhase4CandidateArtifactLive(
-    long long timestamp_ms,
-    const std::string& market,
-    const ProbabilisticRuntimeSnapshot& snapshot,
-    const std::vector<autolife::strategy::Signal>& candidates,
-    int selected_count,
-    bool has_open_position
-) {
-    if (candidates.empty()) {
-        return;
-    }
-    nlohmann::json line;
-    line["ts"] = normalizeTimestampMs(timestamp_ms);
-    line["source"] = "live";
-    line["market"] = market;
-    line["phase4"] = {
-        {"portfolio_allocator_enabled", snapshot.phase4_portfolio_allocator_enabled},
-        {"allocator_top_k", snapshot.phase4_portfolio_allocator_policy.top_k},
-        {"allocator_min_score", snapshot.phase4_portfolio_allocator_policy.min_score},
-        {"risk_budget_per_market_cap", snapshot.phase4_risk_budget_policy.per_market_cap},
-        {"risk_budget_gross_cap", snapshot.phase4_risk_budget_policy.gross_cap},
-        {"risk_budget_cap", snapshot.phase4_risk_budget_policy.risk_budget_cap},
-        {"risk_budget_regime_multipliers", snapshot.phase4_risk_budget_policy.regime_budget_multipliers},
-        {"risk_budget_proxy_stop_pct", snapshot.phase4_risk_budget_policy.risk_proxy_stop_pct},
-        {"dd_threshold_soft", snapshot.phase4_drawdown_governor_policy.dd_threshold_soft},
-        {"dd_threshold_hard", snapshot.phase4_drawdown_governor_policy.dd_threshold_hard},
-        {"dd_budget_multiplier_soft",
-         snapshot.phase4_drawdown_governor_policy.budget_multiplier_soft},
-        {"dd_budget_multiplier_hard",
-         snapshot.phase4_drawdown_governor_policy.budget_multiplier_hard},
-        {"correlation_default_cluster_cap",
-         snapshot.phase4_correlation_control_policy.default_cluster_cap},
-        {"correlation_market_cluster_count",
-         static_cast<int>(snapshot.phase4_correlation_control_policy.market_cluster_map.size())},
-        {"execution_liquidity_low_threshold",
-         snapshot.phase4_execution_aware_sizing_policy.liquidity_low_threshold},
-        {"execution_liquidity_mid_threshold",
-         snapshot.phase4_execution_aware_sizing_policy.liquidity_mid_threshold},
-        {"execution_min_position_size",
-         snapshot.phase4_execution_aware_sizing_policy.min_position_size},
-        {"correlation_control_enabled", snapshot.phase4_correlation_control_enabled},
-        {"risk_budget_enabled", snapshot.phase4_risk_budget_enabled},
-        {"drawdown_governor_enabled", snapshot.phase4_drawdown_governor_enabled},
-        {"execution_aware_sizing_enabled", snapshot.phase4_execution_aware_sizing_enabled},
-        {"portfolio_diagnostics_enabled", snapshot.phase4_portfolio_diagnostics_enabled},
-    };
-    line["position_state"] = {
-        {"has_open_position", has_open_position},
-    };
-    line["candidates"] = nlohmann::json::array();
-    for (size_t i = 0; i < candidates.size(); ++i) {
-        const auto& signal = candidates[i];
-        nlohmann::json item;
-        item["rank"] = static_cast<int>(i);
-        item["selected"] = (static_cast<int>(i) < selected_count);
-        item["market_id"] = signal.market;
-        item["strategy_name"] = signal.strategy_name;
-        item["decision_time"] = normalizeTimestampMs(timestamp_ms);
-        item["expected_edge_after_cost_pct"] = signal.expected_value;
-        item["expected_edge_tail_after_cost_pct"] = signal.expected_value;
-        item["expected_edge_calibrated_bps"] = signal.phase3.expected_edge_calibrated_bps;
-        item["expected_edge_used_for_gate_bps"] = signal.phase3.expected_edge_used_for_gate_bps;
-        item["margin"] = signal.probabilistic_h5_margin;
-        item["implied_win"] = signal.phase3.implied_win_runtime;
-        item["prob_confidence_raw"] = snapshot.prob_h5_raw;
-        item["prob_confidence_calibrated"] = signal.probabilistic_h5_calibrated;
-        item["prob_confidence"] = signal.probabilistic_h5_calibrated;
-        item["ev_confidence"] = signal.phase3.ev_confidence;
-        item["regime"] = regimeToString(signal.market_regime);
-        item["volatility_bucket"] = autolife::common::runtime_diag::volatilityBucket(signal.volatility);
-        item["liquidity_bucket"] = autolife::common::runtime_diag::liquidityBucket(signal.liquidity_score);
-        item["cost"] = {
-            {"mode", signal.phase3.cost_mode},
-            {"entry_pct", signal.phase3.cost_entry_pct},
-            {"exit_pct", signal.phase3.cost_exit_pct},
-            {"tail_pct", signal.phase3.cost_tail_pct},
-            {"used_pct", signal.phase3.cost_used_pct},
-            {"used_bps_estimate", signal.phase3.cost_used_bps_estimate},
-        };
-        item["execution_proxy"] = {
-            {"signal_strength", signal.strength},
-            {"liquidity_score", signal.liquidity_score},
-            {"volatility", signal.volatility},
-            {"position_size", signal.position_size},
-        };
-        item["policy_tags"] = {
-            {"phase3_frontier_enabled", signal.phase3.frontier_enabled},
-            {"phase3_cost_mode", signal.phase3.cost_mode},
-            {"edge_regressor_used", signal.phase3.edge_regressor_used},
-            {"prob_model_backend", signal.phase3.prob_model_backend},
-            {"edge_semantics", signal.phase3.edge_semantics},
-            {"root_cost_model_enabled_configured", signal.phase3.root_cost_model_enabled_configured},
-            {"phase3_cost_model_enabled_configured", signal.phase3.phase3_cost_model_enabled_configured},
-            {"root_cost_model_enabled_effective", signal.phase3.root_cost_model_enabled_effective},
-            {"phase3_cost_model_enabled_effective", signal.phase3.phase3_cost_model_enabled_effective},
-            {"edge_semantics_guard_violation", signal.phase3.edge_semantics_guard_violation},
-            {"edge_semantics_guard_forced_off", signal.phase3.edge_semantics_guard_forced_off},
-            {"edge_semantics_guard_action", signal.phase3.edge_semantics_guard_action},
-        };
-        line["candidates"].push_back(std::move(item));
-    }
-    const auto path = phase4CandidateArtifactPathLive();
-    std::filesystem::create_directories(path.parent_path());
-    std::ofstream out(path, std::ios::binary | std::ios::app);
-    if (!out.is_open()) {
-        LOG_WARN("Phase4 live candidate artifact open failed: {}", path.string());
-        return;
-    }
-    out << line.dump() << "\n";
-}
 
 std::filesystem::path rangingShadowArtifactPathLive() {
     return autolife::utils::PathUtils::resolveRelativePath("logs/ranging_shadow_signals.jsonl");
@@ -443,27 +308,6 @@ RealtimeEntryVetoProbeResult probeRealtimeEntryVeto(
     return out;
 }
 
-double effectiveProbabilisticScanPrefilterMargin(
-    const autolife::engine::EngineConfig& cfg,
-    autolife::analytics::MarketRegime regime,
-    const autolife::analytics::ProbabilisticRuntimeModel::Phase3ManagerFilterPolicy& policy
-) {
-    const autolife::analytics::ProbabilisticRuntimeModel::Phase3ManagerFilterPolicy defaults{};
-    const auto pick = [](double candidate, double fallback) -> double {
-        return std::isfinite(candidate) ? candidate : fallback;
-    };
-    double gate = cfg.probabilistic_runtime_scan_prefilter_margin;
-    if (regime == autolife::analytics::MarketRegime::TRENDING_DOWN ||
-        regime == autolife::analytics::MarketRegime::HIGH_VOLATILITY) {
-        gate += pick(policy.scan_prefilter_margin_add_hostile, defaults.scan_prefilter_margin_add_hostile);
-    } else if (regime == autolife::analytics::MarketRegime::TRENDING_UP) {
-        gate += pick(policy.scan_prefilter_margin_add_trending_up, defaults.scan_prefilter_margin_add_trending_up);
-    }
-    const double clamp_min = pick(policy.scan_prefilter_margin_clamp_min, defaults.scan_prefilter_margin_clamp_min);
-    const double clamp_max = pick(policy.scan_prefilter_margin_clamp_max, defaults.scan_prefilter_margin_clamp_max);
-    return std::clamp(gate, std::min(clamp_min, clamp_max), std::max(clamp_min, clamp_max));
-}
-
 double probabilisticUncertaintySizeScale(
     const autolife::engine::EngineConfig& cfg,
     const ProbabilisticRuntimeSnapshot& snapshot
@@ -480,18 +324,6 @@ double probabilisticUncertaintySizeScale(
         scale = 1.0 - (u / u_max);
     }
     return std::clamp(scale, cfg.probabilistic_uncertainty_min_scale, 1.0);
-}
-
-bool probabilisticUncertaintyBlocksEntry(
-    const autolife::engine::EngineConfig& cfg,
-    const ProbabilisticRuntimeSnapshot& snapshot
-) {
-    if (!cfg.probabilistic_uncertainty_ensemble_enabled ||
-        !cfg.probabilistic_uncertainty_skip_when_high ||
-        snapshot.ensemble_member_count < 2) {
-        return false;
-    }
-    return snapshot.prob_h5_std > std::max(cfg.probabilistic_uncertainty_u_max, cfg.probabilistic_uncertainty_skip_u);
 }
 
 double resolveAdaptiveEvBlend(
@@ -654,7 +486,6 @@ bool inferProbabilisticRuntimeSnapshot(
     out_snapshot.cost_used_bps_estimate = inference.cost_used_bps_estimate;
     out_snapshot.cost_mode = inference.cost_mode;
     const auto& phase3_policy = model.phase3Policy();
-    const auto& phase4_policy = model.phase4Policy();
     out_snapshot.phase3_frontier_enabled = inference.phase3_frontier_enabled;
     out_snapshot.phase3_ev_calibration_enabled = inference.phase3_ev_calibration_enabled;
     out_snapshot.phase3_cost_tail_enabled = inference.phase3_cost_tail_enabled;
@@ -669,12 +500,6 @@ bool inferProbabilisticRuntimeSnapshot(
     for (const auto& kv : phase3_policy.regime_entry_disable) {
         out_snapshot.phase3_regime_entry_disable[kv.first] = kv.second;
     }
-    out_snapshot.phase4_portfolio_allocator_enabled = inference.phase4_portfolio_allocator_enabled;
-    out_snapshot.phase4_correlation_control_enabled = inference.phase4_correlation_control_enabled;
-    out_snapshot.phase4_risk_budget_enabled = inference.phase4_risk_budget_enabled;
-    out_snapshot.phase4_drawdown_governor_enabled = inference.phase4_drawdown_governor_enabled;
-    out_snapshot.phase4_execution_aware_sizing_enabled = inference.phase4_execution_aware_sizing_enabled;
-    out_snapshot.phase4_portfolio_diagnostics_enabled = inference.phase4_portfolio_diagnostics_enabled;
     out_snapshot.phase3_frontier_policy = phase3_policy.frontier;
     out_snapshot.phase3_blend_policy = phase3_policy.adaptive_ev_blend;
     out_snapshot.phase3_operations_control_policy = phase3_policy.operations_control;
@@ -686,11 +511,6 @@ bool inferProbabilisticRuntimeSnapshot(
     out_snapshot.phase3_foundation_structure_gate_policy = phase3_policy.foundation_structure_gate;
     out_snapshot.phase3_bear_rebound_guard_policy = phase3_policy.bear_rebound_guard;
     out_snapshot.phase3_stop_loss_risk_policy = phase3_policy.risk;
-    out_snapshot.phase4_portfolio_allocator_policy = phase4_policy.portfolio_allocator;
-    out_snapshot.phase4_risk_budget_policy = phase4_policy.risk_budget;
-    out_snapshot.phase4_drawdown_governor_policy = phase4_policy.drawdown_governor;
-    out_snapshot.phase4_correlation_control_policy = phase4_policy.correlation_control;
-    out_snapshot.phase4_execution_aware_sizing_policy = phase4_policy.execution_aware_sizing;
     out_snapshot.margin_h5 = std::clamp(
         inference.prob_h5_calibrated - inference.selection_threshold_h5,
         -1.0,
@@ -719,38 +539,6 @@ bool inferProbabilisticRuntimeSnapshot(
         regime_ext.state
     );
 
-    if (cfg.probabilistic_runtime_scan_prefilter_enabled) {
-        const auto& manager_policy = out_snapshot.phase3_manager_filter_policy;
-        const autolife::analytics::ProbabilisticRuntimeModel::Phase3ManagerFilterPolicy
-            manager_defaults{};
-        const auto pick = [](double candidate, double fallback) -> double {
-            return std::isfinite(candidate) ? candidate : fallback;
-        };
-        const double gate_with_regime_clamp_min = pick(
-            manager_policy.scan_prefilter_margin_with_regime_clamp_min,
-            manager_defaults.scan_prefilter_margin_with_regime_clamp_min
-        );
-        const double gate_with_regime_clamp_max = pick(
-            manager_policy.scan_prefilter_margin_with_regime_clamp_max,
-            manager_defaults.scan_prefilter_margin_with_regime_clamp_max
-        );
-        const double gate_margin = std::clamp(
-            effectiveProbabilisticScanPrefilterMargin(cfg, regime, manager_policy) +
-                out_snapshot.regime_threshold_add,
-            std::min(gate_with_regime_clamp_min, gate_with_regime_clamp_max),
-            std::max(gate_with_regime_clamp_min, gate_with_regime_clamp_max)
-        );
-        if (out_snapshot.margin_h5 < gate_margin) {
-            if (reject_reason != nullptr) {
-                *reject_reason =
-                    (cfg.probabilistic_regime_spec_enabled &&
-                     out_snapshot.regime_state != autolife::common::probabilistic_regime::State::NORMAL)
-                    ? "probabilistic_regime_prefilter"
-                    : "probabilistic_market_prefilter";
-            }
-            return false;
-        }
-    }
     return true;
 }
 
@@ -771,8 +559,7 @@ void applyProbabilisticManagerFloors(
 bool applyProbabilisticRuntimeAdjustment(
     const autolife::engine::EngineConfig& cfg,
     const ProbabilisticRuntimeSnapshot& snapshot,
-    autolife::strategy::Signal& signal,
-    std::string* reject_reason
+    autolife::strategy::Signal& signal
 ) {
     signal.phase3 = autolife::strategy::Signal::Phase3PolicySnapshot{};
     signal.probabilistic_runtime_applied = false;
@@ -1105,22 +892,6 @@ bool applyProbabilisticRuntimeAdjustment(
         );
     }
     applyProbabilisticPrimaryDecisionProfile(cfg, snapshot, signal);
-
-    if (cfg.probabilistic_runtime_hard_gate &&
-        effective_margin < cfg.probabilistic_runtime_hard_gate_margin) {
-        signal.phase3.expected_edge_used_for_gate_bps = signal.expected_value * 10000.0;
-        if (reject_reason != nullptr) {
-            *reject_reason = "probabilistic_runtime_hard_gate";
-        }
-        LOG_INFO(
-            "{} rejected by probabilistic hard gate: p_h5_cal={:.4f}, threshold={:.4f}, margin={:.4f}",
-            signal.market,
-            snapshot.prob_h5_calibrated,
-            snapshot.threshold_h5,
-            effective_margin
-        );
-        return false;
-    }
 
     signal.phase3.expected_edge_used_for_gate_bps = signal.expected_value * 10000.0;
     return true;
@@ -1563,278 +1334,6 @@ void applyProbabilisticManagerFloors(
     );
     *min_strength = std::min(*min_strength, target_strength);
     *min_expected_value = std::min(*min_expected_value, target_edge);
-}
-
-struct ProbabilisticPrimaryMinimums {
-    double min_h5_calibrated = 0.5;
-    double min_h5_margin = 0.0;
-    double min_liquidity_score = 0.0;
-    double min_signal_strength = 0.0;
-};
-
-ProbabilisticPrimaryMinimums effectiveProbabilisticPrimaryMinimums(
-    const autolife::engine::EngineConfig& cfg,
-    const autolife::strategy::Signal& signal,
-    autolife::analytics::MarketRegime regime,
-    const ProbabilisticRuntimeSnapshot* snapshot
-) {
-    const auto defaults = autolife::analytics::ProbabilisticRuntimeModel::Phase3PrimaryMinimumPolicy{};
-    const auto& policy = (snapshot != nullptr)
-        ? snapshot->phase3_primary_minimum_policy
-        : defaults;
-    const bool use_policy = (snapshot != nullptr) && snapshot->phase3_primary_minimum_policy.enabled;
-    const auto pick = [&](double policy_value, double fallback_value) {
-        return use_policy ? policy_value : fallback_value;
-    };
-
-    ProbabilisticPrimaryMinimums out;
-    if (use_policy) {
-        out.min_h5_calibrated = policy.min_h5_calibrated;
-        out.min_h5_margin = policy.min_h5_margin;
-        out.min_liquidity_score = policy.min_liquidity_score;
-        out.min_signal_strength = policy.min_signal_strength;
-    } else if (signal.phase3.primary_minimums_enabled) {
-        out.min_h5_calibrated = std::clamp(signal.phase3.primary_min_h5_calibrated, 0.0, 1.0);
-        out.min_h5_margin = std::clamp(signal.phase3.primary_min_h5_margin, -1.0, 1.0);
-        out.min_liquidity_score = std::clamp(signal.phase3.primary_min_liquidity_score, 0.0, 100.0);
-        out.min_signal_strength = std::clamp(signal.phase3.primary_min_signal_strength, 0.0, 1.0);
-    } else {
-        out.min_h5_calibrated = cfg.probabilistic_primary_min_h5_calibrated;
-        out.min_h5_margin = cfg.probabilistic_primary_min_h5_margin;
-        out.min_liquidity_score = cfg.probabilistic_primary_min_liquidity_score;
-        out.min_signal_strength = cfg.probabilistic_primary_min_signal_strength;
-    }
-
-    const bool hostile =
-        regime == autolife::analytics::MarketRegime::HIGH_VOLATILITY ||
-        regime == autolife::analytics::MarketRegime::TRENDING_DOWN;
-    if (hostile) {
-        out.min_h5_calibrated += pick(
-            policy.hostile_add_h5_calibrated,
-            defaults.hostile_add_h5_calibrated
-        );
-        out.min_h5_margin += pick(policy.hostile_add_h5_margin, defaults.hostile_add_h5_margin);
-        out.min_liquidity_score += pick(
-            policy.hostile_add_liquidity_score,
-            defaults.hostile_add_liquidity_score
-        );
-        out.min_signal_strength += pick(
-            policy.hostile_add_signal_strength,
-            defaults.hostile_add_signal_strength
-        );
-    } else if (regime == autolife::analytics::MarketRegime::RANGING) {
-        out.min_h5_calibrated += pick(
-            policy.ranging_add_h5_calibrated,
-            defaults.ranging_add_h5_calibrated
-        );
-        out.min_h5_margin += pick(policy.ranging_add_h5_margin, defaults.ranging_add_h5_margin);
-        out.min_liquidity_score += pick(
-            policy.ranging_add_liquidity_score,
-            defaults.ranging_add_liquidity_score
-        );
-        out.min_signal_strength += pick(
-            policy.ranging_add_signal_strength,
-            defaults.ranging_add_signal_strength
-        );
-    } else if (regime == autolife::analytics::MarketRegime::TRENDING_UP) {
-        out.min_h5_calibrated += pick(
-            policy.trending_up_add_h5_calibrated,
-            defaults.trending_up_add_h5_calibrated
-        );
-        out.min_h5_margin += pick(
-            policy.trending_up_add_h5_margin,
-            defaults.trending_up_add_h5_margin
-        );
-        out.min_liquidity_score += pick(
-            policy.trending_up_add_liquidity_score,
-            defaults.trending_up_add_liquidity_score
-        );
-        out.min_signal_strength += pick(
-            policy.trending_up_add_signal_strength,
-            defaults.trending_up_add_signal_strength
-        );
-    }
-
-    if (snapshot != nullptr && cfg.probabilistic_regime_spec_enabled) {
-        const double regime_add = std::max(0.0, snapshot->regime_threshold_add);
-        out.min_h5_margin += regime_add;
-        out.min_h5_calibrated += std::clamp(regime_add * 1.5, 0.0, 0.20);
-        if (snapshot->regime_state == autolife::common::probabilistic_regime::State::VOLATILE) {
-            out.min_signal_strength += pick(
-                policy.regime_volatile_add_signal_strength,
-                defaults.regime_volatile_add_signal_strength
-            );
-        } else if (snapshot->regime_state == autolife::common::probabilistic_regime::State::HOSTILE) {
-            out.min_liquidity_score += pick(
-                policy.regime_hostile_add_liquidity_score,
-                defaults.regime_hostile_add_liquidity_score
-            );
-            out.min_signal_strength += pick(
-                policy.regime_hostile_add_signal_strength,
-                defaults.regime_hostile_add_signal_strength
-            );
-        }
-    }
-
-    out.min_h5_calibrated = std::clamp(out.min_h5_calibrated, 0.0, 1.0);
-    out.min_h5_margin = std::clamp(
-        out.min_h5_margin,
-        pick(policy.clamp_h5_margin_min, defaults.clamp_h5_margin_min),
-        pick(policy.clamp_h5_margin_max, defaults.clamp_h5_margin_max)
-    );
-    out.min_liquidity_score = std::clamp(
-        out.min_liquidity_score,
-        pick(policy.clamp_liquidity_min, defaults.clamp_liquidity_min),
-        pick(policy.clamp_liquidity_max, defaults.clamp_liquidity_max)
-    );
-    out.min_signal_strength = std::clamp(
-        out.min_signal_strength,
-        pick(policy.clamp_strength_min, defaults.clamp_strength_min),
-        pick(policy.clamp_strength_max, defaults.clamp_strength_max)
-    );
-    return out;
-}
-
-double probabilisticPrimaryPriorityScore(
-    const autolife::engine::EngineConfig& cfg,
-    const autolife::strategy::Signal& signal,
-    autolife::analytics::MarketRegime regime
-) {
-    const auto& priority = signal.phase3.primary_priority;
-    const bool use_policy = priority.enabled;
-    const auto pick = [&](double policy_value, double fallback_value) {
-        return use_policy ? policy_value : fallback_value;
-    };
-
-    const double prob = signal.probabilistic_runtime_applied
-        ? std::clamp(signal.probabilistic_h5_calibrated, 0.0, 1.0)
-        : 0.5;
-    const double margin = signal.probabilistic_runtime_applied
-        ? std::clamp(signal.probabilistic_h5_margin, -1.0, 1.0)
-        : 0.0;
-    const double margin_score_shift = pick(priority.margin_score_shift, 0.10);
-    const double margin_score_scale = std::max(1e-6, pick(priority.margin_score_scale, 0.20));
-    const double margin_score = std::clamp((margin + margin_score_shift) / margin_score_scale, 0.0, 1.0);
-    const double liquidity_score = std::clamp(signal.liquidity_score / 100.0, 0.0, 1.0);
-    const double strength_score = std::clamp(signal.strength, 0.0, 1.0);
-    const double edge_score_shift = pick(priority.edge_score_shift, 0.0005);
-    const double edge_score_scale = std::max(1e-6, pick(priority.edge_score_scale, 0.0025));
-    const double expected_edge_score = std::clamp((signal.expected_value + edge_score_shift) / edge_score_scale, 0.0, 1.0);
-
-    double prob_weight = pick(priority.prob_weight, 0.50);
-    double margin_weight = pick(priority.margin_weight, 0.22);
-    double liquidity_weight = pick(priority.liquidity_weight, 0.10);
-    double strength_weight = pick(priority.strength_weight, 0.10);
-    double edge_weight = pick(priority.edge_weight, 0.08);
-    const bool hostile =
-        regime == autolife::analytics::MarketRegime::HIGH_VOLATILITY ||
-        regime == autolife::analytics::MarketRegime::TRENDING_DOWN;
-    if (hostile) {
-        prob_weight = pick(priority.hostile_prob_weight, 0.54);
-        margin_weight = pick(priority.hostile_margin_weight, 0.22);
-        liquidity_weight = pick(priority.hostile_liquidity_weight, 0.11);
-        strength_weight = pick(priority.hostile_strength_weight, 0.09);
-        edge_weight = pick(priority.hostile_edge_weight, 0.04);
-    }
-    double score =
-        (prob * prob_weight) +
-        (margin_score * margin_weight) +
-        (liquidity_score * liquidity_weight) +
-        (strength_score * strength_weight) +
-        (expected_edge_score * edge_weight);
-
-    if (signal.type == autolife::strategy::SignalType::STRONG_BUY) {
-        score += pick(priority.strong_buy_bonus, 0.02);
-    }
-    if (cfg.probabilistic_runtime_primary_mode && signal.probabilistic_runtime_applied) {
-        const double margin_bonus_scale = pick(priority.margin_bonus_scale, 0.08);
-        const double margin_bonus_cap = std::max(0.0, pick(priority.margin_bonus_cap, 0.03));
-        score += std::clamp(signal.probabilistic_h5_margin * margin_bonus_scale, -margin_bonus_cap, margin_bonus_cap);
-    }
-
-    const std::string& archetype = signal.entry_archetype;
-    if (archetype.find("FOUNDATION_RANGE_PULLBACK") != std::string::npos) {
-        const double range_penalty_strength_floor = pick(priority.range_penalty_strength_floor, 0.50);
-        const double range_penalty_margin_floor = pick(priority.range_penalty_margin_floor, 0.008);
-        const double range_penalty_prob_floor = pick(priority.range_penalty_prob_floor, 0.54);
-        const double range_bonus_margin_floor = pick(priority.range_bonus_margin_floor, 0.012);
-        const double range_bonus_prob_floor = pick(priority.range_bonus_prob_floor, 0.57);
-        if (signal.strength < range_penalty_strength_floor &&
-            (margin < range_penalty_margin_floor || prob < range_penalty_prob_floor)) {
-            score -= std::max(0.0, pick(priority.range_penalty, 0.11));
-        } else if (margin >= range_bonus_margin_floor && prob >= range_bonus_prob_floor) {
-            score += pick(priority.range_bonus, 0.03);
-        }
-    } else if (archetype.find("FOUNDATION_UPTREND_CONTINUATION") != std::string::npos) {
-        const double uptrend_bonus_margin_floor = pick(priority.uptrend_bonus_margin_floor, 0.0);
-        const double uptrend_bonus_prob_floor = pick(priority.uptrend_bonus_prob_floor, 0.52);
-        if (margin >= uptrend_bonus_margin_floor && prob >= uptrend_bonus_prob_floor) {
-            score += pick(priority.uptrend_bonus, 0.03);
-        }
-    }
-
-    return score;
-}
-
-bool passesProbabilisticPrimaryMinimums(
-    const autolife::engine::EngineConfig& cfg,
-    const autolife::strategy::Signal& signal,
-    autolife::analytics::MarketRegime regime,
-    const ProbabilisticRuntimeSnapshot* snapshot,
-    std::string* reject_reason
-) {
-    if (!cfg.probabilistic_runtime_primary_mode) {
-        return true;
-    }
-    if (!signal.probabilistic_runtime_applied) {
-        if (reject_reason != nullptr) {
-            *reject_reason = "blocked_probabilistic_primary_missing_overlay";
-        }
-        return false;
-    }
-    if (snapshot != nullptr &&
-        cfg.probabilistic_regime_spec_enabled &&
-        snapshot->regime_block_new_entries) {
-        if (reject_reason != nullptr) {
-            *reject_reason = "blocked_probabilistic_regime_hostile";
-        }
-        return false;
-    }
-    if (snapshot != nullptr && probabilisticUncertaintyBlocksEntry(cfg, *snapshot)) {
-        if (reject_reason != nullptr) {
-            *reject_reason = "blocked_probabilistic_uncertainty_high";
-        }
-        return false;
-    }
-
-    ProbabilisticPrimaryMinimums mins =
-        effectiveProbabilisticPrimaryMinimums(cfg, signal, regime, snapshot);
-
-    if (signal.probabilistic_h5_calibrated < mins.min_h5_calibrated) {
-        if (reject_reason != nullptr) {
-            *reject_reason = "blocked_probabilistic_primary_calibrated";
-        }
-        return false;
-    }
-    if (signal.probabilistic_h5_margin < mins.min_h5_margin) {
-        if (reject_reason != nullptr) {
-            *reject_reason = "blocked_probabilistic_primary_margin";
-        }
-        return false;
-    }
-    if (signal.liquidity_score < mins.min_liquidity_score) {
-        if (reject_reason != nullptr) {
-            *reject_reason = "blocked_probabilistic_primary_liquidity";
-        }
-        return false;
-    }
-    if (signal.strength < mins.min_signal_strength) {
-        if (reject_reason != nullptr) {
-            *reject_reason = "blocked_probabilistic_primary_strength";
-        }
-        return false;
-    }
-    return true;
 }
 
 using autolife::common::strategy_edge::StrategyEdgeStats;
@@ -2437,7 +1936,6 @@ bool TradingEngine::start() {
     pending_be_after_partial_due_ms_.clear();
     live_warmup_scans_completed_ = 0;
     live_warmup_done_ = !config_.enable_live_cache_warmup;
-    resetPhase4CandidateArtifactLive();
     resetRangingShadowArtifactLive();
     if (config_.mode == TradingMode::LIVE) {
         resetPolicyDecisionAuditArtifact();
@@ -2788,11 +2286,33 @@ void TradingEngine::scanMarkets() {
         filtered.push_back(coin);
     }
 
+    std::vector<autolife::gate_vnext::CandidateSnapshot> candidate_snapshots;
+    candidate_snapshots.reserve(filtered.size());
+    std::unordered_map<std::string, analytics::CoinMetrics> coin_by_market;
+    coin_by_market.reserve(filtered.size());
+    const long long snapshot_ts_ms = getCurrentTimestampMs();
+
     for (auto& coin : filtered) {
         coin.model_margin_valid = false;
         coin.model_margin_score = 0.0;
         coin.model_prob_h5_calibrated = 0.5;
         coin.model_selection_threshold_h5 = 0.5;
+
+        autolife::gate_vnext::CandidateSnapshot gate_snapshot{};
+        gate_snapshot.market = coin.market;
+        gate_snapshot.ts_ms = snapshot_ts_ms;
+        gate_snapshot.regime = "UNKNOWN";
+        gate_snapshot.spread_pct = coin.orderbook_snapshot.spread_pct;
+        gate_snapshot.notional = coin.orderbook_snapshot.ask_notional;
+        gate_snapshot.volume_surge = coin.volume_surge_ratio;
+        gate_snapshot.imbalance = coin.order_book_imbalance;
+        gate_snapshot.drop_vs_recent = 0.0;
+        gate_snapshot.drop_vs_signal = 0.0;
+        gate_snapshot.p_calibrated = 0.5;
+        gate_snapshot.selection_threshold = 0.5;
+        gate_snapshot.margin = 0.0;
+        gate_snapshot.edge_bps = 0.0;
+        gate_snapshot.snapshot_valid = false;
 
         analytics::CoinMetrics signal_metrics = coin;
         if (signal_metrics.candles_by_tf.find("1m") == signal_metrics.candles_by_tf.end() &&
@@ -2814,10 +2334,16 @@ void TradingEngine::scanMarkets() {
 
         const auto data_window_check = common::checkLiveEquivalentWindow(signal_metrics.candles_by_tf);
         if (!data_window_check.pass || signal_metrics.candles.empty()) {
+            gate_snapshot.fail_reason = "missing_or_insufficient_context";
+            candidate_snapshots.push_back(gate_snapshot);
+            coin_by_market[coin.market] = coin;
             continue;
         }
 
         auto regime = regime_detector_->analyzeRegime(signal_metrics.candles);
+        gate_snapshot.regime = regimeToString(regime.regime);
+        gate_snapshot.atr_pct_14 = regime.atr_pct;
+        gate_snapshot.adx = regime.adx;
         ProbabilisticRuntimeSnapshot snapshot;
         std::string probabilistic_prefilter_reason;
         inferProbabilisticRuntimeSnapshot(
@@ -2834,30 +2360,56 @@ void TradingEngine::scanMarkets() {
             coin.model_margin_score = std::clamp(snapshot.margin_h5, -1.0, 1.0);
             coin.model_prob_h5_calibrated = std::clamp(snapshot.prob_h5_calibrated, 0.0, 1.0);
             coin.model_selection_threshold_h5 = std::clamp(snapshot.threshold_h5, 0.0, 1.0);
+            gate_snapshot.snapshot_valid = true;
+            gate_snapshot.p_calibrated = coin.model_prob_h5_calibrated;
+            gate_snapshot.selection_threshold = coin.model_selection_threshold_h5;
+            gate_snapshot.margin = coin.model_margin_score;
+            gate_snapshot.edge_bps = snapshot.expected_edge_calibrated_bps;
+        } else {
+            gate_snapshot.fail_reason = probabilistic_prefilter_reason.empty()
+                ? "probabilistic_feature_build_failed"
+                : probabilistic_prefilter_reason;
+        }
+        candidate_snapshots.push_back(gate_snapshot);
+        coin_by_market[coin.market] = coin;
+    }
+
+    autolife::gate_vnext::GateVNext::Params gate_params{};
+    gate_params.quality_topk = 5;
+    gate_params.base_size = 0.1;
+    gate_params.ev_scale_bps = 10.0;
+    autolife::gate_vnext::GateVNext gate_vnext(gate_params);
+    autolife::gate_vnext::GateVNextTelemetry gate_telemetry{};
+    const auto gated_snapshots = gate_vnext.run(candidate_snapshots, &gate_telemetry);
+
+    std::vector<analytics::CoinMetrics> selected_coins;
+    selected_coins.reserve(gated_snapshots.size());
+    long long drop_ev_negative_count = 0;
+    for (const auto& gated : gated_snapshots) {
+        if (gated.expected_value_vnext_bps < 0.0) {
+            drop_ev_negative_count++;
+        }
+        if (!gated.execution_gate_pass) {
+            continue;
+        }
+        auto it = coin_by_market.find(gated.market);
+        if (it != coin_by_market.end()) {
+            selected_coins.push_back(it->second);
         }
     }
 
-    std::stable_sort(
-        filtered.begin(),
-        filtered.end(),
-        [](const analytics::CoinMetrics& a, const analytics::CoinMetrics& b) {
-            if (a.model_margin_valid != b.model_margin_valid) {
-                return a.model_margin_valid && !b.model_margin_valid;
-            }
-            if (a.model_margin_valid && b.model_margin_valid &&
-                std::abs(a.model_margin_score - b.model_margin_score) > 1e-12) {
-                return a.model_margin_score > b.model_margin_score;
-            }
-            return a.composite_score > b.composite_score;
-        }
-    );
-
-    if (filtered.size() > 20) {
-        filtered.resize(20);
-    }
-
-    scanned_markets_ = filtered;
-    live_signal_funnel_.top20_sort_mode = "model_margin";
+    scanned_markets_ = std::move(selected_coins);
+    live_signal_funnel_.gate_system_version_effective = "vnext";
+    live_signal_funnel_.gate_vnext_s0_snapshots_valid = gate_telemetry.funnel.s0_snapshots_valid;
+    live_signal_funnel_.gate_vnext_s1_selected_topk = gate_telemetry.funnel.s1_selected_topk;
+    live_signal_funnel_.gate_vnext_s2_sized_count = gate_telemetry.funnel.s2_sized_count;
+    live_signal_funnel_.gate_vnext_s3_exec_gate_pass = gate_telemetry.funnel.s3_exec_gate_pass;
+    live_signal_funnel_.gate_vnext_drop_ev_negative_count = drop_ev_negative_count;
+    live_signal_funnel_.quality_topk_effective = gate_params.quality_topk;
+    live_signal_funnel_.candidates_before_topk = static_cast<long long>(candidate_snapshots.size());
+    live_signal_funnel_.candidates_after_topk = gate_telemetry.funnel.s1_selected_topk;
+    live_signal_funnel_.selected_after_topk_count = gate_telemetry.funnel.s3_exec_gate_pass;
+    live_signal_funnel_.top20_sort_mode = "vnext_margin_rank";
     live_signal_funnel_.top20_candidates = static_cast<long long>(scanned_markets_.size());
     std::vector<double> margin_values;
     std::vector<double> composite_values;
@@ -2918,13 +2470,24 @@ void TradingEngine::scanMarkets() {
              scan_prefilter_thresholds.min_ask_notional_krw,
              market_hostility_ewma_);
     LOG_INFO(
-        "Top20 sort(model_margin): candidates={}, margin_valid={}, margin_mean={:+.4f}, p10={:+.4f}, p50={:+.4f}, p90={:+.4f}",
+        "TopK select(vnext_margin_rank): selected={}, margin_valid={}, margin_mean={:+.4f}, p10={:+.4f}, p50={:+.4f}, p90={:+.4f}",
         static_cast<int>(live_signal_funnel_.top20_candidates),
         static_cast<int>(live_signal_funnel_.top20_margin_valid_count),
         live_signal_funnel_.top20_margin_mean,
         live_signal_funnel_.top20_margin_p10,
         live_signal_funnel_.top20_margin_p50,
         live_signal_funnel_.top20_margin_p90
+    );
+    LOG_INFO(
+        "Quality TopK forced: K={}, before={}, after={}, S0={}, S1={}, S2={}, S3={}, drop_ev_negative={}",
+        live_signal_funnel_.quality_topk_effective,
+        live_signal_funnel_.candidates_before_topk,
+        live_signal_funnel_.candidates_after_topk,
+        live_signal_funnel_.gate_vnext_s0_snapshots_valid,
+        live_signal_funnel_.gate_vnext_s1_selected_topk,
+        live_signal_funnel_.gate_vnext_s2_sized_count,
+        live_signal_funnel_.gate_vnext_s3_exec_gate_pass,
+        live_signal_funnel_.gate_vnext_drop_ev_negative_count
     );
 
     const long long now_ms = getCurrentTimestampMs();
@@ -3194,50 +2757,6 @@ void TradingEngine::generateSignals() {
                                    : probabilistic_prefilter_reason);
                 continue;
             }
-            if (probabilistic_snapshot.phase4_portfolio_diagnostics_enabled) {
-                live_signal_funnel_.phase4_portfolio_diagnostics_enabled = true;
-                live_signal_funnel_.phase4_portfolio_allocator_enabled =
-                    probabilistic_snapshot.phase4_portfolio_allocator_enabled;
-                live_signal_funnel_.phase4_correlation_control_enabled =
-                    probabilistic_snapshot.phase4_correlation_control_enabled;
-                live_signal_funnel_.phase4_risk_budget_enabled =
-                    probabilistic_snapshot.phase4_risk_budget_enabled;
-                live_signal_funnel_.phase4_drawdown_governor_enabled =
-                    probabilistic_snapshot.phase4_drawdown_governor_enabled;
-                live_signal_funnel_.phase4_execution_aware_sizing_enabled =
-                    probabilistic_snapshot.phase4_execution_aware_sizing_enabled;
-                live_signal_funnel_.phase4_allocator_top_k =
-                    probabilistic_snapshot.phase4_portfolio_allocator_policy.top_k;
-                live_signal_funnel_.phase4_allocator_min_score =
-                    probabilistic_snapshot.phase4_portfolio_allocator_policy.min_score;
-                live_signal_funnel_.phase4_risk_budget_per_market_cap =
-                    probabilistic_snapshot.phase4_risk_budget_policy.per_market_cap;
-                live_signal_funnel_.phase4_risk_budget_gross_cap =
-                    probabilistic_snapshot.phase4_risk_budget_policy.gross_cap;
-                live_signal_funnel_.phase4_risk_budget_cap =
-                    probabilistic_snapshot.phase4_risk_budget_policy.risk_budget_cap;
-                live_signal_funnel_.phase4_risk_budget_regime_multipliers.clear();
-                for (const auto& kv :
-                     probabilistic_snapshot.phase4_risk_budget_policy.regime_budget_multipliers) {
-                    live_signal_funnel_.phase4_risk_budget_regime_multipliers[kv.first] = kv.second;
-                }
-                live_signal_funnel_.phase4_correlation_default_cluster_cap =
-                    probabilistic_snapshot.phase4_correlation_control_policy.default_cluster_cap;
-                live_signal_funnel_.phase4_correlation_market_cluster_count =
-                    static_cast<int>(
-                        probabilistic_snapshot.phase4_correlation_control_policy
-                            .market_cluster_map.size()
-                    );
-                live_signal_funnel_.phase4_execution_liquidity_low_threshold =
-                    probabilistic_snapshot.phase4_execution_aware_sizing_policy
-                        .liquidity_low_threshold;
-                live_signal_funnel_.phase4_execution_liquidity_mid_threshold =
-                    probabilistic_snapshot.phase4_execution_aware_sizing_policy
-                        .liquidity_mid_threshold;
-                live_signal_funnel_.phase4_execution_min_position_size =
-                    probabilistic_snapshot.phase4_execution_aware_sizing_policy.min_position_size;
-            }
-
             strategy::StrategyManager::CollectDiagnostics collect_diag;
             signal_metrics.liq_vol_gate_policy.enabled =
                 probabilistic_snapshot.phase3_liq_vol_gate_policy.enabled;
@@ -3423,15 +2942,11 @@ void TradingEngine::generateSignals() {
                 std::vector<strategy::Signal> adjusted_signals;
                 adjusted_signals.reserve(signals.size());
                 for (auto& signal : signals) {
-                    std::string reject_reason;
                     if (!applyProbabilisticRuntimeAdjustment(
                             config_,
                             probabilistic_snapshot,
-                            signal,
-                            &reject_reason)) {
-                        markScanReject(reject_reason.empty()
-                                           ? std::string("probabilistic_runtime_hard_gate")
-                                           : reject_reason);
+                            signal)) {
+                        markScanReject("probabilistic_runtime_adjustment_failed");
                         continue;
                     }
                     adjusted_signals.push_back(std::move(signal));
@@ -3449,44 +2964,6 @@ void TradingEngine::generateSignals() {
                     const std::string regime_key =
                         disabled_regime_key.empty() ? std::string(regimeToString(regime.regime))
                                                     : disabled_regime_key;
-                    const auto& manager_policy = probabilistic_snapshot.phase3_manager_filter_policy;
-                    const auto manager_defaults =
-                        autolife::analytics::ProbabilisticRuntimeModel::Phase3ManagerFilterPolicy{};
-                    const bool use_manager_policy = manager_policy.enabled;
-                    const auto manager_pick = [&](double policy_value, double default_value) {
-                        return use_manager_policy ? policy_value : default_value;
-                    };
-                    double shadow_min_strength = manager_pick(
-                        manager_policy.base_min_strength_default,
-                        manager_defaults.base_min_strength_default
-                    );
-                    double shadow_min_expected_value = manager_pick(
-                        manager_policy.base_min_expected_value,
-                        manager_defaults.base_min_expected_value
-                    );
-                    if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
-                        shadow_min_strength = manager_pick(
-                            manager_policy.base_min_strength_high_volatility,
-                            manager_defaults.base_min_strength_high_volatility
-                        );
-                    } else if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
-                        shadow_min_strength = manager_pick(
-                            manager_policy.base_min_strength_trending_down,
-                            manager_defaults.base_min_strength_trending_down
-                        );
-                    } else if (regime.regime == analytics::MarketRegime::RANGING) {
-                        shadow_min_strength = manager_pick(
-                            manager_policy.base_min_strength_ranging,
-                            manager_defaults.base_min_strength_ranging
-                        );
-                    }
-                    applyProbabilisticManagerFloors(
-                        config_,
-                        probabilistic_snapshot,
-                        regime.regime,
-                        &shadow_min_strength,
-                        &shadow_min_expected_value
-                    );
                     const double hostility_alpha =
                         std::clamp(config_.hostility_ewma_alpha, 0.01, 0.99);
                     const double hostility_now = computeMarketHostilityScore(
@@ -3505,23 +2982,8 @@ void TradingEngine::generateSignals() {
                     const long long now_ms = getCurrentTimestampMs();
 
                     for (const auto& shadow_signal : signals) {
-                        strategy::StrategyManager::FilterDiagnostics shadow_filter_diag;
-                        const std::vector<strategy::Signal> one_signal{shadow_signal};
-                        const auto filtered_shadow = strategy_manager_->filterSignalsWithDiagnostics(
-                            one_signal,
-                            shadow_min_strength,
-                            shadow_min_expected_value,
-                            regime.regime,
-                            &shadow_filter_diag
-                        );
-                        const bool would_pass_manager = !filtered_shadow.empty();
-                        bool would_pass_frontier = true;
-                        double required_expected_value = std::numeric_limits<double>::quiet_NaN();
-                        if (!shadow_filter_diag.frontier_decision_samples.empty()) {
-                            const auto& sample = shadow_filter_diag.frontier_decision_samples.front();
-                            would_pass_frontier = sample.frontier_pass;
-                            required_expected_value = sample.required_expected_value;
-                        }
+                        const bool would_pass_manager = true;
+                        const bool would_pass_frontier = true;
                         const auto veto_probe = probeRealtimeEntryVeto(
                             config_,
                             shadow_signal,
@@ -3558,12 +3020,8 @@ void TradingEngine::generateSignals() {
                         shadow_line["signal_expected_value"] = shadow_signal.expected_value;
                         shadow_line["signal_strength"] = shadow_signal.strength;
                         shadow_line["ev_blend"] = shadow_signal.phase3.adaptive_ev_blend;
-                        if (std::isfinite(required_expected_value)) {
-                            shadow_line["required_expected_value"] = required_expected_value;
-                        } else {
-                            shadow_line["required_expected_value"] = nullptr;
-                        }
-                        shadow_line["required_margin_floor"] = shadow_signal.phase3.frontier_margin_floor;
+                        shadow_line["required_expected_value"] = nullptr;
+                        shadow_line["required_margin_floor"] = nullptr;
                         shadow_line["disabled_reason"] = "REGIME_RANGING_SHADOW";
                         shadow_line["would_pass_frontier"] = would_pass_frontier;
                         shadow_line["would_pass_manager"] = would_pass_manager;
@@ -3634,145 +3092,23 @@ void TradingEngine::generateSignals() {
             }
             live_signal_funnel_.generated_signal_candidates += static_cast<long long>(signals.size());
 
-            strategy::Signal best_signal;
-            int candidate_count = static_cast<int>(signals.size());
-            const auto& manager_policy = probabilistic_snapshot.phase3_manager_filter_policy;
-            const auto manager_defaults =
-                autolife::analytics::ProbabilisticRuntimeModel::Phase3ManagerFilterPolicy{};
-            const bool use_manager_policy = manager_policy.enabled;
-            const auto manager_pick = [&](double policy_value, double default_value) {
-                return use_manager_policy ? policy_value : default_value;
-            };
-            double min_strength = manager_pick(
-                manager_policy.base_min_strength_default,
-                manager_defaults.base_min_strength_default
-            );
-            double min_expected_value = manager_pick(
-                manager_policy.base_min_expected_value,
-                manager_defaults.base_min_expected_value
-            );
-            if (regime.regime == analytics::MarketRegime::HIGH_VOLATILITY) {
-                min_strength = manager_pick(
-                    manager_policy.base_min_strength_high_volatility,
-                    manager_defaults.base_min_strength_high_volatility
-                );
-            } else if (regime.regime == analytics::MarketRegime::TRENDING_DOWN) {
-                min_strength = manager_pick(
-                    manager_policy.base_min_strength_trending_down,
-                    manager_defaults.base_min_strength_trending_down
-                );
-            } else if (regime.regime == analytics::MarketRegime::RANGING) {
-                min_strength = manager_pick(
-                    manager_policy.base_min_strength_ranging,
-                    manager_defaults.base_min_strength_ranging
-                );
-            }
-            applyProbabilisticManagerFloors(
-                config_,
-                probabilistic_snapshot,
-                regime.regime,
-                &min_strength,
-                &min_expected_value
-            );
-
-            strategy::StrategyManager::FilterDiagnostics manager_filter_diag;
-            auto filtered = strategy_manager_->filterSignalsWithDiagnostics(
-                signals,
-                min_strength,
-                min_expected_value,
-                regime.regime,
-                &manager_filter_diag
-            );
-            if (filtered.empty()) {
-                live_signal_funnel_.filtered_out_by_manager++;
-                markScanReject("filtered_out_by_manager");
-                for (const auto& kv : manager_filter_diag.rejection_reason_counts) {
-                    markScanReject(kv.first, kv.second);
-                }
-                continue;
-            }
-
-            std::vector<strategy::Signal> ranked;
-            ranked.reserve(filtered.size());
-            for (auto& signal : filtered) {
-                std::string primary_reject_reason;
-                if (!passesProbabilisticPrimaryMinimums(
-                        config_,
-                        signal,
-                        regime.regime,
-                        &probabilistic_snapshot,
-                        &primary_reject_reason)) {
-                    markScanReject(
-                        primary_reject_reason.empty()
-                            ? std::string("filtered_out_by_probabilistic_primary_minimum")
-                            : primary_reject_reason
-                    );
-                    continue;
-                }
-                ranked.push_back(std::move(signal));
-            }
-            if (ranked.empty()) {
-                live_signal_funnel_.filtered_out_by_manager++;
-                markScanReject("filtered_out_by_probabilistic_primary_minimum");
-                continue;
-            }
             std::stable_sort(
-                ranked.begin(),
-                ranked.end(),
-                [&](const strategy::Signal& lhs, const strategy::Signal& rhs) {
-                    return probabilisticPrimaryPriorityScore(config_, lhs, regime.regime) >
-                           probabilisticPrimaryPriorityScore(config_, rhs, regime.regime);
+                signals.begin(),
+                signals.end(),
+                [](const strategy::Signal& lhs, const strategy::Signal& rhs) {
+                    if (lhs.probabilistic_h5_margin != rhs.probabilistic_h5_margin) {
+                        return lhs.probabilistic_h5_margin > rhs.probabilistic_h5_margin;
+                    }
+                    return lhs.strength > rhs.strength;
                 }
             );
-            std::vector<strategy::Signal> phase4_ranked_snapshot = ranked;
-            int phase4_selected_count = ranked.empty() ? 0 : 1;
-            if (probabilistic_snapshot.phase4_portfolio_allocator_enabled && !ranked.empty()) {
-                const auto allocator_result = autolife::common::phase4::selectAllocatorCandidates(
-                    ranked,
-                    probabilistic_snapshot.phase4_portfolio_allocator_policy
-                );
-                phase4_ranked_snapshot = autolife::common::phase4::materializeSignalsByIndex(
-                    ranked,
-                    allocator_result.ranked_indices
-                );
-                ranked = autolife::common::phase4::materializeSignalsByIndex(
-                    ranked,
-                    allocator_result.selected_indices
-                );
-                phase4_selected_count = static_cast<int>(ranked.size());
-                if (probabilistic_snapshot.phase4_portfolio_diagnostics_enabled &&
-                    allocator_result.rejected_by_budget > 0) {
-                    live_signal_funnel_.phase4_rejected_by_budget +=
-                        static_cast<long long>(allocator_result.rejected_by_budget);
-                }
-            }
-
-            candidate_count = static_cast<int>(ranked.size());
-            if (probabilistic_snapshot.phase4_portfolio_diagnostics_enabled) {
-                live_signal_funnel_.phase4_candidates_total +=
-                    static_cast<long long>(phase4_ranked_snapshot.size());
-                live_signal_funnel_.phase4_candidate_snapshot_rows +=
-                    static_cast<long long>(phase4_ranked_snapshot.size());
-                appendPhase4CandidateArtifactLive(
-                    candles.back().timestamp,
-                    coin.market,
-                    probabilistic_snapshot,
-                    phase4_ranked_snapshot,
-                    phase4_selected_count,
-                    false
-                );
-            }
-            if (ranked.empty()) {
-                live_signal_funnel_.filtered_out_by_manager++;
-                markScanReject("filtered_out_by_phase4_budget");
-                continue;
-            }
-            best_signal = ranked.front();
+            const int candidate_count = static_cast<int>(signals.size());
+            strategy::Signal best_signal = signals.front();
             live_signal_funnel_.selection_call_count++;
             live_signal_funnel_.selection_scored_candidate_count +=
                 static_cast<long long>(candidate_count);
             LOG_INFO(
-                "{} probabilistic-primary best selected: p_h5={:.4f}, margin={:+.4f}, liq={:.1f}, strength={:.3f}, ranked_candidates={}, regime_state={}, vol_z={:+.3f}, dd_speed_bps={:.2f}, ens_n={}, u_std={:.4f}, ev_blend={:.3f}, ev_conf={:.3f}, edge_raw={:+.4f}%, edge_cal={:+.4f}%, cost_mode={}, c_entry={:.4f}%, c_exit={:.4f}%, c_tail={:.4f}%",
+                "{} vnext best selected: p_h5={:.4f}, margin={:+.4f}, liq={:.1f}, strength={:.3f}, candidates={}, regime_state={}, vol_z={:+.3f}, dd_speed_bps={:.2f}, ens_n={}, u_std={:.4f}, ev_blend={:.3f}, ev_conf={:.3f}, edge_raw={:+.4f}%, edge_cal={:+.4f}%, cost_mode={}, c_entry={:.4f}%, c_exit={:.4f}%, c_tail={:.4f}%",
                 coin.market,
                 best_signal.probabilistic_h5_calibrated,
                 best_signal.probabilistic_h5_margin,
@@ -3800,44 +3136,40 @@ void TradingEngine::generateSignals() {
                 continue;
             }
 
-            if (best_signal.type != strategy::SignalType::NONE) {
-                if (config_.probabilistic_regime_spec_enabled) {
-                    const double regime_scale = std::clamp(
-                        probabilistic_snapshot.regime_size_multiplier,
-                        0.01,
-                        1.0
+            if (config_.probabilistic_regime_spec_enabled) {
+                const double regime_scale = std::clamp(
+                    probabilistic_snapshot.regime_size_multiplier,
+                    0.01,
+                    1.0
+                );
+                if (std::fabs(regime_scale - 1.0) > 1e-6) {
+                    best_signal.position_size *= regime_scale;
+                    LOG_INFO(
+                        "{} probabilistic regime size scale: state={}, scale={:.3f}, pos={:.4f}",
+                        coin.market,
+                        autolife::common::probabilistic_regime::stateLabel(
+                            probabilistic_snapshot.regime_state
+                        ),
+                        regime_scale,
+                        best_signal.position_size
                     );
-                    if (std::fabs(regime_scale - 1.0) > 1e-6) {
-                        best_signal.position_size *= regime_scale;
-                        LOG_INFO(
-                            "{} probabilistic regime size scale: state={}, scale={:.3f}, pos={:.4f}",
-                            coin.market,
-                            autolife::common::probabilistic_regime::stateLabel(
-                                probabilistic_snapshot.regime_state
-                            ),
-                            regime_scale,
-                            best_signal.position_size
-                        );
-                    }
                 }
-                best_signal.market_regime = regime.regime;
-                pending_signals_.push_back(best_signal);
-                total_signals_++;
-                live_signal_funnel_.selected_signal_candidates++;
-                live_signal_funnel_.markets_with_selected_candidate++;
-                if (probabilistic_snapshot.phase4_portfolio_diagnostics_enabled) {
-                    live_signal_funnel_.phase4_selected_total++;
-                }
-
-                LOG_INFO("Signal selected: {} - {} (strength: {:.2f}, candidates={}, tf5m_preloaded={}, tf1h_preloaded={}, fallback={})",
-                         coin.market,
-                         best_signal.type == strategy::SignalType::STRONG_BUY ? "STRONG_BUY" : "BUY",
-                         best_signal.strength,
-                         candidate_count,
-                         best_signal.used_preloaded_tf_5m ? "Y" : "N",
-                         best_signal.used_preloaded_tf_1h ? "Y" : "N",
-                         best_signal.used_resampled_tf_fallback ? "Y" : "N");
             }
+
+            best_signal.market_regime = regime.regime;
+            pending_signals_.push_back(std::move(best_signal));
+            total_signals_++;
+            live_signal_funnel_.selected_signal_candidates++;
+            live_signal_funnel_.markets_with_selected_candidate++;
+
+            LOG_INFO("Signal selected: {} - {} (strength: {:.2f}, candidates={}, tf5m_preloaded={}, tf1h_preloaded={}, fallback={})",
+                     coin.market,
+                     pending_signals_.back().type == strategy::SignalType::STRONG_BUY ? "STRONG_BUY" : "BUY",
+                     pending_signals_.back().strength,
+                     candidate_count,
+                     pending_signals_.back().used_preloaded_tf_5m ? "Y" : "N",
+                     pending_signals_.back().used_preloaded_tf_1h ? "Y" : "N",
+                     pending_signals_.back().used_resampled_tf_fallback ? "Y" : "N");
         } catch (const std::exception& e) {
             LOG_ERROR("Signal generation failed: {} - {}", coin.market, e.what());
         }
@@ -3962,22 +3294,6 @@ void TradingEngine::flushLiveSignalFunnelTaxonomyReport(
             ? static_cast<double>(snapshot.selection_hint_adjusted_candidate_count) /
                 static_cast<double>(snapshot.selection_scored_candidate_count)
             : 0.0;
-    const double phase4_selection_rate =
-        snapshot.phase4_candidates_total > 0
-            ? static_cast<double>(snapshot.phase4_selected_total) /
-                  static_cast<double>(snapshot.phase4_candidates_total)
-            : 0.0;
-    nlohmann::json phase4_regime_budget_multiplier_avg_by_regime = nlohmann::json::object();
-    for (const auto& kv : snapshot.phase4_regime_budget_multiplier_count_by_regime) {
-        if (kv.second <= 0) {
-            continue;
-        }
-        const double sum = snapshot.phase4_regime_budget_multiplier_sum_by_regime.count(kv.first) > 0
-            ? snapshot.phase4_regime_budget_multiplier_sum_by_regime.at(kv.first)
-            : 0.0;
-        phase4_regime_budget_multiplier_avg_by_regime[kv.first] =
-            sum / static_cast<double>(kv.second);
-    }
     const double liq_vol_gate_pass_rate =
         snapshot.liq_vol_gate_observation_count > 0
             ? static_cast<double>(snapshot.liq_vol_gate_pass_count) /
@@ -4183,6 +3499,18 @@ void TradingEngine::flushLiveSignalFunnelTaxonomyReport(
     report["selection_hint_adjusted_ratio"] = selection_hint_adjusted_ratio;
     report["selection_hint_adjustment_counts"] = snapshot.selection_hint_adjustment_counts;
     report["selection_hint_total_adjustments"] = total_hint_adjustments;
+    report["gate_system_version_effective"] = snapshot.gate_system_version_effective;
+    report["stage_funnel_vnext"] = {
+        {"S0_snapshots_valid", snapshot.gate_vnext_s0_snapshots_valid},
+        {"S1_selected_topk", snapshot.gate_vnext_s1_selected_topk},
+        {"S2_sized_count", snapshot.gate_vnext_s2_sized_count},
+        {"S3_exec_gate_pass", snapshot.gate_vnext_s3_exec_gate_pass},
+        {"drop_ev_negative_count", snapshot.gate_vnext_drop_ev_negative_count},
+    };
+    report["quality_topk_effective"] = snapshot.quality_topk_effective;
+    report["candidates_before_topk"] = snapshot.candidates_before_topk;
+    report["candidates_after_topk"] = snapshot.candidates_after_topk;
+    report["selected_after_topk_count"] = snapshot.selected_after_topk_count;
     report["top20_sort_mode"] = snapshot.top20_sort_mode;
     report["top20_candidates"] = snapshot.top20_candidates;
     report["top20_margin_stats"] = {
@@ -4199,39 +3527,6 @@ void TradingEngine::flushLiveSignalFunnelTaxonomyReport(
     };
     report["top_selection_hint_adjustments"] =
         buildTopNamedCounts(sorted_cumulative_hint_adjustments, 8, "adjustment");
-    report["phase4_portfolio_diagnostics"] = {
-        {"enabled", snapshot.phase4_portfolio_diagnostics_enabled},
-        {"phase4_portfolio_allocator_enabled", snapshot.phase4_portfolio_allocator_enabled},
-        {"phase4_correlation_control_enabled", snapshot.phase4_correlation_control_enabled},
-        {"phase4_risk_budget_enabled", snapshot.phase4_risk_budget_enabled},
-        {"phase4_drawdown_governor_enabled", snapshot.phase4_drawdown_governor_enabled},
-        {"phase4_execution_aware_sizing_enabled", snapshot.phase4_execution_aware_sizing_enabled},
-        {"allocator_top_k", snapshot.phase4_allocator_top_k},
-        {"allocator_min_score", snapshot.phase4_allocator_min_score},
-        {"risk_budget_per_market_cap", snapshot.phase4_risk_budget_per_market_cap},
-        {"risk_budget_gross_cap", snapshot.phase4_risk_budget_gross_cap},
-        {"risk_budget_cap", snapshot.phase4_risk_budget_cap},
-        {"risk_budget_regime_multipliers", snapshot.phase4_risk_budget_regime_multipliers},
-        {"regime_budget_multiplier_applied_count", snapshot.phase4_regime_budget_multiplier_applied_count},
-        {"regime_budget_multiplier_count_by_regime", snapshot.phase4_regime_budget_multiplier_count_by_regime},
-        {"regime_budget_multiplier_avg_by_regime", phase4_regime_budget_multiplier_avg_by_regime},
-        {"drawdown_current", snapshot.phase4_drawdown_current},
-        {"drawdown_budget_multiplier", snapshot.phase4_drawdown_budget_multiplier},
-        {"correlation_default_cluster_cap", snapshot.phase4_correlation_default_cluster_cap},
-        {"correlation_market_cluster_count", snapshot.phase4_correlation_market_cluster_count},
-        {"execution_liquidity_low_threshold", snapshot.phase4_execution_liquidity_low_threshold},
-        {"execution_liquidity_mid_threshold", snapshot.phase4_execution_liquidity_mid_threshold},
-        {"execution_min_position_size", snapshot.phase4_execution_min_position_size},
-        {"candidates_total", snapshot.phase4_candidates_total},
-        {"selected_total", snapshot.phase4_selected_total},
-        {"selection_rate", phase4_selection_rate},
-        {"rejected_by_budget", snapshot.phase4_rejected_by_budget},
-        {"rejected_by_cluster_cap", snapshot.phase4_rejected_by_cluster_cap},
-        {"rejected_by_correlation_penalty", snapshot.phase4_rejected_by_correlation_penalty},
-        {"rejected_by_execution_cap", snapshot.phase4_rejected_by_execution_cap},
-        {"rejected_by_drawdown_governor", snapshot.phase4_rejected_by_drawdown_governor},
-        {"candidate_snapshot_rows", snapshot.phase4_candidate_snapshot_rows},
-    };
     report["rejection_reason_counts"] = snapshot.rejection_reason_counts;
     report["rejection_group_counts"] = rejection_group_counts;
     report["total_rejections"] = total_rejections;
@@ -4474,89 +3769,9 @@ void TradingEngine::executeSignals() {
     );
 
     std::vector<strategy::Signal> execution_candidates = pending_signals_;
-    if (config_.enable_core_plane_bridge &&
-        config_.enable_core_policy_plane &&
-        core_cycle_) {
-        core::PolicyContext context;
-        context.small_seed_mode = small_seed_mode;
-        context.max_new_orders_per_scan = per_scan_buy_limit;
-        context.dominant_regime = dominant_regime;
-
-        auto decision_batch = core_cycle_->selectPolicyCandidates(pending_signals_, context);
-        execution_candidates = std::move(decision_batch.selected_candidates);
-        appendPolicyDecisionAudit(
-            decision_batch.decisions,
-            dominant_regime,
-            small_seed_mode,
-            per_scan_buy_limit,
-            resolvePolicyAuditTimestampMs(
-                scanned_markets_,
-                decision_batch.decisions,
-                pending_signals_
-            )
-        );
-        if (!decision_batch.decisions.empty()) {
-            nlohmann::json payload;
-            payload["selected"] = decision_batch.selected_candidates.size();
-            payload["decisions"] = decision_batch.decisions.size();
-            payload["small_seed_mode"] = small_seed_mode;
-            payload["max_new_orders_per_scan"] = per_scan_buy_limit;
-            appendJournalEvent(
-                core::JournalEventType::POLICY_CHANGED,
-                "MULTI",
-                "policy_cycle",
-                payload
-            );
-        }
-        if (decision_batch.dropped_by_policy > 0) {
-            LOG_INFO("Policy plane dropped {} candidate(s)",
-                     decision_batch.dropped_by_policy);
-        }
-    } else if (policy_controller_) {
-        PolicyInput policy_input;
-        policy_input.candidates = pending_signals_;
-        policy_input.small_seed_mode = small_seed_mode;
-        policy_input.max_new_orders_per_scan = per_scan_buy_limit;
-        policy_input.dominant_regime = dominant_regime;
-        if (performance_store_) {
-            policy_input.strategy_stats = &performance_store_->byStrategy();
-            policy_input.bucket_stats = &performance_store_->byBucket();
-        }
-        auto policy_output = policy_controller_->selectCandidates(policy_input);
-        execution_candidates = std::move(policy_output.selected_candidates);
-        appendPolicyDecisionAudit(
-            policy_output.decisions,
-            dominant_regime,
-            small_seed_mode,
-            per_scan_buy_limit,
-            resolvePolicyAuditTimestampMs(
-                scanned_markets_,
-                policy_output.decisions,
-                pending_signals_
-            )
-        );
-        if (!policy_output.decisions.empty()) {
-            nlohmann::json payload;
-            payload["selected"] = policy_output.selected_candidates.size();
-            payload["decisions"] = policy_output.decisions.size();
-            payload["small_seed_mode"] = small_seed_mode;
-            payload["max_new_orders_per_scan"] = per_scan_buy_limit;
-            appendJournalEvent(
-                core::JournalEventType::POLICY_CHANGED,
-                "MULTI",
-                "policy_cycle",
-                payload
-            );
-        }
-        if (policy_output.dropped_by_policy > 0) {
-            LOG_INFO("AdaptivePolicyController dropped {} candidate(s)",
-                     policy_output.dropped_by_policy);
-        }
-    }
-
     if (execution_candidates.empty()) {
         nlohmann::json payload;
-        payload["reason"] = "policy_selected_zero_candidates";
+        payload["reason"] = "gate_vnext_selected_zero_candidates";
         payload["input_candidates"] = pending_signals_.size();
         payload["dominant_regime"] = regimeToString(dominant_regime);
         payload["small_seed_mode"] = small_seed_mode;
@@ -4564,7 +3779,7 @@ void TradingEngine::executeSignals() {
         appendJournalEvent(
             core::JournalEventType::NO_TRADE,
             "MULTI",
-            "policy_guard",
+            "gate_vnext_quality_selection",
             payload
         );
         pending_signals_.clear();
@@ -4585,259 +3800,20 @@ void TradingEngine::executeSignals() {
     if (total_potential >= static_cast<size_t>(effective_max_positions)) {
         LOG_WARN("Position limit reached: {} / effective_max {} (configured {})", total_potential, effective_max_positions, configured_max_positions);
     }
+
     std::stable_sort(
         execution_candidates.begin(),
         execution_candidates.end(),
-        [&](const strategy::Signal& lhs, const strategy::Signal& rhs) {
-            const auto lhs_regime =
-                lhs.market_regime == analytics::MarketRegime::UNKNOWN ? dominant_regime : lhs.market_regime;
-            const auto rhs_regime =
-                rhs.market_regime == analytics::MarketRegime::UNKNOWN ? dominant_regime : rhs.market_regime;
-            return probabilisticPrimaryPriorityScore(config_, lhs, lhs_regime) >
-                   probabilisticPrimaryPriorityScore(config_, rhs, rhs_regime);
+        [](const strategy::Signal& lhs, const strategy::Signal& rhs) {
+            if (lhs.probabilistic_h5_margin != rhs.probabilistic_h5_margin) {
+                return lhs.probabilistic_h5_margin > rhs.probabilistic_h5_margin;
+            }
+            if (lhs.strength != rhs.strength) {
+                return lhs.strength > rhs.strength;
+            }
+            return lhs.expected_value > rhs.expected_value;
         }
     );
-    const auto& phase4_policy = probabilistic_runtime_model_.phase4Policy();
-    int phase4_execution_reject_count = 0;
-    int phase4_drawdown_reject_count = 0;
-    int phase4_cluster_reject_count = 0;
-    if (phase4_policy.phase4_execution_aware_sizing_enabled && !execution_candidates.empty()) {
-        const int before_exec_count = static_cast<int>(execution_candidates.size());
-        const auto exec_result = autolife::common::phase4::applyExecutionAwareSizingFilter(
-            execution_candidates,
-            phase4_policy.execution_aware_sizing
-        );
-        auto adjusted_candidates = autolife::common::phase4::materializeSignalsByIndex(
-            execution_candidates,
-            exec_result.selected_indices
-        );
-        for (std::size_t i = 0;
-             i < adjusted_candidates.size() && i < exec_result.adjusted_position_sizes.size();
-             ++i) {
-            adjusted_candidates[i].position_size = exec_result.adjusted_position_sizes[i];
-        }
-        execution_candidates = std::move(adjusted_candidates);
-        phase4_execution_reject_count = exec_result.rejected_by_execution_cap;
-        if (live_signal_funnel_.phase4_portfolio_diagnostics_enabled &&
-            exec_result.rejected_by_execution_cap > 0) {
-            live_signal_funnel_.phase4_rejected_by_execution_cap +=
-                static_cast<long long>(exec_result.rejected_by_execution_cap);
-        }
-        if (static_cast<int>(execution_candidates.size()) < before_exec_count) {
-            LOG_INFO(
-                "Phase4 execution-aware sizing filtered candidates: selected={}, rejected_exec={}",
-                static_cast<int>(execution_candidates.size()),
-                exec_result.rejected_by_execution_cap
-            );
-        }
-    }
-    const bool phase4_has_regime_budget_multiplier =
-        !phase4_policy.risk_budget.regime_budget_multipliers.empty();
-    if ((phase4_policy.phase4_risk_budget_enabled ||
-         phase4_policy.phase4_drawdown_governor_enabled ||
-         phase4_has_regime_budget_multiplier) &&
-        !execution_candidates.empty()) {
-        int regime_multiplier_applied_this_scan = 0;
-        std::map<std::string, long long> regime_multiplier_count_this_scan;
-        std::map<std::string, double> regime_multiplier_sum_this_scan;
-        for (auto& signal : execution_candidates) {
-            const auto regime_for_budget =
-                signal.market_regime == analytics::MarketRegime::UNKNOWN
-                    ? dominant_regime
-                    : signal.market_regime;
-            const auto resolution = autolife::common::phase4::resolveRegimeBudgetMultiplier(
-                phase4_policy.risk_budget,
-                regime_for_budget
-            );
-            if (!resolution.configured) {
-                continue;
-            }
-            signal.position_size = std::clamp(signal.position_size * resolution.multiplier, 0.0, 1.0);
-            const std::string regime_key = resolution.matched_key.empty()
-                ? std::string(regimeToString(regime_for_budget))
-                : resolution.matched_key;
-            regime_multiplier_applied_this_scan += 1;
-            regime_multiplier_count_this_scan[regime_key] += 1;
-            regime_multiplier_sum_this_scan[regime_key] += resolution.multiplier;
-        }
-        if (live_signal_funnel_.phase4_portfolio_diagnostics_enabled &&
-            regime_multiplier_applied_this_scan > 0) {
-            live_signal_funnel_.phase4_regime_budget_multiplier_applied_count +=
-                static_cast<long long>(regime_multiplier_applied_this_scan);
-            for (const auto& kv : regime_multiplier_count_this_scan) {
-                live_signal_funnel_.phase4_regime_budget_multiplier_count_by_regime[kv.first] += kv.second;
-            }
-            for (const auto& kv : regime_multiplier_sum_this_scan) {
-                live_signal_funnel_.phase4_regime_budget_multiplier_sum_by_regime[kv.first] += kv.second;
-            }
-        }
-
-        if (phase4_policy.phase4_risk_budget_enabled ||
-            phase4_policy.phase4_drawdown_governor_enabled) {
-            const auto runtime_metrics = risk_manager_->getRiskMetrics();
-            const double phase4_drawdown_current = std::clamp(runtime_metrics.current_drawdown, 0.0, 1.0);
-            const double existing_gross_exposure =
-                (runtime_metrics.total_capital > 1e-9)
-                    ? std::clamp(
-                          (runtime_metrics.total_capital - runtime_metrics.available_capital) /
-                              runtime_metrics.total_capital,
-                          0.0,
-                          10.0
-                      )
-                    : 0.0;
-            auto effective_budget_policy = phase4_policy.risk_budget;
-            const double phase4_drawdown_budget_multiplier = autolife::common::phase4::drawdownBudgetMultiplier(
-                phase4_drawdown_current,
-                phase4_policy.drawdown_governor
-            );
-            effective_budget_policy.per_market_cap = std::clamp(
-                effective_budget_policy.per_market_cap * phase4_drawdown_budget_multiplier,
-                0.0,
-                1.0
-            );
-            effective_budget_policy.gross_cap = std::max(
-                0.0,
-                effective_budget_policy.gross_cap * phase4_drawdown_budget_multiplier
-            );
-            effective_budget_policy.risk_budget_cap = std::max(
-                0.0,
-                effective_budget_policy.risk_budget_cap * phase4_drawdown_budget_multiplier
-            );
-            const double existing_risk_exposure =
-                existing_gross_exposure *
-                std::max(0.0, effective_budget_policy.risk_proxy_stop_pct);
-
-            const int before_budget_count = static_cast<int>(execution_candidates.size());
-            int baseline_selected_count = before_budget_count;
-            if (phase4_policy.phase4_drawdown_governor_enabled &&
-                phase4_drawdown_budget_multiplier < 0.999999) {
-                const auto baseline_result = autolife::common::phase4::applyRiskBudgetPrefixFilter(
-                    execution_candidates,
-                    phase4_policy.risk_budget,
-                    existing_gross_exposure,
-                    existing_risk_exposure
-                );
-                baseline_selected_count = std::clamp(
-                    baseline_result.selected_count,
-                    0,
-                    before_budget_count
-                );
-            }
-            const auto budget_result = autolife::common::phase4::applyRiskBudgetPrefixFilter(
-                execution_candidates,
-                effective_budget_policy,
-                existing_gross_exposure,
-                existing_risk_exposure
-            );
-            const int selected_count = std::clamp(
-                budget_result.selected_count,
-                0,
-                before_budget_count
-            );
-            phase4_drawdown_reject_count =
-                (phase4_policy.phase4_drawdown_governor_enabled &&
-                 phase4_drawdown_budget_multiplier < 0.999999)
-                    ? std::max(0, baseline_selected_count - selected_count)
-                    : 0;
-            const int budget_reject_count = std::max(
-                0,
-                budget_result.rejected_by_budget - phase4_drawdown_reject_count
-            );
-            for (int i = 0; i < selected_count; ++i) {
-                execution_candidates[static_cast<std::size_t>(i)].position_size =
-                    budget_result.selected_position_sizes[static_cast<std::size_t>(i)];
-            }
-            if (live_signal_funnel_.phase4_portfolio_diagnostics_enabled) {
-                live_signal_funnel_.phase4_drawdown_current = phase4_drawdown_current;
-                live_signal_funnel_.phase4_drawdown_budget_multiplier =
-                    phase4_drawdown_budget_multiplier;
-            }
-            if (selected_count < before_budget_count) {
-                execution_candidates.resize(static_cast<std::size_t>(selected_count));
-                if (live_signal_funnel_.phase4_portfolio_diagnostics_enabled) {
-                    if (budget_reject_count > 0) {
-                        live_signal_funnel_.phase4_rejected_by_budget +=
-                            static_cast<long long>(budget_reject_count);
-                    }
-                    if (phase4_drawdown_reject_count > 0) {
-                        live_signal_funnel_.phase4_rejected_by_drawdown_governor +=
-                            static_cast<long long>(phase4_drawdown_reject_count);
-                    }
-                }
-                LOG_INFO(
-                    "Phase4 budget filtered candidates: selected={}, rejected_budget={}, rejected_dd={}, gross_cap={:.3f}, risk_cap={:.3f}, dd={:.3f}, dd_mult={:.3f}",
-                    selected_count,
-                    budget_reject_count,
-                    phase4_drawdown_reject_count,
-                    effective_budget_policy.gross_cap,
-                    effective_budget_policy.risk_budget_cap,
-                    phase4_drawdown_current,
-                    phase4_drawdown_budget_multiplier
-                );
-            }
-        }
-    }
-    if (phase4_policy.phase4_correlation_control_enabled &&
-        !execution_candidates.empty()) {
-        const auto runtime_metrics = risk_manager_->getRiskMetrics();
-        const double total_capital = std::max(1e-9, runtime_metrics.total_capital);
-        std::map<std::string, double> existing_cluster_exposure;
-        for (const auto& pos : risk_manager_->getAllPositions()) {
-            const std::string cluster_id = autolife::common::phase4::clusterIdForMarket(
-                pos.market,
-                phase4_policy.correlation_control
-            );
-            const double exposure = std::clamp(pos.invested_amount / total_capital, 0.0, 10.0);
-            existing_cluster_exposure[cluster_id] += exposure;
-        }
-        const auto cluster_result = autolife::common::phase4::applyClusterCapFilter(
-            execution_candidates,
-            phase4_policy.correlation_control,
-            existing_cluster_exposure
-        );
-        if (cluster_result.selected_indices.size() < execution_candidates.size()) {
-            const int rejected_count = static_cast<int>(
-                execution_candidates.size() - cluster_result.selected_indices.size()
-            );
-            phase4_cluster_reject_count = rejected_count;
-            execution_candidates = autolife::common::phase4::materializeSignalsByIndex(
-                execution_candidates,
-                cluster_result.selected_indices
-            );
-            if (live_signal_funnel_.phase4_portfolio_diagnostics_enabled && rejected_count > 0) {
-                live_signal_funnel_.phase4_rejected_by_cluster_cap +=
-                    static_cast<long long>(rejected_count);
-            }
-            LOG_INFO(
-                "Phase4 cluster cap filtered candidates: selected={}, rejected_cluster={}",
-                static_cast<int>(execution_candidates.size()),
-                rejected_count
-            );
-        }
-    }
-
-    if (execution_candidates.empty()) {
-        nlohmann::json payload;
-        payload["reason"] = phase4_drawdown_reject_count > 0
-            ? "phase4_drawdown_governor_selected_zero_candidates"
-            : (phase4_cluster_reject_count > 0
-                ? "phase4_cluster_cap_selected_zero_candidates"
-                : (phase4_execution_reject_count > 0
-                    ? "phase4_execution_cap_selected_zero_candidates"
-                    : "phase4_budget_selected_zero_candidates"));
-        payload["input_candidates"] = pending_signals_.size();
-        payload["dominant_regime"] = regimeToString(dominant_regime);
-        payload["small_seed_mode"] = small_seed_mode;
-        payload["max_new_orders_per_scan"] = per_scan_buy_limit;
-        appendJournalEvent(
-            core::JournalEventType::NO_TRADE,
-            "MULTI",
-            "phase4_budget_guard",
-            payload
-        );
-        pending_signals_.clear();
-        return;
-    }
 
     for (auto& signal : execution_candidates) {
         if (signal.type != strategy::SignalType::BUY &&

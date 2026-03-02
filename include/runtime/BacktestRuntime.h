@@ -95,6 +95,15 @@ public:
             int no_signal_generated = 0;
             int filtered_out_by_manager = 0;
             int filtered_out_by_policy = 0;
+            std::string gate_system_version_effective = "vnext";
+            int quality_topk_effective = 5;
+            int gate_vnext_s0_snapshots_valid = 0;
+            int gate_vnext_s1_selected_topk = 0;
+            int gate_vnext_s2_sized_count = 0;
+            int gate_vnext_s3_exec_gate_pass = 0;
+            int gate_vnext_s4_submitted = 0;
+            int gate_vnext_s5_filled = 0;
+            int gate_vnext_drop_ev_negative_count = 0;
             int reject_expected_edge_negative_count = 0;
             int reject_regime_entry_disabled_count = 0;
             std::map<std::string, int> reject_regime_entry_disabled_by_regime;
@@ -445,6 +454,8 @@ private:
     Result::ShadowFunnelSummary shadow_funnel_;
     Result::Phase4PortfolioDiagnostics phase4_portfolio_diagnostics_;
     std::vector<Result::Phase4CandidateSnapshotSample> phase4_candidate_snapshot_samples_;
+    int gate_vnext_quality_topk_ = 5;
+    double gate_vnext_ev_scale_bps_ = 10.0;
     size_t current_candle_index_ = 0;
 
     // Simulation Methods

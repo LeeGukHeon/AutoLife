@@ -935,12 +935,22 @@ def parse_backtest_json(proc: subprocess.CompletedProcess) -> Dict[str, Any]:
     raise RuntimeError(f"Backtest JSON output not found (exit={proc.returncode})")
 
 
+def resolve_runtime_logs_dir(
+    exe_dir: pathlib.Path,
+    run_dir: Optional[pathlib.Path] = None,
+) -> pathlib.Path:
+    if isinstance(run_dir, pathlib.Path):
+        return run_dir.resolve()
+    return (exe_dir / "logs").resolve()
+
+
 def run_backtest(
     exe_path: pathlib.Path,
     dataset_path: pathlib.Path,
     config_path: pathlib.Path,
     require_higher_tf_companions: bool,
     disable_adaptive_state_io: bool,
+    run_dir: Optional[pathlib.Path] = None,
     evaluation_start_ts: Optional[int] = None,
     evaluation_end_ts: Optional[int] = None,
     cumulative_start_ts: Optional[int] = None,
@@ -954,6 +964,8 @@ def run_backtest(
         "--config-path",
         str(config_path),
     ]
+    if isinstance(run_dir, pathlib.Path):
+        cmd.extend(["--run-dir", str(run_dir)])
     if require_higher_tf_companions and is_upbit_primary_1m_dataset(dataset_path):
         cmd.append("--require-higher-tf-companions")
     env = os.environ.copy()
@@ -971,48 +983,63 @@ def run_backtest(
         env=env,
     )
     parsed = parse_backtest_json(proc)
-    parsed["phase3_pass_ev_samples"] = load_policy_decision_ev_samples(exe_path.parent)
-    parsed["policy_decision_volatility_samples"] = load_policy_decision_volatility_samples(exe_path.parent)
+    parsed["runtime_logs_dir"] = str(resolve_runtime_logs_dir(exe_path.parent, run_dir))
+    parsed["phase3_pass_ev_samples"] = load_policy_decision_ev_samples(exe_path.parent, run_dir=run_dir)
+    parsed["policy_decision_volatility_samples"] = load_policy_decision_volatility_samples(
+        exe_path.parent,
+        run_dir=run_dir,
+    )
     parsed["split_eval_stats"] = load_policy_decision_range_stats(
         exe_dir=exe_path.parent,
+        run_dir=run_dir,
         start_ts=evaluation_start_ts,
         end_ts=evaluation_end_ts,
     )
     parsed["split_cumulative_stats"] = load_policy_decision_range_stats(
         exe_dir=exe_path.parent,
+        run_dir=run_dir,
         start_ts=cumulative_start_ts,
         end_ts=cumulative_end_ts,
     )
     parsed["split_trade_eval_stats"] = load_execution_trade_range_stats(
         exe_dir=exe_path.parent,
+        run_dir=run_dir,
         start_ts=evaluation_start_ts,
         end_ts=evaluation_end_ts,
     )
     parsed["split_trade_cumulative_stats"] = load_execution_trade_range_stats(
         exe_dir=exe_path.parent,
+        run_dir=run_dir,
         start_ts=cumulative_start_ts,
         end_ts=cumulative_end_ts,
     )
     parsed["split_stage_funnel_eval_stats"] = load_entry_stage_funnel_range_stats(
         exe_dir=exe_path.parent,
+        run_dir=run_dir,
         start_ts=evaluation_start_ts,
         end_ts=evaluation_end_ts,
     )
     parsed["split_stage_funnel_cumulative_stats"] = load_entry_stage_funnel_range_stats(
         exe_dir=exe_path.parent,
+        run_dir=run_dir,
         start_ts=cumulative_start_ts,
         end_ts=cumulative_end_ts,
     )
     parsed["frontier_filter_samples"] = load_frontier_filter_range_samples(
         exe_dir=exe_path.parent,
+        run_dir=run_dir,
         start_ts=evaluation_start_ts,
         end_ts=evaluation_end_ts,
     )
     return parsed
 
 
-def load_ranging_shadow_events(exe_dir: pathlib.Path, dataset_name: str) -> List[Dict[str, Any]]:
-    artifact_path = (exe_dir / "logs" / "ranging_shadow_signals.jsonl").resolve()
+def load_ranging_shadow_events(
+    exe_dir: pathlib.Path,
+    dataset_name: str,
+    run_dir: Optional[pathlib.Path] = None,
+) -> List[Dict[str, Any]]:
+    artifact_path = (resolve_runtime_logs_dir(exe_dir, run_dir) / "ranging_shadow_signals.jsonl").resolve()
     if not artifact_path.exists():
         return []
     events: List[Dict[str, Any]] = []
@@ -1048,8 +1075,11 @@ def write_ranging_shadow_events_jsonl(
             fp.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def load_policy_decision_ev_samples(exe_dir: pathlib.Path) -> List[Dict[str, Any]]:
-    artifact_path = (exe_dir / "logs" / "policy_decisions_backtest.jsonl").resolve()
+def load_policy_decision_ev_samples(
+    exe_dir: pathlib.Path,
+    run_dir: Optional[pathlib.Path] = None,
+) -> List[Dict[str, Any]]:
+    artifact_path = (resolve_runtime_logs_dir(exe_dir, run_dir) / "policy_decisions_backtest.jsonl").resolve()
     if not artifact_path.exists():
         return []
     samples: List[Dict[str, Any]] = []
@@ -1146,9 +1176,10 @@ def load_policy_decision_ev_samples(exe_dir: pathlib.Path) -> List[Dict[str, Any
 def load_policy_decision_volatility_samples(
     exe_dir: pathlib.Path,
     *,
+    run_dir: Optional[pathlib.Path] = None,
     sample_cap: int = 120000,
 ) -> List[Dict[str, Any]]:
-    artifact_path = (exe_dir / "logs" / "policy_decisions_backtest.jsonl").resolve()
+    artifact_path = (resolve_runtime_logs_dir(exe_dir, run_dir) / "policy_decisions_backtest.jsonl").resolve()
     if not artifact_path.exists():
         return []
     samples: List[Dict[str, Any]] = []
@@ -1222,13 +1253,14 @@ def load_policy_decision_volatility_samples(
 
 def load_policy_decision_range_stats(
     exe_dir: pathlib.Path,
+    run_dir: Optional[pathlib.Path],
     start_ts: Optional[int],
     end_ts: Optional[int],
 ) -> Dict[str, Any]:
     start = int(start_ts) if start_ts is not None else 0
     end = int(end_ts) if end_ts is not None else 0
     enabled = bool(start > 0 and end > 0 and end >= start)
-    artifact_path = (exe_dir / "logs" / "policy_decisions_backtest.jsonl").resolve()
+    artifact_path = (resolve_runtime_logs_dir(exe_dir, run_dir) / "policy_decisions_backtest.jsonl").resolve()
     out = {
         "enabled": enabled,
         "start_ts": int(start),
@@ -1289,13 +1321,14 @@ def load_policy_decision_range_stats(
 
 def load_execution_trade_range_stats(
     exe_dir: pathlib.Path,
+    run_dir: Optional[pathlib.Path],
     start_ts: Optional[int],
     end_ts: Optional[int],
 ) -> Dict[str, Any]:
     start = int(start_ts) if start_ts is not None else 0
     end = int(end_ts) if end_ts is not None else 0
     enabled = bool(start > 0 and end > 0 and end >= start)
-    artifact_path = (exe_dir / "logs" / "execution_updates_backtest.jsonl").resolve()
+    artifact_path = (resolve_runtime_logs_dir(exe_dir, run_dir) / "execution_updates_backtest.jsonl").resolve()
     out = {
         "enabled": enabled,
         "start_ts": int(start),
@@ -1383,13 +1416,14 @@ def load_execution_trade_range_stats(
 
 def load_entry_stage_funnel_range_stats(
     exe_dir: pathlib.Path,
+    run_dir: Optional[pathlib.Path],
     start_ts: Optional[int],
     end_ts: Optional[int],
 ) -> Dict[str, Any]:
     start = int(start_ts) if start_ts is not None else 0
     end = int(end_ts) if end_ts is not None else 0
     enabled = bool(start > 0 and end > 0 and end >= start)
-    artifact_path = (exe_dir / "logs" / "entry_stage_funnel_backtest.jsonl").resolve()
+    artifact_path = (resolve_runtime_logs_dir(exe_dir, run_dir) / "entry_stage_funnel_backtest.jsonl").resolve()
     out: Dict[str, Any] = {
         "enabled": enabled,
         "start_ts": int(start),
@@ -1643,13 +1677,14 @@ def load_entry_stage_funnel_range_stats(
 
 def load_frontier_filter_range_samples(
     exe_dir: pathlib.Path,
+    run_dir: Optional[pathlib.Path],
     start_ts: Optional[int],
     end_ts: Optional[int],
 ) -> Dict[str, Any]:
     start = int(start_ts) if start_ts is not None else 0
     end = int(end_ts) if end_ts is not None else 0
     enabled = bool(start > 0 and end > 0 and end >= start)
-    artifact_path = (exe_dir / "logs" / "frontier_filter_backtest.jsonl").resolve()
+    artifact_path = (resolve_runtime_logs_dir(exe_dir, run_dir) / "frontier_filter_backtest.jsonl").resolve()
     out: Dict[str, Any] = {
         "enabled": enabled,
         "start_ts": int(start),
@@ -7436,6 +7471,76 @@ def build_dataset_diagnostics(
     no_signal_generated = max(0, to_int(entry_funnel.get("no_signal_generated", 0)))
     filtered_out_by_manager = max(0, to_int(entry_funnel.get("filtered_out_by_manager", 0)))
     filtered_out_by_policy = max(0, to_int(entry_funnel.get("filtered_out_by_policy", 0)))
+    gate_system_version_effective = str(
+        entry_funnel.get("gate_system_version_effective", "legacy")
+    ).strip().lower() or "legacy"
+    quality_topk_effective = max(0, to_int(entry_funnel.get("quality_topk_effective", 0)))
+    stage_funnel_vnext_raw = entry_funnel.get("stage_funnel_vnext", {})
+    if not isinstance(stage_funnel_vnext_raw, dict):
+        stage_funnel_vnext_raw = {}
+    gate_vnext_s0_snapshots_valid = max(
+        0,
+        to_int(
+            stage_funnel_vnext_raw.get(
+                "s0_snapshots_valid",
+                entry_funnel.get("gate_vnext_s0_snapshots_valid", 0),
+            )
+        ),
+    )
+    gate_vnext_s1_selected_topk = max(
+        0,
+        to_int(
+            stage_funnel_vnext_raw.get(
+                "s1_selected_topk",
+                entry_funnel.get("gate_vnext_s1_selected_topk", 0),
+            )
+        ),
+    )
+    gate_vnext_s2_sized_count = max(
+        0,
+        to_int(
+            stage_funnel_vnext_raw.get(
+                "s2_sized_count",
+                entry_funnel.get("gate_vnext_s2_sized_count", 0),
+            )
+        ),
+    )
+    gate_vnext_s3_exec_gate_pass = max(
+        0,
+        to_int(
+            stage_funnel_vnext_raw.get(
+                "s3_exec_gate_pass",
+                entry_funnel.get("gate_vnext_s3_exec_gate_pass", 0),
+            )
+        ),
+    )
+    gate_vnext_s4_submitted = max(
+        0,
+        to_int(
+            stage_funnel_vnext_raw.get(
+                "s4_submitted",
+                entry_funnel.get("gate_vnext_s4_submitted", 0),
+            )
+        ),
+    )
+    gate_vnext_s5_filled = max(
+        0,
+        to_int(
+            stage_funnel_vnext_raw.get(
+                "s5_filled",
+                entry_funnel.get("gate_vnext_s5_filled", 0),
+            )
+        ),
+    )
+    gate_vnext_drop_ev_negative_count = max(
+        0,
+        to_int(
+            stage_funnel_vnext_raw.get(
+                "drop_ev_negative_count",
+                entry_funnel.get("gate_vnext_drop_ev_negative_count", 0),
+            )
+        ),
+    )
     reject_regime_entry_disabled_count = max(
         0, to_int(entry_funnel.get("reject_regime_entry_disabled_count", 0))
     )
@@ -7956,6 +8061,19 @@ def build_dataset_diagnostics(
         "backend_provenance": backend_provenance,
         "phase3_diagnostics_v2": phase3_diag,
         "phase4_portfolio_diagnostics": phase4_diag,
+        "gate_vnext": {
+            "gate_system_version_effective": gate_system_version_effective,
+            "quality_topk_effective": int(quality_topk_effective),
+            "stage_funnel_vnext": {
+                "s0_snapshots_valid": int(gate_vnext_s0_snapshots_valid),
+                "s1_selected_topk": int(gate_vnext_s1_selected_topk),
+                "s2_sized_count": int(gate_vnext_s2_sized_count),
+                "s3_exec_gate_pass": int(gate_vnext_s3_exec_gate_pass),
+                "s4_submitted": int(gate_vnext_s4_submitted),
+                "s5_filled": int(gate_vnext_s5_filled),
+                "drop_ev_negative_count": int(gate_vnext_drop_ev_negative_count),
+            },
+        },
         "strategy_exit": {
             "mode_effective": strategy_exit_mode_effective,
             "strategy_exit_triggered_count": int(strategy_exit_triggered_count),
@@ -10646,6 +10764,11 @@ def main(argv=None) -> int:
     )
     parser.add_argument("--exe-path", default=r".\build\Release\AutoLifeTrading.exe")
     parser.add_argument("--config-path", default=r".\build\Release\config\config.json")
+    parser.add_argument(
+        "--run-dir",
+        default="",
+        help="Optional runtime output root passed to AutoLifeTrading.exe (--run-dir).",
+    )
     parser.add_argument("--source-config-path", default=r".\config\config.json")
     parser.add_argument("--data-dir", default=r".\data\backtest_real")
     parser.add_argument("--dataset-names", nargs="*", default=[])
@@ -10906,6 +11029,9 @@ def main(argv=None) -> int:
 
     exe_path = resolve_path(args.exe_path, "Executable")
     config_path = resolve_path(args.config_path, "Build config", must_exist=False)
+    runtime_run_dir: Optional[pathlib.Path] = None
+    if str(args.run_dir).strip():
+        runtime_run_dir = resolve_path(args.run_dir, "Runtime run dir", must_exist=False)
     source_config_path = resolve_path(args.source_config_path, "Source config")
     data_dir = resolve_path(args.data_dir, "Data directory")
     output_csv = resolve_path(args.output_csv, "Output csv", must_exist=False)
@@ -11144,7 +11270,7 @@ def main(argv=None) -> int:
             dataset_paths=dataset_paths,
             split_manifest_payload=split_manifest_payload,
             split_name=str(args.split_name),
-            logs_dir=(exe_path.parent / "logs").resolve(),
+            logs_dir=resolve_runtime_logs_dir(exe_path.parent, runtime_run_dir),
             execution_prewarm_hours=float(max(0.0, args.split_execution_prewarm_hours)),
         )
         filtered_paths = split_filter_context.get("filtered_dataset_paths", [])
@@ -11193,6 +11319,7 @@ def main(argv=None) -> int:
                 config_path=config_path,
                 require_higher_tf_companions=bool(args.require_higher_tf_companions),
                 disable_adaptive_state_io=not bool(args.enable_adaptive_state_io),
+                run_dir=runtime_run_dir,
                 evaluation_start_ts=eval_start_ts,
                 evaluation_end_ts=eval_end_ts,
                 cumulative_start_ts=cumulative_start_ts,
@@ -11202,6 +11329,7 @@ def main(argv=None) -> int:
                 load_ranging_shadow_events(
                     exe_dir=exe_path.parent,
                     dataset_name=dataset_path.name,
+                    run_dir=runtime_run_dir,
                 )
             )
             frontier_payload = result.get("frontier_filter_samples", {})
@@ -12543,6 +12671,7 @@ def main(argv=None) -> int:
             "output_json": str(output_json),
             "baseline_report_path": str(baseline_report_path),
             "config_path": str(config_path),
+            "runtime_run_dir": str(resolve_runtime_logs_dir(exe_path.parent, runtime_run_dir)),
             "source_config_path": str(source_config_path),
             "runtime_bundle_path": str(bundle_meta.get("bundle_path", "")) if bundle_meta else "",
             "runtime_bundle_version": str(bundle_meta.get("bundle_version", "")) if bundle_meta else "",

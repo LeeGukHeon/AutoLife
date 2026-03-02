@@ -1,8 +1,9 @@
 # Probabilistic Execution Docs Index
-Last updated: 2026-02-27
+Last updated: 2026-03-02
 
 ## Core baseline
 - `docs/STRICT_GATE_RUNBOOK_2026-02-13.md`: Locked full roadmap (hard locks, Stage B~E execution order, output format).
+- `docs/RND_GATENEXT_FULL_REBUILD_2026-03-02.md`: Current top-priority RND roadmap (Gate vNext full rebuild, Fresh14-first validation).
 - `docs/10_BASELINE_IMPLEMENTED.md`: Current implemented baseline (what runs today).
 - `docs/11_BASELINE_RUNBOOK.md`: Step-by-step baseline operation runbook.
 - `docs/20_API_POLICY_UPBIT.md`: Upbit API compliance and throttling policy.
