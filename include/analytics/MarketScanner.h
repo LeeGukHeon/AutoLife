@@ -59,7 +59,8 @@ struct CoinMetrics {
     double model_prob_h5_calibrated;      // cached probability for diagnostics
     double model_selection_threshold_h5;  // cached threshold for diagnostics
     bool model_margin_valid;              // true when model_margin_score is available
-    OrderbookSnapshot orderbook_snapshot; // 二쇰Ц???ㅻ깄??    nlohmann::json orderbook_units;       // 二쇰Ц???좊떅 罹먯떆
+    OrderbookSnapshot orderbook_snapshot; // normalized orderbook snapshot
+    nlohmann::json orderbook_units;       // raw orderbook units cache
 
     // ??罹붾뱾 ?곗씠??異붽?
     std::vector<Candle> candles;

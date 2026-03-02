@@ -4,6 +4,7 @@
 #include <string>
 #include <map>
 #include <array>
+#include <nlohmann/json.hpp>
 #include "common/Types.h"
 #include "common/Config.h"
 #include "backtest/DataHistory.h"
@@ -96,6 +97,9 @@ public:
             int filtered_out_by_policy = 0;
             std::string gate_system_version_effective = "vnext";
             int quality_topk_effective = 5;
+            std::string gate_vnext_backend_request = "unknown";
+            std::string gate_vnext_backend_effective = "unknown";
+            std::string gate_vnext_lgbm_model_sha256;
             int gate_vnext_s0_snapshots_valid = 0;
             int gate_vnext_s1_selected_topk = 0;
             int gate_vnext_s2_sized_count = 0;
@@ -103,6 +107,7 @@ public:
             int gate_vnext_s4_submitted = 0;
             int gate_vnext_s5_filled = 0;
             int gate_vnext_drop_ev_negative_count = 0;
+            int gate_vnext_scan_rounds = 0;
             int reject_expected_edge_negative_count = 0;
             int reject_regime_entry_disabled_count = 0;
             std::map<std::string, int> reject_regime_entry_disabled_by_regime;
@@ -447,6 +452,7 @@ private:
     Result::ShadowFunnelSummary shadow_funnel_;
     Result::Phase4PortfolioDiagnostics phase4_portfolio_diagnostics_;
     std::vector<Result::Phase4CandidateSnapshotSample> phase4_candidate_snapshot_samples_;
+    std::vector<nlohmann::json> gate_vnext_ev_samples_;
     int gate_vnext_quality_topk_ = 5;
     double gate_vnext_ev_scale_bps_ = 10.0;
     size_t current_candle_index_ = 0;

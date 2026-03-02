@@ -1031,6 +1031,16 @@ def run_backtest(
         start_ts=evaluation_start_ts,
         end_ts=evaluation_end_ts,
     )
+    runtime_logs_dir = resolve_runtime_logs_dir(exe_path.parent, run_dir)
+    parsed["run_provenance"] = load_report_json(runtime_logs_dir / "run_provenance.json")
+    parsed["run_params_dump"] = load_report_json(runtime_logs_dir / "run_params_dump.json")
+    parsed["vnext_ev_samples"] = load_vnext_ev_samples(
+        exe_dir=exe_path.parent,
+        run_dir=run_dir,
+        start_ts=evaluation_start_ts,
+        end_ts=evaluation_end_ts,
+        limit=50,
+    )
     return parsed
 
 
@@ -1432,7 +1442,6 @@ def load_entry_stage_funnel_range_stats(
         "entry_rounds_total": 0,
         "entry_rounds_in_range": 0,
         "candidates_total_in_range": 0,
-        "candidates_after_quality_topk_in_range": 0,
         "candidates_after_sizing_in_range": 0,
         "candidates_after_quality_topk_in_range": 0,
         "candidates_after_manager_in_range": 0,
@@ -1503,6 +1512,9 @@ def load_entry_stage_funnel_range_stats(
                 stages = payload.get("stages", {})
                 if not isinstance(stages, dict):
                     stages = {}
+                stage_vnext = payload.get("stage_funnel_vnext", {})
+                if not isinstance(stage_vnext, dict):
+                    stage_vnext = {}
                 out["entry_rounds_total"] = int(out["entry_rounds_total"]) + 1
                 if ts_value > 0:
                     if out["ts_min_total"] is None or ts_value < int(out["ts_min_total"]):
@@ -1538,23 +1550,35 @@ def load_entry_stage_funnel_range_stats(
                     continue
                 out["entry_rounds_in_range"] = int(out["entry_rounds_in_range"]) + 1
                 out["candidates_total_in_range"] = int(out["candidates_total_in_range"]) + max(
-                    0, to_int(stages.get("candidates_total", 0))
+                    0,
+                    to_int(
+                        stage_vnext.get(
+                            "s0_snapshots_valid",
+                            stages.get("candidates_total", 0),
+                        )
+                    ),
                 )
                 after_quality_topk = max(
                     0,
                     to_int(
-                        stages.get(
-                            "candidates_after_quality_topk",
-                            stages.get("candidates_after_quality_topk", 0),
+                        stage_vnext.get(
+                            "s1_selected_topk",
+                            stages.get(
+                                "candidates_after_quality_topk",
+                                stages.get("candidates_after_quality_topk", 0),
+                            ),
                         )
                     ),
                 )
                 after_sizing = max(
                     0,
                     to_int(
-                        stages.get(
-                            "candidates_after_sizing",
-                            stages.get("candidates_after_manager", 0),
+                        stage_vnext.get(
+                            "s2_sized_count",
+                            stages.get(
+                                "candidates_after_sizing",
+                                stages.get("candidates_after_manager", 0),
+                            ),
                         )
                     ),
                 )
@@ -1564,17 +1588,28 @@ def load_entry_stage_funnel_range_stats(
                 out["candidates_after_sizing_in_range"] = int(
                     out["candidates_after_sizing_in_range"]
                 ) + int(after_sizing)
-                out["candidates_after_quality_topk_in_range"] = int(
-                    out["candidates_after_quality_topk_in_range"]
-                ) + int(after_quality_topk)
                 out["candidates_after_manager_in_range"] = int(
                     out["candidates_after_manager_in_range"]
                 ) + int(after_sizing)
                 out["candidates_after_portfolio_in_range"] = int(
                     out["candidates_after_portfolio_in_range"]
-                ) + max(0, to_int(stages.get("candidates_after_portfolio", 0)))
-                orders_submitted = max(0, to_int(stages.get("orders_submitted", 0)))
-                orders_filled = max(0, to_int(stages.get("orders_filled", 0)))
+                ) + max(
+                    0,
+                    to_int(
+                        stage_vnext.get(
+                            "s3_exec_gate_pass",
+                            stages.get("candidates_after_portfolio", 0),
+                        )
+                    ),
+                )
+                orders_submitted = max(
+                    0,
+                    to_int(stage_vnext.get("s4_submitted", stages.get("orders_submitted", 0))),
+                )
+                orders_filled = max(
+                    0,
+                    to_int(stage_vnext.get("s5_filled", stages.get("orders_filled", 0))),
+                )
                 out["orders_submitted_in_range"] = int(out["orders_submitted_in_range"]) + int(
                     orders_submitted
                 )
@@ -1701,6 +1736,91 @@ def load_entry_stage_funnel_range_stats(
     else:
         out["ev_at_manager_pass_avg_in_range"] = 0.0
         out["ev_at_order_submit_check_avg_in_range"] = 0.0
+    return out
+
+
+def load_vnext_ev_samples(
+    exe_dir: pathlib.Path,
+    run_dir: Optional[pathlib.Path],
+    start_ts: Optional[int],
+    end_ts: Optional[int],
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    artifact_path = (resolve_runtime_logs_dir(exe_dir, run_dir) / "vnext_ev_samples.json").resolve()
+    if not artifact_path.exists():
+        return []
+    start = int(start_ts) if start_ts is not None else 0
+    end = int(end_ts) if end_ts is not None else 0
+    enabled_range = bool(start > 0 and end > 0 and end >= start)
+    try:
+        loaded = load_report_json(artifact_path)
+    except Exception:
+        return []
+    rows = loaded if isinstance(loaded, list) else []
+    out: List[Dict[str, Any]] = []
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        ts_ms = max(0, to_int(raw.get("ts_ms", 0)))
+        if enabled_range and (ts_ms <= 0 or ts_ms < start or ts_ms > end):
+            continue
+        out.append(
+            {
+                "ts_ms": int(ts_ms),
+                "market": str(raw.get("market", "")).strip(),
+                "regime": str(raw.get("regime", "")).strip(),
+                "backend_request": str(raw.get("backend_request", "")).strip().lower(),
+                "backend_effective": str(raw.get("backend_effective", "")).strip().lower(),
+                "lgbm_model_sha256": str(raw.get("lgbm_model_sha256", "")).strip().lower(),
+                "sample_stage": str(raw.get("sample_stage", "")).strip(),
+                "snapshot_valid": bool(raw.get("snapshot_valid", False)),
+                "snapshot_fail_reason": str(raw.get("snapshot_fail_reason", "")).strip(),
+                "p_raw": (
+                    None
+                    if raw.get("p_raw", None) is None
+                    else round(to_float(raw.get("p_raw", 0.0)), 10)
+                ),
+                "p_cal": round(
+                    to_float(raw.get("p_cal", raw.get("p_calibrated", 0.0))),
+                    10,
+                ),
+                "p_calibrated": round(to_float(raw.get("p_calibrated", 0.0)), 10),
+                "threshold": round(
+                    to_float(raw.get("threshold", raw.get("selection_threshold", 0.0))),
+                    10,
+                ),
+                "selection_threshold": round(
+                    to_float(raw.get("selection_threshold", raw.get("threshold", 0.0))),
+                    10,
+                ),
+                "margin": round(to_float(raw.get("margin", 0.0)), 10),
+                "expected_edge_calibrated_bps": round(
+                    to_float(raw.get("expected_edge_calibrated_bps", 0.0)),
+                    10,
+                ),
+                "expected_edge_used_for_gate_bps": round(
+                    to_float(raw.get("expected_edge_used_for_gate_bps", 0.0)),
+                    10,
+                ),
+                "signal_expected_value": round(
+                    to_float(raw.get("signal_expected_value", 0.0)),
+                    10,
+                ),
+                "edge_bps_from_snapshot": round(
+                    to_float(raw.get("edge_bps_from_snapshot", 0.0)),
+                    10,
+                ),
+                "expected_value_vnext_bps": round(
+                    to_float(raw.get("expected_value_vnext_bps", 0.0)),
+                    10,
+                ),
+                "size_fraction": round(to_float(raw.get("size_fraction", 0.0)), 10),
+                "execution_gate_pass": bool(raw.get("execution_gate_pass", False)),
+                "execution_reject_reason": str(raw.get("execution_reject_reason", "")).strip(),
+            }
+        )
+        if len(out) >= max(1, int(limit)):
+            break
     return out
 
 
@@ -5008,6 +5128,7 @@ def build_runtime_cost_semantics_debug(
 def build_semantics_lock_report(
     bundle_meta: Dict[str, Any],
     runtime_cost_semantics_debug: Dict[str, Any],
+    filled_sample_count: Optional[int] = None,
 ) -> Dict[str, Any]:
     bundle_edge_semantics = str(bundle_meta.get("edge_semantics", "unknown")).strip().lower()
     if bundle_edge_semantics not in ("net", "gross"):
@@ -5036,6 +5157,11 @@ def build_semantics_lock_report(
     if not isinstance(semantics_counts, dict):
         semantics_counts = {}
     sample_count = max(0, to_int(runtime_cost_semantics_debug.get("sample_size_total", 0)))
+    filled_samples = (
+        max(0, to_int(filled_sample_count))
+        if filled_sample_count is not None
+        else None
+    )
     dominant_runtime_semantics = str(
         runtime_cost_semantics_debug.get("dominant_edge_semantics", "unknown")
     ).strip().lower() or "unknown"
@@ -5069,6 +5195,87 @@ def build_semantics_lock_report(
         mean_cost_bps = 0.0
     if not math.isfinite(max_cost_bps):
         max_cost_bps = 0.0
+
+    if filled_samples is not None and filled_samples <= 0:
+        return {
+            "generated_at": __import__("datetime").datetime.now().astimezone().isoformat(),
+            "edge_semantics": (bundle_edge_semantics or "unknown"),
+            "status": "SKIPPED_NO_SAMPLES",
+            "skip_reason": "no_filled_samples",
+            "messages": [
+                "Semantics lock skipped: no filled trades/samples were observed in this run."
+            ],
+            "bundle": {
+                "bundle_path": str(bundle_meta.get("bundle_path", "")),
+                "bundle_version": str(bundle_meta.get("bundle_version", "")),
+                "edge_semantics": bundle_edge_semantics,
+                "root_cost_model_enabled_configured": bool(bundle_root_cfg),
+                "phase3_cost_model_enabled_configured": bool(bundle_phase3_cfg),
+            },
+            "runtime": {
+                "filled_sample_count": int(filled_samples),
+                "sample_count": int(sample_count),
+                "dominant_edge_semantics": dominant_runtime_semantics,
+                "edge_semantics_counts": semantics_counts,
+                "root_cost_model_enabled_configured_true_count": int(root_cfg_true_count),
+                "phase3_cost_model_enabled_configured_true_count": int(phase3_cfg_true_count),
+                "root_cost_model_enabled_effective_true_count": int(root_effective_true_count),
+                "phase3_cost_model_enabled_effective_true_count": int(phase3_effective_true_count),
+                "edge_semantics_guard_violation_count": int(guard_violation_count),
+                "edge_semantics_guard_forced_off_count": int(guard_forced_off_count),
+                "edge_semantics_guard_action_counts": (
+                    runtime_flags.get("edge_semantics_guard_action_counts", {})
+                    if isinstance(runtime_flags.get("edge_semantics_guard_action_counts", {}), dict)
+                    else {}
+                ),
+                "cost_bps_estimate_mean": float(mean_cost_bps),
+                "cost_bps_estimate_max": float(max_cost_bps),
+            },
+        }
+
+    if sample_count <= 0:
+        return {
+            "generated_at": __import__("datetime").datetime.now().astimezone().isoformat(),
+            "edge_semantics": (bundle_edge_semantics or "unknown"),
+            "status": "SKIPPED_NO_SAMPLES",
+            "skip_reason": "no_runtime_semantics_samples",
+            "messages": [
+                "Semantics lock skipped: no runtime semantics/cost samples were observed in this run."
+            ],
+            "bundle": {
+                "bundle_path": str(bundle_meta.get("bundle_path", "")),
+                "bundle_version": str(bundle_meta.get("bundle_version", "")),
+                "edge_semantics": bundle_edge_semantics,
+                "root_cost_model_enabled_configured": bool(bundle_root_cfg),
+                "phase3_cost_model_enabled_configured": bool(bundle_phase3_cfg),
+            },
+            "runtime": {
+                "sample_count": 0,
+                "dominant_edge_semantics": dominant_runtime_semantics,
+                "edge_semantics_counts": semantics_counts,
+                "root_cost_model_enabled_configured_true_count": int(root_cfg_true_count),
+                "phase3_cost_model_enabled_configured_true_count": int(phase3_cfg_true_count),
+                "root_cost_model_enabled_effective_true_count": int(root_effective_true_count),
+                "phase3_cost_model_enabled_effective_true_count": int(phase3_effective_true_count),
+                "edge_semantics_guard_violation_count": int(guard_violation_count),
+                "edge_semantics_guard_forced_off_count": int(guard_forced_off_count),
+                "edge_semantics_guard_action_counts": (
+                    runtime_flags.get("edge_semantics_guard_action_counts", {})
+                    if isinstance(runtime_flags.get("edge_semantics_guard_action_counts", {}), dict)
+                    else {}
+                ),
+            },
+            "cost_bps_estimate_summary": {
+                "sample_count": int(max(0, to_int(cost_summary.get("sample_count", 0)))),
+                "mean_bps": round(float(mean_cost_bps), 6),
+                "max_bps": round(float(max_cost_bps), 6),
+                "min_bps": round(float(to_float(cost_summary.get("min_bps", 0.0))), 6),
+                "p50_bps": round(float(to_float(cost_summary.get("p50_bps", 0.0))), 6),
+                "p90_bps": round(float(to_float(cost_summary.get("p90_bps", 0.0))), 6),
+            },
+            "violations": [],
+            "warnings": [],
+        }
 
     violations: List[str] = []
     warnings: List[str] = []
@@ -5527,6 +5734,7 @@ def build_stage_g8_backend_provenance_report(
 ) -> Dict[str, Any]:
     per_dataset: List[Dict[str, Any]] = []
     effective_counts: Dict[str, int] = {}
+    configured_counts: Dict[str, int] = {}
     p_raw_mean_sum = 0.0
     p_raw_std_sum = 0.0
     p_raw_p95_sum = 0.0
@@ -5545,6 +5753,10 @@ def build_stage_g8_backend_provenance_report(
         prov = item.get("backend_provenance", {})
         if not isinstance(prov, dict):
             prov = {}
+        backend_cfg_dataset = str(
+            prov.get("prob_model_backend_configured", "unknown")
+        ).strip().lower() or "unknown"
+        configured_counts[backend_cfg_dataset] = configured_counts.get(backend_cfg_dataset, 0) + 1
         backend_effective = str(prov.get("prob_model_backend_effective", "unknown")).strip().lower() or "unknown"
         effective_counts[backend_effective] = effective_counts.get(backend_effective, 0) + 1
         prob = prov.get("probability_distribution", {})
@@ -5613,17 +5825,40 @@ def build_stage_g8_backend_provenance_report(
     bundle_ev_affine = bundle.get("lgbm_ev_affine", {})
     if not isinstance(bundle_ev_affine, dict):
         bundle_ev_affine = {}
+    configured_backend_from_bundle = (
+        str(bundle.get("prob_model_backend", "unknown")).strip().lower() or "unknown"
+    )
+    if configured_backend_from_bundle in {"unknown", "n/a", ""} and configured_counts:
+        configured_backend_from_bundle = sorted(
+            configured_counts.items(),
+            key=lambda item: (-int(item[1]), str(item[0])),
+        )[0][0]
+
+    lgbm_model_path_cfg = str(bundle.get("lgbm_model_path", "")).strip()
+    lgbm_model_sha_cfg = str(bundle.get("lgbm_model_sha256", "")).strip().lower()
+    if (not lgbm_model_path_cfg or not lgbm_model_sha_cfg) and per_dataset:
+        for row in per_dataset:
+            if not isinstance(row, dict):
+                continue
+            p = str(row.get("lgbm_model_path", "")).strip()
+            s = str(row.get("lgbm_model_sha256", "")).strip().lower()
+            if not lgbm_model_path_cfg and p:
+                lgbm_model_path_cfg = p
+            if not lgbm_model_sha_cfg and s:
+                lgbm_model_sha_cfg = s
+            if lgbm_model_path_cfg and lgbm_model_sha_cfg:
+                break
 
     return {
         "generated_at": __import__("datetime").datetime.now().astimezone().isoformat(),
         "runtime_bundle_path": str(bundle.get("bundle_path", "")),
-        "prob_model_backend_configured": str(bundle.get("prob_model_backend", "unknown")).strip().lower(),
+        "prob_model_backend_configured": configured_backend_from_bundle,
         "prob_model_backend_effective_counts": {
             str(k): int(v) for k, v in sorted(effective_counts.items(), key=lambda x: str(x[0]))
         },
         "prob_model_backend_effective_dominant": str(dominant_backend),
-        "lgbm_model_path": str(bundle.get("lgbm_model_path", "")).strip(),
-        "lgbm_model_sha256": str(bundle.get("lgbm_model_sha256", "")).strip().lower(),
+        "lgbm_model_path": lgbm_model_path_cfg,
+        "lgbm_model_sha256": lgbm_model_sha_cfg,
         "calibration_mode": str(bundle.get("lgbm_calibration_mode", "off")).strip().lower(),
         "calibration_params": {
             "a": bundle_lgbm_cal.get("a", None),
@@ -7570,6 +7805,19 @@ def build_dataset_diagnostics(
             )
         ),
     )
+    gate_vnext_scan_rounds = max(
+        0,
+        to_int(
+            stage_funnel_vnext_raw.get(
+                "scan_rounds",
+                entry_funnel.get("gate_vnext_scan_rounds", 0),
+            )
+        ),
+    )
+    gate_vnext_topk_bound = int(gate_vnext_scan_rounds * max(1, quality_topk_effective))
+    gate_vnext_s1_exceeds_topk_bound = bool(
+        gate_vnext_scan_rounds > 0 and gate_vnext_s1_selected_topk > gate_vnext_topk_bound
+    )
     reject_regime_entry_disabled_count = max(
         0, to_int(entry_funnel.get("reject_regime_entry_disabled_count", 0))
     )
@@ -7930,17 +8178,53 @@ def build_dataset_diagnostics(
         sample_limit=20,
     )
     bundle = bundle_meta if isinstance(bundle_meta, dict) else {}
+    run_provenance = backtest_result.get("run_provenance", {})
+    if not isinstance(run_provenance, dict):
+        run_provenance = {}
+    gate_vnext_backend_provenance = entry_funnel.get("gate_vnext_backend_provenance", {})
+    if not isinstance(gate_vnext_backend_provenance, dict):
+        gate_vnext_backend_provenance = {}
     configured_backend = str(bundle.get("prob_model_backend", "unknown")).strip().lower() or "unknown"
-    backend_effective = str(
+    backend_request = (
+        str(gate_vnext_backend_provenance.get("backend_request", "")).strip().lower()
+        or str(run_provenance.get("prob_model_backend", "")).strip().lower()
+        or configured_backend
+    )
+    backend_effective_raw = str(
         probability_calibration_telemetry.get("prob_model_backend_effective", "unknown")
     ).strip().lower() or "unknown"
+    backend_effective_source = "runtime_samples"
+    backend_effective = backend_effective_raw
+    if backend_effective in {"", "unknown", "n/a"}:
+        gate_effective = str(
+            gate_vnext_backend_provenance.get("backend_effective", "")
+        ).strip().lower()
+        if gate_effective in {"sgd", "lgbm"}:
+            backend_effective = gate_effective
+            backend_effective_source = "gate_vnext_fallback"
+        elif backend_request in {"sgd", "lgbm"}:
+            backend_effective = backend_request
+            backend_effective_source = "run_provenance_fallback"
+        elif configured_backend in {"sgd", "lgbm"}:
+            backend_effective = configured_backend
+            backend_effective_source = "bundle_config_fallback"
+        else:
+            backend_effective = "unknown"
+            backend_effective_source = "unknown"
     prob_backend_counts = (
         probability_calibration_telemetry.get("prob_model_backend_counts", {})
         if isinstance(probability_calibration_telemetry.get("prob_model_backend_counts", {}), dict)
         else {}
     )
-    lgbm_model_path = str(bundle.get("lgbm_model_path", "")).strip()
-    lgbm_model_sha256 = str(bundle.get("lgbm_model_sha256", "")).strip().lower()
+    lgbm_model_path = str(
+        run_provenance.get("lgbm_model_path", bundle.get("lgbm_model_path", ""))
+    ).strip()
+    lgbm_model_sha256 = str(
+        gate_vnext_backend_provenance.get(
+            "lgbm_model_sha256",
+            run_provenance.get("lgbm_model_sha256", bundle.get("lgbm_model_sha256", "")),
+        )
+    ).strip().lower()
     lgbm_calibration_mode = str(bundle.get("lgbm_calibration_mode", "off")).strip().lower() or "off"
     lgbm_h5_calibration = (
         bundle.get("lgbm_h5_calibration", {})
@@ -7970,8 +8254,11 @@ def build_dataset_diagnostics(
         else {}
     )
     backend_provenance = {
+        "backend_request": backend_request,
         "prob_model_backend_configured": configured_backend,
         "prob_model_backend_effective": backend_effective,
+        "prob_model_backend_effective_source": backend_effective_source,
+        "prob_model_backend_effective_raw": backend_effective_raw,
         "prob_model_backend_counts": {
             str(k): int(max(0, to_int(v)))
             for k, v in sorted(prob_backend_counts.items(), key=lambda x: str(x[0]))
@@ -8024,6 +8311,46 @@ def build_dataset_diagnostics(
         backtest_result.get("trade_history_samples", []),
         limit=10,
     )
+    raw_vnext_ev_samples = backtest_result.get("vnext_ev_samples", [])
+    vnext_ev_samples: List[Dict[str, Any]] = []
+    if isinstance(raw_vnext_ev_samples, list):
+        for raw in raw_vnext_ev_samples:
+            if not isinstance(raw, dict):
+                continue
+            vnext_ev_samples.append(
+                {
+                    "ts_ms": int(max(0, to_int(raw.get("ts_ms", 0)))),
+                    "market": str(raw.get("market", "")).strip(),
+                    "regime": str(raw.get("regime", "")).strip(),
+                    "p_calibrated": round(to_float(raw.get("p_calibrated", 0.0)), 10),
+                    "margin": round(to_float(raw.get("margin", 0.0)), 10),
+                    "expected_edge_calibrated_bps": round(
+                        to_float(raw.get("expected_edge_calibrated_bps", 0.0)),
+                        10,
+                    ),
+                    "expected_edge_used_for_gate_bps": round(
+                        to_float(raw.get("expected_edge_used_for_gate_bps", 0.0)),
+                        10,
+                    ),
+                    "signal_expected_value": round(
+                        to_float(raw.get("signal_expected_value", 0.0)),
+                        10,
+                    ),
+                    "edge_bps_from_snapshot": round(
+                        to_float(raw.get("edge_bps_from_snapshot", 0.0)),
+                        10,
+                    ),
+                    "expected_value_vnext_bps": round(
+                        to_float(raw.get("expected_value_vnext_bps", 0.0)),
+                        10,
+                    ),
+                    "size_fraction": round(to_float(raw.get("size_fraction", 0.0)), 10),
+                    "execution_gate_pass": bool(raw.get("execution_gate_pass", False)),
+                    "execution_reject_reason": str(raw.get("execution_reject_reason", "")).strip(),
+                }
+            )
+            if len(vnext_ev_samples) >= 50:
+                break
 
     return {
         "dataset": dataset_name,
@@ -8093,6 +8420,16 @@ def build_dataset_diagnostics(
         "gate_vnext": {
             "gate_system_version_effective": gate_system_version_effective,
             "quality_topk_effective": int(quality_topk_effective),
+            "backend_provenance": {
+                "backend_request": str(backend_request),
+                "backend_effective": str(backend_effective),
+                "lgbm_model_sha256": str(lgbm_model_sha256 if backend_effective == "lgbm" else ""),
+                "source": str(backend_effective_source),
+            },
+            "scans_count": int(gate_vnext_scan_rounds),
+            "scan_rounds": int(gate_vnext_scan_rounds),
+            "s1_topk_bound": int(gate_vnext_topk_bound),
+            "s1_exceeds_topk_bound": bool(gate_vnext_s1_exceeds_topk_bound),
             "stage_funnel_vnext": {
                 "s0_snapshots_valid": int(gate_vnext_s0_snapshots_valid),
                 "s1_selected_topk": int(gate_vnext_s1_selected_topk),
@@ -8101,7 +8438,9 @@ def build_dataset_diagnostics(
                 "s4_submitted": int(gate_vnext_s4_submitted),
                 "s5_filled": int(gate_vnext_s5_filled),
                 "drop_ev_negative_count": int(gate_vnext_drop_ev_negative_count),
+                "scan_rounds": int(gate_vnext_scan_rounds),
             },
+            "ev_samples": vnext_ev_samples,
         },
         "strategy_exit": {
             "mode_effective": strategy_exit_mode_effective,
@@ -10791,7 +11130,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description="Minimal sequential verification pipeline (reset baseline)."
     )
-    parser.add_argument("--exe-path", default=r".\build\Release\AutoLifeTrading.exe")
+    parser.add_argument("--exe-path", default=r".\build\AutoLifeTrading.exe")
     parser.add_argument("--config-path", default=r".\build\Release\config\config.json")
     parser.add_argument(
         "--run-dir",
@@ -11110,8 +11449,13 @@ def main(argv=None) -> int:
         "A10-2 stage funnel json",
         must_exist=False,
     )
+    quality_filter_fail_breakdown_arg = getattr(
+        args,
+        "quality_filter_fail_breakdown_json",
+        getattr(args, "quality_filter_breakdown_json", None),
+    )
     quality_filter_fail_breakdown_json = resolve_path(
-        args.quality_filter_fail_breakdown_json,
+        quality_filter_fail_breakdown_arg,
         "Frontier fail breakdown json",
         must_exist=False,
     )
@@ -12343,6 +12687,24 @@ def main(argv=None) -> int:
     semantics_lock_report = build_semantics_lock_report(
         bundle_meta=bundle_meta if isinstance(bundle_meta, dict) else {},
         runtime_cost_semantics_debug=runtime_cost_semantics_debug,
+        filled_sample_count=max(
+            int(
+                split_filter_context.get(
+                    "orders_filled_core_effective",
+                    split_filter_context.get("total_trades_core_effective", 0),
+                )
+            )
+            if isinstance(split_filter_context, dict)
+            else 0,
+            int(
+                (a10_2_stage_funnel_report.get("funnel_summary_core", {}) or {}).get(
+                    "S5_orders_filled_core",
+                    0,
+                )
+            )
+            if isinstance(a10_2_stage_funnel_report, dict)
+            else 0,
+        ),
     )
     ensure_parent(runtime_cost_semantics_debug_json)
     with runtime_cost_semantics_debug_json.open("w", encoding="utf-8", newline="\n") as fp:

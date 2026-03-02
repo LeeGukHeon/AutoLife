@@ -158,6 +158,7 @@ struct ProbabilisticRuntimeSnapshot {
     double expected_edge_calibrated_pct = 0.0;
     double expected_edge_calibrated_bps = 0.0;
     double expected_edge_calibrated_corrected_bps = 0.0;
+    double expected_edge_used_for_gate_bps = 0.0;
     double expected_edge_pct = 0.0;
     std::string edge_semantics = "net";
     bool root_cost_model_enabled_configured = false;
@@ -208,6 +209,8 @@ struct ProbabilisticRuntimeSnapshot {
     double regime_size_multiplier = 1.0;
     bool regime_block_new_entries = false;
 };
+
+std::unordered_map<std::string, ProbabilisticRuntimeSnapshot> g_gate_vnext_snapshot_cache;
 
 std::filesystem::path rangingShadowArtifactPathLive() {
     return autolife::utils::PathUtils::resolveRelativePath("logs/ranging_shadow_signals.jsonl");
@@ -345,7 +348,7 @@ bool inferProbabilisticRuntimeSnapshot(
             metrics,
             transformed_features,
             &feature_error)) {
-        LOG_WARN("{} probabilistic prefilter feature build skipped: {}", market, feature_error);
+        LOG_WARN("{} probabilistic runtime snapshot feature build skipped: {}", market, feature_error);
         if (strict_primary_mode) {
             if (reject_reason != nullptr) {
                 *reject_reason = "probabilistic_feature_build_failed";
@@ -357,7 +360,7 @@ bool inferProbabilisticRuntimeSnapshot(
 
     if (transformed_features.size() != model.featureColumns().size()) {
         LOG_WARN(
-            "{} probabilistic prefilter feature dimension mismatch: runtime={} bundle={}",
+            "{} probabilistic runtime snapshot feature dimension mismatch: runtime={} bundle={}",
             market,
             transformed_features.size(),
             model.featureColumns().size()
@@ -373,7 +376,7 @@ bool inferProbabilisticRuntimeSnapshot(
 
     autolife::analytics::ProbabilisticInference inference;
     if (!model.infer(market, transformed_features, inference)) {
-        LOG_WARN("{} probabilistic prefilter inference failed", market);
+        LOG_WARN("{} probabilistic runtime snapshot inference failed", market);
         if (strict_primary_mode) {
             if (reject_reason != nullptr) {
                 *reject_reason = "probabilistic_inference_failed";
@@ -403,6 +406,7 @@ bool inferProbabilisticRuntimeSnapshot(
     );
     out_snapshot.expected_edge_calibrated_bps = inference.expected_edge_calibrated_bps;
     out_snapshot.expected_edge_calibrated_corrected_bps = inference.expected_edge_calibrated_corrected_bps;
+    out_snapshot.expected_edge_used_for_gate_bps = inference.expected_edge_bps;
     out_snapshot.expected_edge_pct = std::clamp(inference.expected_edge_pct, -0.05, 0.05);
     out_snapshot.edge_semantics = inference.edge_semantics;
     out_snapshot.root_cost_model_enabled_configured = inference.root_cost_model_enabled_configured;
@@ -527,7 +531,7 @@ bool applyProbabilisticRuntimeAdjustment(
     signal.phase3.expected_edge_calibrated_pct = snapshot.expected_edge_calibrated_pct;
     signal.phase3.expected_edge_calibrated_bps = snapshot.expected_edge_calibrated_bps;
     signal.phase3.expected_edge_calibrated_raw_bps = snapshot.expected_edge_calibrated_raw_bps;
-    signal.phase3.expected_edge_used_for_gate_bps = snapshot.expected_edge_calibrated_bps;
+    signal.phase3.expected_edge_used_for_gate_bps = snapshot.expected_edge_used_for_gate_bps;
 
     signal.phase3.lgbm_ev_affine_enabled = snapshot.lgbm_ev_affine_enabled;
     signal.phase3.lgbm_ev_affine_applied = snapshot.lgbm_ev_affine_applied;
@@ -1470,9 +1474,11 @@ void TradingEngine::scanMarkets() {
     candidate_snapshots.reserve(filtered.size());
     std::unordered_map<std::string, analytics::CoinMetrics> coin_by_market;
     coin_by_market.reserve(filtered.size());
+    g_gate_vnext_snapshot_cache.clear();
     const long long snapshot_ts_ms = getCurrentTimestampMs();
 
-    for (auto& coin : filtered) {
+    for (const auto& scanned_coin : filtered) {
+        analytics::CoinMetrics coin = scanned_coin;
         coin.model_margin_valid = false;
         coin.model_margin_score = 0.0;
         coin.model_prob_h5_calibrated = 0.5;
@@ -1525,7 +1531,7 @@ void TradingEngine::scanMarkets() {
         gate_snapshot.atr_pct_14 = regime.atr_pct;
         gate_snapshot.adx = regime.adx;
         ProbabilisticRuntimeSnapshot snapshot;
-        std::string probabilistic_prefilter_reason;
+        std::string probabilistic_snapshot_reason;
         inferProbabilisticRuntimeSnapshot(
             probabilistic_runtime_model_,
             config_,
@@ -1533,22 +1539,49 @@ void TradingEngine::scanMarkets() {
             signal_metrics.market,
             regime.regime,
             snapshot,
-            &probabilistic_prefilter_reason
+            &probabilistic_snapshot_reason
         );
-        if (snapshot.applied && std::isfinite(snapshot.margin_h5)) {
+        if (snapshot.applied && std::isfinite(snapshot.margin_h5) && std::isfinite(snapshot.expected_edge_used_for_gate_bps)) {
             coin.model_margin_valid = true;
             coin.model_margin_score = std::clamp(snapshot.margin_h5, -1.0, 1.0);
             coin.model_prob_h5_calibrated = std::clamp(snapshot.prob_h5_calibrated, 0.0, 1.0);
             coin.model_selection_threshold_h5 = std::clamp(snapshot.threshold_h5, 0.0, 1.0);
+            coin.liq_vol_gate_policy.enabled = snapshot.phase3_liq_vol_gate_policy.enabled;
+            coin.liq_vol_gate_policy.mode = snapshot.phase3_liq_vol_gate_policy.mode;
+            coin.liq_vol_gate_policy.window_minutes = snapshot.phase3_liq_vol_gate_policy.window_minutes;
+            coin.liq_vol_gate_policy.quantile_q = snapshot.phase3_liq_vol_gate_policy.quantile_q;
+            coin.liq_vol_gate_policy.min_samples_required = snapshot.phase3_liq_vol_gate_policy.min_samples_required;
+            coin.liq_vol_gate_policy.low_conf_action = snapshot.phase3_liq_vol_gate_policy.low_conf_action;
+
+            coin.foundation_structure_gate_policy.enabled = snapshot.phase3_foundation_structure_gate_policy.enabled;
+            coin.foundation_structure_gate_policy.mode = snapshot.phase3_foundation_structure_gate_policy.mode;
+            coin.foundation_structure_gate_policy.relax_delta = snapshot.phase3_foundation_structure_gate_policy.relax_delta;
+
+            coin.bear_rebound_guard_policy.enabled = snapshot.phase3_bear_rebound_guard_policy.enabled;
+            coin.bear_rebound_guard_policy.mode = snapshot.phase3_bear_rebound_guard_policy.mode;
+            coin.bear_rebound_guard_policy.window_minutes = snapshot.phase3_bear_rebound_guard_policy.window_minutes;
+            coin.bear_rebound_guard_policy.quantile_q = snapshot.phase3_bear_rebound_guard_policy.quantile_q;
+            coin.bear_rebound_guard_policy.min_samples_required = snapshot.phase3_bear_rebound_guard_policy.min_samples_required;
+            coin.bear_rebound_guard_policy.low_conf_action = snapshot.phase3_bear_rebound_guard_policy.low_conf_action;
+            coin.bear_rebound_guard_policy.static_threshold = snapshot.phase3_bear_rebound_guard_policy.static_threshold;
+
+            coin.stop_loss_risk_policy.enabled = snapshot.phase3_stop_loss_risk_policy.enabled;
+            coin.stop_loss_risk_policy.stop_loss_trending_multiplier = snapshot.phase3_stop_loss_risk_policy.stop_loss_trending_multiplier;
             gate_snapshot.snapshot_valid = true;
             gate_snapshot.p_calibrated = coin.model_prob_h5_calibrated;
             gate_snapshot.selection_threshold = coin.model_selection_threshold_h5;
             gate_snapshot.margin = coin.model_margin_score;
-            gate_snapshot.edge_bps = snapshot.expected_edge_calibrated_bps;
+            gate_snapshot.expected_edge_calibrated_bps = snapshot.expected_edge_calibrated_bps;
+            gate_snapshot.expected_edge_used_for_gate_bps = snapshot.expected_edge_used_for_gate_bps;
+            gate_snapshot.edge_bps = snapshot.expected_edge_used_for_gate_bps;
+            g_gate_vnext_snapshot_cache[coin.market] = snapshot;
         } else {
-            gate_snapshot.fail_reason = probabilistic_prefilter_reason.empty()
-                ? "probabilistic_feature_build_failed"
-                : probabilistic_prefilter_reason;
+            gate_snapshot.fail_reason = (!std::isfinite(snapshot.expected_edge_used_for_gate_bps))
+                ? "missing_ev_source"
+                : (probabilistic_snapshot_reason.empty()
+                    ? "probabilistic_snapshot_build_failed"
+                    : probabilistic_snapshot_reason);
+            g_gate_vnext_snapshot_cache.erase(coin.market);
         }
         candidate_snapshots.push_back(gate_snapshot);
         coin_by_market[coin.market] = coin;
@@ -1558,15 +1591,25 @@ void TradingEngine::scanMarkets() {
     gate_params.quality_topk = 5;
     gate_params.base_size = 0.1;
     gate_params.ev_scale_bps = 10.0;
+    gate_params.backend_request = probabilistic_runtime_model_.probModelBackend();
+    gate_params.backend_effective = probabilistic_runtime_model_.probModelBackend();
+    gate_params.model_sha256 = probabilistic_runtime_model_.lgbmModelSha256();
     autolife::gate_vnext::GateVNext gate_vnext(gate_params);
     autolife::gate_vnext::GateVNextTelemetry gate_telemetry{};
     const auto gated_snapshots = gate_vnext.run(candidate_snapshots, &gate_telemetry);
+    if (gate_telemetry.funnel.s1_selected_topk > gate_params.quality_topk) {
+        LOG_WARN(
+            "GateVNext invariant warning(live): S1_selected_topk={} exceeds quality_topk={}",
+            gate_telemetry.funnel.s1_selected_topk,
+            gate_params.quality_topk
+        );
+    }
 
     std::vector<analytics::CoinMetrics> selected_coins;
     selected_coins.reserve(gated_snapshots.size());
     long long drop_ev_negative_count = 0;
     for (const auto& gated : gated_snapshots) {
-        if (gated.expected_value_vnext_bps < 0.0) {
+        if (gated.execution_reject_reason == "ev_negative_size_zero") {
             drop_ev_negative_count++;
         }
         if (!gated.execution_gate_pass) {
@@ -1912,22 +1955,13 @@ void TradingEngine::generateSignals() {
 
             double current_price = candles.back().close;
             auto regime = regime_detector_->analyzeRegime(candles);
-            ProbabilisticRuntimeSnapshot probabilistic_snapshot;
-            std::string probabilistic_prefilter_reason;
-            if (!inferProbabilisticRuntimeSnapshot(
-                    probabilistic_runtime_model_,
-                    config_,
-                    signal_metrics,
-                    signal_metrics.market,
-                    regime.regime,
-                    probabilistic_snapshot,
-                    &probabilistic_prefilter_reason)) {
+            auto snapshot_it = g_gate_vnext_snapshot_cache.find(signal_metrics.market);
+            if (snapshot_it == g_gate_vnext_snapshot_cache.end()) {
                 live_signal_funnel_.no_signal_generated++;
-                markScanReject(probabilistic_prefilter_reason.empty()
-                                   ? std::string("probabilistic_market_prefilter")
-                                   : probabilistic_prefilter_reason);
+                markScanReject("probabilistic_snapshot_unavailable");
                 continue;
             }
+            ProbabilisticRuntimeSnapshot probabilistic_snapshot = snapshot_it->second;
             strategy::StrategyManager::CollectDiagnostics collect_diag;
             signal_metrics.liq_vol_gate_policy.enabled =
                 probabilistic_snapshot.phase3_liq_vol_gate_policy.enabled;

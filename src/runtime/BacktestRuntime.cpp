@@ -342,6 +342,7 @@ struct ProbabilisticRuntimeSnapshot {
     double expected_edge_calibrated_bps = 0.0;
     double expected_edge_calibrated_raw_bps = 0.0;
     double expected_edge_calibrated_corrected_bps = 0.0;
+    double expected_edge_used_for_gate_bps = 0.0;
     double expected_edge_pct = 0.0;
     std::string edge_semantics = "net";
     bool root_cost_model_enabled_configured = false;
@@ -642,6 +643,14 @@ void appendEntryStageFunnelAudit(
         {"orders_submitted", std::max(0, orders_submitted)},
         {"orders_filled", std::max(0, orders_filled)}
     };
+    line["stage_funnel_vnext"] = {
+        {"s0_snapshots_valid", std::max(0, candidates_total)},
+        {"s1_selected_topk", std::max(0, candidates_after_quality_topk)},
+        {"s2_sized_count", std::max(0, candidates_after_sizing)},
+        {"s3_exec_gate_pass", std::max(0, candidates_after_portfolio)},
+        {"s4_submitted", std::max(0, orders_submitted)},
+        {"s5_filled", std::max(0, orders_filled)},
+    };
     nlohmann::json ev_consistency;
     ev_consistency["source"] = "signal.expected_value_ssot";
     if (std::isfinite(ev_at_selection)) {
@@ -674,6 +683,139 @@ void appendEntryStageFunnelAudit(
         return;
     }
     out << line.dump() << "\n";
+}
+
+std::filesystem::path stageFunnelVNextArtifactPath() {
+    return autolife::utils::PathUtils::resolveRelativePath("logs/stage_funnel_vnext.json");
+}
+
+void resetStageFunnelVNextArtifact() {
+    const auto path = stageFunnelVNextArtifactPath();
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+        return;
+    }
+    out << "{}\n";
+}
+
+nlohmann::json topRejectRows(
+    const std::map<std::string, int>& counts,
+    std::size_t limit
+) {
+    std::vector<std::pair<std::string, int>> rows;
+    rows.reserve(counts.size());
+    for (const auto& kv : counts) {
+        if (kv.first.empty() || kv.second <= 0) {
+            continue;
+        }
+        rows.push_back(kv);
+    }
+    std::sort(
+        rows.begin(),
+        rows.end(),
+        [](const auto& lhs, const auto& rhs) {
+            if (lhs.second != rhs.second) {
+                return lhs.second > rhs.second;
+            }
+            return lhs.first < rhs.first;
+        }
+    );
+    nlohmann::json out = nlohmann::json::array();
+    for (std::size_t i = 0; i < rows.size() && i < limit; ++i) {
+        out.push_back({
+            {"reason", rows[i].first},
+            {"count", rows[i].second},
+        });
+    }
+    return out;
+}
+
+void writeStageFunnelVNextArtifact(
+    const BacktestEngine::Result::EntryFunnelSummary& entry_funnel,
+    const std::map<std::string, int>& reject_reason_counts
+) {
+    const auto path = stageFunnelVNextArtifactPath();
+    std::filesystem::create_directories(path.parent_path());
+
+    const int topk_effective = std::max(1, entry_funnel.quality_topk_effective);
+    const int scan_rounds = std::max(0, entry_funnel.gate_vnext_scan_rounds);
+    const int s1_selected = std::max(0, entry_funnel.gate_vnext_s1_selected_topk);
+    const int s1_topk_bound = scan_rounds * topk_effective;
+
+    nlohmann::json stage2_reasons = nlohmann::json::array();
+    if (entry_funnel.gate_vnext_drop_ev_negative_count > 0) {
+        stage2_reasons.push_back({
+            {"reason", "ev_negative_size_zero"},
+            {"count", entry_funnel.gate_vnext_drop_ev_negative_count},
+        });
+    }
+
+    nlohmann::json payload;
+    payload["generated_at_ms"] = getCurrentTimeMs();
+    payload["backend_request"] = entry_funnel.gate_vnext_backend_request;
+    payload["backend_effective"] = entry_funnel.gate_vnext_backend_effective;
+    payload["lgbm_model_sha256"] = entry_funnel.gate_vnext_lgbm_model_sha256;
+    payload["topk_effective"] = topk_effective;
+    payload["scans_count"] = scan_rounds;
+    payload["stage_funnel_vnext"] = {
+        {"s0_snapshots_valid", std::max(0, entry_funnel.gate_vnext_s0_snapshots_valid)},
+        {"s1_selected_topk", s1_selected},
+        {"s2_sized_count", std::max(0, entry_funnel.gate_vnext_s2_sized_count)},
+        {"s3_exec_gate_pass", std::max(0, entry_funnel.gate_vnext_s3_exec_gate_pass)},
+        {"s4_submitted", std::max(0, entry_funnel.gate_vnext_s4_submitted)},
+        {"s5_filled", std::max(0, entry_funnel.gate_vnext_s5_filled)},
+        {"drop_ev_negative_count", std::max(0, entry_funnel.gate_vnext_drop_ev_negative_count)},
+        {"scan_rounds", scan_rounds},
+    };
+    payload["s1_topk_bound"] = s1_topk_bound;
+    payload["s1_exceeds_topk_bound"] = (scan_rounds > 0 && s1_selected > s1_topk_bound);
+    payload["top_reject_reasons"] = topRejectRows(reject_reason_counts, 10);
+    payload["top_reject_reasons_by_stage"] = {
+        {"stage0_snapshot", topRejectRows(reject_reason_counts, 5)},
+        {"stage1_selection", topRejectRows(reject_reason_counts, 5)},
+        {"stage2_sizing", stage2_reasons},
+        {"stage3_execution", topRejectRows(reject_reason_counts, 5)},
+    };
+
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+        LOG_WARN("Stage funnel vNext artifact open failed: {}", path.string());
+        return;
+    }
+    out << payload.dump(2) << "\n";
+}
+
+std::filesystem::path gateVNextEvSamplesArtifactPath() {
+    return autolife::utils::PathUtils::resolveRelativePath("logs/vnext_ev_samples.json");
+}
+
+void resetGateVNextEvSamplesArtifact() {
+    const auto path = gateVNextEvSamplesArtifactPath();
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+        return;
+    }
+    out << "[]\n";
+}
+
+void writeGateVNextEvSamplesArtifact(const std::vector<nlohmann::json>& samples) {
+    const auto path = gateVNextEvSamplesArtifactPath();
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+        LOG_WARN("GateVNext EV samples artifact open failed: {}", path.string());
+        return;
+    }
+    nlohmann::json payload = nlohmann::json::array();
+    for (const auto& row : samples) {
+        if (!row.is_object()) {
+            continue;
+        }
+        payload.push_back(row);
+    }
+    out << payload.dump(2) << "\n";
 }
 
 std::filesystem::path rangingShadowArtifactPath() {
@@ -812,7 +954,7 @@ bool inferProbabilisticRuntimeSnapshot(
             metrics,
             transformed_features,
             &feature_error)) {
-        LOG_WARN("{} probabilistic prefilter feature build skipped: {}", market, feature_error);
+        LOG_WARN("{} probabilistic runtime snapshot feature build skipped: {}", market, feature_error);
         if (strict_primary_mode) {
             if (reject_reason != nullptr) {
                 *reject_reason = "probabilistic_feature_build_failed";
@@ -824,7 +966,7 @@ bool inferProbabilisticRuntimeSnapshot(
 
     if (transformed_features.size() != model.featureColumns().size()) {
         LOG_WARN(
-            "{} probabilistic prefilter feature dimension mismatch: runtime={} bundle={}",
+            "{} probabilistic runtime snapshot feature dimension mismatch: runtime={} bundle={}",
             market,
             transformed_features.size(),
             model.featureColumns().size()
@@ -840,7 +982,7 @@ bool inferProbabilisticRuntimeSnapshot(
 
     autolife::analytics::ProbabilisticInference inference;
     if (!model.infer(market, transformed_features, inference)) {
-        LOG_WARN("{} probabilistic prefilter inference failed", market);
+        LOG_WARN("{} probabilistic runtime snapshot inference failed", market);
         if (strict_primary_mode) {
             if (reject_reason != nullptr) {
                 *reject_reason = "probabilistic_inference_failed";
@@ -871,6 +1013,7 @@ bool inferProbabilisticRuntimeSnapshot(
     out_snapshot.expected_edge_calibrated_raw_bps = inference.expected_edge_calibrated_raw_bps;
     out_snapshot.expected_edge_calibrated_corrected_bps =
         inference.expected_edge_calibrated_corrected_bps;
+    out_snapshot.expected_edge_used_for_gate_bps = inference.expected_edge_bps;
     out_snapshot.expected_edge_pct = std::clamp(inference.expected_edge_pct, -0.05, 0.05);
     out_snapshot.edge_semantics = inference.edge_semantics;
     out_snapshot.root_cost_model_enabled_configured = inference.root_cost_model_enabled_configured;
@@ -995,7 +1138,7 @@ bool applyProbabilisticRuntimeAdjustment(
     signal.phase3.expected_edge_calibrated_pct = snapshot.expected_edge_calibrated_pct;
     signal.phase3.expected_edge_calibrated_bps = snapshot.expected_edge_calibrated_bps;
     signal.phase3.expected_edge_calibrated_raw_bps = snapshot.expected_edge_calibrated_raw_bps;
-    signal.phase3.expected_edge_used_for_gate_bps = snapshot.expected_edge_calibrated_bps;
+    signal.phase3.expected_edge_used_for_gate_bps = snapshot.expected_edge_used_for_gate_bps;
 
     signal.phase3.lgbm_ev_affine_enabled = snapshot.lgbm_ev_affine_enabled;
     signal.phase3.lgbm_ev_affine_applied = snapshot.lgbm_ev_affine_applied;
@@ -1040,7 +1183,9 @@ void BacktestEngine::init(const Config& config) {
     resetExecutionUpdateArtifact();
     resetPolicyDecisionArtifact();
     resetEntryStageFunnelArtifact();
+    resetStageFunnelVNextArtifact();
     resetPhase4CandidateArtifact();
+    resetGateVNextEvSamplesArtifact();
     resetRangingShadowArtifact();
     balance_krw_ = config.getInitialCapital();
     balance_asset_ = 0.0;
@@ -1081,6 +1226,7 @@ void BacktestEngine::init(const Config& config) {
     ranging_shadow_summary_ = Result::RangingShadowSummary{};
     phase4_portfolio_diagnostics_ = Result::Phase4PortfolioDiagnostics{};
     phase4_candidate_snapshot_samples_.clear();
+    gate_vnext_ev_samples_.clear();
     recent_best_ask_price_ = 0.0;
     recent_best_ask_timestamp_ms_ = 0;
     current_candle_index_ = 0;
@@ -1108,10 +1254,16 @@ void BacktestEngine::init(const Config& config) {
         gate_vnext_ev_scale_bps_ = std::max(1e-9, gate_settings.ev_scale_bps);
         entry_funnel_.gate_system_version_effective = "vnext";
         entry_funnel_.quality_topk_effective = gate_vnext_quality_topk_;
+        entry_funnel_.gate_vnext_backend_request = "unknown";
+        entry_funnel_.gate_vnext_backend_effective = "unknown";
+        entry_funnel_.gate_vnext_lgbm_model_sha256.clear();
         std::string error_message;
         probabilistic_runtime_model_loaded_ =
             probabilistic_runtime_model_.loadFromFile(bundle_path.string(), &error_message);
         if (probabilistic_runtime_model_loaded_) {
+            entry_funnel_.gate_vnext_backend_request = probabilistic_runtime_model_.probModelBackend();
+            entry_funnel_.gate_vnext_backend_effective = probabilistic_runtime_model_.probModelBackend();
+            entry_funnel_.gate_vnext_lgbm_model_sha256 = probabilistic_runtime_model_.lgbmModelSha256();
             LOG_INFO(
                 "Backtest probabilistic runtime bundle loaded: path={}, features={}, backend={}, model_sha256={}",
                 bundle_path.string(),
@@ -1437,6 +1589,8 @@ void BacktestEngine::run() {
     }
     
     LOG_INFO("Backtest Completed.");
+    writeStageFunnelVNextArtifact(entry_funnel_, entry_rejection_reason_counts_);
+    writeGateVNextEvSamplesArtifact(gate_vnext_ev_samples_);
     if (risk_manager_) {
         risk_manager_->clearTimeOverride();
         auto metrics = risk_manager_->getRiskMetrics();
@@ -2064,7 +2218,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
         };
         strategy::StrategyManager::CollectDiagnostics collect_diag;
         ProbabilisticRuntimeSnapshot probabilistic_snapshot;
-        std::string probabilistic_prefilter_reason;
+        std::string probabilistic_snapshot_reason;
         std::vector<strategy::Signal> signals;
         bool signals_suppressed_by_regime_shadow = false;
         if (!inferProbabilisticRuntimeSnapshot(
@@ -2074,12 +2228,12 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 market_name_,
                 regime.regime,
                 probabilistic_snapshot,
-                &probabilistic_prefilter_reason)) {
+                &probabilistic_snapshot_reason)) {
             entry_funnel_.no_signal_generated++;
             markEntryReject(
-                probabilistic_prefilter_reason.empty()
-                    ? "probabilistic_market_prefilter"
-                    : probabilistic_prefilter_reason.c_str()
+                probabilistic_snapshot_reason.empty()
+                    ? "probabilistic_snapshot_build_failed"
+                    : probabilistic_snapshot_reason.c_str()
             );
             const std::string no_signal_pattern_key =
                 std::string("regime=") + marketRegimeLabel(regime.regime) +
@@ -2317,6 +2471,9 @@ void BacktestEngine::processCandle(const Candle& candle) {
             gate_params.quality_topk = gate_vnext_quality_topk_;
             gate_params.base_size = 1.0;
             gate_params.ev_scale_bps = gate_vnext_ev_scale_bps_;
+            gate_params.backend_request = entry_funnel_.gate_vnext_backend_request;
+            gate_params.backend_effective = entry_funnel_.gate_vnext_backend_effective;
+            gate_params.model_sha256 = entry_funnel_.gate_vnext_lgbm_model_sha256;
             autolife::gate_vnext::GateVNext gate_vnext(gate_params);
 
             std::vector<autolife::gate_vnext::CandidateSnapshot> gate_inputs;
@@ -2339,21 +2496,46 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 snap.p_calibrated = signal.probabilistic_h5_calibrated;
                 snap.selection_threshold = signal.probabilistic_h5_threshold;
                 snap.margin = signal.probabilistic_h5_margin;
+                snap.expected_edge_calibrated_bps = signal.phase3.expected_edge_calibrated_bps;
+                snap.expected_edge_used_for_gate_bps = signal.phase3.expected_edge_used_for_gate_bps;
                 snap.edge_bps = signal.phase3.expected_edge_used_for_gate_bps;
                 snap.snapshot_valid =
                     std::isfinite(snap.p_calibrated) &&
                     std::isfinite(snap.selection_threshold) &&
-                    std::isfinite(snap.margin);
+                    std::isfinite(snap.margin) &&
+                    std::isfinite(snap.expected_edge_used_for_gate_bps);
                 if (!snap.snapshot_valid) {
-                    snap.fail_reason = "invalid_margin_inputs";
+                    if (!std::isfinite(snap.expected_edge_used_for_gate_bps)) {
+                        snap.fail_reason = "missing_ev_source";
+                    } else {
+                        snap.fail_reason = "invalid_margin_inputs";
+                    }
                 }
                 gate_inputs.push_back(std::move(snap));
             }
-
             autolife::gate_vnext::GateVNextTelemetry gate_telemetry{};
             const auto gate_outputs = gate_vnext.run(gate_inputs, &gate_telemetry);
+            if (gate_telemetry.funnel.s1_selected_topk > gate_params.quality_topk) {
+                LOG_WARN(
+                    "GateVNext invariant warning(backtest): S1_selected_topk={} exceeds quality_topk={} market={} ts={}",
+                    gate_telemetry.funnel.s1_selected_topk,
+                    gate_params.quality_topk,
+                    market_name_,
+                    normalizeTimestampMs(candle.timestamp)
+                );
+            }
             entry_funnel_.gate_system_version_effective = "vnext";
             entry_funnel_.quality_topk_effective = gate_params.quality_topk;
+            if (!gate_telemetry.provenance.backend_request.empty()) {
+                entry_funnel_.gate_vnext_backend_request = gate_telemetry.provenance.backend_request;
+            }
+            if (!gate_telemetry.provenance.backend_effective.empty()) {
+                entry_funnel_.gate_vnext_backend_effective = gate_telemetry.provenance.backend_effective;
+            }
+            if (!gate_telemetry.provenance.model_sha256.empty()) {
+                entry_funnel_.gate_vnext_lgbm_model_sha256 = gate_telemetry.provenance.model_sha256;
+            }
+            entry_funnel_.gate_vnext_scan_rounds += 1;
             entry_funnel_.gate_vnext_s0_snapshots_valid +=
                 static_cast<int>(gate_telemetry.funnel.s0_snapshots_valid);
             entry_funnel_.gate_vnext_s1_selected_topk +=
@@ -2362,16 +2544,52 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 static_cast<int>(gate_telemetry.funnel.s2_sized_count);
             entry_funnel_.gate_vnext_s3_exec_gate_pass +=
                 static_cast<int>(gate_telemetry.funnel.s3_exec_gate_pass);
-            stage_candidates_after_quality_topk +=
-                static_cast<int>(gate_telemetry.funnel.s1_selected_topk);
-            stage_candidates_after_sizing +=
-                static_cast<int>(gate_telemetry.funnel.s2_sized_count);
+            stage_candidates_total =
+                static_cast<int>(std::max<long long>(0, gate_telemetry.funnel.s0_snapshots_valid));
+            stage_candidates_after_quality_topk =
+                static_cast<int>(std::max<long long>(0, gate_telemetry.funnel.s1_selected_topk));
+            stage_candidates_after_sizing =
+                static_cast<int>(std::max<long long>(0, gate_telemetry.funnel.s2_sized_count));
+            stage_candidates_after_portfolio =
+                static_cast<int>(std::max<long long>(0, gate_telemetry.funnel.s3_exec_gate_pass));
 
             std::vector<strategy::Signal> selected_signals;
             selected_signals.reserve(gate_outputs.size());
             for (const auto& gated : gate_outputs) {
-                if (gated.execution_reject_reason == "size_zero") {
+                if (gated.execution_reject_reason == "ev_negative_size_zero") {
                     entry_funnel_.gate_vnext_drop_ev_negative_count++;
+                }
+                if (gate_vnext_ev_samples_.size() < 50 &&
+                    gated.source_index >= 0 &&
+                    gated.source_index < static_cast<int>(signals.size())) {
+                    const auto& src_signal = signals[static_cast<std::size_t>(gated.source_index)];
+                    nlohmann::json sample{
+                        {"ts_ms", normalizeTimestampMs(candle.timestamp)},
+                        {"market", market_name_},
+                        {"regime", marketRegimeLabel(regime.regime)},
+                        {"source_index", gated.source_index},
+                        {"sample_stage", "stage1_selected_topk"},
+                        {"snapshot_valid", true},
+                        {"snapshot_fail_reason", ""},
+                        {"p_raw", nullptr},
+                        {"p_cal", gated.p_calibrated},
+                        {"p_calibrated", gated.p_calibrated},
+                        {"threshold", gated.selection_threshold},
+                        {"selection_threshold", gated.selection_threshold},
+                        {"margin", gated.margin},
+                        {"backend_request", gate_params.backend_request},
+                        {"backend_effective", gate_params.backend_effective},
+                        {"lgbm_model_sha256", gate_params.model_sha256},
+                        {"expected_edge_calibrated_bps", src_signal.phase3.expected_edge_calibrated_bps},
+                        {"expected_edge_used_for_gate_bps", src_signal.phase3.expected_edge_used_for_gate_bps},
+                        {"signal_expected_value", src_signal.expected_value},
+                        {"edge_bps_from_snapshot", gated.edge_bps},
+                        {"expected_value_vnext_bps", gated.expected_value_vnext_bps},
+                        {"size_fraction", gated.size_fraction},
+                        {"execution_gate_pass", gated.execution_gate_pass},
+                        {"execution_reject_reason", gated.execution_reject_reason},
+                    };
+                    gate_vnext_ev_samples_.push_back(std::move(sample));
                 }
                 if (!gated.execution_gate_pass) {
                     continue;
@@ -2393,7 +2611,9 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 strategy_generated_counts_[signal.strategy_name]++;
             }
         }
-        stage_candidates_total = std::max(0, static_cast<int>(signals.size()));
+        if (stage_candidates_total <= 0) {
+            stage_candidates_total = std::max(0, static_cast<int>(signals.size()));
+        }
         
         std::vector<strategy::Signal> candidate_signals;
         std::vector<strategy::Signal> phase4_ranked_snapshot;

@@ -221,12 +221,9 @@ def default_phase3_bundle_config() -> Dict[str, Any]:
             "range_penalty": 0.11,
             "range_bonus": 0.03,
             "range_penalty_strength_floor": 0.50,
-            "range_penalty_margin_floor": 0.008,
             "range_penalty_prob_floor": 0.54,
-            "range_bonus_margin_floor": 0.012,
             "range_bonus_prob_floor": 0.57,
             "uptrend_bonus": 0.03,
-            "uptrend_bonus_margin_floor": 0.0,
             "uptrend_bonus_prob_floor": 0.52,
         },
         "primary_decision_profile": {

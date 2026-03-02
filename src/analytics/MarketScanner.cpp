@@ -32,7 +32,7 @@ MarketScanner::MarketScanner(std::shared_ptr<network::UpbitHttpClient> client)
     , last_scan_time_(std::chrono::steady_clock::now())
     , last_candle_api_call_time_(std::chrono::steady_clock::now())
 {
-    LOG_INFO("MarketScanner ì´ˆê¸°??);
+    LOG_INFO("MarketScanner initialized");
 }
 
 std::vector<CoinMetrics> MarketScanner::scanAllMarkets() {
@@ -87,7 +87,10 @@ std::vector<CoinMetrics> MarketScanner::scanAllMarkets() {
     // 2?¨ê³„ ?•ë ¬ ì§í›„ ë¡œê·¸ ì¶”ê?
     LOG_INFO("TOP 5 ê±°ë˜?€ê¸?ì¢…ëª©:");
     for(int i=0; i<std::min(5, (int)volume_ranks.size()); ++i) {
-        LOG_INFO("  #{} {} : {:.0f}??, i+1, volume_ranks[i].first, volume_ranks[i].second / 100000000.0);
+        LOG_INFO("  #{} {} : {:.0f} hundred-million KRW",
+                 i + 1,
+                 volume_ranks[i].first,
+                 volume_ranks[i].second / 100000000.0);
     }
 
     // 3?¨ê³„: ?ìœ„ ?œí•œ ì¢…ëª©ë§??ì„¸ ?˜ì§‘ (?¤ê±°??ì§€???¸ì¶œ???ˆê°)

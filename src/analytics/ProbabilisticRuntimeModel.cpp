@@ -1906,25 +1906,11 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         0.0,
         1.0
     );
-    phase3_policy_.primary_priority.range_penalty_margin_floor = parseCostParam(
-        phase3_primary_priority_node,
-        "range_penalty_margin_floor",
-        0.008,
-        -1.0,
-        1.0
-    );
     phase3_policy_.primary_priority.range_penalty_prob_floor = parseCostParam(
         phase3_primary_priority_node,
         "range_penalty_prob_floor",
         0.54,
         0.0,
-        1.0
-    );
-    phase3_policy_.primary_priority.range_bonus_margin_floor = parseCostParam(
-        phase3_primary_priority_node,
-        "range_bonus_margin_floor",
-        0.012,
-        -1.0,
         1.0
     );
     phase3_policy_.primary_priority.range_bonus_prob_floor = parseCostParam(
@@ -1938,13 +1924,6 @@ bool ProbabilisticRuntimeModel::loadFromFile(const std::string& path, std::strin
         phase3_primary_priority_node,
         "uptrend_bonus",
         0.03,
-        -1.0,
-        1.0
-    );
-    phase3_policy_.primary_priority.uptrend_bonus_margin_floor = parseCostParam(
-        phase3_primary_priority_node,
-        "uptrend_bonus_margin_floor",
-        0.0,
         -1.0,
         1.0
     );

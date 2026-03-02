@@ -24,6 +24,8 @@ struct CandidateSnapshot {
     double p_calibrated = 0.5;
     double selection_threshold = 0.5;
     double margin = 0.0;
+    double expected_edge_calibrated_bps = 0.0;
+    double expected_edge_used_for_gate_bps = 0.0;
     double edge_bps = 0.0;
 
     double expected_value_vnext_bps = 0.0;

@@ -350,6 +350,12 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
         {"filtered_out_by_policy", result.entry_funnel.filtered_out_by_policy},
         {"gate_system_version_effective", result.entry_funnel.gate_system_version_effective},
         {"quality_topk_effective", result.entry_funnel.quality_topk_effective},
+        {"gate_vnext_backend_provenance",
+         {
+             {"backend_request", result.entry_funnel.gate_vnext_backend_request},
+             {"backend_effective", result.entry_funnel.gate_vnext_backend_effective},
+             {"lgbm_model_sha256", result.entry_funnel.gate_vnext_lgbm_model_sha256},
+         }},
         {"stage_funnel_vnext",
          {
              {"s0_snapshots_valid", result.entry_funnel.gate_vnext_s0_snapshots_valid},
@@ -358,7 +364,8 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
              {"s3_exec_gate_pass", result.entry_funnel.gate_vnext_s3_exec_gate_pass},
              {"s4_submitted", result.entry_funnel.gate_vnext_s4_submitted},
              {"s5_filled", result.entry_funnel.gate_vnext_s5_filled},
-             {"drop_ev_negative_count", result.entry_funnel.gate_vnext_drop_ev_negative_count}
+             {"drop_ev_negative_count", result.entry_funnel.gate_vnext_drop_ev_negative_count},
+             {"scan_rounds", result.entry_funnel.gate_vnext_scan_rounds}
          }},
         {"reject_expected_edge_negative_count",
          result.entry_funnel.reject_expected_edge_negative_count},

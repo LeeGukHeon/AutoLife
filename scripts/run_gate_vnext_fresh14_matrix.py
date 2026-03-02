@@ -108,7 +108,9 @@ def extract_case_summary(report: Dict[str, Any], run_dir: Path) -> Dict[str, Any
         "s4_submitted": 0,
         "s5_filled": 0,
         "drop_ev_negative_count": 0,
+        "scan_rounds": 0,
     }
+    s1_topk_bound_violations = 0
     if isinstance(per_dataset, list):
         for row in per_dataset:
             if not isinstance(row, dict):
@@ -128,6 +130,8 @@ def extract_case_summary(report: Dict[str, Any], run_dir: Path) -> Dict[str, Any
             if isinstance(stage, dict):
                 for key in stage_vnext_totals.keys():
                     stage_vnext_totals[key] += int(stage.get(key, 0) or 0)
+            if bool(gate_vnext.get("s1_exceeds_topk_bound", False)):
+                s1_topk_bound_violations += 1
 
     gate_effective = "unknown"
     if gate_versions:
@@ -166,6 +170,7 @@ def extract_case_summary(report: Dict[str, Any], run_dir: Path) -> Dict[str, Any
         "gate_system_version_effective": gate_effective,
         "quality_topk_effective": quality_topk_effective,
         "stage_funnel_vnext_totals": stage_vnext_totals,
+        "s1_topk_bound_violations": int(s1_topk_bound_violations),
         "ev_scale_bps": run_params.get("bundle", {}).get("ev_scale_bps"),
         "stage_funnel_core": funnel,
         "execution_no_signal_top3": core_no_signal.get("execution_no_signal_top3", [])[:3],
@@ -186,6 +191,7 @@ def write_summary_csv(path: Path, rows: List[Dict[str, Any]]) -> None:
                 "quality_topk",
                 "gate_system_version_effective",
                 "quality_topk_effective",
+                "scan_rounds",
                 "ev_scale_bps",
                 "split_applied",
                 "trades_core",
@@ -194,6 +200,7 @@ def write_summary_csv(path: Path, rows: List[Dict[str, Any]]) -> None:
                 "stop_loss_count",
                 "partial_tp_count",
                 "tp_full_count",
+                "s1_topk_bound_violations",
                 "semantics_lock_status",
             ]
         )
@@ -207,6 +214,7 @@ def write_summary_csv(path: Path, rows: List[Dict[str, Any]]) -> None:
                     row.get("quality_topk"),
                     row.get("gate_system_version_effective"),
                     row.get("quality_topk_effective"),
+                    (row.get("stage_funnel_vnext_totals", {}) or {}).get("scan_rounds", 0),
                     row.get("ev_scale_bps"),
                     row.get("split_applied"),
                     row.get("total_trades_core_effective"),
@@ -215,9 +223,75 @@ def write_summary_csv(path: Path, rows: List[Dict[str, Any]]) -> None:
                     row.get("stop_loss_trigger_count"),
                     row.get("partial_tp_exit_count"),
                     row.get("take_profit_full_count"),
+                    row.get("s1_topk_bound_violations"),
                     row.get("semantics_lock_status"),
                 ]
             )
+
+
+def build_hardlock_compliance_payload(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    required_files = [
+        "run_provenance.json",
+        "stage_funnel_vnext.json",
+        "vnext_ev_samples.json",
+    ]
+    case_rows: List[Dict[str, Any]] = []
+    backend_effective_values: List[str] = []
+    all_required_present = True
+    all_topk_ok = True
+    semantics_ok = True
+
+    for row in rows:
+        run_dir = Path(str(row.get("run_dir", ""))).resolve()
+        file_checks: Dict[str, bool] = {}
+        for name in required_files:
+            exists = (run_dir / name).exists()
+            file_checks[name] = exists
+            if not exists:
+                all_required_present = False
+
+        backend_effective = str(row.get("backend_effective", "")).strip().lower()
+        if backend_effective:
+            backend_effective_values.append(backend_effective)
+
+        topk_effective = int(row.get("quality_topk_effective", 0) or 0)
+        if topk_effective != 5:
+            all_topk_ok = False
+
+        sem_status = str(row.get("semantics_lock_status", "")).strip().upper()
+        sem_ok = sem_status in {"OK", "PASS", "SKIPPED_NO_SAMPLES"}
+        if not sem_ok:
+            semantics_ok = False
+
+        case_rows.append(
+            {
+                "case": row.get("case"),
+                "run_dir": str(run_dir),
+                "backend_request": row.get("backend_request"),
+                "backend_effective": backend_effective,
+                "quality_topk_effective": topk_effective,
+                "semantics_lock_status": sem_status,
+                "required_files": file_checks,
+                "required_files_all_present": all(file_checks.values()) if file_checks else False,
+            }
+        )
+
+    distinct_backend_effective = sorted({v for v in backend_effective_values if v})
+    backend_split_ok = ("sgd" in distinct_backend_effective and "lgbm" in distinct_backend_effective)
+
+    return {
+        "required_files": required_files,
+        "cases": case_rows,
+        "backend_effective_values": distinct_backend_effective,
+        "backend_split_ok": backend_split_ok,
+        "topk_effective_required": 5,
+        "all_required_files_present": all_required_present,
+        "all_topk_effective_ok": all_topk_ok,
+        "all_semantics_status_ok": semantics_ok,
+        "hardlock_compliance_ok": (
+            all_required_present and all_topk_ok and semantics_ok and backend_split_ok
+        ),
+    }
 
 
 def main() -> int:
@@ -225,14 +299,14 @@ def main() -> int:
         description="Run fixed Fresh14 Gate vNext matrix (SGD/LGBM) and produce a comparison summary."
     )
     parser.add_argument("--python", default=sys.executable)
-    parser.add_argument("--exe-path", default="build/Release/AutoLifeTrading.exe")
-    parser.add_argument("--build-config-sgd", default="build/Release/config/config_rnd_sgd.json")
-    parser.add_argument("--build-config-lgbm", default="build/Release/config/config_rnd_lgbm.json")
-    parser.add_argument("--source-config-sgd", default="config/config_rnd_sgd.json")
-    parser.add_argument("--source-config-lgbm", default="config/config_rnd_lgbm.json")
+    parser.add_argument("--exe-path", default="build/AutoLifeTrading.exe")
+    parser.add_argument("--build-config-sgd", default="build/Release/config/config_rnd_vnext_sgd.json")
+    parser.add_argument("--build-config-lgbm", default="build/Release/config/config_rnd_vnext_lgbm.json")
+    parser.add_argument("--source-config-sgd", default="config/config_rnd_vnext_sgd.json")
+    parser.add_argument("--source-config-lgbm", default="config/config_rnd_vnext_lgbm.json")
     parser.add_argument("--data-dir", default="data/backtest_fresh_14d")
     parser.add_argument("--split-manifest-json", default="build/Release/logs/time_split_manifest_r21_prefix.json")
-    parser.add_argument("--split-name", default="quarantine")
+    parser.add_argument("--split-name", default="validation")
     parser.add_argument("--split-execution-prewarm-hours", type=int, default=168)
     parser.add_argument("--logs-root", default="build/Release/logs")
     parser.add_argument("--run-tag", default="gatevnext_fresh14_matrix")
@@ -297,11 +371,18 @@ def main() -> int:
 
     out_json = logs_root / f"{args.run_tag}_summary.json"
     out_csv = logs_root / f"{args.run_tag}_summary.csv"
+    compliance_json = logs_root / f"{args.run_tag}_hardlock_compliance_check.json"
     out_json.write_text(json.dumps({"cases": summaries}, ensure_ascii=False, indent=2), encoding="utf-8")
     write_summary_csv(out_csv, summaries)
+    compliance_payload = build_hardlock_compliance_payload(summaries)
+    compliance_json.write_text(
+        json.dumps(compliance_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
     print(out_json)
     print(out_csv)
+    print(compliance_json)
     return 0
 
 

@@ -177,12 +177,9 @@ public:
         double range_penalty = 0.11;
         double range_bonus = 0.03;
         double range_penalty_strength_floor = 0.50;
-        double range_penalty_margin_floor = 0.008;
         double range_penalty_prob_floor = 0.54;
-        double range_bonus_margin_floor = 0.012;
         double range_bonus_prob_floor = 0.57;
         double uptrend_bonus = 0.03;
-        double uptrend_bonus_margin_floor = 0.0;
         double uptrend_bonus_prob_floor = 0.52;
     };
 

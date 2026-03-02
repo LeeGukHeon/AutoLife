@@ -16,6 +16,9 @@ public:
         int quality_topk = 5;
         double base_size = 0.1;
         double ev_scale_bps = 10.0;
+        std::string backend_request = "unknown";
+        std::string backend_effective = "unknown";
+        std::string model_sha256;
     };
 
     explicit GateVNext(Params params = {});

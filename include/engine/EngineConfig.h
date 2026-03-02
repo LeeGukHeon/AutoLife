@@ -385,7 +385,7 @@ struct EngineConfig {
     double execution_guard_veto_max_spread_clamp_max = 0.0150;
     double execution_guard_veto_min_imbalance_clamp_min = -0.90;
     double execution_guard_veto_min_imbalance_clamp_max = -0.05;
-    // Live scan prefilter dynamic policy coefficients.
+    // Live scan dynamic policy coefficients.
     double execution_guard_live_scan_volume_quantile_median = 0.50;
     double execution_guard_live_scan_volume_quantile_p70 = 0.70;
     double execution_guard_live_scan_base_spread_multiplier = 1.25;

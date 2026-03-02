@@ -78,8 +78,18 @@ std::vector<CandidateSnapshot> RiskSizer::applySizing(
 ) const {
     std::vector<CandidateSnapshot> out = selected;
     for (auto& s : out) {
-        s.expected_value_vnext_bps = s.edge_bps;
-        if (s.expected_value_vnext_bps < 0.0) {
+        const bool has_gate_edge = std::isfinite(s.expected_edge_used_for_gate_bps);
+        const bool has_legacy_edge = std::isfinite(s.edge_bps);
+        if (has_gate_edge) {
+            s.expected_value_vnext_bps = s.expected_edge_used_for_gate_bps;
+        } else if (has_legacy_edge) {
+            s.expected_value_vnext_bps = s.edge_bps;
+        } else {
+            s.expected_value_vnext_bps = std::numeric_limits<double>::quiet_NaN();
+            s.size_fraction = 0.0;
+            continue;
+        }
+        if (!std::isfinite(s.expected_value_vnext_bps) || s.expected_value_vnext_bps < 0.0) {
             s.size_fraction = 0.0;
             continue;
         }
@@ -99,7 +109,13 @@ std::vector<CandidateSnapshot> ExecutionGate::filterExecutable(
     for (auto s : sized) {
         if (s.size_fraction <= 0.0) {
             s.execution_gate_pass = false;
-            s.execution_reject_reason = "size_zero";
+            if (!std::isfinite(s.expected_value_vnext_bps)) {
+                s.execution_reject_reason = "missing_ev_source";
+            } else if (s.expected_value_vnext_bps < 0.0) {
+                s.execution_reject_reason = "ev_negative_size_zero";
+            } else {
+                s.execution_reject_reason = "size_zero";
+            }
             out.push_back(std::move(s));
             continue;
         }
@@ -156,6 +172,9 @@ std::vector<CandidateSnapshot> GateVNext::run(
         telemetry->quality.margin_p10 = computeQuantile(margins, 0.10);
         telemetry->quality.margin_p50 = computeQuantile(margins, 0.50);
         telemetry->quality.margin_p90 = computeQuantile(margins, 0.90);
+        telemetry->provenance.backend_request = params_.backend_request;
+        telemetry->provenance.backend_effective = params_.backend_effective;
+        telemetry->provenance.model_sha256 = params_.model_sha256;
     }
 
     return gated;
