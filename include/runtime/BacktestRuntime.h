@@ -107,6 +107,29 @@ public:
             int gate_vnext_s4_submitted = 0;
             int gate_vnext_s5_filled = 0;
             int gate_vnext_drop_ev_negative_count = 0;
+            int gate_vnext_ev_negative_size_zero_count = 0;
+            int gate_vnext_ev_positive_size_gt_zero_count = 0;
+            double gate_vnext_expected_value_from_prob_min_bps = 0.0;
+            double gate_vnext_expected_value_from_prob_median_bps = 0.0;
+            double gate_vnext_expected_value_from_prob_max_bps = 0.0;
+            double gate_vnext_p_cal_min = 0.0;
+            double gate_vnext_p_cal_median = 0.0;
+            double gate_vnext_p_cal_max = 0.0;
+            double gate_vnext_tp_pct_min = 0.0;
+            double gate_vnext_tp_pct_median = 0.0;
+            double gate_vnext_tp_pct_max = 0.0;
+            double gate_vnext_sl_pct_min = 0.0;
+            double gate_vnext_sl_pct_median = 0.0;
+            double gate_vnext_sl_pct_max = 0.0;
+            double gate_vnext_ev_in_min_bps = 0.0;
+            double gate_vnext_ev_in_median_bps = 0.0;
+            double gate_vnext_ev_in_max_bps = 0.0;
+            double gate_vnext_ev_for_size_min_bps = 0.0;
+            double gate_vnext_ev_for_size_median_bps = 0.0;
+            double gate_vnext_ev_for_size_max_bps = 0.0;
+            double gate_vnext_size_fraction_min = 0.0;
+            double gate_vnext_size_fraction_median = 0.0;
+            double gate_vnext_size_fraction_max = 0.0;
             int gate_vnext_scan_rounds = 0;
             int reject_expected_edge_negative_count = 0;
             int reject_regime_entry_disabled_count = 0;
@@ -191,6 +214,15 @@ public:
             int generated = 0;
         };
         struct PostEntryRiskTelemetry {
+            bool exit_policy_v1_enabled = true;
+            bool exit_policy_partial_tp_enabled = false;
+            bool exit_policy_breakeven_enabled = false;
+            bool exit_policy_trailing_enabled = false;
+            bool exit_policy_tp_full_enabled = true;
+            bool exit_policy_stop_loss_enabled = true;
+            bool exit_policy_time_exit_enabled = true;
+            int exit_policy_time_exit_max_holding_minutes = 30;
+            double exit_policy_rr_full = 2.2;
             int adaptive_stop_updates = 0;
             int adaptive_tp_recalibration_updates = 0;
             int adaptive_partial_ratio_samples = 0;
@@ -455,6 +487,15 @@ private:
     std::vector<nlohmann::json> gate_vnext_ev_samples_;
     int gate_vnext_quality_topk_ = 5;
     double gate_vnext_ev_scale_bps_ = 10.0;
+    bool exit_policy_v1_enabled_ = true;
+    bool exit_policy_partial_tp_enabled_ = false;
+    bool exit_policy_breakeven_enabled_ = false;
+    bool exit_policy_trailing_enabled_ = false;
+    bool exit_policy_tp_full_enabled_ = true;
+    bool exit_policy_stop_loss_enabled_ = true;
+    bool exit_policy_time_exit_enabled_ = true;
+    int exit_policy_time_exit_max_holding_minutes_ = 30;
+    double exit_policy_rr_full_ = 2.2;
     size_t current_candle_index_ = 0;
 
     // Simulation Methods

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 import argparse
 import json
 import pathlib
@@ -13,7 +13,7 @@ from _script_common import dump_json, resolve_repo_path
 
 DEFAULT_RUNTIME_BUNDLE_V2 = r".\config\model\probabilistic_runtime_bundle_v2.json"
 DEFAULT_LIVE_DECISION_LOG_JSONL = r".\build\Release\logs\policy_decisions.jsonl"
-DEFAULT_BACKTEST_DECISION_LOG_JSONL = r".\build\Release\logs\policy_decisions_backtest.jsonl"
+DEFAULT_BACKTEST_DECISION_LOG_JSONL = r".\build\Release\logs\vnext_policy_decisions_backtest.jsonl"
 DEFAULT_FEATURE_VALIDATION_JSON = r".\build\Release\logs\probabilistic_feature_validation_summary.json"
 DEFAULT_PARITY_JSON = r".\build\Release\logs\probabilistic_runtime_bundle_parity.json"
 DEFAULT_VERIFICATION_JSON = r".\build\Release\logs\verification_report.json"
@@ -568,3 +568,4 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

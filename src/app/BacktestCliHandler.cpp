@@ -2,14 +2,21 @@
 
 #include "app/BacktestReportFormatter.h"
 #include "common/Logger.h"
+#include "common/PathUtils.h"
 #include "runtime/BacktestRuntime.h"
 
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <filesystem>
+#include <fstream>
+#include <limits>
+#include <map>
 #include <iostream>
+#include <numeric>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -108,6 +115,430 @@ static void printCompanionRequirementError(const std::string& csv_path, const Co
     }
 }
 
+constexpr double kStructuralMinOrderKrw = 5000.0;
+constexpr double kStructuralFeeRatePerLeg = 0.0005;         // 0.05% each side
+constexpr double kStructuralSlippageAlpha = 0.5;
+constexpr double kStructuralSlippageCapBps = 30.0;
+constexpr double kStructuralLabelCostBps = 12.0;
+
+struct StructuralMarketAgg {
+    int trade_count = 0;
+    double price_move_pnl_sum_krw = 0.0;
+    double fee_sum_krw = 0.0;
+    double slippage_sum_krw = 0.0;
+    double structural_pnl_after_cost_sum_krw = 0.0;
+    int forced_full_exit_count = 0;
+    int partial_disabled_count = 0;
+    int dust_leftover_count = 0;
+};
+
+static std::string normalizeStructuralExitReason(const std::string& raw_reason) {
+    const std::string reason = toLowerCopy(raw_reason);
+    if (reason == "stoploss" || reason == "stop_loss") {
+        return "stop_loss";
+    }
+    if (reason == "takeprofit1" || reason == "partial_take_profit" || reason == "partial_tp") {
+        return "partial_tp";
+    }
+    if (reason == "takeprofit2" || reason == "take_profit" || reason == "tp_full") {
+        return "tp_full";
+    }
+    if (reason == "takeprofitfullduetominorder" || reason == "take_profit_full_due_to_min_order") {
+        return "tp_full_due_to_min_order";
+    }
+    if (reason == "strategy_exit") {
+        return "strategy_exit";
+    }
+    if (reason == "backtesteod") {
+        return "time_exit";
+    }
+    if (reason == "timeexit" || reason == "time_exit") {
+        return "time_exit";
+    }
+    return "other";
+}
+
+static double toLiquidityNorm01(double liquidity_score) {
+    if (!std::isfinite(liquidity_score)) {
+        return 0.5;
+    }
+    if (liquidity_score > 1.0) {
+        return std::clamp(liquidity_score / 100.0, 0.0, 1.0);
+    }
+    return std::clamp(liquidity_score, 0.0, 1.0);
+}
+
+static double estimateSpreadPctForStructuralEv(const BacktestResult::TradeHistorySample& trade) {
+    const double liq = toLiquidityNorm01(trade.liquidity_score);
+    const double vol = std::clamp(
+        std::isfinite(trade.volatility) ? std::abs(trade.volatility) : 0.0,
+        0.0,
+        1.0
+    );
+    const double spread_pct =
+        0.00020 + ((1.0 - liq) * 0.00090) + (vol * 0.00020);
+    return std::clamp(spread_pct, 0.00005, 0.00600);
+}
+
+static double spreadToSlippageBps(double spread_pct) {
+    const double raw_bps = std::max(0.0, spread_pct) * 10000.0 * kStructuralSlippageAlpha;
+    return std::min(raw_bps, kStructuralSlippageCapBps);
+}
+
+static void writeExitPolicyDumpArtifact(
+    const BacktestResult& result,
+    const std::filesystem::path& run_dir
+) {
+    std::filesystem::create_directories(run_dir);
+    const std::filesystem::path path = run_dir / "exit_policy_dump.json";
+    nlohmann::json payload;
+    payload["exit_policy_v1"] = {
+        {"enabled", result.post_entry_risk_telemetry.exit_policy_v1_enabled},
+        {"partial_tp_enabled", result.post_entry_risk_telemetry.exit_policy_partial_tp_enabled},
+        {"breakeven_enabled", result.post_entry_risk_telemetry.exit_policy_breakeven_enabled},
+        {"trailing_enabled", result.post_entry_risk_telemetry.exit_policy_trailing_enabled},
+        {"tp_full_enabled", result.post_entry_risk_telemetry.exit_policy_tp_full_enabled},
+        {"stop_loss_enabled", result.post_entry_risk_telemetry.exit_policy_stop_loss_enabled},
+        {"time_exit_enabled", result.post_entry_risk_telemetry.exit_policy_time_exit_enabled},
+        {"time_exit_max_holding_minutes",
+         result.post_entry_risk_telemetry.exit_policy_time_exit_max_holding_minutes},
+        {"rr_full", result.post_entry_risk_telemetry.exit_policy_rr_full},
+    };
+    payload["upbit_constraints"] = {
+        {"min_order_krw", kStructuralMinOrderKrw},
+        {"fee_rate_roundtrip_default", kStructuralFeeRatePerLeg * 2.0},
+        {"slippage_model_v1", {
+            {"alpha", kStructuralSlippageAlpha},
+            {"cap_bps", kStructuralSlippageCapBps},
+            {"formula", "min(spread_pct*10000*alpha, cap_bps)"},
+        }},
+    };
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+        return;
+    }
+    out << payload.dump(2) << "\n";
+}
+
+static double quantileFromSorted(const std::vector<double>& sorted_values, double q) {
+    if (sorted_values.empty()) {
+        return 0.0;
+    }
+    const double qv = std::clamp(q, 0.0, 1.0);
+    if (sorted_values.size() == 1) {
+        return sorted_values.front();
+    }
+    const double pos = qv * static_cast<double>(sorted_values.size() - 1);
+    const std::size_t lo = static_cast<std::size_t>(std::floor(pos));
+    const std::size_t hi = static_cast<std::size_t>(std::ceil(pos));
+    if (lo == hi) {
+        return sorted_values[lo];
+    }
+    const double weight = pos - static_cast<double>(lo);
+    return sorted_values[lo] + (sorted_values[hi] - sorted_values[lo]) * weight;
+}
+
+static nlohmann::json loadRunProvenanceJson(const std::filesystem::path& run_dir) {
+    const std::filesystem::path path = run_dir / "run_provenance.json";
+    if (!std::filesystem::exists(path)) {
+        return nlohmann::json::object();
+    }
+    try {
+        std::ifstream in(path, std::ios::binary);
+        if (!in.is_open()) {
+            return nlohmann::json::object();
+        }
+        nlohmann::json payload;
+        in >> payload;
+        if (!payload.is_object()) {
+            return nlohmann::json::object();
+        }
+        return payload;
+    } catch (...) {
+        return nlohmann::json::object();
+    }
+}
+
+static nlohmann::json writeStructuralEvArtifacts(
+    const BacktestResult& result,
+    const std::filesystem::path& run_dir
+) {
+    std::filesystem::create_directories(run_dir);
+    const std::filesystem::path rows_path = run_dir / "structural_ev_trade_rows.jsonl";
+    const std::filesystem::path breakdown_path = run_dir / "structural_ev_breakdown.json";
+    const std::filesystem::path summary_csv_path = run_dir / "structural_ev_summary.csv";
+    const nlohmann::json run_provenance = loadRunProvenanceJson(run_dir);
+
+    std::ofstream rows_out(rows_path, std::ios::binary | std::ios::trunc);
+    std::map<std::string, StructuralMarketAgg> market_aggs;
+    std::map<std::string, int> exit_reason_counts;
+    std::map<std::string, int> min_order_effect_counts{
+        {"NONE", 0},
+        {"FORCED_FULL_EXIT", 0},
+        {"PARTIAL_DISABLED", 0},
+        {"DUST_LEFTOVER", 0},
+    };
+
+    double price_move_pnl_sum_krw = 0.0;
+    double fee_sum_krw = 0.0;
+    double slippage_sum_krw = 0.0;
+    double structural_pnl_after_cost_sum_krw = 0.0;
+    std::vector<double> predicted_structural_ev_bps_values;
+    int row_count = 0;
+
+    for (const auto& trade : result.trade_history_samples) {
+        if (!(trade.quantity > 0.0) || !(trade.entry_price > 0.0) || !(trade.exit_price > 0.0)) {
+            continue;
+        }
+
+        const std::string market = trade.market.empty() ? "UNKNOWN" : trade.market;
+        const std::string exit_reason = normalizeStructuralExitReason(trade.exit_reason);
+        const double entry_notional_krw = std::max(0.0, trade.entry_price * trade.quantity);
+        const double exit_notional_krw = std::max(0.0, trade.exit_price * trade.quantity);
+        const double notional_krw = std::max(entry_notional_krw, exit_notional_krw);
+
+        const double price_move_pnl_krw = (trade.exit_price - trade.entry_price) * trade.quantity;
+        const double fee_krw = (trade.fee_paid_krw > 0.0)
+            ? trade.fee_paid_krw
+            : ((entry_notional_krw + exit_notional_krw) * kStructuralFeeRatePerLeg);
+
+        const double spread_pct_entry_est = estimateSpreadPctForStructuralEv(trade);
+        const double spread_pct_exit_est = estimateSpreadPctForStructuralEv(trade);
+        const double slippage_entry_bps = spreadToSlippageBps(spread_pct_entry_est);
+        const double slippage_exit_bps = spreadToSlippageBps(spread_pct_exit_est);
+        const double slippage_krw =
+            (entry_notional_krw * (slippage_entry_bps / 10000.0)) +
+            (exit_notional_krw * (slippage_exit_bps / 10000.0));
+
+        const double structural_pnl_after_cost_krw = price_move_pnl_krw - fee_krw - slippage_krw;
+
+        std::string min_order_effect_tag = "NONE";
+        if (exit_reason == "tp_full_due_to_min_order") {
+            min_order_effect_tag = "FORCED_FULL_EXIT";
+        } else if (exit_reason == "tp_full" && entry_notional_krw < (2.0 * kStructuralMinOrderKrw)) {
+            min_order_effect_tag = "PARTIAL_DISABLED";
+        } else if (exit_notional_krw > 0.0 && exit_notional_krw < kStructuralMinOrderKrw) {
+            min_order_effect_tag = "DUST_LEFTOVER";
+        }
+
+        const double p_cal = std::clamp(
+            std::isfinite(trade.probabilistic_h5_calibrated) ? trade.probabilistic_h5_calibrated : 0.5,
+            0.0,
+            1.0
+        );
+        const double tp_pct = std::max(0.0, trade.initial_take_profit_distance_pct);
+        const double sl_pct = std::max(0.0, trade.initial_stop_loss_distance_pct);
+        const double slippage_bps = slippage_entry_bps + slippage_exit_bps;
+        const double cost_bps = (kStructuralFeeRatePerLeg * 2.0 * 10000.0) + slippage_bps;
+        const double predicted_structural_ev_bps =
+            (tp_pct > 0.0 && sl_pct > 0.0)
+                ? ((10000.0 * ((p_cal * tp_pct) - ((1.0 - p_cal) * sl_pct))) - cost_bps)
+                : std::numeric_limits<double>::quiet_NaN();
+
+        nlohmann::json row;
+        row["event_type"] = (exit_reason == "partial_tp") ? "PARTIAL" : "EXIT";
+        row["exit_reason"] = exit_reason;
+        row["market"] = market;
+        row["ts_entry"] = trade.entry_time;
+        row["ts_exit"] = trade.exit_time;
+        row["holding_sec"] = std::max(0.0, trade.holding_minutes * 60.0);
+        row["entry_price"] = trade.entry_price;
+        row["exit_price"] = trade.exit_price;
+        row["qty"] = trade.quantity;
+        row["notional_krw"] = notional_krw;
+        row["price_move_pnl_krw"] = price_move_pnl_krw;
+        row["fee_cost_krw"] = fee_krw;
+        row["slippage_cost_krw"] = slippage_krw;
+        row["structural_pnl_after_cost_krw"] = structural_pnl_after_cost_krw;
+        row["realized_profit_loss_krw"] = trade.profit_loss_krw;
+        row["realized_profit_loss_pct"] = trade.profit_loss_pct;
+        row["min_order_effect_tag"] = min_order_effect_tag;
+        row["p_calibrated"] = p_cal;
+        row["tp_pct"] = tp_pct;
+        row["sl_pct"] = sl_pct;
+        row["spread_pct_entry_estimate"] = spread_pct_entry_est;
+        row["spread_pct_exit_estimate"] = spread_pct_exit_est;
+        row["fee_bps_roundtrip"] = (kStructuralFeeRatePerLeg * 2.0 * 10000.0);
+        row["slippage_bps_estimate"] = slippage_bps;
+        row["label_cost_bps"] = kStructuralLabelCostBps;
+        row["predicted_structural_ev_bps"] = predicted_structural_ev_bps;
+        row["backend_effective"] = result.entry_funnel.gate_vnext_backend_effective;
+        row["backend_request"] = result.entry_funnel.gate_vnext_backend_request;
+        row["topk_effective"] = result.entry_funnel.quality_topk_effective;
+        row["run_config_path"] = run_provenance.value("config_path", std::string{});
+        row["run_bundle_path"] = run_provenance.value("bundle_path", std::string{});
+        row["run_lgbm_model_sha256"] = run_provenance.value("lgbm_model_sha256", std::string{});
+
+        if (rows_out.is_open()) {
+            rows_out << row.dump() << "\n";
+        }
+
+        auto& agg = market_aggs[market];
+        agg.trade_count += 1;
+        agg.price_move_pnl_sum_krw += price_move_pnl_krw;
+        agg.fee_sum_krw += fee_krw;
+        agg.slippage_sum_krw += slippage_krw;
+        agg.structural_pnl_after_cost_sum_krw += structural_pnl_after_cost_krw;
+        if (min_order_effect_tag == "FORCED_FULL_EXIT") {
+            agg.forced_full_exit_count += 1;
+        } else if (min_order_effect_tag == "PARTIAL_DISABLED") {
+            agg.partial_disabled_count += 1;
+        } else if (min_order_effect_tag == "DUST_LEFTOVER") {
+            agg.dust_leftover_count += 1;
+        }
+
+        exit_reason_counts[exit_reason] += 1;
+        min_order_effect_counts[min_order_effect_tag] += 1;
+        price_move_pnl_sum_krw += price_move_pnl_krw;
+        fee_sum_krw += fee_krw;
+        slippage_sum_krw += slippage_krw;
+        structural_pnl_after_cost_sum_krw += structural_pnl_after_cost_krw;
+        if (std::isfinite(predicted_structural_ev_bps)) {
+            predicted_structural_ev_bps_values.push_back(predicted_structural_ev_bps);
+        }
+        row_count += 1;
+    }
+    if (rows_out.is_open()) {
+        rows_out.flush();
+    }
+
+    std::vector<std::pair<std::string, StructuralMarketAgg>> sorted_markets(
+        market_aggs.begin(),
+        market_aggs.end()
+    );
+    std::sort(
+        sorted_markets.begin(),
+        sorted_markets.end(),
+        [](const auto& lhs, const auto& rhs) {
+            if (lhs.second.structural_pnl_after_cost_sum_krw !=
+                rhs.second.structural_pnl_after_cost_sum_krw) {
+                return lhs.second.structural_pnl_after_cost_sum_krw <
+                       rhs.second.structural_pnl_after_cost_sum_krw;
+            }
+            return lhs.first < rhs.first;
+        }
+    );
+
+    std::sort(predicted_structural_ev_bps_values.begin(), predicted_structural_ev_bps_values.end());
+    const nlohmann::json predicted_ev_summary = {
+        {"count", static_cast<int>(predicted_structural_ev_bps_values.size())},
+        {"min", predicted_structural_ev_bps_values.empty()
+                    ? 0.0
+                    : quantileFromSorted(predicted_structural_ev_bps_values, 0.0)},
+        {"median", predicted_structural_ev_bps_values.empty()
+                       ? 0.0
+                       : quantileFromSorted(predicted_structural_ev_bps_values, 0.5)},
+        {"max", predicted_structural_ev_bps_values.empty()
+                    ? 0.0
+                    : quantileFromSorted(predicted_structural_ev_bps_values, 1.0)},
+    };
+
+    nlohmann::json top_loss_markets = nlohmann::json::array();
+    for (std::size_t i = 0; i < sorted_markets.size() && i < 3; ++i) {
+        const auto& item = sorted_markets[i];
+        top_loss_markets.push_back(
+            {
+                {"market", item.first},
+                {"trade_count", item.second.trade_count},
+                {"structural_pnl_after_cost_sum_krw", item.second.structural_pnl_after_cost_sum_krw},
+                {"fee_sum_krw", item.second.fee_sum_krw},
+                {"slippage_sum_krw", item.second.slippage_sum_krw},
+            }
+        );
+    }
+
+    nlohmann::json per_exit_reason = nlohmann::json::array();
+    for (const auto& [reason, count] : exit_reason_counts) {
+        per_exit_reason.push_back({{"exit_reason", reason}, {"count", count}});
+    }
+    std::sort(
+        per_exit_reason.begin(),
+        per_exit_reason.end(),
+        [](const nlohmann::json& lhs, const nlohmann::json& rhs) {
+            if (lhs.value("count", 0) != rhs.value("count", 0)) {
+                return lhs.value("count", 0) > rhs.value("count", 0);
+            }
+            return lhs.value("exit_reason", std::string{}) < rhs.value("exit_reason", std::string{});
+        }
+    );
+
+    nlohmann::json breakdown;
+    breakdown["run_provenance"] = run_provenance;
+    breakdown["backend_effective"] = result.entry_funnel.gate_vnext_backend_effective;
+    breakdown["backend_request"] = result.entry_funnel.gate_vnext_backend_request;
+    breakdown["topk_effective"] = result.entry_funnel.quality_topk_effective;
+    breakdown["trade_rows_count"] = row_count;
+    breakdown["component_aggregates"] = {
+        {"price_move_pnl_sum_krw", price_move_pnl_sum_krw},
+        {"fee_sum_krw", fee_sum_krw},
+        {"slippage_sum_krw", slippage_sum_krw},
+        {"structural_pnl_after_cost_sum_krw", structural_pnl_after_cost_sum_krw},
+    };
+    breakdown["slippage_model_v1"] = {
+        {"alpha", kStructuralSlippageAlpha},
+        {"cap_bps", kStructuralSlippageCapBps},
+        {"formula", "min(spread_pct*10000*alpha, cap_bps)"},
+    };
+    breakdown["predicted_structural_ev_bps_summary"] = predicted_ev_summary;
+    breakdown["min_order_effect_counts"] = min_order_effect_counts;
+    breakdown["exit_reason_breakdown"] = per_exit_reason;
+    breakdown["top_loss_markets"] = top_loss_markets;
+
+    nlohmann::json per_market_rows = nlohmann::json::array();
+    for (const auto& [market, agg] : sorted_markets) {
+        per_market_rows.push_back(
+            {
+                {"market", market},
+                {"trade_count", agg.trade_count},
+                {"price_move_pnl_sum_krw", agg.price_move_pnl_sum_krw},
+                {"fee_sum_krw", agg.fee_sum_krw},
+                {"slippage_sum_krw", agg.slippage_sum_krw},
+                {"structural_pnl_after_cost_sum_krw", agg.structural_pnl_after_cost_sum_krw},
+                {"forced_full_exit_count", agg.forced_full_exit_count},
+                {"partial_disabled_count", agg.partial_disabled_count},
+                {"dust_leftover_count", agg.dust_leftover_count},
+            }
+        );
+    }
+    breakdown["per_market"] = per_market_rows;
+
+    {
+        std::ofstream out(breakdown_path, std::ios::binary | std::ios::trunc);
+        if (out.is_open()) {
+            out << breakdown.dump(2) << "\n";
+        }
+    }
+
+    {
+        std::ofstream out(summary_csv_path, std::ios::binary | std::ios::trunc);
+        if (out.is_open()) {
+            out << "market,trade_count,price_move_pnl_sum_krw,fee_sum_krw,slippage_sum_krw,structural_pnl_after_cost_sum_krw,forced_full_exit_count,partial_disabled_count,dust_leftover_count\n";
+            out << "TOTAL,"
+                << row_count << ","
+                << price_move_pnl_sum_krw << ","
+                << fee_sum_krw << ","
+                << slippage_sum_krw << ","
+                << structural_pnl_after_cost_sum_krw << ","
+                << min_order_effect_counts["FORCED_FULL_EXIT"] << ","
+                << min_order_effect_counts["PARTIAL_DISABLED"] << ","
+                << min_order_effect_counts["DUST_LEFTOVER"] << "\n";
+            for (const auto& [market, agg] : sorted_markets) {
+                out << market << ","
+                    << agg.trade_count << ","
+                    << agg.price_move_pnl_sum_krw << ","
+                    << agg.fee_sum_krw << ","
+                    << agg.slippage_sum_krw << ","
+                    << agg.structural_pnl_after_cost_sum_krw << ","
+                    << agg.forced_full_exit_count << ","
+                    << agg.partial_disabled_count << ","
+                    << agg.dust_leftover_count << "\n";
+            }
+        }
+    }
+
+    return breakdown;
+}
+
 nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
     nlohmann::json j;
     j["final_balance"] = result.final_balance;
@@ -135,6 +566,24 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
         ? (result.post_entry_risk_telemetry.adaptive_partial_ratio_sum / static_cast<double>(partial_ratio_samples))
         : 0.0;
     j["post_entry_risk_telemetry"] = {
+        {"exit_policy_v1_enabled",
+         result.post_entry_risk_telemetry.exit_policy_v1_enabled},
+        {"exit_policy_partial_tp_enabled",
+         result.post_entry_risk_telemetry.exit_policy_partial_tp_enabled},
+        {"exit_policy_breakeven_enabled",
+         result.post_entry_risk_telemetry.exit_policy_breakeven_enabled},
+        {"exit_policy_trailing_enabled",
+         result.post_entry_risk_telemetry.exit_policy_trailing_enabled},
+        {"exit_policy_tp_full_enabled",
+         result.post_entry_risk_telemetry.exit_policy_tp_full_enabled},
+        {"exit_policy_stop_loss_enabled",
+         result.post_entry_risk_telemetry.exit_policy_stop_loss_enabled},
+        {"exit_policy_time_exit_enabled",
+         result.post_entry_risk_telemetry.exit_policy_time_exit_enabled},
+        {"exit_policy_time_exit_max_holding_minutes",
+         result.post_entry_risk_telemetry.exit_policy_time_exit_max_holding_minutes},
+        {"exit_policy_rr_full",
+         result.post_entry_risk_telemetry.exit_policy_rr_full},
         {"adaptive_stop_updates", result.post_entry_risk_telemetry.adaptive_stop_updates},
         {"adaptive_tp_recalibration_updates", result.post_entry_risk_telemetry.adaptive_tp_recalibration_updates},
         {"adaptive_partial_ratio_samples", partial_ratio_samples},
@@ -365,6 +814,32 @@ nlohmann::json buildBacktestResultJson(const BacktestResult& result) {
              {"s4_submitted", result.entry_funnel.gate_vnext_s4_submitted},
              {"s5_filled", result.entry_funnel.gate_vnext_s5_filled},
              {"drop_ev_negative_count", result.entry_funnel.gate_vnext_drop_ev_negative_count},
+             {"ev_negative_size_zero_count", result.entry_funnel.gate_vnext_ev_negative_size_zero_count},
+             {"ev_positive_size_gt_zero_count", result.entry_funnel.gate_vnext_ev_positive_size_gt_zero_count},
+             {"expected_value_from_prob_min_bps",
+              result.entry_funnel.gate_vnext_expected_value_from_prob_min_bps},
+             {"expected_value_from_prob_median_bps",
+              result.entry_funnel.gate_vnext_expected_value_from_prob_median_bps},
+             {"expected_value_from_prob_max_bps",
+              result.entry_funnel.gate_vnext_expected_value_from_prob_max_bps},
+             {"p_cal_min", result.entry_funnel.gate_vnext_p_cal_min},
+             {"p_cal_median", result.entry_funnel.gate_vnext_p_cal_median},
+             {"p_cal_max", result.entry_funnel.gate_vnext_p_cal_max},
+             {"tp_pct_min", result.entry_funnel.gate_vnext_tp_pct_min},
+             {"tp_pct_median", result.entry_funnel.gate_vnext_tp_pct_median},
+             {"tp_pct_max", result.entry_funnel.gate_vnext_tp_pct_max},
+             {"sl_pct_min", result.entry_funnel.gate_vnext_sl_pct_min},
+             {"sl_pct_median", result.entry_funnel.gate_vnext_sl_pct_median},
+             {"sl_pct_max", result.entry_funnel.gate_vnext_sl_pct_max},
+             {"ev_in_min_bps", result.entry_funnel.gate_vnext_ev_in_min_bps},
+             {"ev_in_median_bps", result.entry_funnel.gate_vnext_ev_in_median_bps},
+             {"ev_in_max_bps", result.entry_funnel.gate_vnext_ev_in_max_bps},
+             {"ev_for_size_min_bps", result.entry_funnel.gate_vnext_ev_for_size_min_bps},
+             {"ev_for_size_median_bps", result.entry_funnel.gate_vnext_ev_for_size_median_bps},
+             {"ev_for_size_max_bps", result.entry_funnel.gate_vnext_ev_for_size_max_bps},
+             {"size_fraction_min", result.entry_funnel.gate_vnext_size_fraction_min},
+             {"size_fraction_median", result.entry_funnel.gate_vnext_size_fraction_median},
+             {"size_fraction_max", result.entry_funnel.gate_vnext_size_fraction_max},
              {"scan_rounds", result.entry_funnel.gate_vnext_scan_rounds}
          }},
         {"reject_expected_edge_negative_count",
@@ -666,8 +1141,13 @@ bool tryRunCliBacktest(int argc, char* argv[], Config& config, int& out_exit_cod
     bt_engine.run();
 
     auto result = bt_engine.getResult();
+    const std::filesystem::path run_dir = autolife::utils::PathUtils::getRunDir();
+    const nlohmann::json structural_ev_breakdown = writeStructuralEvArtifacts(result, run_dir);
+    writeExitPolicyDumpArtifact(result, run_dir);
     if (json_mode) {
-        std::cout << buildBacktestResultJson(result).dump() << "\n";
+        auto payload = buildBacktestResultJson(result);
+        payload["structural_ev"] = structural_ev_breakdown;
+        std::cout << payload.dump() << "\n";
         out_exit_code = 0;
         return true;
     }

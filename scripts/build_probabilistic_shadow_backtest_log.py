@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 import argparse
 import bisect
 import json
@@ -35,7 +35,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--backtest-policy-log-jsonl",
-        default=r".\build\Release\logs\policy_decisions_backtest.jsonl",
+        default=r".\build\Release\logs\vnext_policy_decisions_backtest.jsonl",
         help="Path written by backtest runtime per replay run.",
     )
     parser.add_argument(
@@ -750,3 +750,4 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

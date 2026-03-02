@@ -32,12 +32,12 @@ namespace backtest {
 
 namespace {
 // Keep core execution plane slippage constants explicit in backtest cost modeling.
-constexpr double CORE_ENTRY_SLIPPAGE_PCT = 0.00018;  // 0.018%
-constexpr double CORE_EXIT_SLIPPAGE_PCT = 0.00026;   // 0.026%
-constexpr double CORE_STOP_SLIPPAGE_PCT = 0.00095;   // 0.095%
-constexpr double LEGACY_ENTRY_SLIPPAGE_PCT = 0.0002; // 0.02%
-constexpr double LEGACY_EXIT_SLIPPAGE_PCT = 0.0003;  // 0.03%
-constexpr double LEGACY_STOP_SLIPPAGE_PCT = 0.0010;  // 0.10%
+constexpr double CORE_ENTRY_SLIPPAGE_PCT = 0.00018;     // 0.018%
+constexpr double CORE_EXIT_SLIPPAGE_PCT = 0.00026;      // 0.026%
+constexpr double CORE_STOP_SLIPPAGE_PCT = 0.00095;      // 0.095%
+constexpr double FALLBACK_ENTRY_SLIPPAGE_PCT = 0.0002;  // 0.02%
+constexpr double FALLBACK_EXIT_SLIPPAGE_PCT = 0.0003;   // 0.03%
+constexpr double FALLBACK_STOP_SLIPPAGE_PCT = 0.0010;   // 0.10%
 // Live scanner and backtest must share a single window policy.
 const size_t BACKTEST_CANDLE_WINDOW = common::targetBarsForTimeframe("1m", 200);
 const size_t TF_5M_MAX_BARS = common::targetBarsForTimeframe("5m", 120);
@@ -49,6 +49,15 @@ const size_t TF_1D_MAX_BARS = common::targetBarsForTimeframe("1d", 60);
 struct GateVNextBundleSettings {
     int quality_topk = 5;
     double ev_scale_bps = 10.0;
+    bool exit_policy_v1_enabled = true;
+    bool exit_policy_partial_tp_enabled = false;
+    bool exit_policy_breakeven_enabled = false;
+    bool exit_policy_trailing_enabled = false;
+    bool exit_policy_tp_full_enabled = true;
+    bool exit_policy_stop_loss_enabled = true;
+    bool exit_policy_time_exit_enabled = true;
+    int exit_policy_time_exit_max_holding_minutes = 30;
+    double exit_policy_rr_full = 2.2;
 };
 
 GateVNextBundleSettings loadGateVNextBundleSettings(
@@ -80,6 +89,53 @@ GateVNextBundleSettings loadGateVNextBundleSettings(
         }
         if (root.contains("ev_scale_bps")) {
             out.ev_scale_bps = std::max(1e-9, root.value("ev_scale_bps", out.ev_scale_bps));
+        }
+        nlohmann::json exit_policy = nlohmann::json::object();
+        if (root.contains("exit_policy_v1") && root["exit_policy_v1"].is_object()) {
+            exit_policy = root["exit_policy_v1"];
+        } else if (root.contains("exit") && root["exit"].is_object()) {
+            exit_policy = root["exit"];
+        }
+        if (exit_policy.is_object()) {
+            out.exit_policy_v1_enabled = exit_policy.value(
+                "enabled",
+                out.exit_policy_v1_enabled
+            );
+            out.exit_policy_partial_tp_enabled = exit_policy.value(
+                "partial_tp_enabled",
+                out.exit_policy_partial_tp_enabled
+            );
+            out.exit_policy_breakeven_enabled = exit_policy.value(
+                "breakeven_enabled",
+                out.exit_policy_breakeven_enabled
+            );
+            out.exit_policy_trailing_enabled = exit_policy.value(
+                "trailing_enabled",
+                out.exit_policy_trailing_enabled
+            );
+            out.exit_policy_tp_full_enabled = exit_policy.value(
+                "tp_full_enabled",
+                out.exit_policy_tp_full_enabled
+            );
+            out.exit_policy_stop_loss_enabled = exit_policy.value(
+                "stop_loss_enabled",
+                out.exit_policy_stop_loss_enabled
+            );
+            out.exit_policy_time_exit_enabled = exit_policy.value(
+                "time_exit_enabled",
+                out.exit_policy_time_exit_enabled
+            );
+            out.exit_policy_time_exit_max_holding_minutes = std::max(
+                1,
+                exit_policy.value(
+                    "time_exit_max_holding_minutes",
+                    out.exit_policy_time_exit_max_holding_minutes
+                )
+            );
+            out.exit_policy_rr_full = std::max(
+                1.0,
+                exit_policy.value("rr_full", out.exit_policy_rr_full)
+            );
         }
     } catch (...) {
         return GateVNextBundleSettings{};
@@ -134,17 +190,17 @@ int adaptivePartialRatioHistogramIndex(double ratio) {
 
 double entrySlippagePct(const engine::EngineConfig& cfg) {
     const bool execution_plane_enabled = cfg.enable_core_plane_bridge && cfg.enable_core_execution_plane;
-    return execution_plane_enabled ? CORE_ENTRY_SLIPPAGE_PCT : LEGACY_ENTRY_SLIPPAGE_PCT;
+    return execution_plane_enabled ? CORE_ENTRY_SLIPPAGE_PCT : FALLBACK_ENTRY_SLIPPAGE_PCT;
 }
 
 double exitSlippagePct(const engine::EngineConfig& cfg) {
     const bool execution_plane_enabled = cfg.enable_core_plane_bridge && cfg.enable_core_execution_plane;
-    return execution_plane_enabled ? CORE_EXIT_SLIPPAGE_PCT : LEGACY_EXIT_SLIPPAGE_PCT;
+    return execution_plane_enabled ? CORE_EXIT_SLIPPAGE_PCT : FALLBACK_EXIT_SLIPPAGE_PCT;
 }
 
 double stopSlippagePct(const engine::EngineConfig& cfg) {
     const bool execution_plane_enabled = cfg.enable_core_plane_bridge && cfg.enable_core_execution_plane;
-    return execution_plane_enabled ? CORE_STOP_SLIPPAGE_PCT : LEGACY_STOP_SLIPPAGE_PCT;
+    return execution_plane_enabled ? CORE_STOP_SLIPPAGE_PCT : FALLBACK_STOP_SLIPPAGE_PCT;
 }
 
 std::filesystem::path executionUpdateArtifactPath() {
@@ -169,7 +225,7 @@ void appendExecutionUpdateArtifact(const autolife::core::ExecutionUpdate& update
 }
 
 std::filesystem::path policyDecisionArtifactPath() {
-    return autolife::utils::PathUtils::resolveRelativePath("logs/policy_decisions_backtest.jsonl");
+    return autolife::utils::PathUtils::resolveRelativePath("logs/vnext_policy_decisions_backtest.jsonl");
 }
 
 void resetPolicyDecisionArtifact() {
@@ -353,7 +409,10 @@ struct ProbabilisticRuntimeSnapshot {
     bool edge_semantics_guard_forced_off = false;
     std::string edge_semantics_guard_action = "none";
     double ev_confidence = 1.0;
+    bool edge_regressor_available = false;
     bool edge_regressor_used = false;
+    bool edge_profile_used = false;
+    std::string expected_edge_used_for_gate_source = "UNKNOWN";
     bool ev_calibration_applied = false;
     double cost_entry_pct = 0.0;
     double cost_exit_pct = 0.0;
@@ -744,10 +803,10 @@ void writeStageFunnelVNextArtifact(
     const int s1_topk_bound = scan_rounds * topk_effective;
 
     nlohmann::json stage2_reasons = nlohmann::json::array();
-    if (entry_funnel.gate_vnext_drop_ev_negative_count > 0) {
+    if (entry_funnel.gate_vnext_ev_negative_size_zero_count > 0) {
         stage2_reasons.push_back({
             {"reason", "ev_negative_size_zero"},
-            {"count", entry_funnel.gate_vnext_drop_ev_negative_count},
+            {"count", entry_funnel.gate_vnext_ev_negative_size_zero_count},
         });
     }
 
@@ -766,6 +825,29 @@ void writeStageFunnelVNextArtifact(
         {"s4_submitted", std::max(0, entry_funnel.gate_vnext_s4_submitted)},
         {"s5_filled", std::max(0, entry_funnel.gate_vnext_s5_filled)},
         {"drop_ev_negative_count", std::max(0, entry_funnel.gate_vnext_drop_ev_negative_count)},
+        {"ev_negative_size_zero_count", std::max(0, entry_funnel.gate_vnext_ev_negative_size_zero_count)},
+        {"ev_positive_size_gt_zero_count", std::max(0, entry_funnel.gate_vnext_ev_positive_size_gt_zero_count)},
+        {"expected_value_from_prob_min_bps", entry_funnel.gate_vnext_expected_value_from_prob_min_bps},
+        {"expected_value_from_prob_median_bps", entry_funnel.gate_vnext_expected_value_from_prob_median_bps},
+        {"expected_value_from_prob_max_bps", entry_funnel.gate_vnext_expected_value_from_prob_max_bps},
+        {"p_cal_min", entry_funnel.gate_vnext_p_cal_min},
+        {"p_cal_median", entry_funnel.gate_vnext_p_cal_median},
+        {"p_cal_max", entry_funnel.gate_vnext_p_cal_max},
+        {"tp_pct_min", entry_funnel.gate_vnext_tp_pct_min},
+        {"tp_pct_median", entry_funnel.gate_vnext_tp_pct_median},
+        {"tp_pct_max", entry_funnel.gate_vnext_tp_pct_max},
+        {"sl_pct_min", entry_funnel.gate_vnext_sl_pct_min},
+        {"sl_pct_median", entry_funnel.gate_vnext_sl_pct_median},
+        {"sl_pct_max", entry_funnel.gate_vnext_sl_pct_max},
+        {"ev_in_min_bps", entry_funnel.gate_vnext_ev_in_min_bps},
+        {"ev_in_median_bps", entry_funnel.gate_vnext_ev_in_median_bps},
+        {"ev_in_max_bps", entry_funnel.gate_vnext_ev_in_max_bps},
+        {"ev_for_size_min_bps", entry_funnel.gate_vnext_ev_for_size_min_bps},
+        {"ev_for_size_median_bps", entry_funnel.gate_vnext_ev_for_size_median_bps},
+        {"ev_for_size_max_bps", entry_funnel.gate_vnext_ev_for_size_max_bps},
+        {"size_fraction_min", entry_funnel.gate_vnext_size_fraction_min},
+        {"size_fraction_median", entry_funnel.gate_vnext_size_fraction_median},
+        {"size_fraction_max", entry_funnel.gate_vnext_size_fraction_max},
         {"scan_rounds", scan_rounds},
     };
     payload["s1_topk_bound"] = s1_topk_bound;
@@ -1024,7 +1106,11 @@ bool inferProbabilisticRuntimeSnapshot(
     out_snapshot.edge_semantics_guard_forced_off = inference.edge_semantics_guard_forced_off;
     out_snapshot.edge_semantics_guard_action = inference.edge_semantics_guard_action;
     out_snapshot.ev_confidence = std::clamp(inference.ev_confidence, 0.0, 1.0);
+    out_snapshot.edge_regressor_available = inference.edge_regressor_available;
     out_snapshot.edge_regressor_used = inference.edge_regressor_used;
+    out_snapshot.edge_profile_used = inference.edge_profile_used;
+    out_snapshot.expected_edge_used_for_gate_source =
+        inference.expected_edge_used_for_gate_source;
     out_snapshot.ev_calibration_applied = inference.ev_calibration_applied;
     out_snapshot.cost_entry_pct = std::clamp(inference.entry_cost_bps_estimate / 10000.0, 0.0, 0.10);
     out_snapshot.cost_exit_pct = std::clamp(inference.exit_cost_bps_estimate / 10000.0, 0.0, 0.10);
@@ -1252,6 +1338,18 @@ void BacktestEngine::init(const Config& config) {
         const auto gate_settings = loadGateVNextBundleSettings(bundle_path);
         gate_vnext_quality_topk_ = std::max(1, gate_settings.quality_topk);
         gate_vnext_ev_scale_bps_ = std::max(1e-9, gate_settings.ev_scale_bps);
+        exit_policy_v1_enabled_ = gate_settings.exit_policy_v1_enabled;
+        exit_policy_partial_tp_enabled_ = gate_settings.exit_policy_partial_tp_enabled;
+        exit_policy_breakeven_enabled_ = gate_settings.exit_policy_breakeven_enabled;
+        exit_policy_trailing_enabled_ = gate_settings.exit_policy_trailing_enabled;
+        exit_policy_tp_full_enabled_ = gate_settings.exit_policy_tp_full_enabled;
+        exit_policy_stop_loss_enabled_ = gate_settings.exit_policy_stop_loss_enabled;
+        exit_policy_time_exit_enabled_ = gate_settings.exit_policy_time_exit_enabled;
+        exit_policy_time_exit_max_holding_minutes_ = std::max(
+            1,
+            gate_settings.exit_policy_time_exit_max_holding_minutes
+        );
+        exit_policy_rr_full_ = std::max(1.0, gate_settings.exit_policy_rr_full);
         entry_funnel_.gate_system_version_effective = "vnext";
         entry_funnel_.quality_topk_effective = gate_vnext_quality_topk_;
         entry_funnel_.gate_vnext_backend_request = "unknown";
@@ -1279,9 +1377,18 @@ void BacktestEngine::init(const Config& config) {
             );
         }
         LOG_INFO(
-            "Backtest GateVNext settings: gate_system_version=vnext, quality_topk={}, ev_scale_bps={:.4f}",
+            "Backtest GateVNext settings: gate_system_version=vnext, quality_topk={}, ev_scale_bps={:.4f}, exit_v1(enabled={}, partial={}, be={}, trailing={}, tp_full={}, stop_loss={}, time_exit={}@{}m, rr_full={:.2f})",
             gate_vnext_quality_topk_,
-            gate_vnext_ev_scale_bps_
+            gate_vnext_ev_scale_bps_,
+            exit_policy_v1_enabled_ ? "on" : "off",
+            exit_policy_partial_tp_enabled_ ? "on" : "off",
+            exit_policy_breakeven_enabled_ ? "on" : "off",
+            exit_policy_trailing_enabled_ ? "on" : "off",
+            exit_policy_tp_full_enabled_ ? "on" : "off",
+            exit_policy_stop_loss_enabled_ ? "on" : "off",
+            exit_policy_time_exit_enabled_ ? "on" : "off",
+            exit_policy_time_exit_max_holding_minutes_,
+            exit_policy_rr_full_
         );
     }
     
@@ -1641,10 +1748,12 @@ void BacktestEngine::processCandle(const Candle& candle) {
     const bool strategy_exit_observe_only = strategy_exit_mode_effective == "observe_only";
     const bool strategy_exit_clamp_to_stop = strategy_exit_mode_effective == "clamp_to_stop";
     const bool strategy_exit_disabled = strategy_exit_mode_effective == "disabled";
-    const int be_after_partial_tp_delay_sec = std::max(
-        0,
-        probabilistic_runtime_model_.phase3Policy().exit.be_after_partial_tp_delay_sec
-    );
+    const int be_after_partial_tp_delay_sec = exit_policy_breakeven_enabled_
+        ? std::max(
+              0,
+              probabilistic_runtime_model_.phase3Policy().exit.be_after_partial_tp_delay_sec
+          )
+        : 0;
     be_after_partial_tp_delay_sec_ = be_after_partial_tp_delay_sec;
     entry_funnel_.strategy_exit_mode_effective = strategy_exit_mode_effective;
     auto computeNetPnlAtExit = [&](const risk::Position& closed_position, double exit_price) {
@@ -1675,7 +1784,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
         }
     };
     auto scheduleOrApplyBreakevenAfterPartial = [&](const std::string& market, long long trigger_ts_ms) {
-        if (!risk_manager_ || market.empty()) {
+        if (!exit_policy_breakeven_enabled_ || !risk_manager_ || market.empty()) {
             return;
         }
         be_move_attempt_count_++;
@@ -1690,7 +1799,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
         be_move_skipped_due_to_delay_count_++;
     };
     auto flushPendingBreakevenAfterPartial = [&](long long now_ts_ms) {
-        if (!risk_manager_ || pending_be_after_partial_due_ms_.empty()) {
+        if (!exit_policy_breakeven_enabled_ || !risk_manager_ || pending_be_after_partial_due_ms_.empty()) {
             return;
         }
         std::vector<std::string> ready_markets;
@@ -1913,11 +2022,15 @@ void BacktestEngine::processCandle(const Candle& candle) {
         }
         if (strategy) {
             // Check Exit Condition
+            const double holding_time_seconds = std::max(
+                0.0,
+                static_cast<double>(toMsTimestamp(candle.timestamp) - position->entry_time) / 1000.0
+            );
             bool should_exit = strategy->shouldExit(
                 market_name_,
                 position->entry_price,
                 current_price,
-                (candle.timestamp - position->entry_time) / 1000.0 // holding seconds
+                holding_time_seconds
             );
             const bool risk_manager_exit = risk_manager_->shouldExitPosition(market_name_);
             
@@ -1936,7 +2049,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 intrabar_collision_by_strategy_[position->strategy_name.empty() ? "unknown" : position->strategy_name]++;
             }
 
-            if (stop_touched) {
+            if (exit_policy_stop_loss_enabled_ && stop_touched) {
                 if (position->half_closed) {
                     stop_loss_after_partial_tp_count_++;
                 } else {
@@ -1970,7 +2083,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 notifyStrategyClosed(closed_position, stop_fill);
                 position = nullptr;
             } else {
-                if (!position->half_closed && tp1_touched) {
+                if (exit_policy_partial_tp_enabled_ && !position->half_closed && tp1_touched) {
                     const auto tp1_slippage = computeDynamicSlippageThresholds(
                         engine_config_,
                         market_hostility_ewma_,
@@ -2049,7 +2162,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
 
                 if (position) {
                     const bool tp2_touched_after_partial = tp2_touched || (candle.high >= position->take_profit_2);
-                    if (tp2_touched_after_partial) {
+                    if (exit_policy_tp_full_enabled_ && tp2_touched_after_partial) {
                         const risk::Position closed_position = *position;
                         const auto tp2_slippage = computeDynamicSlippageThresholds(
                             engine_config_,
@@ -2076,6 +2189,36 @@ void BacktestEngine::processCandle(const Candle& candle) {
                         risk_manager_->exitPosition(market_name_, tp2_fill, "TakeProfit2");
                         pending_be_after_partial_due_ms_.erase(market_name_);
                         notifyStrategyClosed(closed_position, tp2_fill);
+                        position = nullptr;
+                    } else if (exit_policy_time_exit_enabled_ &&
+                               holding_time_seconds >=
+                                   static_cast<double>(exit_policy_time_exit_max_holding_minutes_) * 60.0) {
+                        const risk::Position closed_position = *position;
+                        const auto time_exit_slippage = computeDynamicSlippageThresholds(
+                            engine_config_,
+                            market_hostility_ewma_,
+                            false,
+                            position->market_regime,
+                            position->signal_strength,
+                            position->liquidity_score,
+                            position->expected_value,
+                            "time_exit"
+                        );
+                        const double time_exit_fill_slippage = std::min(
+                            exitSlippagePct(engine_config_),
+                            time_exit_slippage.max_slippage_pct
+                        );
+                        const double time_exit_fill = current_price * (1.0 - time_exit_fill_slippage);
+                        Order time_exit_order;
+                        time_exit_order.market = market_name_;
+                        time_exit_order.side = OrderSide::SELL;
+                        time_exit_order.volume = position->quantity;
+                        time_exit_order.price = time_exit_fill;
+                        time_exit_order.strategy_name = position->strategy_name;
+                        executeOrder(time_exit_order, time_exit_fill);
+                        risk_manager_->exitPosition(market_name_, time_exit_fill, "TimeExit");
+                        pending_be_after_partial_due_ms_.erase(market_name_);
+                        notifyStrategyClosed(closed_position, time_exit_fill);
                         position = nullptr;
                     } else if (should_exit || risk_manager_exit) {
                         const char* reason_code = should_exit
@@ -2163,7 +2306,7 @@ void BacktestEngine::processCandle(const Candle& candle) {
 
     // Apply post-entry adaptive stop logic after current-candle exit checks.
     // This avoids same-candle stop tightening lookahead in backtest.
-    if (position) {
+    if (position && (exit_policy_trailing_enabled_ || exit_policy_breakeven_enabled_)) {
         const double stop_before = position->stop_loss;
         const double tp1_before = position->take_profit_1;
         const double tp2_before = position->take_profit_2;
@@ -2496,6 +2639,27 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 snap.p_calibrated = signal.probabilistic_h5_calibrated;
                 snap.selection_threshold = signal.probabilistic_h5_threshold;
                 snap.margin = signal.probabilistic_h5_margin;
+                double sl_pct = std::numeric_limits<double>::quiet_NaN();
+                if (std::isfinite(signal.expected_risk_pct) && signal.expected_risk_pct > 0.0) {
+                    sl_pct = signal.expected_risk_pct;
+                } else if (signal.entry_price > 0.0 && signal.stop_loss > 0.0 &&
+                           signal.stop_loss < signal.entry_price) {
+                    sl_pct = (signal.entry_price - signal.stop_loss) / signal.entry_price;
+                }
+                double tp_pct = std::numeric_limits<double>::quiet_NaN();
+                if (std::isfinite(signal.expected_return_pct) && signal.expected_return_pct > 0.0) {
+                    tp_pct = signal.expected_return_pct;
+                } else {
+                    const double tp_price = (signal.take_profit_2 > signal.entry_price)
+                        ? signal.take_profit_2
+                        : signal.take_profit_1;
+                    if (signal.entry_price > 0.0 && tp_price > signal.entry_price) {
+                        tp_pct = (tp_price - signal.entry_price) / signal.entry_price;
+                    }
+                }
+                snap.tp_pct = tp_pct;
+                snap.sl_pct = sl_pct;
+                snap.label_cost_bps = 12.0;
                 snap.expected_edge_calibrated_bps = signal.phase3.expected_edge_calibrated_bps;
                 snap.expected_edge_used_for_gate_bps = signal.phase3.expected_edge_used_for_gate_bps;
                 snap.edge_bps = signal.phase3.expected_edge_used_for_gate_bps;
@@ -2503,10 +2667,14 @@ void BacktestEngine::processCandle(const Candle& candle) {
                     std::isfinite(snap.p_calibrated) &&
                     std::isfinite(snap.selection_threshold) &&
                     std::isfinite(snap.margin) &&
-                    std::isfinite(snap.expected_edge_used_for_gate_bps);
+                    std::isfinite(snap.tp_pct) &&
+                    std::isfinite(snap.sl_pct) &&
+                    snap.tp_pct > 0.0 &&
+                    snap.sl_pct > 0.0;
                 if (!snap.snapshot_valid) {
-                    if (!std::isfinite(snap.expected_edge_used_for_gate_bps)) {
-                        snap.fail_reason = "missing_ev_source";
+                    if (!std::isfinite(snap.tp_pct) || !std::isfinite(snap.sl_pct) ||
+                        snap.tp_pct <= 0.0 || snap.sl_pct <= 0.0) {
+                        snap.fail_reason = "missing_tp_sl_source";
                     } else {
                         snap.fail_reason = "invalid_margin_inputs";
                     }
@@ -2544,6 +2712,37 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 static_cast<int>(gate_telemetry.funnel.s2_sized_count);
             entry_funnel_.gate_vnext_s3_exec_gate_pass +=
                 static_cast<int>(gate_telemetry.funnel.s3_exec_gate_pass);
+            entry_funnel_.gate_vnext_ev_negative_size_zero_count +=
+                static_cast<int>(gate_telemetry.sizing.ev_negative_size_zero_count);
+            entry_funnel_.gate_vnext_ev_positive_size_gt_zero_count +=
+                static_cast<int>(gate_telemetry.sizing.ev_positive_size_gt_zero_count);
+            entry_funnel_.gate_vnext_expected_value_from_prob_min_bps =
+                gate_telemetry.sizing.expected_value_from_prob_min_bps;
+            entry_funnel_.gate_vnext_expected_value_from_prob_median_bps =
+                gate_telemetry.sizing.expected_value_from_prob_median_bps;
+            entry_funnel_.gate_vnext_expected_value_from_prob_max_bps =
+                gate_telemetry.sizing.expected_value_from_prob_max_bps;
+            entry_funnel_.gate_vnext_p_cal_min = gate_telemetry.sizing.p_cal_min;
+            entry_funnel_.gate_vnext_p_cal_median = gate_telemetry.sizing.p_cal_median;
+            entry_funnel_.gate_vnext_p_cal_max = gate_telemetry.sizing.p_cal_max;
+            entry_funnel_.gate_vnext_tp_pct_min = gate_telemetry.sizing.tp_pct_min;
+            entry_funnel_.gate_vnext_tp_pct_median = gate_telemetry.sizing.tp_pct_median;
+            entry_funnel_.gate_vnext_tp_pct_max = gate_telemetry.sizing.tp_pct_max;
+            entry_funnel_.gate_vnext_sl_pct_min = gate_telemetry.sizing.sl_pct_min;
+            entry_funnel_.gate_vnext_sl_pct_median = gate_telemetry.sizing.sl_pct_median;
+            entry_funnel_.gate_vnext_sl_pct_max = gate_telemetry.sizing.sl_pct_max;
+            entry_funnel_.gate_vnext_ev_in_min_bps = gate_telemetry.sizing.ev_in_min_bps;
+            entry_funnel_.gate_vnext_ev_in_median_bps = gate_telemetry.sizing.ev_in_median_bps;
+            entry_funnel_.gate_vnext_ev_in_max_bps = gate_telemetry.sizing.ev_in_max_bps;
+            entry_funnel_.gate_vnext_ev_for_size_min_bps = gate_telemetry.sizing.ev_for_size_min_bps;
+            entry_funnel_.gate_vnext_ev_for_size_median_bps =
+                gate_telemetry.sizing.ev_for_size_median_bps;
+            entry_funnel_.gate_vnext_ev_for_size_max_bps = gate_telemetry.sizing.ev_for_size_max_bps;
+            entry_funnel_.gate_vnext_size_fraction_min = gate_telemetry.sizing.size_fraction_min;
+            entry_funnel_.gate_vnext_size_fraction_median = gate_telemetry.sizing.size_fraction_median;
+            entry_funnel_.gate_vnext_size_fraction_max = gate_telemetry.sizing.size_fraction_max;
+            entry_funnel_.gate_vnext_drop_ev_negative_count =
+                entry_funnel_.gate_vnext_ev_negative_size_zero_count;
             stage_candidates_total =
                 static_cast<int>(std::max<long long>(0, gate_telemetry.funnel.s0_snapshots_valid));
             stage_candidates_after_quality_topk =
@@ -2556,14 +2755,16 @@ void BacktestEngine::processCandle(const Candle& candle) {
             std::vector<strategy::Signal> selected_signals;
             selected_signals.reserve(gate_outputs.size());
             for (const auto& gated : gate_outputs) {
-                if (gated.execution_reject_reason == "ev_negative_size_zero") {
-                    entry_funnel_.gate_vnext_drop_ev_negative_count++;
-                }
                 if (gate_vnext_ev_samples_.size() < 50 &&
                     gated.source_index >= 0 &&
                     gated.source_index < static_cast<int>(signals.size())) {
                     const auto& src_signal = signals[static_cast<std::size_t>(gated.source_index)];
+                    const std::string snapshot_id =
+                        market_name_ + ":" +
+                        std::to_string(normalizeTimestampMs(candle.timestamp)) + ":" +
+                        std::to_string(gated.source_index);
                     nlohmann::json sample{
+                        {"snapshot_id", snapshot_id},
                         {"ts_ms", normalizeTimestampMs(candle.timestamp)},
                         {"market", market_name_},
                         {"regime", marketRegimeLabel(regime.regime)},
@@ -2571,19 +2772,34 @@ void BacktestEngine::processCandle(const Candle& candle) {
                         {"sample_stage", "stage1_selected_topk"},
                         {"snapshot_valid", true},
                         {"snapshot_fail_reason", ""},
-                        {"p_raw", nullptr},
+                        {"p_raw", probabilistic_snapshot.prob_h5_raw},
                         {"p_cal", gated.p_calibrated},
                         {"p_calibrated", gated.p_calibrated},
                         {"threshold", gated.selection_threshold},
                         {"selection_threshold", gated.selection_threshold},
                         {"margin", gated.margin},
+                        {"tp_pct", gated.tp_pct},
+                        {"sl_pct", gated.sl_pct},
+                        {"label_cost_bps", gated.label_cost_bps},
+                        {"stop_loss_trending_multiplier_effective",
+                         probabilistic_snapshot.phase3_stop_loss_risk_policy.stop_loss_trending_multiplier},
+                        {"tp_distance_trending_multiplier_effective",
+                         probabilistic_snapshot.phase3_tp_distance_trending_multiplier},
                         {"backend_request", gate_params.backend_request},
                         {"backend_effective", gate_params.backend_effective},
                         {"lgbm_model_sha256", gate_params.model_sha256},
                         {"expected_edge_calibrated_bps", src_signal.phase3.expected_edge_calibrated_bps},
                         {"expected_edge_used_for_gate_bps", src_signal.phase3.expected_edge_used_for_gate_bps},
+                        {"expected_edge_used_for_gate_source",
+                         probabilistic_snapshot.expected_edge_used_for_gate_source},
+                        {"edge_regressor_available", probabilistic_snapshot.edge_regressor_available},
+                        {"edge_regressor_used", probabilistic_snapshot.edge_regressor_used},
+                        {"edge_profile_used", probabilistic_snapshot.edge_profile_used},
                         {"signal_expected_value", src_signal.expected_value},
                         {"edge_bps_from_snapshot", gated.edge_bps},
+                        {"expected_value_from_prob_bps", gated.expected_value_from_prob_bps},
+                        {"ev_in_bps", gated.ev_in_bps},
+                        {"ev_for_size_bps", gated.ev_for_size_bps},
                         {"expected_value_vnext_bps", gated.expected_value_vnext_bps},
                         {"size_fraction", gated.size_fraction},
                         {"execution_gate_pass", gated.execution_gate_pass},
@@ -2704,6 +2920,30 @@ void BacktestEngine::processCandle(const Candle& candle) {
                 entry_funnel_.blocked_rr_rebalance++;
                 markEntryReject("blocked_rr_rebalance");
             } else {
+                if (exit_policy_v1_enabled_) {
+                    const double entry_price = best_signal.entry_price;
+                    const double stop_loss_price = best_signal.stop_loss;
+                    double risk_pct = std::numeric_limits<double>::quiet_NaN();
+                    if (std::isfinite(best_signal.expected_risk_pct) &&
+                        best_signal.expected_risk_pct > 0.0) {
+                        risk_pct = best_signal.expected_risk_pct;
+                    } else if (entry_price > 0.0 && stop_loss_price > 0.0 &&
+                               stop_loss_price < entry_price) {
+                        risk_pct = (entry_price - stop_loss_price) / entry_price;
+                    }
+                    if (std::isfinite(risk_pct) && risk_pct > 0.0 && entry_price > 0.0) {
+                        const double tp_pct = risk_pct * std::max(1.0, exit_policy_rr_full_);
+                        const double tp_price = entry_price * (1.0 + tp_pct);
+                        if (std::isfinite(tp_price) && tp_price > entry_price) {
+                            best_signal.take_profit_1 = tp_price;
+                            best_signal.take_profit_2 = tp_price;
+                            best_signal.expected_return_pct = tp_pct;
+                        }
+                    }
+                    // Exit v1 disables BE/trailing trigger movement by design.
+                    best_signal.breakeven_trigger = 0.0;
+                    best_signal.trailing_start = 0.0;
+                }
                 const bool regime_gate_ok =
                     !core_risk_enabled || passesRegimeGate(best_signal.market_regime, engine_config_);
                 if (!regime_gate_ok) {
@@ -3490,6 +3730,16 @@ BacktestEngine::Result BacktestEngine::getResult() const {
     result.post_entry_risk_telemetry.adaptive_partial_ratio_samples = adaptive_partial_ratio_samples_;
     result.post_entry_risk_telemetry.adaptive_partial_ratio_sum = adaptive_partial_ratio_sum_;
     result.post_entry_risk_telemetry.adaptive_partial_ratio_histogram = adaptive_partial_ratio_histogram_;
+    result.post_entry_risk_telemetry.exit_policy_v1_enabled = exit_policy_v1_enabled_;
+    result.post_entry_risk_telemetry.exit_policy_partial_tp_enabled = exit_policy_partial_tp_enabled_;
+    result.post_entry_risk_telemetry.exit_policy_breakeven_enabled = exit_policy_breakeven_enabled_;
+    result.post_entry_risk_telemetry.exit_policy_trailing_enabled = exit_policy_trailing_enabled_;
+    result.post_entry_risk_telemetry.exit_policy_tp_full_enabled = exit_policy_tp_full_enabled_;
+    result.post_entry_risk_telemetry.exit_policy_stop_loss_enabled = exit_policy_stop_loss_enabled_;
+    result.post_entry_risk_telemetry.exit_policy_time_exit_enabled = exit_policy_time_exit_enabled_;
+    result.post_entry_risk_telemetry.exit_policy_time_exit_max_holding_minutes =
+        exit_policy_time_exit_max_holding_minutes_;
+    result.post_entry_risk_telemetry.exit_policy_rr_full = exit_policy_rr_full_;
     result.post_entry_risk_telemetry.be_move_attempt_count = be_move_attempt_count_;
     result.post_entry_risk_telemetry.be_move_applied_count = be_move_applied_count_;
     result.post_entry_risk_telemetry.be_move_skipped_due_to_delay_count =

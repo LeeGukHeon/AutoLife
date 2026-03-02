@@ -41,7 +41,10 @@ struct ProbabilisticInference {
     bool edge_semantics_guard_forced_off = false;
     std::string edge_semantics_guard_action = "none";
     double ev_confidence = 1.0;
+    bool edge_regressor_available = false;
     bool edge_regressor_used = false;
+    bool edge_profile_used = false;
+    std::string expected_edge_used_for_gate_source = "UNKNOWN";
     bool ev_calibration_applied = false;
     bool lgbm_ev_affine_enabled = false;
     bool lgbm_ev_affine_applied = false;

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 import tempfile
 import unittest
 from pathlib import Path
@@ -353,7 +353,7 @@ class ProbabilisticShadowBacktestLogBuilderTest(unittest.TestCase):
             root = Path(tmpdir)
             exe_path = root / "AutoLifeTrading.exe"
             dataset_path = root / "upbit_KRW_BTC_1m_live.csv"
-            backtest_log_path = root / "policy_decisions_backtest.jsonl"
+            backtest_log_path = root / "vnext_policy_decisions_backtest.jsonl"
 
             exe_path.write_text("", encoding="utf-8")
             dataset_path.write_text("timestamp,open,high,low,close,volume\n", encoding="utf-8")
@@ -373,3 +373,4 @@ class ProbabilisticShadowBacktestLogBuilderTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

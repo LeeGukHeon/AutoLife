@@ -11,7 +11,7 @@ namespace core {
 LearningStateStoreJson::LearningStateStoreJson(std::filesystem::path file_path)
     : file_path_(std::move(file_path)) {}
 
-bool LearningStateStoreJson::migrateLegacySchemaToCurrent(nlohmann::json& raw) {
+bool LearningStateStoreJson::migrateSchemaToCurrent(nlohmann::json& raw) {
     if (!raw.is_object()) {
         return false;
     }
@@ -24,7 +24,7 @@ bool LearningStateStoreJson::migrateLegacySchemaToCurrent(nlohmann::json& raw) {
         return false;
     }
 
-    // Legacy/unversioned payload migration:
+    // Older/unversioned payload migration:
     // - promote root-level adaptive params into policy_params
     // - normalize required fields and stamp current schema version
     nlohmann::json policy = nlohmann::json::object();
@@ -108,7 +108,7 @@ std::optional<LearningStateSnapshot> LearningStateStoreJson::load() {
     }
 
     const int original_schema_version = raw.value("schema_version", 0);
-    if (!migrateLegacySchemaToCurrent(raw)) {
+    if (!migrateSchemaToCurrent(raw)) {
         LOG_WARN(
             "Learning state schema not supported: path={}, schema_version={}, supported={}",
             file_path_.string(),

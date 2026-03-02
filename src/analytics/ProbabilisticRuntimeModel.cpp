@@ -3133,12 +3133,22 @@ bool ProbabilisticRuntimeModel::infer(
     out.phase4_execution_aware_sizing_enabled = phase4_policy_.phase4_execution_aware_sizing_enabled;
     out.phase4_portfolio_diagnostics_enabled = phase4_policy_.phase4_portfolio_diagnostics_enabled;
 
-    const double fallback_expected_edge_bps =
+    const double fallback_expected_edge_bps_raw =
         (h5_cal_primary * entry->h5.edge_win_mean_bps) +
         ((1.0 - h5_cal_primary) * entry->h5.edge_loss_mean_bps);
+    bool fallback_default_zero = false;
+    double fallback_expected_edge_bps = fallback_expected_edge_bps_raw;
+    if (!std::isfinite(fallback_expected_edge_bps)) {
+        fallback_expected_edge_bps = 0.0;
+        fallback_default_zero = true;
+    }
     double expected_edge_raw_bps = fallback_expected_edge_bps;
+    std::string expected_edge_source =
+        fallback_default_zero ? "DEFAULT_ZERO" : "PROB_PROFILE_FALLBACK";
+    const bool edge_regressor_available =
+        entry->h5.has_edge_regressor && entry->h5.edge_coef.size() == transformed_features.size();
     bool edge_regressor_used = false;
-    if (entry->h5.has_edge_regressor && entry->h5.edge_coef.size() == transformed_features.size()) {
+    if (edge_regressor_available) {
         const double reg_edge = linearScore(entry->h5.edge_coef, entry->h5.edge_intercept, transformed_features);
         if (std::isfinite(reg_edge)) {
             expected_edge_raw_bps = std::clamp(
@@ -3147,10 +3157,14 @@ bool ProbabilisticRuntimeModel::infer(
                 entry->h5.edge_clip_abs_bps
             );
             edge_regressor_used = true;
+            expected_edge_source = "EDGE_REGRESSOR";
         }
     }
     out.expected_edge_raw_bps = expected_edge_raw_bps;
+    out.edge_regressor_available = edge_regressor_available;
     out.edge_regressor_used = edge_regressor_used;
+    out.edge_profile_used = !edge_regressor_used;
+    out.expected_edge_used_for_gate_source = expected_edge_source;
 
     const EvCalibrationResult calibration = calibrateExpectedEdgeBps(
         expected_edge_raw_bps,

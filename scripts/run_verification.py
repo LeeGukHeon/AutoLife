@@ -4,6 +4,7 @@ import bisect
 from collections import Counter, deque
 import copy
 import csv
+import hashlib
 import json
 import math
 import os
@@ -22,6 +23,14 @@ VOL_BUCKET_MID = "MID"
 VOL_BUCKET_HIGH = "HIGH"
 VOL_BUCKET_NONE = "NONE"
 VOL_BUCKET_ORDER = [VOL_BUCKET_LOW, VOL_BUCKET_MID, VOL_BUCKET_HIGH, VOL_BUCKET_NONE]
+VNEXT_POLICY_DECISION_ARTIFACT = "vnext_policy_decisions_backtest.jsonl"
+
+
+def resolve_policy_decision_artifact_path(
+    exe_dir: pathlib.Path,
+    run_dir: Optional[pathlib.Path] = None,
+) -> pathlib.Path:
+    return (resolve_runtime_logs_dir(exe_dir, run_dir) / VNEXT_POLICY_DECISION_ARTIFACT).resolve()
 
 
 def resolve_path(path_value: str, label: str, must_exist: bool = True) -> pathlib.Path:
@@ -1041,6 +1050,12 @@ def run_backtest(
         end_ts=evaluation_end_ts,
         limit=50,
     )
+    parsed["ev_sample_provenance"] = write_ev_sample_provenance_artifact(
+        exe_dir=exe_path.parent,
+        run_dir=run_dir,
+        evaluation_start_ts=evaluation_start_ts,
+        evaluation_end_ts=evaluation_end_ts,
+    )
     return parsed
 
 
@@ -1089,7 +1104,7 @@ def load_policy_decision_ev_samples(
     exe_dir: pathlib.Path,
     run_dir: Optional[pathlib.Path] = None,
 ) -> List[Dict[str, Any]]:
-    artifact_path = (resolve_runtime_logs_dir(exe_dir, run_dir) / "policy_decisions_backtest.jsonl").resolve()
+    artifact_path = resolve_policy_decision_artifact_path(exe_dir, run_dir)
     if not artifact_path.exists():
         return []
     samples: List[Dict[str, Any]] = []
@@ -1189,7 +1204,7 @@ def load_policy_decision_volatility_samples(
     run_dir: Optional[pathlib.Path] = None,
     sample_cap: int = 120000,
 ) -> List[Dict[str, Any]]:
-    artifact_path = (resolve_runtime_logs_dir(exe_dir, run_dir) / "policy_decisions_backtest.jsonl").resolve()
+    artifact_path = resolve_policy_decision_artifact_path(exe_dir, run_dir)
     if not artifact_path.exists():
         return []
     samples: List[Dict[str, Any]] = []
@@ -1270,7 +1285,7 @@ def load_policy_decision_range_stats(
     start = int(start_ts) if start_ts is not None else 0
     end = int(end_ts) if end_ts is not None else 0
     enabled = bool(start > 0 and end > 0 and end >= start)
-    artifact_path = (resolve_runtime_logs_dir(exe_dir, run_dir) / "policy_decisions_backtest.jsonl").resolve()
+    artifact_path = resolve_policy_decision_artifact_path(exe_dir, run_dir)
     out = {
         "enabled": enabled,
         "start_ts": int(start),
@@ -1769,6 +1784,7 @@ def load_vnext_ev_samples(
                 "ts_ms": int(ts_ms),
                 "market": str(raw.get("market", "")).strip(),
                 "regime": str(raw.get("regime", "")).strip(),
+                "snapshot_id": str(raw.get("snapshot_id", "")).strip(),
                 "backend_request": str(raw.get("backend_request", "")).strip().lower(),
                 "backend_effective": str(raw.get("backend_effective", "")).strip().lower(),
                 "lgbm_model_sha256": str(raw.get("lgbm_model_sha256", "")).strip().lower(),
@@ -1794,6 +1810,21 @@ def load_vnext_ev_samples(
                     10,
                 ),
                 "margin": round(to_float(raw.get("margin", 0.0)), 10),
+                "tp_pct": round(to_float(raw.get("tp_pct", 0.0)), 10),
+                "sl_pct": round(to_float(raw.get("sl_pct", 0.0)), 10),
+                "label_cost_bps": round(to_float(raw.get("label_cost_bps", 0.0)), 10),
+                "expected_value_from_prob_bps": round(
+                    to_float(raw.get("expected_value_from_prob_bps", 0.0)),
+                    10,
+                ),
+                "stop_loss_trending_multiplier_effective": round(
+                    to_float(raw.get("stop_loss_trending_multiplier_effective", 0.0)),
+                    10,
+                ),
+                "tp_distance_trending_multiplier_effective": round(
+                    to_float(raw.get("tp_distance_trending_multiplier_effective", 0.0)),
+                    10,
+                ),
                 "expected_edge_calibrated_bps": round(
                     to_float(raw.get("expected_edge_calibrated_bps", 0.0)),
                     10,
@@ -1802,12 +1833,26 @@ def load_vnext_ev_samples(
                     to_float(raw.get("expected_edge_used_for_gate_bps", 0.0)),
                     10,
                 ),
+                "expected_edge_used_for_gate_source": str(
+                    raw.get("expected_edge_used_for_gate_source", "")
+                ).strip(),
+                "edge_regressor_available": bool(raw.get("edge_regressor_available", False)),
+                "edge_regressor_used": bool(raw.get("edge_regressor_used", False)),
+                "edge_profile_used": bool(raw.get("edge_profile_used", False)),
                 "signal_expected_value": round(
                     to_float(raw.get("signal_expected_value", 0.0)),
                     10,
                 ),
                 "edge_bps_from_snapshot": round(
                     to_float(raw.get("edge_bps_from_snapshot", 0.0)),
+                    10,
+                ),
+                "ev_in_bps": round(
+                    to_float(raw.get("ev_in_bps", raw.get("expected_edge_used_for_gate_bps", 0.0))),
+                    10,
+                ),
+                "ev_for_size_bps": round(
+                    to_float(raw.get("ev_for_size_bps", raw.get("expected_value_vnext_bps", 0.0))),
                     10,
                 ),
                 "expected_value_vnext_bps": round(
@@ -1822,6 +1867,93 @@ def load_vnext_ev_samples(
         if len(out) >= max(1, int(limit)):
             break
     return out
+
+
+def sha256_of_file(path: pathlib.Path) -> str:
+    if not path.exists():
+        return ""
+    h = hashlib.sha256()
+    with path.open("rb") as fp:
+        while True:
+            chunk = fp.read(1024 * 1024)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest().lower()
+
+
+def write_ev_sample_provenance_artifact(
+    exe_dir: pathlib.Path,
+    run_dir: Optional[pathlib.Path],
+    evaluation_start_ts: Optional[int],
+    evaluation_end_ts: Optional[int],
+) -> Dict[str, Any]:
+    runtime_logs_dir = resolve_runtime_logs_dir(exe_dir, run_dir)
+    runtime_logs_dir.mkdir(parents=True, exist_ok=True)
+
+    ev_samples_path = (runtime_logs_dir / "vnext_ev_samples.json").resolve()
+    run_provenance_path = (runtime_logs_dir / "run_provenance.json").resolve()
+    stage_funnel_vnext_path = (runtime_logs_dir / "stage_funnel_vnext.json").resolve()
+
+    run_provenance = (
+        load_report_json(run_provenance_path)
+        if run_provenance_path.exists()
+        else {}
+    )
+    if not isinstance(run_provenance, dict):
+        run_provenance = {}
+    stage_funnel_payload = (
+        load_report_json(stage_funnel_vnext_path)
+        if stage_funnel_vnext_path.exists()
+        else {}
+    )
+    if not isinstance(stage_funnel_payload, dict):
+        stage_funnel_payload = {}
+
+    ev_rows: List[Dict[str, Any]] = []
+    if ev_samples_path.exists():
+        try:
+            with ev_samples_path.open("r", encoding="utf-8") as fp:
+                loaded_any = json.load(fp)
+            if isinstance(loaded_any, list):
+                ev_rows = [row for row in loaded_any if isinstance(row, dict)]
+        except Exception:
+            ev_rows = []
+
+    compact_rows = [
+        json.dumps(row, ensure_ascii=False, separators=(",", ":"))
+        for row in ev_rows
+    ]
+    start_ts_ms = (
+        int(evaluation_start_ts)
+        if evaluation_start_ts is not None
+        else int(to_int(run_provenance.get("start_ts_ms", 0)))
+    )
+    end_ts_ms = (
+        int(evaluation_end_ts)
+        if evaluation_end_ts is not None
+        else int(to_int(stage_funnel_payload.get("generated_at_ms", 0)))
+    )
+
+    payload: Dict[str, Any] = {
+        "run_dir": str(runtime_logs_dir),
+        "config_path": str(run_provenance.get("config_path", "")),
+        "bundle_path": str(run_provenance.get("bundle_path", "")),
+        "backend_request": str(run_provenance.get("prob_model_backend", "unknown")).strip().lower(),
+        "backend_effective": str(stage_funnel_payload.get("backend_effective", "unknown")).strip().lower(),
+        "start_ts_ms": start_ts_ms if start_ts_ms > 0 else None,
+        "end_ts_ms": end_ts_ms if end_ts_ms > 0 else None,
+        "vnext_ev_samples_path": str(ev_samples_path),
+        "vnext_ev_samples_sha256": sha256_of_file(ev_samples_path),
+        "vnext_ev_samples_line_count": int(len(ev_rows)),
+        "first_3_rows": compact_rows[:3],
+        "last_3_rows": compact_rows[-3:] if compact_rows else [],
+    }
+
+    output_path = (runtime_logs_dir / "ev_sample_provenance.json").resolve()
+    with output_path.open("w", encoding="utf-8", newline="\n") as fp:
+        json.dump(payload, fp, ensure_ascii=False, indent=4)
+    return payload
 
 
 def load_quality_filter_range_samples(
@@ -7805,6 +7937,213 @@ def build_dataset_diagnostics(
             )
         ),
     )
+    gate_vnext_ev_negative_size_zero_count = max(
+        0,
+        to_int(
+            stage_funnel_vnext_raw.get(
+                "ev_negative_size_zero_count",
+                entry_funnel.get("gate_vnext_ev_negative_size_zero_count", 0),
+            )
+        ),
+    )
+    gate_vnext_ev_positive_size_gt_zero_count = max(
+        0,
+        to_int(
+            stage_funnel_vnext_raw.get(
+                "ev_positive_size_gt_zero_count",
+                entry_funnel.get("gate_vnext_ev_positive_size_gt_zero_count", 0),
+            )
+        ),
+    )
+    gate_vnext_expected_value_from_prob_min_bps = round(
+        to_float(
+            stage_funnel_vnext_raw.get(
+                "expected_value_from_prob_min_bps",
+                entry_funnel.get("gate_vnext_expected_value_from_prob_min_bps", 0.0),
+            )
+        ),
+        10,
+    )
+    gate_vnext_expected_value_from_prob_median_bps = round(
+        to_float(
+            stage_funnel_vnext_raw.get(
+                "expected_value_from_prob_median_bps",
+                entry_funnel.get("gate_vnext_expected_value_from_prob_median_bps", 0.0),
+            )
+        ),
+        10,
+    )
+    gate_vnext_expected_value_from_prob_max_bps = round(
+        to_float(
+            stage_funnel_vnext_raw.get(
+                "expected_value_from_prob_max_bps",
+                entry_funnel.get("gate_vnext_expected_value_from_prob_max_bps", 0.0),
+            )
+        ),
+        10,
+    )
+    gate_vnext_p_cal_min = round(
+        to_float(
+            stage_funnel_vnext_raw.get(
+                "p_cal_min",
+                entry_funnel.get("gate_vnext_p_cal_min", 0.0),
+            )
+        ),
+        10,
+    )
+    gate_vnext_p_cal_median = round(
+        to_float(
+            stage_funnel_vnext_raw.get(
+                "p_cal_median",
+                entry_funnel.get("gate_vnext_p_cal_median", 0.0),
+            )
+        ),
+        10,
+    )
+    gate_vnext_p_cal_max = round(
+        to_float(
+            stage_funnel_vnext_raw.get(
+                "p_cal_max",
+                entry_funnel.get("gate_vnext_p_cal_max", 0.0),
+            )
+        ),
+        10,
+    )
+    gate_vnext_tp_pct_min = round(
+        to_float(
+            stage_funnel_vnext_raw.get(
+                "tp_pct_min",
+                entry_funnel.get("gate_vnext_tp_pct_min", 0.0),
+            )
+        ),
+        10,
+    )
+    gate_vnext_tp_pct_median = round(
+        to_float(
+            stage_funnel_vnext_raw.get(
+                "tp_pct_median",
+                entry_funnel.get("gate_vnext_tp_pct_median", 0.0),
+            )
+        ),
+        10,
+    )
+    gate_vnext_tp_pct_max = round(
+        to_float(
+            stage_funnel_vnext_raw.get(
+                "tp_pct_max",
+                entry_funnel.get("gate_vnext_tp_pct_max", 0.0),
+            )
+        ),
+        10,
+    )
+    gate_vnext_sl_pct_min = round(
+        to_float(
+            stage_funnel_vnext_raw.get(
+                "sl_pct_min",
+                entry_funnel.get("gate_vnext_sl_pct_min", 0.0),
+            )
+        ),
+        10,
+    )
+    gate_vnext_sl_pct_median = round(
+        to_float(
+            stage_funnel_vnext_raw.get(
+                "sl_pct_median",
+                entry_funnel.get("gate_vnext_sl_pct_median", 0.0),
+            )
+        ),
+        10,
+    )
+    gate_vnext_sl_pct_max = round(
+        to_float(
+            stage_funnel_vnext_raw.get(
+                "sl_pct_max",
+                entry_funnel.get("gate_vnext_sl_pct_max", 0.0),
+            )
+        ),
+        10,
+    )
+    gate_vnext_ev_in_min_bps = round(
+        to_float(
+            stage_funnel_vnext_raw.get(
+                "ev_in_min_bps",
+                entry_funnel.get("gate_vnext_ev_in_min_bps", 0.0),
+            )
+        ),
+        10,
+    )
+    gate_vnext_ev_in_median_bps = round(
+        to_float(
+            stage_funnel_vnext_raw.get(
+                "ev_in_median_bps",
+                entry_funnel.get("gate_vnext_ev_in_median_bps", 0.0),
+            )
+        ),
+        10,
+    )
+    gate_vnext_ev_in_max_bps = round(
+        to_float(
+            stage_funnel_vnext_raw.get(
+                "ev_in_max_bps",
+                entry_funnel.get("gate_vnext_ev_in_max_bps", 0.0),
+            )
+        ),
+        10,
+    )
+    gate_vnext_ev_for_size_min_bps = round(
+        to_float(
+            stage_funnel_vnext_raw.get(
+                "ev_for_size_min_bps",
+                entry_funnel.get("gate_vnext_ev_for_size_min_bps", 0.0),
+            )
+        ),
+        10,
+    )
+    gate_vnext_ev_for_size_median_bps = round(
+        to_float(
+            stage_funnel_vnext_raw.get(
+                "ev_for_size_median_bps",
+                entry_funnel.get("gate_vnext_ev_for_size_median_bps", 0.0),
+            )
+        ),
+        10,
+    )
+    gate_vnext_ev_for_size_max_bps = round(
+        to_float(
+            stage_funnel_vnext_raw.get(
+                "ev_for_size_max_bps",
+                entry_funnel.get("gate_vnext_ev_for_size_max_bps", 0.0),
+            )
+        ),
+        10,
+    )
+    gate_vnext_size_fraction_min = round(
+        to_float(
+            stage_funnel_vnext_raw.get(
+                "size_fraction_min",
+                entry_funnel.get("gate_vnext_size_fraction_min", 0.0),
+            )
+        ),
+        10,
+    )
+    gate_vnext_size_fraction_median = round(
+        to_float(
+            stage_funnel_vnext_raw.get(
+                "size_fraction_median",
+                entry_funnel.get("gate_vnext_size_fraction_median", 0.0),
+            )
+        ),
+        10,
+    )
+    gate_vnext_size_fraction_max = round(
+        to_float(
+            stage_funnel_vnext_raw.get(
+                "size_fraction_max",
+                entry_funnel.get("gate_vnext_size_fraction_max", 0.0),
+            )
+        ),
+        10,
+    )
     gate_vnext_scan_rounds = max(
         0,
         to_int(
@@ -8322,8 +8661,25 @@ def build_dataset_diagnostics(
                     "ts_ms": int(max(0, to_int(raw.get("ts_ms", 0)))),
                     "market": str(raw.get("market", "")).strip(),
                     "regime": str(raw.get("regime", "")).strip(),
+                    "snapshot_id": str(raw.get("snapshot_id", "")).strip(),
+                    "backend_effective": str(raw.get("backend_effective", "")).strip().lower(),
                     "p_calibrated": round(to_float(raw.get("p_calibrated", 0.0)), 10),
                     "margin": round(to_float(raw.get("margin", 0.0)), 10),
+                    "tp_pct": round(to_float(raw.get("tp_pct", 0.0)), 10),
+                    "sl_pct": round(to_float(raw.get("sl_pct", 0.0)), 10),
+                    "label_cost_bps": round(to_float(raw.get("label_cost_bps", 0.0)), 10),
+                    "expected_value_from_prob_bps": round(
+                        to_float(raw.get("expected_value_from_prob_bps", 0.0)),
+                        10,
+                    ),
+                    "stop_loss_trending_multiplier_effective": round(
+                        to_float(raw.get("stop_loss_trending_multiplier_effective", 0.0)),
+                        10,
+                    ),
+                    "tp_distance_trending_multiplier_effective": round(
+                        to_float(raw.get("tp_distance_trending_multiplier_effective", 0.0)),
+                        10,
+                    ),
                     "expected_edge_calibrated_bps": round(
                         to_float(raw.get("expected_edge_calibrated_bps", 0.0)),
                         10,
@@ -8332,6 +8688,12 @@ def build_dataset_diagnostics(
                         to_float(raw.get("expected_edge_used_for_gate_bps", 0.0)),
                         10,
                     ),
+                    "expected_edge_used_for_gate_source": str(
+                        raw.get("expected_edge_used_for_gate_source", "")
+                    ).strip(),
+                    "edge_regressor_available": bool(raw.get("edge_regressor_available", False)),
+                    "edge_regressor_used": bool(raw.get("edge_regressor_used", False)),
+                    "edge_profile_used": bool(raw.get("edge_profile_used", False)),
                     "signal_expected_value": round(
                         to_float(raw.get("signal_expected_value", 0.0)),
                         10,
@@ -8340,6 +8702,8 @@ def build_dataset_diagnostics(
                         to_float(raw.get("edge_bps_from_snapshot", 0.0)),
                         10,
                     ),
+                    "ev_in_bps": round(to_float(raw.get("ev_in_bps", 0.0)), 10),
+                    "ev_for_size_bps": round(to_float(raw.get("ev_for_size_bps", 0.0)), 10),
                     "expected_value_vnext_bps": round(
                         to_float(raw.get("expected_value_vnext_bps", 0.0)),
                         10,
@@ -8438,6 +8802,29 @@ def build_dataset_diagnostics(
                 "s4_submitted": int(gate_vnext_s4_submitted),
                 "s5_filled": int(gate_vnext_s5_filled),
                 "drop_ev_negative_count": int(gate_vnext_drop_ev_negative_count),
+                "ev_negative_size_zero_count": int(gate_vnext_ev_negative_size_zero_count),
+                "ev_positive_size_gt_zero_count": int(gate_vnext_ev_positive_size_gt_zero_count),
+                "expected_value_from_prob_min_bps": gate_vnext_expected_value_from_prob_min_bps,
+                "expected_value_from_prob_median_bps": gate_vnext_expected_value_from_prob_median_bps,
+                "expected_value_from_prob_max_bps": gate_vnext_expected_value_from_prob_max_bps,
+                "p_cal_min": gate_vnext_p_cal_min,
+                "p_cal_median": gate_vnext_p_cal_median,
+                "p_cal_max": gate_vnext_p_cal_max,
+                "tp_pct_min": gate_vnext_tp_pct_min,
+                "tp_pct_median": gate_vnext_tp_pct_median,
+                "tp_pct_max": gate_vnext_tp_pct_max,
+                "sl_pct_min": gate_vnext_sl_pct_min,
+                "sl_pct_median": gate_vnext_sl_pct_median,
+                "sl_pct_max": gate_vnext_sl_pct_max,
+                "ev_in_min_bps": gate_vnext_ev_in_min_bps,
+                "ev_in_median_bps": gate_vnext_ev_in_median_bps,
+                "ev_in_max_bps": gate_vnext_ev_in_max_bps,
+                "ev_for_size_min_bps": gate_vnext_ev_for_size_min_bps,
+                "ev_for_size_median_bps": gate_vnext_ev_for_size_median_bps,
+                "ev_for_size_max_bps": gate_vnext_ev_for_size_max_bps,
+                "size_fraction_min": gate_vnext_size_fraction_min,
+                "size_fraction_median": gate_vnext_size_fraction_median,
+                "size_fraction_max": gate_vnext_size_fraction_max,
                 "scan_rounds": int(gate_vnext_scan_rounds),
             },
             "ev_samples": vnext_ev_samples,

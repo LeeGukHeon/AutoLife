@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 import argparse
 import json
 import os
@@ -33,7 +33,7 @@ class ProbabilisticShadowGateFlowTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             live_log = root / "policy_decisions.jsonl"
-            backtest_log = root / "policy_decisions_backtest.jsonl"
+            backtest_log = root / "vnext_policy_decisions_backtest.jsonl"
             runtime_bundle = root / "runtime_bundle_v2.json"
             feature_validation = root / "feature_validation.json"
             parity = root / "parity.json"
@@ -106,7 +106,7 @@ class ProbabilisticShadowGateFlowTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             live_log = root / "policy_decisions.jsonl"
-            backtest_log = root / "policy_decisions_backtest.jsonl"
+            backtest_log = root / "vnext_policy_decisions_backtest.jsonl"
             runtime_bundle = root / "runtime_bundle_v2.json"
             feature_validation = root / "feature_validation.json"
             parity = root / "parity.json"
@@ -172,7 +172,7 @@ class ProbabilisticShadowGateFlowTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             live_log = root / "policy_decisions.jsonl"
-            backtest_log = root / "policy_decisions_backtest.jsonl"
+            backtest_log = root / "vnext_policy_decisions_backtest.jsonl"
             runtime_bundle = root / "runtime_bundle_v2.json"
             feature_validation = root / "feature_validation.json"
             parity = root / "parity.json"
@@ -417,3 +417,4 @@ class ProbabilisticShadowGateFlowTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

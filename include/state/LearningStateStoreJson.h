@@ -18,7 +18,7 @@ public:
     bool save(const LearningStateSnapshot& snapshot) override;
 
 private:
-    static bool migrateLegacySchemaToCurrent(nlohmann::json& raw);
+    static bool migrateSchemaToCurrent(nlohmann::json& raw);
     static bool validateCurrentSchema(const nlohmann::json& raw);
 
     std::filesystem::path file_path_;

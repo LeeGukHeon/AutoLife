@@ -29,6 +29,52 @@ def list_fresh14_primary_datasets(data_dir: Path) -> List[str]:
     return names
 
 
+def build_legacy_sweep_report(repo_root: Path, output_path: Path) -> Dict[str, Any]:
+    tokens = [
+        "legacy",
+        "frontier",
+        "expected_value_pass",
+        "composite_score",
+        "prefilter",
+        "hard_gate_margin",
+    ]
+    source_roots = [repo_root / "src", repo_root / "include"]
+    suffixes = {".h", ".hpp", ".hh", ".c", ".cc", ".cpp", ".cxx"}
+    token_hits: Dict[str, Dict[str, Any]] = {
+        token: {"count": 0, "files": []} for token in tokens
+    }
+    scanned_files = 0
+
+    for root in source_roots:
+        if not root.exists():
+            continue
+        for path in root.rglob("*"):
+            if not path.is_file() or path.suffix.lower() not in suffixes:
+                continue
+            scanned_files += 1
+            try:
+                text = path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+            text_lower = text.lower()
+            for token in tokens:
+                count = text_lower.count(token.lower())
+                if count <= 0:
+                    continue
+                token_hits[token]["count"] = int(token_hits[token]["count"]) + int(count)
+                token_hits[token]["files"].append(str(path.resolve()))
+
+    payload: Dict[str, Any] = {
+        "scanned_roots": [str(p.resolve()) for p in source_roots],
+        "scanned_file_count": int(scanned_files),
+        "tokens": token_hits,
+        "all_tokens_zero": all(int(v.get("count", 0)) == 0 for v in token_hits.values()),
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return payload
+
+
 def run_verification_case(
     repo_root: Path,
     python_exe: str,
@@ -88,6 +134,18 @@ def run_verification_case(
 def extract_case_summary(report: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
     run_provenance = load_json(run_dir / "run_provenance.json")
     run_params = load_json(run_dir / "run_params_dump.json")
+    structural_ev_breakdown_path = run_dir / "structural_ev_breakdown.json"
+    structural_ev_breakdown = (
+        load_json(structural_ev_breakdown_path) if structural_ev_breakdown_path.exists() else {}
+    )
+    if not isinstance(structural_ev_breakdown, dict):
+        structural_ev_breakdown = {}
+    ev_sample_provenance_path = run_dir / "ev_sample_provenance.json"
+    ev_sample_provenance = (
+        load_json(ev_sample_provenance_path) if ev_sample_provenance_path.exists() else {}
+    )
+    if not isinstance(ev_sample_provenance, dict):
+        ev_sample_provenance = {}
 
     split = report.get("split_filter", {})
     aggs = report.get("aggregates", {})
@@ -108,6 +166,8 @@ def extract_case_summary(report: Dict[str, Any], run_dir: Path) -> Dict[str, Any
         "s4_submitted": 0,
         "s5_filled": 0,
         "drop_ev_negative_count": 0,
+        "ev_negative_size_zero_count": 0,
+        "ev_positive_size_gt_zero_count": 0,
         "scan_rounds": 0,
     }
     s1_topk_bound_violations = 0
@@ -152,6 +212,20 @@ def extract_case_summary(report: Dict[str, Any], run_dir: Path) -> Dict[str, Any
             f"backend mismatch: request={backend_request}, effective={backend_effective}, run_dir={run_dir}"
         )
 
+    structural_components = (
+        structural_ev_breakdown.get("component_aggregates", {})
+        if isinstance(structural_ev_breakdown.get("component_aggregates", {}), dict)
+        else {}
+    )
+    min_order_effect_counts = (
+        structural_ev_breakdown.get("min_order_effect_counts", {})
+        if isinstance(structural_ev_breakdown.get("min_order_effect_counts", {}), dict)
+        else {}
+    )
+    exit_reason_breakdown = structural_ev_breakdown.get("exit_reason_breakdown", [])
+    if not isinstance(exit_reason_breakdown, list):
+        exit_reason_breakdown = []
+
     return {
         "run_dir": str(run_dir),
         "split_applied": split.get("split_applied"),
@@ -175,6 +249,17 @@ def extract_case_summary(report: Dict[str, Any], run_dir: Path) -> Dict[str, Any
         "stage_funnel_core": funnel,
         "execution_no_signal_top3": core_no_signal.get("execution_no_signal_top3", [])[:3],
         "core_no_signal_top3": core_no_signal.get("core_no_signal_top3", [])[:3],
+        "structural_pnl_after_cost_sum_krw": structural_components.get(
+            "structural_pnl_after_cost_sum_krw"
+        ),
+        "structural_fee_sum_krw": structural_components.get("fee_sum_krw"),
+        "structural_slippage_sum_krw": structural_components.get("slippage_sum_krw"),
+        "min_order_effect_counts": {
+            str(k): int(v) for k, v in min_order_effect_counts.items()
+        },
+        "structural_exit_reason_breakdown": exit_reason_breakdown,
+        "structural_top_loss_markets": structural_ev_breakdown.get("top_loss_markets", []),
+        "ev_sample_provenance": ev_sample_provenance,
     }
 
 
@@ -200,6 +285,11 @@ def write_summary_csv(path: Path, rows: List[Dict[str, Any]]) -> None:
                 "stop_loss_count",
                 "partial_tp_count",
                 "tp_full_count",
+                "structural_pnl_after_cost_sum_krw",
+                "structural_fee_sum_krw",
+                "structural_slippage_sum_krw",
+                "ev_negative_size_zero_count",
+                "ev_positive_size_gt_zero_count",
                 "s1_topk_bound_violations",
                 "semantics_lock_status",
             ]
@@ -223,6 +313,15 @@ def write_summary_csv(path: Path, rows: List[Dict[str, Any]]) -> None:
                     row.get("stop_loss_trigger_count"),
                     row.get("partial_tp_exit_count"),
                     row.get("take_profit_full_count"),
+                    row.get("structural_pnl_after_cost_sum_krw"),
+                    row.get("structural_fee_sum_krw"),
+                    row.get("structural_slippage_sum_krw"),
+                    (row.get("stage_funnel_vnext_totals", {}) or {}).get(
+                        "ev_negative_size_zero_count", 0
+                    ),
+                    (row.get("stage_funnel_vnext_totals", {}) or {}).get(
+                        "ev_positive_size_gt_zero_count", 0
+                    ),
                     row.get("s1_topk_bound_violations"),
                     row.get("semantics_lock_status"),
                 ]
@@ -234,6 +333,12 @@ def build_hardlock_compliance_payload(rows: List[Dict[str, Any]]) -> Dict[str, A
         "run_provenance.json",
         "stage_funnel_vnext.json",
         "vnext_ev_samples.json",
+        "ev_sample_provenance.json",
+        "exit_policy_dump.json",
+        "structural_ev_breakdown.json",
+        "structural_ev_trade_rows.jsonl",
+        "structural_ev_summary.csv",
+        "gate_vnext_legacy_sweep_report.json",
     ]
     case_rows: List[Dict[str, Any]] = []
     backend_effective_values: List[str] = []
@@ -372,8 +477,18 @@ def main() -> int:
     out_json = logs_root / f"{args.run_tag}_summary.json"
     out_csv = logs_root / f"{args.run_tag}_summary.csv"
     compliance_json = logs_root / f"{args.run_tag}_hardlock_compliance_check.json"
+    legacy_sweep_json = logs_root / "gate_vnext_legacy_sweep_report.json"
     out_json.write_text(json.dumps({"cases": summaries}, ensure_ascii=False, indent=2), encoding="utf-8")
     write_summary_csv(out_csv, summaries)
+    sweep_payload = build_legacy_sweep_report(repo_root=repo_root, output_path=legacy_sweep_json)
+    for case in cases:
+        case_run_dir = Path(case["run_dir"])
+        case_run_dir.mkdir(parents=True, exist_ok=True)
+        case_sweep_path = case_run_dir / "gate_vnext_legacy_sweep_report.json"
+        case_sweep_path.write_text(
+            json.dumps(sweep_payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
     compliance_payload = build_hardlock_compliance_payload(summaries)
     compliance_json.write_text(
         json.dumps(compliance_payload, ensure_ascii=False, indent=2),
@@ -383,6 +498,7 @@ def main() -> int:
     print(out_json)
     print(out_csv)
     print(compliance_json)
+    print(legacy_sweep_json)
     return 0
 
 

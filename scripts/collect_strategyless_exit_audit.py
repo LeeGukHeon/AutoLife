@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Collect correctness-first audit evidence for strategy-less/runtime exits.
 
 This script replays backtests on selected datasets, captures runtime-position
@@ -66,7 +66,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--backtest-decision-log-jsonl",
-        default=r".\build\Release\logs\policy_decisions_backtest.jsonl",
+        default=r".\build\Release\logs\vnext_policy_decisions_backtest.jsonl",
         help="Backtest decision log path (optional).",
     )
     parser.add_argument(
@@ -868,3 +868,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
